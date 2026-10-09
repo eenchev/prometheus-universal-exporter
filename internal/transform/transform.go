@@ -2349,6 +2349,71 @@ func csvRow(raw any) map[string]any {
 	return nil
 }
 
+// csvRowView is a row of a csv transform's input: row at of the csv
+// decoder's rows, or m, a row a pre-script left as csvRow reads it, nil when
+// it is neither a dict nor a list.
+type csvRowView struct {
+	m     map[string]any
+	table *decode.CSVRows
+	at    int
+}
+
+// csvRowAt is row at of the decoder's rows, table, or of rows, those a
+// pre-script left.
+func csvRowAt(rows []any, table *decode.CSVRows, at int) csvRowView {
+	if table != nil {
+		return csvRowView{table: table, at: at}
+	}
+	return csvRowView{m: csvRow(rows[at])}
+}
+
+// cell is the row's value in column, and whether the row has the column.
+func (v csvRowView) cell(column string) (csvValue, bool) {
+	if v.table != nil {
+		text, ok := v.table.Cell(v.at, column)
+		return csvValue{text: text, isText: true}, ok
+	}
+	value, ok := v.m[column]
+	return csvValue{value: value}, ok
+}
+
+// csvValue is a cell: text, as the csv decoder reads every cell, or a value
+// of any type a pre-script left. Text is kept as text, and read as the
+// other transforms read text (ruleTextValue), so that reading a cell does
+// not copy its string's header to the heap as a value of any type.
+type csvValue struct {
+	value  any
+	text   string
+	isText bool
+}
+
+// blank reports whether the cell holds nothing: blanks, or None.
+func (v csvValue) blank() bool {
+	if v.isText {
+		return isBlank(v.text)
+	}
+	return blankValue(v.value)
+}
+
+// none reports whether the cell is None, which leaves a label out.
+func (v csvValue) none() bool { return !v.isText && v.value == nil }
+
+// number is the cell as a rule's value.
+func (v csvValue) number(rule model.MetricRule) (float64, error) {
+	if v.isText {
+		return ruleTextValue(rule, v.text)
+	}
+	return ruleValue(rule, v.value)
+}
+
+// label is the cell as a label's value.
+func (v csvValue) label() (string, error) {
+	if v.isText {
+		return v.text, nil
+	}
+	return labelText(v.value)
+}
+
 // csvNotRows is the failure of a csv transform that was given something
 // other than rows, which says what it was given and by whom. The csv decoder
 // gives rows whatever the body holds, and a response another decoder read is
@@ -2391,6 +2456,8 @@ const csvColumnsShown = 12
 // the rows are gone through once for that column and the answer kept.
 type csvColumns struct {
 	rows []any
+	// table is the rows the csv decoder gave, which rows then is not.
+	table *decode.CSVRows
 	// has is whether the response has a column, for each one asked after;
 	// absent the error of each that it does not have.
 	has    map[string]bool
@@ -2421,7 +2488,7 @@ func (k *csvColumns) inResponse(column string) bool {
 	if n, err := strconv.Atoi(column); err == nil && n > 0 && strconv.Itoa(n) == column {
 		number = n
 	}
-	has := false
+	has := k.table != nil && k.table.Has(column)
 	for _, raw := range k.rows {
 		switch row := raw.(type) {
 		case map[string]any:
@@ -2467,6 +2534,16 @@ func (k *csvColumns) notInResponse(column string) csvAbsentColumn {
 func (k *csvColumns) describe(column string) string {
 	if !k.listed {
 		named, longest := map[string]struct{}{}, 0
+		if k.table != nil {
+			// The rows of a header have the columns it names, and the
+			// longest of those without one the columns read by number.
+			for _, column := range k.table.Columns() {
+				k.names = append(k.names, column.Name)
+			}
+			if !k.table.Named() {
+				longest = k.table.Longest()
+			}
+		}
 		for _, raw := range k.rows {
 			switch row := raw.(type) {
 			case map[string]any:
@@ -2550,16 +2627,23 @@ func csvColumnsText(names []string, numbered, column string) string {
 }
 
 func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+	// The csv decoder's rows (decode.CSVRows), or those a pre-script left,
+	// which are a list of dicts and lists.
+	table, decoded := data.(*decode.CSVRows)
 	rows, ok := data.([]any)
-	if !ok {
+	if !ok && !decoded {
 		return nil, csvNotRows(c, data)
+	}
+	count := len(rows)
+	if decoded {
+		count = table.Len()
 	}
 	out := &model.MetricSet{}
 	// A response without a row has no value for any rule, as a regex that
 	// matched no text has none, and a jq items expression that selected
 	// nothing: a required rule is missing its value, and its error mode
 	// decides, rather than the scrape passing with nothing.
-	if len(rows) == 0 {
+	if count == 0 {
 		for _, rule := range rules {
 			if !requiredRule(rule, c) {
 				continue
@@ -2591,53 +2675,56 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 	// has them anyway.
 	var next, ends []int
 	parts := 0
-	if len(rows) > 0 {
+	if count > 0 {
 		columns := len(rules)
-		first, named := rows[0].(map[string]any)
+		first, named := csvRowView{table: table}, decoded && table.Named()
+		if !decoded {
+			first.m, named = rows[0].(map[string]any)
+		}
 		if named {
 			columns = 0
 			for i := range rules {
-				if _, exists := first[rules[i].Expression]; exists {
+				if _, exists := first.cell(rules[i].Expression); exists {
 					columns++
 				}
 			}
 		}
-		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= len(rows)*columns) {
-			parts = len(rows) * columns
+		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= count*columns) {
+			parts = count * columns
 			out.Metrics = make([]model.Metric, parts)
 			next, ends = make([]int, len(rules)), make([]int, len(rules))
 			at := 0
 			for i := range rules {
 				next[i] = at
-				if _, exists := first[rules[i].Expression]; exists || !named {
-					at += len(rows)
+				if _, exists := first.cell(rules[i].Expression); exists || !named {
+					at += count
 				}
 				ends[i] = at
 			}
 		} else {
-			out.Metrics = growSeries(ctx, out.Metrics, len(rows)*columns)
+			out.Metrics = growSeries(ctx, out.Metrics, count*columns)
 		}
 	}
-	responseColumns := csvColumns{rows: rows}
+	responseColumns := csvColumns{rows: rows, table: table}
 	// unreadable is the rules that have failed for a label whose column the
 	// response does not have, which fail once and make no series.
 	var unreadable []bool
-	for at, raw := range rows {
+	for at := range count {
 		if ctx.Err() != nil {
 			return nil, interruptedAt(ctx, "")
 		}
-		row := csvRow(raw)
-		if row == nil {
-			if _, named := raw.(map[string]any); !named {
-				return nil, csvNotARow(c, at+1, raw)
+		row := csvRowAt(rows, table, at)
+		if row.m == nil && !decoded {
+			if _, named := rows[at].(map[string]any); !named {
+				return nil, csvNotARow(c, at+1, rows[at])
 			}
 		}
 		for r, rule := range rules {
 			if unreadable != nil && unreadable[r] {
 				continue
 			}
-			value, exists := row[rule.Expression]
-			if !exists || blankValue(value) {
+			value, exists := row.cell(rule.Expression)
+			if !exists || value.blank() {
 				if requiredRule(rule, c) {
 					// A column no row has, or a cell that is empty in this
 					// row, the header's line not counted among the rows.
@@ -2654,7 +2741,7 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 				}
 				continue
 			}
-			n, err := ruleValue(rule, value)
+			n, err := value.number(rule)
 			if err != nil {
 				if handleMetricError(ctx, c, rule, err) {
 					continue
@@ -2666,11 +2753,11 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 			for _, label := range rule.Labels {
 				if label.Static() {
 					labels[label.Name] = label.Value
-				} else if labelValue, exists := row[label.Expression]; exists && labelValue != nil {
+				} else if labelValue, exists := row.cell(label.Expression); exists && !labelValue.none() {
 					// A pre-script may leave numbers and None in a row:
 					// a number is written as the other transforms write
 					// one, and None leaves the label out.
-					text, err := labelText(labelValue)
+					text, err := labelValue.label()
 					if err != nil {
 						labelErr = fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
 						break

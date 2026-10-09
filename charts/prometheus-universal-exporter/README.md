@@ -161,7 +161,7 @@ A monitor must name a `collector`, and, when the chart holds the configuration, 
 
 > Probe monitors, of either type, send Prometheus to the exporter's Service, so they need `service.enabled: true`; with it off, rendering fails.
 
-Each monitor is named `<release>-prometheus-universal-exporter-<name>`, so `name` is a DNS-1123 label — lower-case letters, digits and `-`, starting and ending with a letter or digit — unique among the entries, and neither `self` nor `static-targets`, the names of the chart's own monitors; anything else fails rendering. Without `targetSelector` a monitor selects the targets labelled `app.kubernetes.io/name: target`; with it, its `matchLabels` or `matchExpressions`. `interval` and `scrapeTimeout`, here and on the self-metrics and static targets monitors, are Prometheus durations, as the Prometheus Operator takes them: whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `30s`, `1m30s` or `1500ms`; a fraction such as `1.5m`, or `us` and `ns`, fail rendering. So does a `scrapeTimeout` longer than its `interval`: Prometheus refuses such a scrape, so the monitor would scrape nothing.
+Each monitor is named `<release>-prometheus-universal-exporter-<name>`, so `name` is a DNS-1123 label — lower-case letters, digits and `-`, starting and ending with a letter or digit — unique among the entries, and neither `self` nor `static-targets`, the names of the chart's own monitors; anything else fails rendering. Without `targetSelector` a monitor selects the targets labelled `app.kubernetes.io/name: target`; with it, its `matchLabels` or `matchExpressions`. `interval` and `scrapeTimeout`, here and on the self-metrics and static targets monitors, are Prometheus durations, as the Prometheus Operator takes them: whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `30s`, `1m30s` or `1500ms`; a fraction such as `1.5m`, or `us` and `ns`, fail rendering. So does a `scrapeTimeout` longer than its `interval`: Prometheus refuses such a scrape, so the monitor would scrape nothing. A probing monitor may leave either out, and then renders none, so the Prometheus Operator's default applies.
 
 A monitor finds its targets in its own namespace, the release's unless `namespaceOverride` is set, and probes each on the port named `http`. Both are the entry's to change. `port` names the port whose address becomes the probe's target: a port of the selected Services for `type: service`, a container port of the selected pods for `type: pod`. `namespaceSelector` is the Prometheus Operator's: `matchNames` lists the namespaces to look in, and `any: true` looks in all of them.
 
@@ -293,7 +293,7 @@ request:
 
 Bearer authentication is also supported.
 
-`targetAuth.mountPath` must be a path of its own: the configuration directory, `webAuth.mountPath` or an `extraVolumeMounts` entry at the same path fails rendering.
+`targetAuth.mountPath` must be a path of its own: the configuration directory, `webAuth.mountPath` or an `extraVolumeMounts` entry at the same path fails rendering, and so does a path inside or above either directory, or an `extraVolumeMounts` entry inside it, since a mount point cannot be created in a read-only Secret or ConfigMap volume.
 
 ### Monitor authentication
 
@@ -369,9 +369,9 @@ monitors:
     collector: example
 ```
 
-With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering.
+With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering, and so is a path inside or above either directory, or an `extraVolumeMounts` entry inside it.
 
-The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected, and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
+The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while it shuts down and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; a rejected reload of its configuration leaves it ready, serving the configuration in force; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
 ## Common configuration
 
@@ -782,10 +782,11 @@ extraArgs:
 
 `extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
 
-Two collisions are rejected while rendering, because both fail in a way that points somewhere other than the values file:
+Three mistakes are rejected while rendering, because each fails in a way that points somewhere other than the values file:
 
 * An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path`, `--log.level`, `--probe.timeout-offset` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
 * An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts — the configuration directory, and `targetAuth.mountPath` and `webAuth.mountPath` while they are enabled — or one another entry uses. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it. Paths are compared without a trailing slash, so `/etc/prometheus-universal-exporter/` is the same path.
+* A mount below a directory the chart mounts from a ConfigMap or a Secret — inside the configuration directory, such as a `subPath` file at `/etc/prometheus-universal-exporter/extra.yaml`, or inside `targetAuth.mountPath` or `webAuth.mountPath` while they are enabled — an `extraVolumeMounts` entry, a credential's `mountPath`, or a credential's `mountPath` above the configuration directory. Kubernetes mounts those volumes read-only, so the mount point cannot be created in them and the container never starts (`CreateContainerError`). The error names the value and the directory to mount outside of; to add a file to the configuration directory, add it to `config.data`.
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 

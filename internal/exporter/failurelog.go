@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"crypto/sha256"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -105,9 +106,10 @@ func newFailureLog() *failureLog {
 // ever read back out of one. Whose a failure is, which a reload asks when it
 // forgets, is told beside the key and kept with the entry.
 //
-// The bytes of a key are the kind of its subject, a letter; its parts, each
-// after its length in decimal and a NUL, so a part ends where its length
-// says and not where a byte of it says; and then what of the subject the
+// The bytes of a key are the digest of its subject (subjectBytes): of the
+// kind of its subject, a letter, and its parts, each after its length in
+// decimal and a NUL, so a part ends where its length says and not where a
+// byte of it says (appendSubjectEncoding); and then what of the subject the
 // failure is, when it is not the subject's own: one of the aspects below,
 // or, for a rule, the marker of a rule's key and what tells the rule apart
 // (appendRuleFailureKey). The kinds are
@@ -239,24 +241,48 @@ func otlpNameClashKey(resource, metric string) subjectKey {
 }
 
 // subjectBytes are the bytes of the key of a subject of kind with the
-// parts, and of the aspect of it when there is one: made at once, in the one
-// allocation that holds them.
+// parts, and of the aspect of it when there is one: the digest of the
+// subject (appendSubjectEncoding) and then the aspect, made at once, in one
+// allocation, which for a usual subject is the only one.
+//
+// A key is a digest rather than the parts themselves because a probe's
+// target is as long as its caller makes it, up to 8 KiB, and a failure is
+// remembered for an hour (failureLogForget): with the target in the key, ten
+// thousand probes of failing targets that differ held some 80 MiB in keys
+// alone. The digest is as long whatever the parts are, so what an entry
+// holds of its subject is bounded, and since it is of one length a key
+// ends where its digest does: an aspect or the marker of a rule's key after
+// it is never read as part of the subject. The log never reads a key back;
+// the log lines take the target from the trip that reports the failure, as
+// before.
+//
+// The encoding is written where that of a usual subject fits, without an
+// allocation of its own, and that of a longer one, such as a probe of a long
+// target, is hashed as it is written (streamSubjectDigest): no copy of a
+// long target is made to remember its failure.
 func subjectBytes(kind byte, of failureAspect, parts ...string) string {
-	size := 1 + len(of)
+	var digest [sha256.Size]byte
+	var room [512]byte
+	if size := subjectEncodingSize(parts); size <= len(room) {
+		digest = sha256.Sum256(appendSubjectEncoding(room[:0], kind, parts...))
+	} else {
+		digest = streamSubjectDigest(kind, parts)
+	}
+	var b strings.Builder
+	b.Grow(len(digest) + len(of))
+	b.Write(digest[:])
+	b.WriteString(string(of))
+	return b.String()
+}
+
+// subjectEncodingSize is how long the encoding of a subject with the parts
+// is (appendSubjectEncoding).
+func subjectEncodingSize(parts []string) int {
+	size := 1
 	for _, part := range parts {
 		size += decimalDigits(len(part)) + 1 + len(part)
 	}
-	var b strings.Builder
-	b.Grow(size)
-	b.WriteByte(kind)
-	var length [20]byte
-	for _, part := range parts {
-		b.Write(strconv.AppendInt(length[:0], int64(len(part)), 10))
-		b.WriteByte(0)
-		b.WriteString(part)
-	}
-	b.WriteString(string(of))
-	return b.String()
+	return size
 }
 
 // decimalDigits is how many digits n, which is not negative, is written with.
@@ -266,6 +292,54 @@ func decimalDigits(n int) int {
 		digits++
 	}
 	return digits
+}
+
+// streamSubjectDigest is the digest of the encoding of a subject of kind
+// with the parts (appendSubjectEncoding), hashed a piece at a time through
+// a buffer of its own, so that what it allocates is the same however long
+// the parts are.
+func streamSubjectDigest(kind byte, parts []string) [sha256.Size]byte {
+	h := sha256.New()
+	buffer := make([]byte, 0, 512)
+	buffer = append(buffer, kind)
+	for _, part := range parts {
+		buffer = strconv.AppendInt(buffer, int64(len(part)), 10)
+		buffer = append(buffer, 0)
+		for part != "" {
+			if len(buffer) == cap(buffer) {
+				h.Write(buffer)
+				buffer = buffer[:0]
+			}
+			n := copy(buffer[len(buffer):cap(buffer)], part)
+			buffer, part = buffer[:len(buffer)+n], part[n:]
+		}
+		// A length and its NUL, 21 bytes at most, fit after what is
+		// left: past half the buffer, it is hashed first.
+		if len(buffer) > cap(buffer)/2 {
+			h.Write(buffer)
+			buffer = buffer[:0]
+		}
+	}
+	h.Write(buffer)
+	var digest [sha256.Size]byte
+	h.Sum(digest[:0])
+	return digest
+}
+
+// subjectDigestBytes is how long the digest that begins every key is.
+const subjectDigestBytes = sha256.Size
+
+// appendSubjectEncoding appends to dst what the digest of a subject of kind
+// with the parts is taken of: the kind, a letter, and then each part after
+// its length in decimal and a NUL (appendKeyPart), so a part ends where its
+// length says and not where a byte of it says, and no two subjects that
+// differ have one encoding.
+func appendSubjectEncoding(dst []byte, kind byte, parts ...string) []byte {
+	dst = append(dst, kind)
+	for _, part := range parts {
+		dst = appendKeyPart(dst, part)
+	}
+	return dst
 }
 
 // appendKeyPart appends part to dst as a key holds a part: after its length

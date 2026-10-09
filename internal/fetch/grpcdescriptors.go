@@ -499,6 +499,12 @@ func registerFileTree(files *protoregistry.Files, f protoreflect.FileDescriptor)
 // An import the set does not carry is taken from the types built into the
 // exporter when it has them, as it has the well-known types; otherwise it is
 // an error naming it.
+//
+// Imports are followed depth first, each file registered after the files it
+// imports, on a stack of its own rather than by recursion: a chain of
+// imports is as long as the set, which a reflection service chooses, and
+// one frame per file would let a long enough chain overflow the goroutine's
+// stack, a fatal error and not a recoverable one.
 func registryOf(protos []*descriptorpb.FileDescriptorProto) (*protoregistry.Files, error) {
 	byName := make(map[string]*descriptorpb.FileDescriptorProto, len(protos))
 	for _, fd := range protos {
@@ -506,37 +512,64 @@ func registryOf(protos []*descriptorpb.FileDescriptorProto) (*protoregistry.File
 	}
 	files := new(protoregistry.Files)
 	adding := map[string]bool{}
-	var add func(name string) error
-	add = func(name string) error {
+	// enter starts a file: it gives the file when its imports are to be
+	// followed, and nil when it is registered already, or built in and
+	// registered now.
+	enter := func(name string) (*descriptorpb.FileDescriptorProto, error) {
 		if _, err := files.FindFileByPath(name); err == nil {
-			return nil
+			return nil, nil
 		}
 		fd, ok := byName[name]
 		if !ok {
 			builtIn, err := protoregistry.GlobalFiles.FindFileByPath(name)
 			if err != nil {
-				return fmt.Errorf("the import %s is missing", name)
+				return nil, fmt.Errorf("the import %s is missing", name)
 			}
-			return registerFileTree(files, builtIn)
+			return nil, registerFileTree(files, builtIn)
 		}
 		if adding[name] {
-			return fmt.Errorf("%s imports itself", name)
+			return nil, fmt.Errorf("%s imports itself", name)
 		}
 		adding[name] = true
-		for _, dep := range fd.GetDependency() {
-			if err := add(dep); err != nil {
-				return err
-			}
-		}
-		file, err := protodesc.NewFile(fd, files)
-		if err != nil {
-			return err
-		}
-		return files.RegisterFile(file)
+		return fd, nil
 	}
-	for _, fd := range protos {
-		if err := add(fd.GetName()); err != nil {
+	// following is a file whose imports are being followed, and the next
+	// of them.
+	type following struct {
+		fd   *descriptorpb.FileDescriptorProto
+		next int
+	}
+	var stack []following
+	for _, top := range protos {
+		fd, err := enter(top.GetName())
+		if err != nil {
 			return nil, err
+		}
+		if fd != nil {
+			stack = append(stack, following{fd: fd})
+		}
+		for len(stack) > 0 {
+			f := &stack[len(stack)-1]
+			if deps := f.fd.GetDependency(); f.next < len(deps) {
+				dep := deps[f.next]
+				f.next++
+				fd, err := enter(dep)
+				if err != nil {
+					return nil, err
+				}
+				if fd != nil {
+					stack = append(stack, following{fd: fd})
+				}
+				continue
+			}
+			file, err := protodesc.NewFile(f.fd, files)
+			if err != nil {
+				return nil, err
+			}
+			if err := files.RegisterFile(file); err != nil {
+				return nil, err
+			}
+			stack = stack[:len(stack)-1]
 		}
 	}
 	return files, nil
@@ -576,17 +609,43 @@ var reflectionAnswers = &reflected{entries: map[reflectedKey]*reflectedEntry{}, 
 // reflectionQuestionTimeout bounds a question to a reflection service. The
 // question belongs to no single probe: it runs detached from the context of
 // the probe that started it, so that probe's deadline or cancellation does
-// not fail the others waiting for the same answer.
+// not fail the others waiting for the same answer. It is not ended when no
+// probe waits for it any more either, so a server slower than a probe's
+// timeout is still answered, and its answer serves the probes that follow;
+// what it may take meanwhile is bounded by size instead (askReflection).
 var reflectionQuestionTimeout = 30 * time.Second
 
+// maxReflectionFiles is the most files a reflection question takes for one
+// service. A service's file and every file it imports, which is what a
+// reflection service sends, are tens of files, and a few hundred in the
+// largest APIs; 4096 leaves an order of magnitude to spare. It bounds what
+// the response limit alone does not: a server that answers with endless
+// tiny files, each importing the next, costs a round trip, a map entry and
+// a descriptor each.
+const maxReflectionFiles = 4096
+
+// reflectionLimit is the most bytes of files a collector's reflection
+// question takes: its response limit, but never less than the default one.
+// The limit is the operator's for the answers, which a collector may hold
+// to a kilobyte, and the service's descriptors are not the answer: they can
+// be larger, and the operator does not size them. 10 MiB is past any real
+// service's files, so the floor bounds a hostile server as well as the
+// limit does, and a collector that raises the limit past it raises this.
+func reflectionLimit(c *model.Collector) int64 {
+	return max(responseLimit(c), defaultResponseLimit)
+}
+
 // files returns the service's files, asking the server when there is no
-// answer younger than reflectionTTL. Every caller, the one that started the
-// question included, waits for the shared answer only as long as its own
-// context allows. The question holds its connection until it ends, so a
-// probe that gives up on it, and drops a connection it takes for dead, does
-// not close the connection under a question a slow server is still answering:
-// the answer arrives, and serves the probes that follow.
-func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflectedKey, now time.Time) (*protoregistry.Files, error) {
+// answer younger than reflectionTTL. limit bounds the bytes of the files the
+// question takes (askReflection, reflectionLimit), and is that of the probe
+// that asks: probes that share the question share its limit. Every caller,
+// the one that started the question included, waits for the shared answer
+// only as long as its own context allows. The question holds its connection
+// until it ends, so a probe that gives up on it, and drops a connection it
+// takes for dead, does not close the connection under a question a slow
+// server is still answering: the answer arrives, and serves the probes that
+// follow.
+func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflectedKey, limit int64, now time.Time) (*protoregistry.Files, error) {
 	conn := held.conn
 	r.mu.Lock()
 	r.sweepLocked(now)
@@ -605,7 +664,7 @@ func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflecte
 		go func() {
 			defer grpcConns.release(held)
 			defer cancel()
-			files, err := askReflection(detached, conn, key.service)
+			files, err := askReflection(detached, conn, key.service, limit)
 			r.mu.Lock()
 			call.files, call.err = files, err
 			if r.asking[key] == call {
@@ -651,8 +710,11 @@ type reflectionStream interface {
 }
 
 // askReflection asks the server's reflection service for the file that
-// defines service and every file it imports.
-func askReflection(ctx context.Context, conn *grpc.ClientConn, service string) (*protoregistry.Files, error) {
+// defines service and every file it imports. The server chooses how many
+// files that is and how large they are, so the question takes at most limit
+// bytes of files (reflectionLimit) and maxReflectionFiles files, and fails
+// at whichever it passes first.
+func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, limit int64) (*protoregistry.Files, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream, err := openReflection(ctx, conn)
@@ -668,13 +730,33 @@ func askReflection(ctx context.Context, conn *grpc.ClientConn, service string) (
 		return nil, err
 	}
 	byName := map[string]*descriptorpb.FileDescriptorProto{}
+	// imports are the files' imports still to be looked at, each with the
+	// file that names it: a file the server sends again under the same name
+	// replaces the first, and only the one kept counts.
+	type importOf struct {
+		fd  *descriptorpb.FileDescriptorProto
+		dep string
+	}
+	var imports []importOf
+	var received, size int64
 	collect := func(raw [][]byte) error {
 		for _, b := range raw {
+			received++
+			size += int64(len(b))
+			if received > maxReflectionFiles {
+				return model.MarkError(fmt.Errorf("the reflection service sent more than %d files for the service %s, the most the exporter takes for one service, whose files and imports are far fewer; the server's reflection answer is broken, so use descriptors: protoset or proto", maxReflectionFiles, service), model.ErrLimitExceeded)
+			}
+			if size > limit {
+				return model.MarkError(fmt.Errorf("the reflection service's files for the service %s come to more than %d bytes, the most a reflection question takes: the collector's response limit, or 10 MiB when that is smaller; raise request.max_response_bytes or limits.max_response_bytes past it, or use descriptors: protoset or proto", service, limit), model.ErrLimitExceeded)
+			}
 			fd := &descriptorpb.FileDescriptorProto{}
 			if err := proto.Unmarshal(b, fd); err != nil {
 				return fmt.Errorf("the reflection service answered a file that does not decode: %w", err)
 			}
 			byName[fd.GetName()] = fd
+			for _, dep := range fd.GetDependency() {
+				imports = append(imports, importOf{fd: fd, dep: dep})
+			}
 		}
 		return nil
 	}
@@ -684,33 +766,28 @@ func askReflection(ctx context.Context, conn *grpc.ClientConn, service string) (
 	// A server sends the imports it has not sent before on the stream;
 	// anything still missing is asked for by name, unless the exporter
 	// has it built in.
-	for {
-		var missing []string
-		for _, fd := range byName {
-			for _, dep := range fd.GetDependency() {
-				if _, ok := byName[dep]; ok || slices.Contains(missing, dep) {
-					continue
-				}
-				if _, err := protoregistry.GlobalFiles.FindFileByPath(dep); err == nil {
-					continue
-				}
-				missing = append(missing, dep)
-			}
+	for len(imports) > 0 {
+		next := imports[len(imports)-1]
+		imports = imports[:len(imports)-1]
+		name := next.dep
+		if byName[next.fd.GetName()] != next.fd {
+			continue
 		}
-		if len(missing) == 0 {
-			break
+		if _, ok := byName[name]; ok {
+			continue
 		}
-		for _, name := range missing {
-			answers, err := stream.ask("", name)
-			if err != nil {
-				return nil, fmt.Errorf("asking the reflection service for %s: %w", name, err)
-			}
-			if err := collect(answers); err != nil {
-				return nil, err
-			}
-			if _, ok := byName[name]; !ok {
-				return nil, fmt.Errorf("the reflection service did not send %s, which the service's files import", name)
-			}
+		if _, err := protoregistry.GlobalFiles.FindFileByPath(name); err == nil {
+			continue
+		}
+		answers, err := stream.ask("", name)
+		if err != nil {
+			return nil, fmt.Errorf("asking the reflection service for %s: %w", name, err)
+		}
+		if err := collect(answers); err != nil {
+			return nil, err
+		}
+		if _, ok := byName[name]; !ok {
+			return nil, fmt.Errorf("the reflection service did not send %s, which the service's files import", name)
 		}
 	}
 	protos := make([]*descriptorpb.FileDescriptorProto, 0, len(byName))

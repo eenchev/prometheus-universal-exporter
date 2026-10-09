@@ -9,11 +9,13 @@ make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
-make build      # every request type; REQUEST_TYPES=http builds only those listed
+make build      # bin/prometheus-universal-exporter, every request type; REQUEST_TYPES=http builds only those listed
+make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
-make ci         # everything above, in CI order
+make ci         # what CI runs, in its order: fmt-check, lint, gopls-check, test, vet,
+                #   build-request-types, test-request-types and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
@@ -865,6 +867,36 @@ hardly move from run to run):
 decoder read it again. The detection now reads it with the json decoder and
 the decode returns what that made, so `jq_sniffed` costs what `jq_items` and
 `jq_detected` cost (36–41 ms at 5,000 items).
+
+The csv decoder has benchmarks of its own, which report beside what a decode
+allocates what the decoded rows still hold a collection later (`held-B/op`):
+
+```sh
+go test -run '^$' -bench 'CSVDecode' -benchtime 3x ./internal/decode/
+```
+
+`wide_header_short_rows/k=2000` is a header of 2,000 columns over 2,000
+lines of `1`, 15 kB; `one_column/10MiB` a header and lines of `1`; and
+`ten_columns/1MiB` a monitoring export of a host name, a time and eight
+numbers a line. Each row was a map with an entry for every column the
+header names, an empty one for each a short row lacks; the rows are now the
+reader's own cells, with the header's names kept once (`CSVRows` in
+`internal/decode/csvrows.go`). Measured old and new in turn on two shared
+cores:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `wide_header_short_rows/k=2000` | 0.64–0.89 s, 649 MB, 66,108 allocations, 328 MB held | 0.5–1.0 ms, 696 kB, 2,099 allocations, 241 kB held |
+| `one_column/10MiB` | 3.3–4.3 s, 3.1 GB, 21.0 million allocations, 1.93 GB held | 1.5–1.9 s, 852 MB, 5.2 million allocations, 238 MB held |
+| `ten_columns/1MiB` | 23–34 ms, 20.6 MB, 231,369 allocations, 12.5 MB held | 4.9 ms, 4.6 MB, 27,260 allocations, 3.6 MB held |
+| `Probe/csv/n=100` | 0.53–0.55 ms, 144 kB, 1,273 allocations | 0.46–0.49 ms, 99 kB, 666 allocations |
+| `Probe/csv/n=5000` | 11.4–13.3 ms, 6.6 MB, 50,405 allocations | 9.5–10.5 ms, 4.3 MB, 20,389 allocations |
+
+What a line of one column still costs, some 48 bytes for a line of two, is
+the reader's: a slice of fields and a string for each record, and its place
+in the list `encoding/csv`'s `ReadAll` grows, which is most of the bytes
+allocated (`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody` holds the rows
+under 32 times the body; they are about 20 times it).
 
 `python` was four times `jq_items`, and nearly all of the difference was the
 hand-over, not the script. At 5,000 items the exporter spent 20 to 24 ms

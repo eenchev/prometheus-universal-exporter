@@ -42,7 +42,7 @@ func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := d.Data.([]any)
+	rows := csvDocument(d.Data).([]any)
 	row := rows[0].(map[string]any)
 	if row["server"] != "web;01" || row["note"] != "up;ok" || row["cpu"] != "72" {
 		t.Fatalf("decoded CSV row=%#v", row)
@@ -54,7 +54,7 @@ func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows = d.Data.([]any)
+	rows = csvDocument(d.Data).([]any)
 	first := rows[0].([]any)
 	if len(rows) != 2 || first[0] != "web01" || first[1] != "72" {
 		t.Fatalf("decoded headerless CSV rows=%#v", rows)

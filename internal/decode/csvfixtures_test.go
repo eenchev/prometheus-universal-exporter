@@ -390,7 +390,7 @@ func TestTheCSVFixturesDecodeIntoTheirRows(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows, ok := d.Data.([]any)
+			rows, ok := csvDocument(d.Data).([]any)
 			if d.Kind != "csv" || !ok || len(rows) != tc.rows {
 				t.Fatalf("decoded as %s into %d rows (%T), want %d rows of csv", d.Kind, len(rows), d.Data, tc.rows)
 			}
@@ -491,7 +491,7 @@ func TestACSVFixtureWithALongRowIsReadByNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := d.Data.([]any)
+	rows := csvDocument(d.Data).([]any)
 	if len(rows) != 11 {
 		t.Fatalf("%d rows, want the header's line and ten more", len(rows))
 	}

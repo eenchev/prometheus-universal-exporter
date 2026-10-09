@@ -3,9 +3,14 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // Expansion is opt-in. Without the flag a reference is part of the value, which
@@ -80,6 +85,44 @@ func TestAnEmptyVariableExpandsToNothing(t *testing.T) {
 	}
 	if got := cfg.Collectors[0].Request.Path; got != "/base" {
 		t.Fatalf("path=%q, want the empty value substituted", got)
+	}
+}
+
+// A variable set to an empty string, as the whole of a value written
+// without quotes, gives what the value written "" gives: a header X-A:
+// ${DEMO_EMPTY} loads as X-A: "" does, where it was refused as a key with
+// nothing after its colon. So does every other place a value may be one
+// variable alone — a path, a body, a label's value, a value after a comment
+// and a sequence's entry — loading alike or refused with the same error.
+func TestAnEmptyVariableAsAWholeValueIsTheValueWrittenEmpty(t *testing.T) {
+	t.Setenv("DEMO_EMPTY", "")
+	const head = "collectors:\n  - name: example\n    request:\n      type: http\n"
+	const tail = "    transform:\n      type: jq\n    metrics:\n      - name: demo_value\n        expression: .value\n"
+	for name, document := range map[string]string{
+		"header":        head + "      path: /x\n      headers:\n        X-A: %s\n" + tail,
+		"path":          head + "      path: %s\n" + tail,
+		"body":          head + "      path: /x\n      body: %s\n" + tail,
+		"label value":   head + "      path: /x\n" + tail + "        labels:\n          - name: l\n            value: %s\n",
+		"before a note": head + "      path: /x\n      headers:\n        X-A: %s # a note\n" + tail,
+		"sequence":      head + "      path: /x\n      forward_headers:\n        - %s\n" + tail,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir() + "/config.yaml"
+			load := func(value string) (*model.Config, error) {
+				if err := os.WriteFile(path, []byte(strings.Replace(document, "%s", value, 1)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return Load(path, WithEnvExpansion())
+			}
+			written, writtenErr := load(`""`)
+			expanded, err := load("${DEMO_EMPTY}")
+			if fmt.Sprint(err) != fmt.Sprint(writtenErr) || !reflect.DeepEqual(expanded, written) {
+				t.Fatalf("the empty variable gives %+v, %v; written \"\" the value gives %+v, %v", expanded, err, written, writtenErr)
+			}
+			if name == "header" && (err != nil || expanded.Collectors[0].Request.Headers["X-A"] != "") {
+				t.Fatalf("the header given an empty variable is %v, %v; want it loaded, empty", expanded, err)
+			}
+		})
 	}
 }
 

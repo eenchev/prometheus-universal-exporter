@@ -36,6 +36,13 @@ func CheckHeaders(headers map[string]string) error {
 	return nil
 }
 
+// CheckHeaderValue refuses a header value with a control character other
+// than tab, which Go refuses to send: the check a collector's request.headers
+// values are held to, for a value that only arrives with a probe.
+func CheckHeaderValue(value string) error {
+	return checkHeaderValue(value)
+}
+
 // CheckClientTLS refuses a tls block that names a client certificate without
 // its key, or a key without its certificate, as a collector's request.tls is
 // refused, and one whose files cannot be read or hold no certificate or key:

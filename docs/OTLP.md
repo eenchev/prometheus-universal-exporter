@@ -187,7 +187,10 @@ it as growth — one counter cannot be two.
 The export keeps running through `--web.shutdown-delay`, while the endpoints
 are still served and the static targets still scraped, and stops when the
 graceful shutdown begins; what was queued since goes out in one last export,
-bounded by `otlp.timeout`.
+bounded by `otlp.timeout`. If that last export fails, there is no next one to
+keep its data points for: they are dropped, counted in
+`http_exporter_otlp_points_dropped_total`, and the warning says how many, as
+`dropped_points`.
 
 ## Delivery
 
@@ -237,7 +240,8 @@ On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
 then makes one last export, bounded by `otlp.timeout`, of what they, earlier
 probes and static targets queued, with a last self-metric snapshot. Static
 targets are not scraped again for it. An export the shutdown interrupted is not
-lost: its data goes out with that last export. A second signal ends the process at once,
+lost: its data goes out with that last export; if the last export fails, its
+data points are dropped and counted. A second signal ends the process at once,
 without it (see [Shutting down](CONFIGURATION.md#shutting-down)).
 
 Metrics keep their type:

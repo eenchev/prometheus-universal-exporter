@@ -17,14 +17,28 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-request-types test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
+.PHONY: build build-request-types ci test test-request-types test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 
+# The exporter's binary, bin/$(APP), built from the main package.
 build:
-	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$$tags" ./...
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$$tags" -o bin/$(APP) .
+
+# What ci.yml's build steps run: every package compiled, then each request
+# type vetted and built on its own, so code one type needs cannot quietly
+# depend on another. Nothing is kept. A test keeps it running what ci.yml
+# runs and `make ci` including it.
+build-request-types:
+	go build ./...
+	@set -e; for type in graphite grpc http localfile; do \
+		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
+		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
+		go vet -tags "$$tags" ./...; \
+		go build -tags "$$tags" ./...; \
+	done
 
 test:
 	go test ./...
@@ -403,4 +417,4 @@ helm-test: helm-version
 		fi; \
 	done
 
-ci: fmt-check lint gopls-check test vet build test-request-types helm-test
+ci: fmt-check lint gopls-check test vet build-request-types test-request-types helm-test

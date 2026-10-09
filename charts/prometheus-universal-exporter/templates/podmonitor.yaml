@@ -35,8 +35,14 @@ spec:
            helper refuses what is not a port's name, a port number first. */}}
     - port: {{ include "prometheus-universal-exporter.monitorPort" $monitor | quote }}
       path: /probe
-      interval: {{ $monitor.interval }}
-      scrapeTimeout: {{ $monitor.scrapeTimeout }}
+      {{- /* Left out when unset, so the Prometheus Operator's defaults apply,
+             rather than rendered as null. */}}
+      {{- with $monitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with $monitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
       params:
         collector: [{{ $monitor.collector | quote }}]
         {{ range $name, $value := $monitor.headers }}

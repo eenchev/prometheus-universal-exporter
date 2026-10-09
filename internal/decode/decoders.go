@@ -255,7 +255,8 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	if cfg.Header != nil {
 		header = *cfg.Header
 	}
-	out := []any{}
+	// The rows are the reader's own, each a line's cells: a row is not
+	// given an entry for a column it is short of (CSVRows).
 	if header {
 		heads := rows[0]
 		// A header naming one column twice, or leaving two unnamed, would
@@ -263,12 +264,21 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		// a word. An unnamed column empty in every row, as a delimiter
 		// ending each line leaves, holds nothing to lose and is left out.
 		column := map[string]int{}
+		var filled []bool
 		for i := range heads {
 			if cfg.TrimSpace {
 				heads[i] = strings.TrimSpace(heads[i])
 			}
 			if heads[i] == "" {
-				if columnIsEmpty(rows[1:], i, cfg.TrimSpace) {
+				// Which columns hold a value is found once, by one pass
+				// over the cells, at the first unnamed column: looking
+				// through every row for each one cost the unnamed columns
+				// times the rows, and a body of 450 kB of empty columns
+				// held a processor for longer than a probe may take.
+				if filled == nil {
+					filled = filledColumns(rows[1:], len(heads), cfg.TrimSpace)
+				}
+				if !filled[i] {
 					continue
 				}
 				return nil, fmt.Errorf("CSV header leaves column %d unnamed, and it holds values; name it, or set response.csv.header: false and read the columns by number", i+1)
@@ -278,49 +288,42 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 			}
 			column[heads[i]] = i
 		}
-		for n, row := range rows[1:] {
+		data := rows[1:]
+		for n, row := range data {
 			// A field past the header's last column has no name to be read
 			// by, and went unseen: a delimiter the header's line was split
 			// by and the rows' were not, or a quote read as text, showed
 			// only as values in the wrong columns. Empty fields there are
-			// what a delimiter ending the line leaves.
+			// what a delimiter ending the line leaves, and are no cells of
+			// the row.
 			if len(row) > len(heads) {
 				if i := len(heads) + firstValue(row[len(heads):], cfg.TrimSpace); i < len(row) {
 					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(r.Body, delim, cfg.TrimSpace, n+1, i)), model.Position(i+1))
 				}
+				row = row[:len(heads)]
+				data[n] = row
 			}
-			m := map[string]any{}
-			for i, k := range heads {
-				if k == "" {
-					continue
-				}
-				if i < len(row) {
-					v := row[i]
-					if cfg.TrimSpace {
-						v = strings.TrimSpace(v)
-					}
-					m[k] = v
-				} else {
-					m[k] = ""
-				}
+			if cfg.TrimSpace {
+				trimCells(row)
 			}
-			out = append(out, m)
 		}
-	} else {
-		for _, row := range rows {
-			a := make([]any, len(row))
-			for i, v := range row {
-				// Both sides, as with a header: the reader itself trims
-				// only what leads a field.
-				if cfg.TrimSpace {
-					v = strings.TrimSpace(v)
-				}
-				a[i] = v
-			}
-			out = append(out, a)
+		return &Decoded{Kind: "csv", Data: &CSVRows{named: true, column: column, rows: data}, Raw: r.Body}, nil
+	}
+	for _, row := range rows {
+		// Both sides, as with a header: the reader itself trims only what
+		// leads a field.
+		if cfg.TrimSpace {
+			trimCells(row)
 		}
 	}
-	return &Decoded{Kind: "csv", Data: out, Raw: r.Body}, nil
+	return &Decoded{Kind: "csv", Data: &CSVRows{rows: rows}, Raw: r.Body}, nil
+}
+
+// trimCells takes the blanks around each of cells off it, in place.
+func trimCells(cells []string) {
+	for i, v := range cells {
+		cells[i] = strings.TrimSpace(v)
+	}
 }
 
 // firstValue is the place of the first of fields that holds a value, which
@@ -338,22 +341,33 @@ func firstValue(fields []string, trim bool) int {
 	return len(fields)
 }
 
-// columnIsEmpty reports whether column i holds nothing in any of rows.
-func columnIsEmpty(rows [][]string, i int, trim bool) bool {
+// filledColumns reports, for each of the first n columns, whether it holds
+// a value, which blanks alone are not under trim, in any of rows. It looks
+// at each cell once, those of a row past the n-th column at none.
+func filledColumns(rows [][]string, n int, trim bool) []bool {
+	filled := make([]bool, n)
+	looked := 0
 	for _, row := range rows {
-		if i >= len(row) {
-			continue
-		}
-		v := row[i]
-		if trim {
-			v = strings.TrimSpace(v)
-		}
-		if v != "" {
-			return false
+		for i, v := range row[:min(len(row), n)] {
+			looked++
+			if filled[i] {
+				continue
+			}
+			if trim {
+				v = strings.TrimSpace(v)
+			}
+			filled[i] = v != ""
 		}
 	}
-	return true
+	if filledColumnsLooked != nil {
+		filledColumnsLooked(looked)
+	}
+	return filled
 }
+
+// filledColumnsLooked, when a test sets it, is told how many cells each call
+// of filledColumns looked at.
+var filledColumnsLooked func(cells int)
 
 func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	options := promOptions{openMetrics: isOpenMetrics(r)}

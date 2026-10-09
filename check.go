@@ -143,14 +143,12 @@ func checkStartup(in checkInputs) checkReport {
 		}
 	}
 
-	// The watch flags are only checked when the watch is asked for, exactly as
-	// at startup, where an interval without --config.watch is never read.
+	// The watch is reported only when it is asked for, exactly as at
+	// startup, where an interval without --config.watch is never read. A
+	// non-positive interval never gets here: it is a command-line error
+	// (exit 2) before the check, as at startup.
 	if in.Watch {
-		if err := validateWatchInterval(in.Watch, in.WatchInterval); err != nil {
-			results = append(results, failedCheck("config_watch", "", err))
-		} else {
-			results = append(results, checkResult{Check: "config_watch", Status: checkOK, Details: map[string]any{"interval": in.WatchInterval.String()}})
-		}
+		results = append(results, checkResult{Check: "config_watch", Status: checkOK, Details: map[string]any{"interval": in.WatchInterval.String()}})
 	}
 
 	if in.StaticTargetFile != "" {
@@ -285,12 +283,13 @@ func skippedCheck(check, file, reason string) checkResult {
 	return checkResult{Check: check, File: file, Status: checkSkipped, Reason: reason}
 }
 
-// validateWatchInterval is shared by startup and --dry-run. A non-positive
-// interval with the watch on is a startup error rather than a silently
-// disabled watch that was explicitly requested.
+// validateWatchInterval checks the watch flags with the other flags, before
+// startup or --dry-run. A non-positive interval with the watch on is a
+// command-line error rather than a silently disabled watch that was
+// explicitly requested.
 func validateWatchInterval(watch bool, interval time.Duration) error {
 	if watch && interval <= 0 {
-		return fmt.Errorf("config.watch-interval must be positive, got %s", interval)
+		return fmt.Errorf("--config.watch-interval must be positive with --config.watch, got %s", interval)
 	}
 	return nil
 }

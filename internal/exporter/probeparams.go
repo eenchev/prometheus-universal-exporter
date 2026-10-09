@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -51,6 +52,42 @@ func checkProbeParams(query url.Values, reads func(key string) bool) error {
 		for _, value := range values {
 			if len(value) > MaxProbeParameterBytes {
 				return fmt.Errorf("probe parameter %s is %d bytes long; a probe parameter's value may be at most %d bytes", key, len(value), MaxProbeParameterBytes)
+			}
+		}
+	}
+	return nil
+}
+
+// checkForwardedHeaderParams refuses a header_<name> parameter for a header
+// request forwards whose value holds a control character other than tab,
+// naming the parameter. Go refuses to send such a value, so the probe would
+// otherwise fail at the target, be retried and be logged as the target's
+// failure, although the mistake is the caller's. A header_<name> for a header
+// not forwarded is ignored, as forwardedHeaders ignores it, and so is an
+// empty value, which is not forwarded. A forwarded request header, the
+// Authorization one among them, needs no such check: the HTTP server answers
+// 400 to a request whose header value holds a control character before the
+// probe sees it, and a header line cannot hold a CR or an LF at all.
+func checkForwardedHeaderParams(query url.Values, request model.RequestConfig) error {
+	forwarded := forwardableHeaders(request)
+	if len(forwarded) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		if headerParam(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		name := http.CanonicalHeaderKey(strings.TrimSpace(key[len(headerParamPrefix):]))
+		if i := sort.SearchStrings(forwarded, name); i == len(forwarded) || forwarded[i] != name {
+			continue
+		}
+		for _, value := range query[key] {
+			if err := fetch.CheckHeaderValue(value); err != nil {
+				return fmt.Errorf("probe parameter %s %w; send the header's value without it", key, err)
 			}
 		}
 	}

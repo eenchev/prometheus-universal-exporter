@@ -1115,7 +1115,7 @@ func numberRows(t *testing.T, trim bool) (forms []string, rows map[string]any) {
 		t.Fatal(err)
 	}
 	rows = map[string]any{}
-	for _, row := range d.Data.([]any) {
+	for _, row := range csvDocument(d.Data).([]any) {
 		form := row.(map[string]any)["form"].(string)
 		if _, twice := rows[form]; twice {
 			t.Fatalf("numbers.csv has two rows of the form %q", form)

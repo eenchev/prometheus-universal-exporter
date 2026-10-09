@@ -193,6 +193,15 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 			}
 		}
 		return append(dst, ']'), true
+	case *decode.CSVRows:
+		// The csv decoder's rows, written as the list of rows they stand
+		// for (decode.CSVRows.Document) without making it: a dict of every
+		// column the header names, the cells a row is short of empty, or
+		// without a header a list of the row's fields.
+		if depth+2 > pythonEncoderDepth {
+			return dst, false
+		}
+		return e.csvRows(dst, x), true
 	case map[string]any:
 		if depth >= pythonEncoderDepth {
 			return dst, false
@@ -224,6 +233,45 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 		return append(dst, '}'), true
 	}
 	return dst, false
+}
+
+// csvRows writes the csv decoder's rows as json.Marshal writes the list of
+// rows they stand for.
+func (e *pythonEncoder) csvRows(dst []byte, rows *decode.CSVRows) []byte {
+	columns := rows.Columns()
+	dst = append(dst, '[')
+	for i := range rows.Len() {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		row := rows.Row(i)
+		if !rows.Named() {
+			dst = append(dst, '[')
+			for j, field := range row {
+				if j > 0 {
+					dst = append(dst, ',')
+				}
+				dst = appendPythonString(dst, field, &e.nul)
+			}
+			dst = append(dst, ']')
+			continue
+		}
+		dst = append(dst, '{')
+		for j, column := range columns {
+			if j > 0 {
+				dst = append(dst, ',')
+			}
+			dst = appendPythonString(dst, column.Name, &e.nul)
+			dst = append(dst, ':')
+			cell := ""
+			if column.Place < len(row) {
+				cell = row[column.Place]
+			}
+			dst = appendPythonString(dst, cell, &e.nul)
+		}
+		dst = append(dst, '}')
+	}
+	return append(dst, ']')
 }
 
 // appendPythonHeaders writes a response's headers as json.Marshal writes a

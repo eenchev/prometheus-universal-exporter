@@ -145,7 +145,7 @@ The deployment MUST run as a non-root user: `podSecurityContext` MUST set
 numeric user, 65532, since Kubernetes can verify `runAsNonRoot` only for a
 numeric user.
 
-The chart MUST configure liveness/readiness probes using the exporter health endpoints: liveness on `/health` and readiness on `/ready`, which reports a rejected reload and failing OTLP exports (SPECIFICATION-EXPORTER.md § 23).
+The chart MUST configure liveness/readiness probes using the exporter health endpoints: liveness on `/health` and readiness on `/ready`, which reports a shutdown and, when `otlp.unready_after_failures` asks for it, failing OTLP exports, but not a rejected reload (SPECIFICATION-EXPORTER.md § 23).
 Their timings MUST come from the `livenessProbe` and `readinessProbe` values,
 defaulting to `periodSeconds: 10`, `timeoutSeconds: 3` and a `failureThreshold`
 of 5 for liveness and 3 for readiness, so a pod busy with a burst of probes is
@@ -638,6 +638,19 @@ rendering, naming the value and what it collides with, and so MUST two
 comparisons MUST ignore a trailing slash, so `/etc/prometheus-universal-exporter/`
 collides with `/etc/prometheus-universal-exporter`.
 
+The configuration directory, and `targetAuth.mountPath` and
+`webAuth.mountPath` while each is enabled, are ConfigMap and Secret volumes,
+which Kubernetes mounts read-only, so no mount point can be created in them
+and a mount below one leaves the container unstarted (CreateContainerError).
+An `extraVolumeMounts` entry, a `subPath` file among them, or an enabled
+credential's `mountPath` below one of them, and an enabled credential's
+`mountPath` above the configuration directory, MUST fail rendering, naming the
+value and the directory to mount outside of; the paths MUST be compared
+cleaned, so doubled and dotted segments hide nothing. The values schema MUST
+refuse such a path below the configuration directory where its pattern can
+tell, and only where the templates refuse it too: an `extraVolumeMounts`
+entry always, a credential's while it is enabled.
+
 An `extraArgs` entry that does not begin with `--` MUST be rejected as well: a
 bare word is read as a positional argument and ignored, so it would fail by
 doing nothing. So MUST every one-shot flag, which prints something and exits so
@@ -686,7 +699,8 @@ The schema MUST:
   count flags' and the disruption budget's strings within it (§ 33.10),
   `server.listenAddress` in the same `host:port` shape the render-time check
   enforces, `goGC.percent` as the whole number from 1 to 10000 or the `off`
-  the render-time check accepts (§ 33.1), and the `--` prefix on an
+  the render-time check accepts (§ 33.1), a mount path inside the
+  configuration directory (§ 33.10a), and the `--` prefix on an
   `extraArgs` entry; and
 - stay open where the chart passes a raw Kubernetes shape straight through —
   `resources`, `affinity`, the security contexts, `tolerations`, `env`,
@@ -1361,6 +1375,37 @@ are skipped and the text checks of the templates still run:
    which Kubernetes defaults to 25%, one of them 1 or `1%`, and both 0 with
    `strategy.type: Recreate`, which renders no `rollingUpdate`, MUST render.
    The repository's own schema validator MUST give helm's verdict on each.
+39. Mounts below a read-only volume (§ 33.10a): an `extraVolumeMounts`
+   directory and a `subPath` file inside the configuration directory,
+   `webAuth.mountPath` and `targetAuth.mountPath` inside it, each credential's
+   inside the other's, `webAuth.mountPath` of `/etc`, above the
+   configuration directory, and an `extraVolumeMounts` entry inside either
+   credential's directory MUST fail rendering, by the values schema naming
+   the value where it is refused there, and with the schema skipped by the
+   templates' message naming the value, the directory and where to mount
+   instead; a path written with doubled and dotted segments, and one whose
+   `..` stays inside, MUST be refused as its cleaned path is. A path beside
+   the configuration directory, one that climbs out of it again, the
+   credentials beside each other below an `emptyDir` of the values' own, and
+   credentials that are not enabled at paths inside the configuration
+   directory or with a mount inside theirs MUST render, with the schema and
+   without. A chart of the helpers alone MUST run the check as it was and as
+   it is over a generated table of thousands of credential and extra mount
+   paths — at, inside, above and beside the configuration directory and the
+   credentials, with trailing slashes, doubled and dotted segments — and the
+   new check MUST refuse with the old one's message where the old one
+   refused, refuse exactly the cases Go's `path.Clean` finds below a
+   read-only volume where it rendered, and render every other. Over
+   generated paths, every path the schema's pattern refuses MUST be, cleaned,
+   inside the configuration directory, every plain path inside it MUST be
+   refused, the directory itself, with trailing slashes, MUST NOT be, the
+   pattern MUST be the same for the three values, and the repository's own
+   validator MUST refuse a credential's path inside it only while enabled.
+40. Probe monitor timings: a monitor of either type without `interval` and
+   `scrapeTimeout` MUST render neither, no `null` anywhere, its `params`
+   right after its `path`; one with only `interval` or only `scrapeTimeout`
+   MUST render that one alone, a `scrapeTimeout` of `5m` without an interval
+   still rendering; and one with both MUST render both as written.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -1468,8 +1513,9 @@ by default) to mount a Secret's two keys as files named `username` and
 `password_file` (SPECIFICATION-EXPORTER.md § 42.5), so the exporter's own
 password need not be in the ConfigMap. `secretName` MUST be required when it
 is enabled, and its `mountPath` MUST be a path of its own: an
-`extraVolumeMounts` entry at it, or it being the configuration directory or
-`targetAuth.mountPath`, MUST fail rendering (§ 33.10a). While it is enabled, every monitor the chart renders MUST send its
+`extraVolumeMounts` entry at it or below it, or it being the configuration
+directory or `targetAuth.mountPath`, or inside or above either, MUST fail
+rendering (§ 33.10a). While it is enabled, every monitor the chart renders MUST send its
 credential as `basicAuth`, since `web.basic_auth` protects `/probe`, the
 self-metrics and the static targets endpoints alike: the self-health and
 static targets monitors, and each probe monitor without `auth.enabled` of its
@@ -1579,7 +1625,9 @@ The parameters themselves, and what the exporter does with each, are specified i
 
 The chart MUST expose these parameters as list-valued `params` entries on
 each `monitors` item, and MUST expose `interval` and `scrapeTimeout` on each
-item as the Prometheus Operator scrape settings. The monitor scrape timeout
+item as the Prometheus Operator scrape settings; one an item leaves out MUST
+be left out of the endpoint, not rendered as null, so the Operator's default
+applies. The monitor scrape timeout
 and the exporter target-request timeout override are distinct: the former is
 set on the generated ServiceMonitor or PodMonitor, while the latter is passed
 to `/probe` as `params.timeout`. Prometheus refuses a scrape timeout longer

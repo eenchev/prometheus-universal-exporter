@@ -221,10 +221,21 @@ func csvLabelColumnsAbsent(data any, rules []model.MetricRule) (absent []bool, s
 // place, a rule that makes nothing and reports nothing, which leaves the
 // error and the series of the other rules to compare, and nothing at all
 // where such a rule is under fail, since it stops the transform.
+// csvDocument is data as the csv decoder once gave its rows, a list of maps
+// or of lists (decode.CSVRows.Document), and other data as it is.
+func csvDocument(data any) any {
+	if rows, ok := data.(*decode.CSVRows); ok {
+		return rows.Document()
+	}
+	return data
+}
+
 func csvTransformsAsBefore(t *testing.T, data any, c model.Collector) (ruleByRule, reordered bool, run csvTransformRun) {
 	t.Helper()
 	former := c
-	absent, labelFails := csvLabelColumnsAbsent(data, c.Metrics)
+	// The former transform read the rows as the decoder made them then.
+	document := csvDocument(data)
+	absent, labelFails := csvLabelColumnsAbsent(document, c.Metrics)
 	if labelFails {
 		optional := false
 		former.Metrics = slices.Clone(c.Metrics)
@@ -234,7 +245,7 @@ func csvTransformsAsBefore(t *testing.T, data any, c model.Collector) (ruleByRul
 			}
 		}
 	}
-	was := runCSVTransform(t, formerTransformCSV, data, former)
+	was := runCSVTransform(t, formerTransformCSV, document, former)
 	now := runCSVTransform(t, transformCSV, data, c)
 	// Each series starts with the place of its rule: a stable sort by it
 	// has each rule's series together, in the order they were in.

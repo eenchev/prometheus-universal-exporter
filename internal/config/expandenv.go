@@ -413,18 +413,16 @@ var plainSafe = regexp.MustCompile(`^[A-Za-z0-9_./+-][A-Za-z0-9_./+=:@?&%~-]*$`)
 
 // encodeScalar writes value as YAML reads it back. A value in place of an
 // unquoted one is written unquoted when that is safe, so a number or a
-// boolean stays one; an empty one is written as nothing, as the file would
-// hold it by hand, where nothing is a value — a block mapping's; everything
-// else is a double-quoted string, JSON's escapes being YAML's. A key is
-// always quoted: a key is a name, and a plain one at the start of a line may
-// be taken for something else, as --- is.
+// boolean stays one; everything else is a double-quoted string, JSON's
+// escapes being YAML's. An empty value is "" everywhere: written as nothing
+// it would be YAML's null, which no key takes, so a header or any other
+// value given an empty variable was refused as a key with nothing after its
+// colon, where the same value written "" loads. A key is always quoted: a
+// key is a name, and a plain one at the start of a line may be taken for
+// something else, as --- is.
 func encodeScalar(value string, plain bool, where scalarContext) string {
 	if plain && !where.key {
 		switch {
-		case value == "":
-			if !where.flow {
-				return value
-			}
 		case value == "-":
 			// A lone dash starts a sequence entry.
 		case plainSafe.MatchString(value) && !strings.HasSuffix(value, ":"):

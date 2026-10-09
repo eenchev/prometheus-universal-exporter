@@ -155,12 +155,11 @@ func TestStartupAndDryRunNameTheCollectorFileOfAPythonFault(t *testing.T) {
 	}
 }
 
+// With --config.watch the report has a config_watch entry with the interval;
+// a non-positive one is a command-line error before the check
+// (TestANonPositiveWatchIntervalIsACommandLineError).
 func TestCheckValidatesTheWatchFlags(t *testing.T) {
 	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig)
-	bad := runCheckCLI(t, conf, "--config.watch", "--config.watch-interval=0s")
-	if bad.code != 1 || bad.result(t, "config_watch").Status != checkFailed {
-		t.Fatalf("exit=%d\n%s", bad.code, bad.stdout)
-	}
 	good := runCheckCLI(t, conf, "--config.watch", "--config.watch-interval=90s")
 	if good.code != 0 || good.result(t, "config_watch").Details["interval"] != "1m30s" {
 		t.Fatalf("exit=%d\n%s", good.code, good.stdout)

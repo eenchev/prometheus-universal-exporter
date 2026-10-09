@@ -862,6 +862,45 @@ func TestChartProbeMonitorsTakeAPortAndNamespaces(t *testing.T) {
 	}
 }
 
+// A probe monitor without interval or scrapeTimeout rendered interval: null
+// and scrapeTimeout: null. Each is now left out when unset, so the
+// Prometheus Operator's defaults apply, and rendered as before when set; the
+// check of the timeout against the interval keeps its verdicts, comparing
+// the two only when both are set.
+func TestChartProbeMonitorsLeaveOutTimingsTheyAreNotGiven(t *testing.T) {
+	helm := requireHelm(t)
+	monitors, endpoints := probeMonitors(t, helm, "--set-json", `monitors=[
+		{"name":"none","enabled":true,"type":"service","collector":"example"},
+		{"name":"none-pods","enabled":true,"type":"pod","collector":"example"},
+		{"name":"interval","enabled":true,"type":"service","collector":"example","interval":"30s"},
+		{"name":"timeout","enabled":true,"type":"pod","collector":"example","scrapeTimeout":"5m"},
+		{"name":"both","enabled":true,"type":"pod","collector":"example","interval":"1m","scrapeTimeout":"10s"}]`)
+	if len(monitors) != 5 {
+		t.Fatalf("%d probe monitors rendered, want 5", len(monitors))
+	}
+	for name, want := range map[string][2]string{"none": {}, "none-pods": {}, "interval": {"30s", ""}, "timeout": {"", "5m"}, "both": {"1m", "10s"}} {
+		for i, key := range []string{"interval", "scrapeTimeout"} {
+			got := child(endpoints[name], key)
+			switch {
+			case want[i] == "" && got != nil:
+				t.Errorf("%s: %s is rendered as %q (%s) without one in the values", name, key, got.Value, got.Tag)
+			case want[i] != "" && (got == nil || got.Value != want[i] || got.Tag != "!!str"):
+				t.Errorf("%s: %s is %+v, want %q", name, key, got, want[i])
+			}
+		}
+		if got := child(endpoints[name], "path"); got == nil || got.Value != "/probe" {
+			t.Errorf("%s: the endpoint does not scrape /probe", name)
+		}
+	}
+	out, ok := helmTemplate(t, helm, chartDir, "--set-json", `monitors=[{"name":"none","enabled":true,"type":"service","collector":"example"}]`)
+	if !ok || strings.Contains(out, "null") {
+		t.Errorf("ok=%v, want a monitor without timings rendered with no null:\n%s", ok, out)
+	}
+	if !strings.Contains(out, "\n      path: /probe\n      params:\n") {
+		t.Errorf("the endpoint's params do not follow its path once the timings are left out:\n%s", out)
+	}
+}
+
 // A monitor's port is a port's name, as the Prometheus Operator's port field
 // is, and the chart rendered whatever string it was given: port: "9115"
 // became a name no port has, so the monitor found no target and nothing said

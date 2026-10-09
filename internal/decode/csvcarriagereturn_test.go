@@ -68,7 +68,7 @@ func decodedCSV(t *testing.T, body string, cfg model.CSVConfig) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.Data, nil
+	return csvDocument(d.Data), nil
 }
 
 // A carriage return alone ends a record, as a line feed does and a carriage

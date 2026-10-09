@@ -428,10 +428,25 @@ func ready(t *testing.T, server *Server) (int, string) {
 	return recorder.Code, recorder.Body.String()
 }
 
-// Not ready while the last reload of a file was rejected, ready again once one
-// is accepted.
-func TestNotReadyWhileTheConfigurationIsRejected(t *testing.T) {
-	r := newReloadable(t, testutil.CollectorsDocument("first"), "")
+// A rejected reload, of the configuration or of the static target file,
+// leaves the exporter ready: it answers probes from the configuration in
+// force, and every replica rejecting the same edit must not leave a Service
+// without endpoints. The rejection shows in
+// http_exporter_config_last_reload_successful, 0 until a reload is accepted
+// again. A shutdown still makes it unready, a rejected reload or not.
+func TestARejectedReloadLeavesTheExporterReady(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	conf := strings.Replace(testutil.CollectorsDocument("first"), "collectors:", "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\ncollectors:", 1)
+	targets := "interval: 1m\ntargets:\n  - name: one\n    collector: first\n    target: http://a.example\n"
+	r := newReloadable(t, conf, targets)
+	probe := "/probe?collector=first&target=" + target.URL
+	successful := func(file string) float64 {
+		t.Helper()
+		return seriesValue(t, selfMetrics(t, r.server), `http_exporter_config_last_reload_successful{file="`+file+`"}`)
+	}
 	if code, body := ready(t, r.server); code != http.StatusOK || body != "ready\n" {
 		t.Fatalf("a fresh exporter: %d %q", code, body)
 	}
@@ -439,19 +454,43 @@ func TestNotReadyWhileTheConfigurationIsRejected(t *testing.T) {
 	if err := r.manager.Reload("http"); err == nil {
 		t.Fatal("a broken configuration was accepted")
 	}
-	code, body := ready(t, r.server)
-	if code != http.StatusServiceUnavailable || !strings.Contains(body, "the last reload of the configuration was rejected") {
-		t.Fatalf("after a rejected reload: %d %q", code, body)
+	r.write(r.targets, strings.Replace(targets, "collector: first", "collector: missing", 1))
+	if err := r.manager.Reload("http"); err == nil {
+		t.Fatal("a broken target file was accepted")
 	}
-	if strings.Contains(body, "yaml") || strings.Contains(body, r.path) {
-		t.Fatalf("/ready is unauthenticated and quotes the error: %q", body)
+	if code, body := ready(t, r.server); code != http.StatusOK || body != "ready\n" {
+		t.Fatalf("after rejected reloads: %d %q, want 200", code, body)
 	}
-	r.write(r.path, testutil.CollectorsDocument("first"))
+	if got := successful("config"); got != 0 {
+		t.Errorf("after a rejected reload of the configuration, last_reload_successful = %v, want 0", got)
+	}
+	if got := successful("static_targets"); got != 0 {
+		t.Errorf("after a rejected reload of the target file, last_reload_successful = %v, want 0", got)
+	}
+	if rr := probeOnce(t, r.server, probe, nil); rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "first_value 42") {
+		t.Fatalf("a probe after a rejected reload: %d %q", rr.Code, rr.Body)
+	}
+	r.write(r.path, conf)
+	r.write(r.targets, targets)
 	if err := r.manager.Reload("http"); err != nil {
 		t.Fatal(err)
 	}
+	if got := successful("config"); got != 1 {
+		t.Errorf("after an accepted reload, last_reload_successful = %v, want 1", got)
+	}
+	if got := successful("static_targets"); got != 1 {
+		t.Errorf("after an accepted reload of the target file, last_reload_successful = %v, want 1", got)
+	}
 	if code, _ := ready(t, r.server); code != http.StatusOK {
-		t.Fatalf("still not ready after an accepted reload: %d", code)
+		t.Fatalf("not ready after an accepted reload: %d", code)
+	}
+	// The other reasons stand: a shutdown after a rejected reload is not
+	// ready, for the shutdown alone.
+	r.write(r.path, "collectors: [\n")
+	_ = r.manager.Reload("http")
+	r.server.BeginShutdown()
+	if code, body := ready(t, r.server); code != http.StatusServiceUnavailable || body != "not ready: the exporter is shutting down\n" {
+		t.Fatalf("shutting down after a rejected reload: %d %q", code, body)
 	}
 }
 

@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -158,22 +159,33 @@ func keyPartRead(key string) (part, rest string, ok bool) {
 	return after[:length], after[length:], true
 }
 
-// logSubjectOf reads the subject back out of the bytes of a key, which the
-// exporter never does: that every key reads as the subject it was made of,
-// and as no other, is what shows that no two subjects have one key.
-func logSubjectOf(key string) (logSubject, bool) {
+// logSubjectOf reads the subject back out of the bytes of a key and the
+// encoding of its subject (appendSubjectEncoding), which the exporter never
+// does: the key begins with the digest of the encoding, the encoding reads
+// as the kind and parts of the subject, and what follows the digest as what
+// of the subject failed. That every key reads so as the subject it was made
+// of, and as no other, is what shows that no two subjects have one key, but
+// for two encodings with one digest.
+func logSubjectOf(encoding, key string) (logSubject, bool) {
 	var s logSubject
-	if key == "" || partsOf[key[0]] == 0 {
+	if encoding == "" || partsOf[encoding[0]] == 0 || len(key) < subjectDigestBytes {
 		return s, false
 	}
-	s.kind = key[0]
-	rest := key[1:]
+	if digest := sha256.Sum256([]byte(encoding)); key[:subjectDigestBytes] != string(digest[:]) {
+		return s, false
+	}
+	s.kind = encoding[0]
+	parts := encoding[1:]
 	for i := range partsOf[s.kind] {
 		var ok bool
-		if s.parts[i], rest, ok = keyPartRead(rest); !ok {
+		if s.parts[i], parts, ok = keyPartRead(parts); !ok {
 			return s, false
 		}
 	}
+	if parts != "" {
+		return s, false
+	}
+	rest := key[subjectDigestBytes:]
 	if of, rule := strings.CutPrefix(rest, ruleKeyMarker); rule {
 		var named, written bool
 		s.rule = true
@@ -191,6 +203,12 @@ func logSubjectOf(key string) (logSubject, bool) {
 		}
 	}
 	return s, false
+}
+
+// encoding is what the digest that begins the keys of the subject is taken
+// of (appendSubjectEncoding).
+func (s logSubject) encoding() string {
+	return string(appendSubjectEncoding(nil, s.kind, s.parts[:partsOf[s.kind]]...))
 }
 
 // logSubjects makes subjects whose parts are joined of pieces that the keys
@@ -282,9 +300,10 @@ func (g *logSubjects) next() logSubject {
 // rule's key and its pieces, the aspects, the words a static target's
 // failures were told by and lengths as a key writes them:
 //
-//   - the bytes of each key read back as the subject the key was made of
-//     (logSubjectOf), so two subjects that differ have two keys, and among
-//     the generated ones no key is that of two;
+//   - each key is the digest of its subject and what of it failed, and
+//     reads back, with the encoding the digest is of, as the subject the
+//     key was made of (logSubjectOf), so two subjects that differ have two
+//     keys, and among the generated ones no key is that of two;
 //   - each key says whose it is: its collector, none for the endpoint's,
 //     and the static target, by name, for a static target's own and for no
 //     other;
@@ -366,7 +385,7 @@ func TestNoTwoSubjectsHaveOneKey(t *testing.T) {
 	for range alloctest.UnlessRaced(300000, 60000) {
 		s := generator.next()
 		key := s.key()
-		if read, ok := logSubjectOf(key.bytes); !ok || read != s {
+		if read, ok := logSubjectOf(s.encoding(), key.bytes); !ok || read != s {
 			t.Fatalf("the key %q of %+v reads as %+v (a key: %v)", key.bytes, s, read, ok)
 		}
 		if other, seen := keys[key.bytes]; seen && other != s {

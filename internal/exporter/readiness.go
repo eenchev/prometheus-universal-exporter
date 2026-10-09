@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 )
 
-// /health says the process is alive; /ready says whether it is doing what it
-// was configured to do. An exporter that keeps answering probes with the last
-// valid configuration after a reload was rejected is alive and useful, but it
-// is not running the configuration somebody deployed, so it is reported as not
-// ready until the next accepted reload.
+// /health says the process is alive; /ready says whether it should be sent
+// probes. A rejected reload, of the configuration or of the static target
+// file, leaves it ready: it keeps answering probes with the configuration in
+// force, and a pod that is not ready is taken out of its Service. Every
+// replica rejects the same ConfigMap edit, so making them unready would leave
+// the Service without endpoints and fail every probe the exporter could
+// still answer. The rejection is reported where it is seen without that cost:
+// http_exporter_config_last_reload_successful is 0, the ERROR log line, and
+// /-/reload's 500.
 //
 // An exporter whose OTLP exports keep failing is delivering nothing to its
 // backend, but it still answers probes, and a pod that is not ready is taken
@@ -31,15 +33,6 @@ func (s *Server) notReadyReasons() []string {
 		return []string{"the exporter is shutting down"}
 	}
 	var reasons []string
-	if s.manager.Reloads != nil {
-		for _, file := range s.manager.Reloads.Rejected() {
-			name := "configuration"
-			if file == config.ReloadFileStaticTargets {
-				name = "static target file"
-			}
-			reasons = append(reasons, fmt.Sprintf("the last reload of the %s was rejected; the previous one is still in force", name))
-		}
-	}
 	cfg := s.manager.Get().OTLP
 	if failing := s.otlp.failing(cfg.Endpoint); cfg.Enabled && cfg.Endpoint != "" && cfg.UnreadyAfterFailures > 0 && failing >= cfg.UnreadyAfterFailures {
 		reasons = append(reasons, fmt.Sprintf("the last %d OTLP exports failed", failing))

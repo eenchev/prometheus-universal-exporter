@@ -166,11 +166,13 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			finish(1)
 			return
 		}
-		count(func(st *serverStats) { st.cacheMisses++ })
 	}
 
 	// A static target scrape shares the collector's max_concurrent_probes with its
 	// probes, and waits for a slot within its budget rather than failing.
+	// One that finds no cache entry is a miss once it has its slot and goes
+	// to the target: one turned away, or cut short by the shutdown while it
+	// waited, fetched nothing in place of an entry.
 	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
 		if shuttingDown(ctx) {
 			s.abortedByShutdown(target, c)
@@ -182,6 +184,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		return
 	}
 	defer s.trips.release(c.Name)
+	if model.CacheTTL(c) > 0 {
+		count(func(st *serverStats) { st.cacheMisses++ })
+	}
 	trip := s.collect(ctx, collectJob{
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, log: log,

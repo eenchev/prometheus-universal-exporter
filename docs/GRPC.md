@@ -61,7 +61,7 @@ The probe's `target` is the server, `host:port`:
 | `forward_authorization`, `forward_headers` | off | The probe's `Authorization` and listed headers, forwarded as metadata. |
 | `retry` | none | `attempts`, `backoff`, and `codes`, the status codes retried: `[UNAVAILABLE]` when left out. See [Errors and retries](#errors-and-retries). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks the calls may and may not reach, checked for the server and each connection; see [Restricting targets](REQUESTS.md#restricting-targets). |
-| `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make several times larger. |
+| `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make several times larger. With `reflection`, also the most bytes of files a reflection question takes, never less than 10 MiB. |
 
 `path`, `query`, `headers`, `body`, `method`, `follow_redirects`,
 `redirect_trusted_hosts`, `enable_http2` and `allowed_schemes` are `http`'s
@@ -152,6 +152,24 @@ covering the question and the call. A target without reflection fails saying
 so, and to register it on the server or use `protoset` or `proto`. The
 reflection question carries the call's `metadata` and credentials, so a server
 that authenticates every RPC, reflection included, answers it.
+
+The server decides how many files a reflection answer is and how large, so a
+question takes at most the collector's response limit of files, or 10 MiB when
+the limit is smaller, counted as they arrive, all its answers together, and at
+most 4096 files. The floor is there because the limit is sized for the
+answers, and a collector that holds them to a kilobyte still needs its
+service's descriptors, which can be larger. A service's file and its imports
+are tens of files, a few hundred in the largest APIs, so a server that passes
+either bound is broken or hostile: the probe fails, counted in
+`http_exporter_series_limit_exceeded_total`, saying which bound it passed.
+Past the bytes, raise `max_response_bytes` if the files are that large; either
+way, `descriptors: protoset` or `proto` takes the types from files the
+exporter reads itself and asks the server nothing. Probes that share a
+question share the limit of the collector whose probe asked it. A failed
+question is not kept, so the next probe asks again. The question goes on when
+the probe that asked it gives up, until it is answered or its own 30-second
+timeout ends, so that a slow server's answer still serves the probes that
+follow; the bounds hold it meanwhile.
 
 Only unary methods are called. A streaming method is refused when the
 configuration loads with `protoset` and `proto`, and at the first call with
@@ -519,6 +537,8 @@ leaves it out links none of them and cannot load a `grpc` collector:
 make build REQUEST_TYPES=http,localfile,graphite
 docker build --build-arg REQUEST_TYPES=http,localfile,graphite .
 ```
+
+`make build` writes the binary to `bin/prometheus-universal-exporter`.
 
 The libraries add about 6 MB to a stripped binary. See
 [Dependencies](DEPENDENCIES.md).

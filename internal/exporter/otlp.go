@@ -1222,7 +1222,7 @@ func (s *Server) FlushOTLP() {
 		return
 	}
 	s.logger.Info("sending the last OTLP export before exiting")
-	s.exportOTLP(context.Background(), time.Duration(cfg.Timeout))
+	s.exportOTLPOnce(context.Background(), time.Duration(cfg.Timeout), true)
 }
 
 // exportOTLP sends everything pending, with a self-metric snapshot, retrying
@@ -1233,6 +1233,14 @@ func (s *Server) FlushOTLP() {
 // next export takes a new snapshot. Metrics the endpoint refused outright are
 // dropped and counted, since sending them again would be refused again.
 func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
+	s.exportOTLPOnce(ctx, budget, false)
+}
+
+// exportOTLPOnce is exportOTLP, and the last export at shutdown when last
+// says so (FlushOTLP): there is no next export then, so the metrics a
+// failure would queue again for it are dropped instead, counted in
+// http_exporter_otlp_points_dropped_total and logged as dropped.
+func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last bool) {
 	cfg := s.manager.Get().OTLP
 	pending := s.drainOTLP()
 	if !cfg.Enabled || cfg.Endpoint == "" {
@@ -1270,6 +1278,12 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 			attrs = append(attrs, "response_body", refused.body)
 		}
 		s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", attrs...)
+		return
+	}
+	if last {
+		points := countPoints(pending)
+		s.otlp.drop(points)
+		s.logger.Warn("the last OTLP export before exiting failed; its data points are dropped", "error", err, "dropped_points", points, "retries", retries)
 		return
 	}
 	s.requeueOTLP(pending)

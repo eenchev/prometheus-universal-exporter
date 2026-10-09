@@ -122,7 +122,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_decoder_lines_skipped_total", model.CounterMetricType, "Lines a decoder left out and read on: carbon lines the graphite decoder could not read, under response.graphite.invalid_lines: skip, and sample lines the prometheus decoder found to be no part of their histogram or summary family.", func(v statsValues) float64 { return float64(v.linesSkipped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
-	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
+	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead, and one a concurrency limit turned away only as rejected.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
 	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and static target scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
@@ -179,7 +179,7 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
-	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, or the oldest waiting past otlp.max_pending_points.",
+	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, rejected by an export it accepted (partialSuccess), the oldest waiting past otlp.max_pending_points, or those of the last export before exiting when it failed.",
 	"http_exporter_otlp_export_duration_seconds":               "Duration of the most recent OTLP export, its retries included.",
 	"http_exporter_otlp_last_export_success_timestamp_seconds": "Unix time of the last OTLP export that got through; 0 before the first.",
 }
@@ -217,6 +217,11 @@ func selfMetricNames() []string {
 // The series' creation times are written, as OpenMetrics' _created samples,
 // only with web.self_metrics.created_timestamps (selfcreated.go).
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	// The self-metrics are read as the probes and the static targets are:
+	// any other method is refused, before anything is gathered.
+	if !readOnly(w, r, "use GET or HEAD to read the self-metrics") {
+		return
+	}
 	set := s.selfMetricSet()
 	if !s.manager.Get().Web.SelfMetrics.CreatedTimestamps {
 		withoutCreated(&set)

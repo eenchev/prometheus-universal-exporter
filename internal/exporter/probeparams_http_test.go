@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,6 +207,62 @@ func TestAnOverLongProbeParameterIsRefused(t *testing.T) {
 		if len(key) > 2*MaxProbeParameterBytes {
 			t.Errorf("a failure log key is %d bytes long", len(key))
 		}
+	}
+}
+
+// A forwarded header_<name> value Go would refuse to send, one with a CR,
+// an LF or another control character but tab, is the caller's mistake, as a
+// malformed param_<name> is: it is answered 400 naming the parameter before
+// the target is contacted, rather than failing the trip there, being retried
+// and logged as the target's failure. A tab or a non-ASCII letter is sent as
+// it is, and a header_<name> for a header the collector does not forward is
+// still ignored, whatever it holds.
+func TestAForwardedHeaderValueWithAControlCharacterIsRefused(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	var hits atomic.Int32
+	var got atomic.Value
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		got.Store(r.Header.Get("X-Tenant"))
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := testutil.Collector("text", "text")
+	c.Request.ForwardHeaders = []string{"X-Tenant"}
+	c.Request.Retry.Attempts = 3
+	server := verboseServer(t, true, c)
+	probe := "/probe?collector=text&target=" + url.QueryEscape(target.URL)
+	for key, value := range map[string]string{
+		"header_X-Tenant": "a\r\nX-Injected: 1",
+		"header_x-tenant": "a\nb",
+		"HEADER_X-Tenant": "a\x01b",
+		"header_X-TENANT": "a\x7fb",
+	} {
+		r := probeOnce(t, server, probe+"&"+key+"="+url.QueryEscape(value), nil)
+		if want := "probe parameter " + key + " has the control character"; r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), want) {
+			t.Errorf("%s=%q: answered %d %q, want 400 saying %q", key, value, r.Code, r.Body, want)
+		}
+	}
+	// Repeated, the bad value is refused wherever it stands.
+	if r := probeOnce(t, server, probe+"&header_X-Tenant=ok&header_X-Tenant="+url.QueryEscape("a\rb"), nil); r.Code != http.StatusBadRequest {
+		t.Errorf("a bad second value answered %d %q, want 400", r.Code, r.Body)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("refused probes reached the target %d times", n)
+	}
+	if counted := metricValue(t, selfMetrics(t, server), `http_exporter_scrapes_total{collector="text"}`); counted != 0 {
+		t.Fatalf("%v refused probes were counted", counted)
+	}
+	if strings.Contains(logs.String(), "probe failed") {
+		t.Fatalf("a refused probe was logged as the target's failure:\n%s", logs)
+	}
+	for _, value := range []string{"a\tb", "Zürich"} {
+		if r := probeOnce(t, server, probe+"&header_X-Tenant="+url.QueryEscape(value), nil); r.Code != http.StatusOK || got.Load() != value {
+			t.Errorf("%q: answered %d %q and forwarded %q, want 200 and the value", value, r.Code, r.Body, got.Load())
+		}
+	}
+	if r := probeOnce(t, server, probe+"&header_X-Other="+url.QueryEscape("a\r\nb"), nil); r.Code != http.StatusOK {
+		t.Errorf("a header not forwarded answered %d %q, want 200", r.Code, r.Body)
 	}
 }
 

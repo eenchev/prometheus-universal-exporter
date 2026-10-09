@@ -171,7 +171,12 @@ and `param_<name>` among them, MUST be at most 8 KiB (8192 bytes); a longer
 one MUST be answered `400` naming the parameter and the limit, without
 repeating the value, so what the exporter keeps about a probe after
 answering it — a failure log entry (§ 25.1), a tracked request (§ 22.1) — is
-bounded by what a probe may name. A parameter no request type accepts MUST stay
+bounded by what a probe may name. A value of a `header_<name>` parameter for a
+header the collector forwards (§ 42.4) that holds a control character other
+than tab MUST be answered `400` naming the parameter, before the target is
+contacted or the probe counted, as a configured header value with one is
+refused at load; it MUST NOT be sent, retried or logged as the target's
+failure. A parameter no request type accepts MUST stay
 ignored, repeated or long as it may be.
 
 #### 3.2a Probe deadline
@@ -654,7 +659,11 @@ type.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1).
 - CI MUST vet and build each single-type selection as well as the default
-  build, so no type depends on code only another type compiles.
+  build, so no type depends on code only another type compiles;
+  `make build-request-types`, which `make ci` includes, MUST run the same
+  commands. `make build` MUST build the main package into
+  `bin/prometheus-universal-exporter`, with the tags of `REQUEST_TYPES`, and
+  the documentation that gives it MUST say where the binary lands.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, which `make test-request-types`
   runs locally and `make ci` includes. A test that needs a request type —
@@ -1010,6 +1019,17 @@ keys:
   probe that started it, so that probe ending does not fail the others; each
   probe MUST wait for the answer only as long as its own deadline allows.
   The question MUST carry the call's metadata and credentials.
+  The question MUST take at most the collector's response bound (§ 20) of
+  files, or 10 MiB when the bound is smaller, counted as the bytes they arrive
+  as, and at most 4096 files, the bounds holding the files of every answer to
+  it together; past either it MUST fail, counted in
+  `http_exporter_series_limit_exceeded_total`, saying which bound it passed
+  and naming `descriptors: protoset` or `proto`, and for the bytes
+  `max_response_bytes`. Probes sharing a question MUST share the response
+  bound of the collector whose probe started it. A failed question MUST NOT be
+  kept: the next probe asks again. The imports of the files received, and of a
+  descriptor set, MUST be followed without a frame of the stack per file, so
+  that no chain of imports can overflow it.
   A call failing with `UNIMPLEMENTED`, or whose answer does not decode, MUST
   drop the answer, ask again and call again once, apart from the retries. A
   server without reflection MUST fail saying so and naming `protoset` and
@@ -2326,8 +2346,18 @@ last that all hold nothing MUST be left out, as a trailing delimiter's
 column is; a row with fewer fields than the header MUST have empty text in
 the columns it lacks; and without a header row rows MAY have any number of
 fields each, and the first line of the body MUST be a row like the others:
-there is no setting that skips lines. A line MUST end at a line feed, with a
-carriage return before it or without one, and at a carriage return that no
+there is no setting that skips lines. The memory the decoded rows take MUST
+grow with the fields the body holds, not with the header's columns times the
+rows: the empty text of a column a short row lacks MUST be what a rule, a
+script and an error read in it without being stored in each row, so that a
+header of 2,000 columns over 2,000 lines of one field, a body of 15 kB, is
+decoded in a few megabytes at most rather than as four million cells.
+Likewise the work of finding which unnamed header columns are empty in every
+row MUST grow with the cells the rows hold, not with the unnamed columns
+times the rows, so that a header of 50,000 unnamed columns over 50,000
+lines of one field is gone through once. A
+line MUST end at a line feed, with a carriage return before it or without
+one, and at a carriage return that no
 line feed follows, as a spreadsheet's "CSV (Macintosh)" ends its lines: a
 body MAY end some lines one way and some another, and the lines an error
 names MUST count each. Inside a quoted field a carriage return MUST be the
@@ -4994,8 +5024,10 @@ An export is one delivery of everything pending, its retries included:
 `success` when it got through and `failure` when it did not, both published
 from the start. Retries MUST be counted in
 `http_exporter_otlp_export_retries_total`. Data points dropped because the
-endpoint refused them, or because they were the oldest waiting past
-`otlp.max_pending_points` (§ 42.1a), MUST be counted in
+endpoint refused them, because an export it accepted rejected them
+(`partialSuccess`, § 42.1a), because they were the oldest waiting past
+`otlp.max_pending_points` (§ 42.1a), or because the last export at shutdown
+failed (§ 42.1a), MUST be counted in
 `http_exporter_otlp_points_dropped_total`; data points kept for the next
 export MUST NOT be. The duration MUST be that of the most recent export,
 retries included, and the timestamp that of the last export that got through,
@@ -5026,7 +5058,11 @@ exposition and the self-metrics delivered over OTLP carry the same text, and a
 family exposed without a description MUST fail the repository's tests rather
 than reach an operator undocumented.
 
-The self-metrics path MUST NOT require a target query parameter.
+The self-metrics path MUST NOT require a target query parameter. It MUST
+answer `GET` and `HEAD`, as `/probe` and the static targets path do; any other
+method MUST be answered `405 Method Not Allowed` with `Allow: GET, HEAD`,
+before anything is gathered. Authentication, where configured (§ 42.5), is
+checked first.
 
 ### 22.0a Resource metrics
 
@@ -5426,9 +5462,7 @@ Recommended behavior:
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests.
-- `/ready`: the exporter is doing what it was configured to do. It MUST answer
-  `503` while the last reload of the configuration or of the static target
-  file was rejected (§ 22.0b), until a reload of it is accepted, and, with OTLP
+- `/ready`: the exporter should be sent probes. It MUST answer `503`, with OTLP
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
   through; from a `SIGTERM` or `SIGINT` on, while the exporter shuts down
@@ -5440,7 +5474,13 @@ Recommended behavior:
   rejected. A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
-  line of the configuration.
+  line of the configuration. A rejected reload of the configuration or of the
+  static target file MUST NOT make the exporter unready, for the reason OTLP
+  failures do not by default: it keeps answering probes from the
+  configuration in force, and every replica rejecting the same edit would
+  otherwise leave a Service without endpoints. The rejection MUST stay
+  visible in `http_exporter_config_last_reload_successful` (§ 22.0b), the
+  reload's `ERROR` log line and the `500` of `/-/reload`.
 - `/self-metrics`: exporter self-metrics by default; the path MUST be configurable (§ 42), and the self-metrics MUST be served at that one path only.
 - `/static-targets`: the latest results of the static targets by default; the
   path MUST be configurable (§ 42.14a).
@@ -5507,7 +5547,8 @@ document, so a deployment does not have to reason about which files are watched.
 The watch interval MUST be configurable and MUST have a documented default of
 60 seconds, which keeps an idle exporter from stating its configuration files
 continuously while still picking a change up promptly enough for a reload. A
-non-positive interval MUST be rejected at startup rather than silently disabling
+non-positive interval with the watch on MUST be rejected as a command-line error
+(exit 2), at startup and with `--dry-run`, rather than silently disabling
 the watch that was explicitly requested. The exporter SHOULD report whether the
 watch is active in its startup log.
 
@@ -7214,7 +7255,8 @@ order, and MUST honour the flags that change what startup loads:
 `--config.file`, `--static-targets-file`, `--config.expand-env`,
 `--static-targets.expand-env`, `--python.path`,
 and `--config.watch` with `--config.watch-interval`. A malformed flag, such as
-a `--web.listen-address` that is not `host:port` with a TCP port, MUST be a
+a `--web.listen-address` that is not `host:port` with a TCP port or a
+non-positive `--config.watch-interval` with `--config.watch`, MUST be a
 command-line error (exit 2) before the check. A configuration that
 `--dry-run` passes MUST start with the same files and flags, and one it fails MUST
 be refused by startup; a test MUST pin this agreement for every failure the
@@ -7233,8 +7275,8 @@ The steps MUST be:
 - `python_scripts` — every Python script compiles and every pre-script produces
   `data` (§ 16), with each faulty script reported as its own error. A
   configuration without Python MUST pass without needing an interpreter;
-- `config_watch` — only when `--config.watch` is set, that the interval is
-  positive;
+- `config_watch` — only when `--config.watch` is set, reporting the interval
+  under `details.interval` (a non-positive one never reaches the check);
 - `static_targets` — only when `--static-targets-file` is set, that the file is
   valid on its own and against the configuration (§ 42.14).
 
@@ -8754,7 +8796,7 @@ status captured:
 - A target file invalid on its own fails; a valid one that does not match the
   configuration fails naming the mismatch; a valid one beside a broken
   configuration is `skipped` and still lists its targets.
-- A non-positive watch interval fails only when the watch is on.
+- A non-positive watch interval exits 2 only when the watch is on.
 - An unset variable fails the check under `--config.expand-env` and not
   without it.
 - A static target file with a reference is expanded under
@@ -9533,8 +9575,9 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
 - The export loop stops when its context ends; an export it cut short is not
   counted and its data is kept; the last export sends it, data queued since,
   and a self-metric snapshot, in one request. Without OTLP there is none.
-- `/ready` is `503` after a rejected reload, without quoting the error, and
-  `200` after an accepted one; `503` after three failed exports in a row and
+- `/ready` stays `200` after a rejected reload of the configuration and of
+  the static target file, and after an accepted one; `503` after three failed
+  exports in a row and
   `200` after one gets through; OTLP failures do not count with OTLP disabled.
 - With `HTTP_PROXY` set, a probe and an OTLP export go through the proxy, and a
   host in `NO_PROXY` does not.
@@ -20687,6 +20730,196 @@ The target file's check finds a collector's placeholders and a request block's k
   in their body, message and targets, which some of their targets replace
   and others do not, and the check still says what it said for each.
 
+## 34.125 CSV rows, gRPC reflection bounds, forwarded header values, the watch interval, readiness after a rejected reload, chart mounts and monitor timings, and the Makefile
+
+The decoded rows of a CSV answer cost the cells its lines hold (§ 13):
+
+- A header of k named columns over k lines of one field is decoded without
+  an empty cell for every column a row is short of: at k = 2,000, a body of
+  15 kB, the decode allocates under a hundred bytes for each of the body's
+  (0.7 MB, where it allocated 649 MB), and at k = 4,000 the same per byte
+  (where it allocated 2.6 GB), counted through `alloctest.BytesAtMost`
+  (`TestCSVShortRowsUnderAWideHeaderCostTheCellsTheyHold`).
+- The decoded rows of a body of one short column, a header and lines of
+  `1`, hold under 32 times the body a collection later (about 20; 2 MiB,
+  256 KiB under the race detector), where a map for each row held 184 times
+  it (`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody`).
+- A row read by name has every column the header names, the cell "" where
+  it is short of one, and no column the header leaves unnamed; a row read by
+  number has the columns "1" up to its length and no other spelling of a
+  number ("01", "+1"); the rows have a column when any row has it
+  (`TestCSVRowsHaveTheColumnsOfTheirHeader`).
+- The rows the csv decoder gives are the rows it gave when each was a map of
+  every column the header names, held against that decoder copied as an
+  oracle: the same rows and cells, the same lists without a header, the same
+  errors by their text and by the text the failure log recognises, and the
+  same bytes from json.Marshal — for every fixture of testdata/csv and every
+  CSV the examples read under every setting of response.csv (a header or
+  none, trim_space or not, six delimiters), and 30,000 generated bodies
+  (3,000 under the race detector) of named, unnamed, duplicate and padded
+  header columns, rows shorter than the header, as long and longer, empty,
+  blank and quoted cells, quotes holding delimiters, line ends and doubled
+  quotes, bare quotes, blank lines, LF, CRLF and CR alone and a last line
+  without one (`TestCSVRowsAreTheRowsTheDecoderGaveBefore`).
+- A csv transform of the decoder's rows gives what the transform as it was
+  gave of the rows as they were, held against both copied as an oracle: the
+  same series in the same order, the same error, the same failures of the
+  same rules in the same order and the same lines logged, word for word —
+  a column no row has named with the columns the rows do have, a cell a
+  short row lacks empty — over every fixture and example CSV under every
+  setting and 2,500 generated bodies (250 under the race detector), each
+  read by generated rules of the header's columns, of columns it lacks and
+  of numbers, with labels, value maps, every error mode and series limits;
+  and the rows a pre-script leaves, dicts, lists, numbers, None, rows that
+  are no row and data that is no list, are read as the transform read them
+  (`TestCSVTransformOfTheDecodersRowsGivesWhatItGave`).
+- The request line that hands the decoder's rows to a Python worker is the
+  line that handed the rows as they were, byte for byte, written by the
+  encoder and by json.Marshal alike — dicts by the header's names in the
+  order of their bytes, "" for a cell a row is short of, lists without a
+  header — over the same fixtures and generated bodies
+  (`TestAScriptIsHandedTheCSVRowsItWasHanded`); and a pre-script and a
+  python transform that echo `json.dumps(data)` echo the same text for every
+  fixture of testdata/csv, with a header and without
+  (`TestAScriptEchoesTheCSVRowsItEchoed`).
+
+A gRPC reflection question is bounded and its imports are registered without recursion (§ 5.1):
+
+- A gRPC reflection service that answers with 1 MiB files each importing the
+  next, for ever, is followed only as far as the collector's response limit,
+  or 10 MiB when the limit is smaller: with `max_response_bytes: 1024` the
+  question fails at 10 MiB, with 12 MiB at 12 MiB, counted as a limit, saying
+  the files come to more than that and naming `max_response_bytes`,
+  `protoset` and `proto`; the server has sent no more than the bound and the
+  file that passed it. A second probe fails the same way at once on a stream
+  of its own: a failed question is not kept.
+- A reflection service that sends more than 4096 files, tiny ones forming one
+  chain of imports, fails the question at the file bound whatever the
+  response limit allows, counted as a limit and saying so; the server sent
+  the two answers that pass the bound and nothing after them.
+- Probes that miss the reflection answer together share one question that
+  fails at a bound: one reflection stream, and each probe gets the failure.
+- A reflection question whose files, the service's file and the import it
+  asks for by name, come to exactly its limit is answered, and fails at the
+  limit one byte under it; a well-known import is built in and not asked.
+- A collector with `max_response_bytes: 1024` takes its service's
+  descriptors, larger than that, by reflection.
+- Within its bounds a reflection question gives the files it gave before
+  them (the old question as the oracle), from grpc-go's reflection service,
+  v1 and v1alpha, and over generated file sets served with their imports and
+  without; a set the old question failed on fails.
+- A descriptor set whose imports form a chain of 50,000 files (20,000 under
+  the race detector) is registered whole with the goroutine stack held to
+  1 MiB: imports are followed without a frame of the stack per file.
+- Building the files of a descriptor set gives the same files or the same
+  error as before it stopped recursing (the old function as the oracle), over
+  the queue service's descriptor set with and without the well-known
+  Timestamp in either order, chains, a diamond, cycles of one, two and three
+  files, a missing import, well-known imports, two files under one name, and
+  generated sets with random imports, clashing names and unknown types.
+
+Forwarded header values, the watch interval and readiness after a rejected reload (§ 3.2, § 23, § 30.1):
+
+- A `header_<name>` value for a forwarded header holding a CR, an LF, another
+  control character or DEL, in any case of the prefix and as any of repeated
+  values, is answered `400` naming the parameter before the target is
+  contacted, without the probe being counted or logged as a failed probe; a
+  tab or a non-ASCII value is forwarded as it is, and a `header_<name>` for a
+  header not forwarded is still ignored whatever it holds.
+- `--config.watch` with a `--config.watch-interval` of `0s` or `-1s` exits 2
+  with a JSON log line naming the flag and nothing on stdout, at startup and
+  with `--dry-run` alike; with a positive interval the `--dry-run` report's
+  `config_watch` entry is `ok` with the interval, and without `--config.watch`
+  the interval is not read.
+- A rejected reload of the configuration and of the static target file leaves
+  `/ready` `200` and probes answered from the configuration in force, with
+  `http_exporter_config_last_reload_successful` 0 for each file; an accepted
+  reload sets both back to 1 and `/ready` stays `200`; a shutdown after a
+  rejected reload answers `503` with the shutdown as its only reason.
+
+The Makefile builds the exporter's binary and `make ci` runs what the CI workflow runs (§ 35):
+
+- Every go command a step of ci.yml's test job runs (beside `go mod
+  download`), its loops over the request types and the request-type-tags
+  line among them, is run by a target `make ci` reaches, every make target
+  the job runs other than the installing ones is reached by `make ci`, at
+  least eight go commands are read from ci.yml, and every target of the
+  Makefile is `.PHONY`.
+- `make build` runs `go build -tags "$tags" -o bin/$(APP) .` with the tags of
+  `REQUEST_TYPES`, `APP` is the name the Dockerfile gives the binary, and
+  docs/CONFIGURATION.md, docs/DEVELOPMENT.md and docs/GRPC.md give
+  `make build` and say the binary lands in
+  `bin/prometheus-universal-exporter`.
+
+## 34.126 Unnamed CSV columns, empty variables, the failure log's keys, cache misses, the self-metrics' methods and the last OTLP export
+
+Unnamed CSV columns are found empty in one pass, and an empty variable as a whole value is `""` (§ 13, § 42.15a):
+
+- A header of one named column and k unnamed ones over k lines of one field
+  (k = 50,000, 10,000 under the race detector) decodes with the unnamed
+  columns found empty by one pass over the rows' cells, k of them, counted
+  through a test hook, where every row was looked through for each unnamed
+  column (k times k: a 450 kB body held a processor 34 s); rows as wide as
+  the header are looked at once each, and a header naming every column has
+  no pass (`TestUnnamedCSVColumnsAreFoundEmptyByLookingAtEachCellOnce`).
+- What the one pass finds of each column is what looking through every row
+  for it found, held against that function copied as an oracle over 20,000
+  generated tables (4,000 under the race detector) of ragged rows, empty,
+  blank and filled cells, with trim and without
+  (`TestFilledColumnsIsWhatLookingThroughEachColumnFound`).
+- A CSV with unnamed header columns decodes to the rows and the refusals the
+  decoder gave when it looked for each unnamed column in every row, held
+  against it as an oracle over 10,000 generated bodies (2,000 under the race
+  detector) of headers with empty, quoted empty, blank, duplicate and named
+  columns over ragged rows of empty, quoted empty, blank and filled cells
+  (`TestUnnamedCSVColumnsDecodeAsWhenEachWasLookedForInEveryRow`).
+- Under `--config.expand-env` a variable set to "" as the whole of an
+  unquoted value gives what the value written `""` gives: a header
+  `X-A: ${A}` loads empty, as do `path`, `body`, a header before a comment
+  and a `forward_headers` entry, and a label's `value` is refused with the
+  error `""` gets, where each was refused as a key with nothing after its
+  colon (`TestAnEmptyVariableAsAWholeValueIsTheValueWrittenEmpty`); the
+  expanded document holds `a: ""` and `- ""` where it held nothing
+  (`TestExpansionInEveryPlaceAValueStands`).
+
+The failure log holds little per subject, a turned-away probe is no cache miss, the self-metrics answer only GET and HEAD, and a failed last OTLP export counts its points as dropped (§ 22, § 22.0c, § 42.13):
+
+- The key of a subject of the failure log is the SHA-256 digest of its
+  encoding — the kind, then each part after its length and a NUL — and then
+  the aspect: over 3,000 generated subjects with parts up to 2,000 bytes, on
+  both sides of the length past which the encoding is hashed as it is
+  written, the key is the digest of what the key was before and the aspect.
+- Remembering the failure of a probe of an 8 KiB caller-chosen target
+  allocates under 1.5 KiB, under a 32-byte key, and the entry holds no byte
+  of the target; it allocated the 8 KiB of the target in its key.
+- Through /probe, 1,000 failing probes of distinct 8 KiB targets leave the
+  failure log holding under 1.5 KiB each (about 375 bytes); they held some
+  16 KiB each, the key holding the target and the collector's name, read
+  from the query, the whole request line.
+- Over 20,000 failures, recoveries and forgotten collectors of probes
+  (short and long targets, several keys, stale aspects), static targets and
+  what trips found, the failure log writes line for line, with the same
+  repeats, sums of repeats and remembered failures after every step, what
+  the same log given the keys that held the parts writes.
+- No two generated subjects have one key, and each key reads back, with the
+  encoding its digest is of, as the subject it was made of.
+- A probe of a cached collector turned away by `max_concurrent_probes` or by
+  `--probe.max-concurrent` is counted as rejected and not in
+  `http_exporter_cache_misses_total`; the misses are the trips that went to
+  the target.
+- A static target scrape of a cached collector that finds no slot within its
+  budget is counted as rejected and not as a cache miss; the scrape that has
+  its slot is the one miss.
+- The self-metrics endpoint answers GET and HEAD 200, and POST, PUT, PATCH,
+  DELETE and OPTIONS 405 with `Allow: GET, HEAD`, the content type of
+  /probe's and the static targets endpoint's 405, and "use GET or HEAD to
+  read the self-metrics".
+- The last OTLP export at shutdown that fails (an endpoint answering 503)
+  drops its data points: nothing stays pending, they are counted in
+  `http_exporter_otlp_points_dropped_total`, and the warning says they are
+  dropped, with `dropped_points`; an export before the shutdown that fails
+  the same way still keeps its points, counts none dropped and says so.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -21179,7 +21412,11 @@ On `SIGTERM` or `SIGINT`, the export loop MUST keep running through
 exporter MUST then stop accepting requests, let the probes in progress finish,
 stop the export loop, and make one last export, bounded by `otlp.timeout`, of everything pending — including the data
 of an export the shutdown cut short — with a last self-metric snapshot, before
-it exits. Static targets MUST NOT be scraped again for it. The shutdown MUST
+it exits. Static targets MUST NOT be scraped again for it. When that last
+export fails, there is no next export to keep its data points for: they MUST
+be dropped, counted in `http_exporter_otlp_points_dropped_total` (§ 22.0c),
+and the warning MUST say that they are dropped and how many; a failed export
+before the shutdown MUST still keep its data points as above. The shutdown MUST
 be logged, and once it has begun a second `SIGTERM` or `SIGINT` MUST end the
 process at once, without waiting for the probes or the last export. A
 `SIGHUP` MUST keep reloading until the process exits, and MUST NOT end it.
@@ -22001,7 +22238,11 @@ http_exporter_cache_stale_served_total
 A probe answered from the cache, including one that finds it filled while it
 waits to start its trip, MUST count as a hit; a probe whose trip goes to the
 target MUST count as a miss; a probe answered by sharing another's trip MUST
-count as neither, and as coalesced.
+count as neither, and as coalesced. A probe or a static target scrape that
+finds no cache entry and is then turned away by a concurrency limit (§ 42.13b),
+and a static target scrape the shutdown cuts short while it waits for a slot,
+MUST NOT count as a miss; one turned away MUST count only as rejected, as
+§ 42.13b says.
 
 A cache hit MUST count as a successful scrape in `http_exporter_scrapes_total`
 and `http_exporter_scrape_success_total`, and the cached metrics MUST still be queued
@@ -22641,7 +22882,10 @@ not an empty substitution. An empty substitution yields a document that parses
 and is wrong — a collector with no path, a credential that is silently blank —
 which the exporter would then serve. Every unset name MUST be reported in one
 message, and the message MUST name the document. A variable that is set to an
-empty string MUST substitute normally: that is a deliberate choice.
+empty string MUST substitute normally: that is a deliberate choice. As the
+whole of an unquoted value it MUST give what the value written `""` gives —
+loaded, or refused for the reason `""` is — and MUST NOT become YAML's null,
+which no key takes.
 
 A reference MUST be expanded where the document holds it as a value — a
 scalar value or key, plain or quoted, whole or in part — and the expansion
@@ -22657,8 +22901,7 @@ whether the reference is the whole value or key, part of a longer one, as in
 `{Authorization: Bearer ${TOKEN}}`, or stands beside quoted values, as in
 `{X-Name: "x", X-Token: ${TOKEN}}`; after an anchor; and for values YAML
 reads specially on their own:
-an expanded key MUST be written quoted, an empty value MUST be written quoted
-inside a flow collection, and `-` MUST always be. Reading a document with a
+an expanded key, an empty value and `-` MUST always be written quoted. Reading a document with a
 bare flow reference MUST NOT change how any other value of it expands: a
 reference in a block value, or in a plain value elsewhere, MUST expand to
 the variable's value exactly as in a document without one, and nothing the
@@ -22775,6 +23018,12 @@ one it accepts: built from source with `go install`, helm reports only its
 release line (`v4.3`) unless the version is set at link time as helm's own
 release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
 target MUST pass that flag with the pinned version.
+
+`make ci` MUST run every go command the CI workflow's test job runs, beside
+the `go mod download` that fills its module cache, and reach every make
+target the job runs other than the installing ones, so that a clean local
+`make ci` means a clean CI run; every target of the Makefile MUST be
+`.PHONY`, since none makes a file of its name. A test MUST check both.
 
 A dependency update can raise the go directive in a pull request that touches no
 workflow, which leaves every later build failing with `go.mod requires go >= X`

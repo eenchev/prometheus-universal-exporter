@@ -121,12 +121,11 @@ func TestCheckAgreesWithStartup(t *testing.T) {
 	broken := strings.Replace(testutil.MinimalConfig, "expression:", "error_mode: panic\n        expression:", 1)
 	badTargets := testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: bad-name\n    collector: legacy_text\n    target: http://a.example\n")
 	for name, args := range map[string][]string{
-		"invalid configuration":     {"--config.file=" + testutil.WriteFile(t, "config.yaml", broken)},
-		"missing configuration":     {"--config.file=" + t.TempDir() + "/absent.yaml"},
-		"no interpreter":            {"--config.file=configs/config.example.yaml", "--python.path=/nonexistent/python"},
-		"invalid targets file":      {"--config.file=configs/config.otlp.example.yaml", "--static-targets-file=" + badTargets},
-		"targets without OTLP":      {"--config.file=configs/config.example.yaml", "--static-targets-file=configs/static-targets.example.yaml"},
-		"non-positive watch period": {"--config.file=configs/config.example.yaml", "--config.watch", "--config.watch-interval=0s"},
+		"invalid configuration": {"--config.file=" + testutil.WriteFile(t, "config.yaml", broken)},
+		"missing configuration": {"--config.file=" + t.TempDir() + "/absent.yaml"},
+		"no interpreter":        {"--config.file=configs/config.example.yaml", "--python.path=/nonexistent/python"},
+		"invalid targets file":  {"--config.file=configs/config.otlp.example.yaml", "--static-targets-file=" + badTargets},
+		"targets without OTLP":  {"--config.file=configs/config.example.yaml", "--static-targets-file=configs/static-targets.example.yaml"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if check := runCheckCLI(t, args...); check.code != 1 {
@@ -236,6 +235,24 @@ func TestANegativeTimeoutOffsetIsACommandLineError(t *testing.T) {
 		out := runCLI(t, args...)
 		if out.code != 2 || !strings.Contains(out.stderr, "--probe.timeout-offset must not be negative") || out.stdout != "" {
 			t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+}
+
+// A non-positive --config.watch-interval with --config.watch is a flag's
+// value, not the configuration's, so it is a command-line error (exit 2)
+// before anything is loaded, at startup and with --dry-run alike, as a
+// negative duration is, rather than a failed config_watch check.
+func TestANonPositiveWatchIntervalIsACommandLineError(t *testing.T) {
+	for _, interval := range []string{"0s", "-1s"} {
+		for _, args := range [][]string{
+			{"--config.file=configs/config.example.yaml", "--config.watch", "--config.watch-interval=" + interval},
+			{"--dry-run", "--config.file=configs/config.example.yaml", "--config.watch", "--config.watch-interval=" + interval},
+		} {
+			out := runCLI(t, args...)
+			if out.code != 2 || !strings.Contains(out.stderr, "--config.watch-interval must be positive with --config.watch, got "+interval) || out.stdout != "" {
+				t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+			}
 		}
 	}
 }

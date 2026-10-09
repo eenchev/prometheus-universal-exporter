@@ -198,6 +198,10 @@ extraArgs: []
 # A mount path the chart already uses is rejected while rendering: mounting over
 # the configuration directory would hide config.yaml and crash-loop the pod.
 # So is a path two entries share. Paths are compared without a trailing slash.
+# A path inside the configuration directory, or inside an enabled
+# targetAuth or webAuth mountPath, is rejected too: those are read-only
+# volumes in which no mount point can be created, so the pod would never
+# start. Add a file to the configuration directory through config.data.
 extraVolumes: []
 extraVolumeMounts: []
 
@@ -319,7 +323,8 @@ monitors: []
 # static-targets, which the chart's own monitors use. interval and
 # scrapeTimeout are Prometheus durations: whole numbers of y, w, d, h, m, s
 # and ms, such as 30s or 1m30s; a scrapeTimeout longer than its interval fails
-# rendering, since Prometheus refuses it. With webAuth.enabled, an entry
+# rendering, since Prometheus refuses it. Either may be left out, and is then
+# not rendered, so the Prometheus Operator's default applies. With webAuth.enabled, an entry
 # without auth of its own presents the webAuth Secret, as the exporter's Basic
 # Auth protects /probe.
 # Example:
@@ -544,7 +549,8 @@ targetAuth:
   usernameFileName: username
   passwordFileName: password
 # mountPath must be a path of its own: not the configuration directory,
-# webAuth.mountPath or an extraVolumeMounts entry's, or rendering fails.
+# webAuth.mountPath or an extraVolumeMounts entry's, nor inside or above
+# either directory, or rendering fails.
 # For basic auth from a Secret, set enabled: true and type: basic, then
 # reference the mounted files from a collector:
 # request:

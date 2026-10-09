@@ -178,7 +178,8 @@ func TestExpansionInEveryPlaceAValueStands(t *testing.T) {
 		"empty in a sequence":  {"a: [${DEMO_EMPTY}, b]\n", `{"a":["","b"]}`},
 		"empty in a mapping":   {"a: {k: ${DEMO_EMPTY}}\n", `{"a":{"k":""}}`},
 		"empty key":            {"${DEMO_EMPTY}: 1\n", `{"":1}`},
-		"empty block value":    {"a: ${DEMO_EMPTY}\n", `{"a":null}`},
+		"empty block value":    {"a: ${DEMO_EMPTY}\n", `{"a":""}`},
+		"empty in a list":      {"a:\n  - ${DEMO_EMPTY}\n", `{"a":[""]}`},
 		"key starting a line":  {"${DEMO_KEY}: 1\n", `{"X-Tenant":1}`},
 	} {
 		t.Run(name, func(t *testing.T) {

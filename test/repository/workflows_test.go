@@ -408,6 +408,135 @@ func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 	}
 }
 
+// makeRule is a rule of the Makefile: a target, its prerequisites after the
+// colon, and no assignment (:=).
+var makeRule = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+):([^=\n][^\n]*)?$`)
+
+// makefileRules reads the Makefile's rules: each target's prerequisites and
+// recipe, the recipe with make's $$ read as the shell's $.
+func makefileRules(t *testing.T) (prerequisites map[string][]string, recipes map[string]string) {
+	t.Helper()
+	prerequisites, recipes = map[string][]string{}, map[string]string{}
+	lines := strings.Split(read(t, "Makefile"), "\n")
+	for i, line := range lines {
+		match := makeRule.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		prerequisites[match[1]] = strings.Fields(match[2])
+		var recipe strings.Builder
+		for _, next := range lines[i+1:] {
+			if !strings.HasPrefix(next, "\t") {
+				break
+			}
+			recipe.WriteString(strings.ReplaceAll(next, "$$", "$"))
+			recipe.WriteString("\n")
+		}
+		recipes[match[1]] = recipe.String()
+	}
+	if len(recipes) == 0 {
+		t.Fatal("no rule of the Makefile was read")
+	}
+	return prerequisites, recipes
+}
+
+// `make ci` is meant to be what CI runs, and had drifted from it: CI vets and
+// builds each request type on its own, which make ci did not, and ci was no
+// .PHONY target, so a file named ci would have stopped it running. Every go
+// command a step of ci.yml's test job runs, and every make target one runs
+// beside the installing ones, has to be run by a target `make ci` reaches,
+// and every target of the Makefile is .PHONY, since none makes a file of
+// its name. go mod download is the one exception: it fills the module cache
+// before CI's steps, which each go command make runs does for itself.
+func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
+	prerequisites, recipes := makefileRules(t)
+	reached, queue := map[string]bool{}, []string{"ci"}
+	for len(queue) > 0 {
+		target := queue[0]
+		queue = queue[1:]
+		if reached[target] {
+			continue
+		}
+		if _, ok := recipes[target]; !ok {
+			t.Fatalf("make ci reaches %s, which the Makefile has no rule for", target)
+		}
+		reached[target] = true
+		queue = append(queue, prerequisites[target]...)
+	}
+	var run strings.Builder
+	for target := range reached {
+		run.WriteString(recipes[target])
+	}
+	makeCI := run.String()
+	commands := 0
+	for _, step := range workflowSteps(t, ".github/workflows/ci.yml")["test"] {
+		script, _ := step["run"].(string)
+		for line := range strings.SplitSeq(script, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case line == "go mod download":
+			case strings.HasPrefix(line, "go "), strings.HasPrefix(line, "for type in "), strings.HasPrefix(line, `tags="$(sh tools/request-type-tags.sh`):
+				commands++
+				if !strings.Contains(makeCI, line) {
+					t.Errorf("ci.yml runs %s, which no target make ci reaches runs", line)
+				}
+			case strings.HasPrefix(line, "make "):
+				for _, target := range strings.Fields(line)[1:] {
+					if !strings.HasSuffix(target, "-install") && !reached[target] {
+						t.Errorf("ci.yml runs make %s, which make ci does not reach", target)
+					}
+				}
+			}
+		}
+	}
+	// What ci.yml runs today: the suite, raced, vetted and built with every
+	// type and with each on its own, and each type's tests.
+	if commands < 8 {
+		t.Errorf("only %d go commands were read from ci.yml; the reader has stopped finding them", commands)
+	}
+	phony := regexp.MustCompile(`(?m)^\.PHONY:(.*)$`).FindAllStringSubmatch(read(t, "Makefile"), -1)
+	declared := map[string]bool{}
+	for _, match := range phony {
+		for _, target := range strings.Fields(match[1]) {
+			declared[target] = true
+		}
+	}
+	for target := range recipes {
+		if !strings.HasPrefix(target, ".") && !declared[target] {
+			t.Errorf("the Makefile's %s target is not .PHONY; a file of that name would stop it running", target)
+		}
+	}
+}
+
+// `make build` compiled every package and kept nothing, while the docs gave
+// it as the way to build the exporter with only some request types. It
+// builds the main package into bin/, under the name the image gives the
+// binary, with the tags of REQUEST_TYPES, and the docs that give it say
+// where the binary lands.
+func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
+	_, recipes := makefileRules(t)
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$tags" -o bin/$(APP) .`
+	if got := strings.TrimSpace(recipes["build"]); got != command {
+		t.Errorf("make build runs %q, want %q", got, command)
+	}
+	app := regexp.MustCompile(`(?m)^APP := (\S+)$`).FindStringSubmatch(read(t, "Makefile"))
+	if app == nil {
+		t.Fatal("the Makefile no longer names APP")
+	}
+	if want := "-o /out/" + app[1] + " ."; !strings.Contains(read(t, "Dockerfile"), want) {
+		t.Errorf("the Dockerfile does not build %q, the binary make build names", want)
+	}
+	for _, doc := range []string{"docs/CONFIGURATION.md", "docs/DEVELOPMENT.md", "docs/GRPC.md"} {
+		text := read(t, doc)
+		if !strings.Contains(text, "make build") {
+			t.Errorf("%s no longer gives make build", doc)
+		}
+		if !strings.Contains(text, "bin/"+app[1]) {
+			t.Errorf("%s gives make build without saying the binary lands in bin/%s", doc, app[1])
+		}
+	}
+}
+
 // The suite runs twice and shuffled under the race detector, where a package
 // takes several times what it takes without: go test's own limit of ten
 // minutes a package, meant for one plain run, was what a slow machine would

@@ -710,6 +710,16 @@ column that is not there is the rule's missing value, so `required: false`
 silences it, whatever the cause. A label's is not: the rule fails, required
 or not, since every series of it would lack the label.
 
+The rows of a CSV answer cost the memory of the cells its lines hold. The
+empty cells of the columns a short row lacks are what a rule and a script
+read there, not cells kept in every row, so a header of thousands of columns
+over lines of one field costs what its bytes do: a header of 2,000 columns
+over 2,000 lines of `1`, 15 kB, decodes in under a megabyte. The rows of a
+plain file hold some times its size while it is scraped, the most for the
+shortest lines: about 23 times for lines of one character, 3.5 times for ten
+columns of a monitoring export. That is before `limits.max_metrics` is
+looked at; `max_response_bytes` is what bounds it.
+
 A `pre_script` of a `csv` transform is given the rows and leaves the rows:
 `data` is a list, each row a dict by the header's names, or with
 `header: false` a list of the row's fields. It may drop rows, change cells
@@ -1998,7 +2008,11 @@ the exception, since every value of it is forwarded. A value may be at most
 limit: what a probe names is kept after it is answered, in the
 [log of repeated failures](LOGGING.md#repeated-failures) and the
 [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics), and
-is bounded there by being bounded here. A parameter no request type knows is
+is bounded there by being bounded here. A `header_<name>` value for a header
+the collector forwards may not hold a control character other than tab (a CR
+or LF among them), which Go refuses to send: it gets a `400` naming the
+parameter before the target is contacted, rather than a `502` retried and
+logged as the target's failure. A parameter no request type knows is
 not read at all, whatever its values. A whole request, its line and headers,
 may be 64 KiB; the exporter answers a longer one `431`.
 
@@ -2013,6 +2027,9 @@ make build REQUEST_TYPES=http
 docker build --build-arg REQUEST_TYPES=http -t exporter:http .
 go build -tags "$(sh tools/request-type-tags.sh http)" .
 ```
+
+`make build` writes the binary to `bin/prometheus-universal-exporter`; plain
+`go build .` writes it to the current directory.
 
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
 means every type. A name that is not a request type fails the build, and so does
@@ -3088,7 +3105,10 @@ requires every ${NAME} it finds to be defined
 An empty substitution would produce a document that parses and is wrong — a
 collector with no path, credentials that are silently blank — and the exporter
 would serve it. Every missing name is listed at once. A variable that is set to
-an empty string is a deliberate choice and substitutes normally.
+an empty string is a deliberate choice and substitutes normally: as the whole
+of a value, `X-A: ${A}`, it is the value written `""`, which loads or is
+refused just as `X-A: ""` would be, and not a key with nothing after its
+colon.
 
 A reference is expanded where the document holds it as a value — a value
 or a key, quoted or not, whole or part of a longer one — and the variable is
@@ -3109,8 +3129,8 @@ changes no other value in it: a reference in a block value or after a comma
 in an unquoted description expands to the variable's value, exactly as in a
 file without one. It holds after an anchor,
 as in `&base ${BASE}`, and for values YAML reads specially on their own, such as
-`-` or an empty string: a key is always written quoted, an empty value is
-written quoted inside a flow collection, and `-` always is. A variable supplies a value and never
+`-` or an empty string: a key is always written quoted, and so are an empty
+value and `-`. A variable supplies a value and never
 structure: `headers: ${ALL_HEADERS}` is one string, not a mapping. A block
 value (`|` or `>`) is expanded in every line, also when its header says how
 far it is indented, as in `|2`. Two places
@@ -3628,8 +3648,9 @@ prometheus-universal-exporter \
 ```
 
 `--config.watch-interval` defaults to 60s and must be positive; passing zero or a
-negative duration alongside `--config.watch` is a startup error rather than a
-silently disabled watch. Without `--config.watch` no polling loop runs at all,
+negative duration alongside `--config.watch` is a command-line error (exit 2),
+at startup and with [`--dry-run`](#dry-run) alike, rather than a silently
+disabled watch. Without `--config.watch` no polling loop runs at all,
 and configuration changes take effect on restart.
 
 Changes are detected by modification time and size rather than filesystem
@@ -4108,13 +4129,9 @@ while a collector is being written or fixed, not for good.
 ## Readiness
 
 `/health` answers `200` for as long as the process runs. `/ready` answers `200`
-when the exporter is doing what it was configured to do, and `503` when it is
-not, with one `not ready:` line per reason:
+when the exporter should be sent probes, and `503` when it should not, with one
+`not ready:` line per reason:
 
-- The last reload of the configuration, or of the static target file, was
-  rejected. The previous configuration is still in force and still answers
-  probes, but it is not the one that was deployed. Ready again once a reload
-  is accepted.
 - With `otlp.unready_after_failures` set, that many OTLP exports to the
   current endpoint failed in a row, retries included (see
   [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
@@ -4127,11 +4144,18 @@ not, with one `not ready:` line per reason:
 Neither endpoint needs credentials, so the reasons never include an error's
 text; the log and the [self-metrics](SELF-METRICS.md) have the details.
 
+A rejected reload, of the configuration or of the static target file, leaves
+the exporter ready: it keeps answering probes from the configuration in force.
+Every replica rejects the same ConfigMap edit, so making them unready would
+leave the Service with no endpoints and fail every probe the exporter could
+still answer. The rejection shows where it costs nothing:
+`http_exporter_config_last_reload_successful` reads `0` until a reload of the
+file is accepted, which is what to alert on (see
+[Configuration reloads](SELF-METRICS.md#configuration-reloads)), the reload
+logs an `ERROR` line with the reason, and `/-/reload` answers `500`.
+
 In Kubernetes, a pod that is not ready is taken out of its Service, and
-Prometheus stops probing through it. With the chart's defaults a configuration
-change rolls the Deployment, and a new pod whose configuration is rejected never
-starts, so the first reason arises only with `server.watchConfig`,
-`server.enableLifecycle` or a `SIGHUP`. Setting `otlp.unready_after_failures`
+Prometheus stops probing through it. Setting `otlp.unready_after_failures`
 takes a pod out of its Service while its OTLP endpoint fails, which also stops
 Prometheus probing through it; set it only where OTLP delivery is the pod's
 job.
@@ -4227,7 +4251,9 @@ A response over `max_response_bytes` fails the scrape with `response size
 5000 exceeds limit 1024` when the target said its size in `Content-Length`,
 refused before the body is read, and with `response size exceeds limit 1024`
 when it did not, once reading passes the limit. The limit counts the answer
-decompressed.
+decompressed. A `grpc` collector with `descriptors: reflection` holds the
+files of its reflection question to the same limit, or to 10 MiB when the
+limit is smaller ([gRPC](GRPC.md#descriptors)).
 
 ## Dry run
 
@@ -4238,7 +4264,7 @@ same validation startup runs, prints a JSON report on stdout, and exits:
 | --- | --- |
 | `0` | Every check passed; the exporter would start with these files and flags. |
 | `1` | At least one check failed; the report says which, and why. |
-| `2` | The command line itself could not be parsed, or a flag is invalid — a `--web.listen-address` that is not `host:port`, such as a bare `9115`, a negative duration or limit — so nothing was checked. |
+| `2` | The command line itself could not be parsed, or a flag is invalid — a `--web.listen-address` that is not `host:port`, such as a bare `9115`, a negative duration or limit, a `--config.watch-interval` that is not positive with `--config.watch` — so nothing was checked. |
 
 ```sh
 prometheus-universal-exporter --dry-run --config.file=config.yaml
@@ -4264,7 +4290,7 @@ It takes the same flags a real start does, and they matter: `--config.file` and
 in each — so a check run where a referenced
 variable is not set fails, exactly as startup would — `--python.path` is the
 interpreter the Python scripts are compiled with, and `--config.watch` with
-`--config.watch-interval` are checked when the watch is on. It never binds a
+`--config.watch-interval` are reported when the watch is on. It never binds a
 port, starts a watch or contacts a target.
 
 The report lists one entry per startup step, in the order startup runs them:
@@ -4301,7 +4327,7 @@ The report lists one entry per startup step, in the order startup runs them:
 | --- | --- | --- |
 | `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`, which names the [collector file](#collector-files) of a collector defined in one. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
-| `config_watch` | with `--config.watch` | `--config.watch-interval` is positive. |
+| `config_watch` | with `--config.watch` | Reports `--config.watch-interval` under `details.interval`. A non-positive interval is a command-line error (exit 2) before the check, so this entry does not fail. |
 | `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |
 
 Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a

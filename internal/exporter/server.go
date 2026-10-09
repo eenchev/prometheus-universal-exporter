@@ -254,13 +254,24 @@ func (s *Server) Handler() http.Handler {
 	return s.writeBounded(mux)
 }
 
+// readOnly reports whether r is a GET or a HEAD, which an endpoint that
+// only reads — /probe, the static targets, the self-metrics — serves, and
+// answers anything else 405, with the methods it allows and refusal, which
+// says what to use.
+func readOnly(w http.ResponseWriter, r *http.Request, refusal string) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	http.Error(w, refusal, http.StatusMethodNotAllowed)
+	return false
+}
+
 func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// A probe only reads; HEAD runs it in full, as net/http answers HEAD with
 	// GET's status and headers. Anything else is refused before the target
 	// is contacted or the probe counted.
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "use GET or HEAD to probe a target", http.StatusMethodNotAllowed)
+	if !readOnly(w, r, "use GET or HEAD to probe a target") {
 		return
 	}
 	start := time.Now()
@@ -328,6 +339,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// Each request type accepts its own probe parameters; one that belongs to
 	// another type is a mistake, reported before anything else happens.
 	if err := fetch.CheckOverrideParams(c, query); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// A forwarded header_<name> value Go would refuse to send is the
+	// caller's mistake too, not the target's failure (probeparams.go).
+	if err := checkForwardedHeaderParams(query, c.Request); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -417,7 +434,11 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			budget: budget, budgetSource: budgetSource,
 			// Probes of one target differing in their parameters or
 			// forwarded headers — tenants, paths — fail apart in the log.
-			failure: probeFailureKey(name, target, key), requestURL: requestURL,
+			// The collector's name is the configuration's, which the
+			// probe's matches: the one read from the query is a piece of
+			// the request's line, which the failure log's entry, keeping
+			// it for an hour, would keep whole, target and all.
+			failure: probeFailureKey(c.Name, target, key), requestURL: requestURL,
 		})
 	}
 	// No key, when the collector's definition could not be fingerprinted,
@@ -556,7 +577,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	c, name, rec, logTarget := p.collector, p.collector.Name, p.rec, p.logTarget
 	out := newProbeRecorder()
 	// A probe that finished while this one was waiting to start may have just
-	// filled the cache.
+	// filled the cache. One that finds nothing there is a miss once it goes
+	// to the target: one the concurrency limit turns away is a rejection,
+	// and no miss, since nothing was fetched in place of a cache entry.
+	missed := false
 	if p.cacheKey != "" && model.CacheTTL(c) > 0 {
 		if cached, fetched, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
 			rec.update(func(x *serverStats) {
@@ -572,7 +596,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return out.result(true)
 		}
-		rec.update(func(x *serverStats) { x.cacheMisses++ })
+		missed = true
 	}
 	// Answered at once when the collector's backend already has all it may
 	// get, rather than queued behind the probes in progress (triplimit.go).
@@ -584,6 +608,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		return out.result(false)
 	}
 	defer s.trips.release(name)
+	if missed {
+		rec.update(func(x *serverStats) { x.cacheMisses++ })
+	}
 	if p.budget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.budget)

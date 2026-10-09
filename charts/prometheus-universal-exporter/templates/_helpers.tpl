@@ -81,6 +81,39 @@
 {{- end -}}
 {{- $_ := set $extra $path true -}}
 {{- end -}}
+{{- /* The configuration directory and the credential directories are
+       ConfigMap and Secret volumes, which the kubelet mounts read-only. A
+       mount below one of them, a subPath file mount among them, needs its
+       mount point created inside that volume, which fails, so the container
+       is never started (CreateContainerError), with nothing said where the
+       values were written; and so does the configuration directory below
+       an enabled credential directory. The runtime mounts a parent before
+       what is below it, whichever is written first. */ -}}
+{{- $readOnly := list (dict "path" "/etc/prometheus-universal-exporter" "what" "the configuration directory /etc/prometheus-universal-exporter" "kind" "ConfigMap" "hint" "; to add a file to it, add the file to config.data instead") -}}
+{{- range $name := list "targetAuth" "webAuth" -}}
+{{- $auth := index $.Values $name -}}
+{{- if and $auth $auth.enabled -}}
+{{- $readOnly = append $readOnly (dict "path" ($auth.mountPath | toString | clean) "what" (printf "%s.mountPath %q" $name (toString $auth.mountPath)) "kind" "Secret" "hint" "" "name" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $inner := $readOnly -}}
+{{- range $outer := $readOnly -}}
+{{- if and (ne $inner.path $outer.path) (hasPrefix (printf "%s/" (trimSuffix "/" $outer.path)) $inner.path) -}}
+{{- if $inner.name -}}
+{{- fail (printf "%s is inside %s, a read-only %s volume in which the mount point cannot be created, so the container would never start; choose a path outside %s" $inner.what $outer.what $outer.kind $outer.path) -}}
+{{- end -}}
+{{- fail (printf "%s holds the configuration directory /etc/prometheus-universal-exporter, which cannot be mounted inside that read-only Secret volume, so the container would never start; choose a path that is not above /etc/prometheus-universal-exporter" $outer.what) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $mount := .Values.extraVolumeMounts -}}
+{{- $path := $mount.mountPath | toString | clean -}}
+{{- range $outer := $readOnly -}}
+{{- if and (ne $path $outer.path) (hasPrefix (printf "%s/" (trimSuffix "/" $outer.path)) $path) -}}
+{{- fail (printf "extraVolumeMounts uses mountPath %q, which is inside %s, a read-only %s volume in which the mount point cannot be created, so the container would never start; mount it outside %s%s" (toString $mount.mountPath) $outer.what $outer.kind $outer.path $outer.hint) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}

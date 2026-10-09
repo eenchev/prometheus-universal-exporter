@@ -123,10 +123,10 @@ pattern needs. See the
 | `/` | A landing page: the build and links to the endpoints. |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.enable-probe-debug`, a switch for the [debug report](docs/CONFIGURATION.md#debugging-a-probe). See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.enable-probe-debug`, `&debug=true` answers with a report of the trip instead; see [Debugging a probe](docs/CONFIGURATION.md#debugging-a-probe). |
-| `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`. See [Self-metrics](docs/SELF-METRICS.md). |
+| `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](docs/SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.enable-probe-debug`, `?debug=<name>` [reports one scrape](docs/STATIC-TARGETS.md#debugging-a-static-target). |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
-| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected, OTLP exports keep failing or the exporter is shutting down; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
+| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it) or the exporter is shutting down, not after a rejected reload; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
 `/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
 

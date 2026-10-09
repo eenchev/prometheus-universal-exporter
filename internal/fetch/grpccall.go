@@ -128,7 +128,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// The reflection question carries the call's metadata, credentials
 		// included: a server that authenticates every RPC authenticates it
 		// too.
-		files, err := reflectionAnswers.files(metadata.NewOutgoingContext(ctx, md), entry, reflection, time.Now())
+		files, err := reflectionAnswers.files(metadata.NewOutgoingContext(ctx, md), entry, reflection, reflectionLimit(c), time.Now())
 		if err != nil {
 			return grpcMethod{}, reflectionError(ctx, err)
 		}

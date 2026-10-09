@@ -185,7 +185,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "properties": {"name": {"type": "string"}, "mountPath": {"type": "string"}, "readOnly": {"type": "boolean"}, "subPath": {"type": "string"}},
+        "properties": {"name": {"type": "string"}, "mountPath": {"type": "string", "not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}, "readOnly": {"type": "boolean"}, "subPath": {"type": "string"}},
         "required": ["name", "mountPath"]
       }
     },
@@ -431,7 +431,9 @@
         "mountPath": {"type": "string", "pattern": "^/"},
         "usernameFileName": {"type": "string"},
         "passwordFileName": {"type": "string"}
-      }
+      },
+      "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+      "then": {"properties": {"mountPath": {"not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}}}
     },
 
     "webAuth": {
@@ -444,7 +446,9 @@
         "usernameKey": {"type": "string", "minLength": 1},
         "passwordKey": {"type": "string", "minLength": 1},
         "mountPath": {"type": "string", "pattern": "^/"}
-      }
+      },
+      "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+      "then": {"properties": {"mountPath": {"not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}}}
     }
   },
 

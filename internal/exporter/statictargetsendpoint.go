@@ -341,9 +341,7 @@ func derivedSeriesNames(name string, typ model.MetricType) []string {
 }
 
 func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "use GET or HEAD to read the static targets", http.StatusMethodNotAllowed)
+	if !readOnly(w, r, "use GET or HEAD to read the static targets") {
 		return
 	}
 	// ?debug=<name> scrapes one target and reports the trip, as a debug

@@ -186,7 +186,7 @@ func compareWithFormerCSV(t *testing.T, body []byte, cfg model.CSVConfig) csvDif
 	var got any
 	d, err := decodeCSV(&fetch.HTTPResponse{Body: bytes.Clone(body), Headers: make(http.Header)}, &c)
 	if err == nil {
-		got = d.Data
+		got = csvDocument(d.Data)
 	}
 	want, read, wantErr := formerDecodeCSV(bytes.Clone(body), cfg)
 	if cfg.TrimSpace && blankAfterQuote.Match(body) {

@@ -170,6 +170,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
+	// A non-positive watch interval is a flag's value, not the
+	// configuration's, so it is a command-line error like a negative
+	// duration, before --dry-run or startup; without --config.watch the
+	// interval is never read, and is not checked.
+	if err := validateWatchInterval(*watchConfig, *watchInterval); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 
 	if *showVersion {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
@@ -236,11 +244,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	config.LogNotices(logger, *configFile, conf)
 
 	if err := config.ValidatePythonScripts(*pythonPath, conf); err != nil {
-		logger.Error("invalid startup configuration; exiting", "error", err)
-		return 1
-	}
-
-	if err := validateWatchInterval(*watchConfig, *watchInterval); err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}

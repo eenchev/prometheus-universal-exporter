@@ -1550,6 +1550,12 @@
     "otlp": {
       "additionalProperties": false,
       "dependentRequired": {
+        "batch_max_bytes": [
+          "enabled"
+        ],
+        "batch_max_size": [
+          "enabled"
+        ],
         "compression": [
           "enabled"
         ],
@@ -1599,6 +1605,19 @@
         ]
       },
       "properties": {
+        "batch_max_bytes": {
+          "description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB, which the exporter checks of a size written as text, in quotes or with a unit, when the configuration loads; 0, like the key left out, is the default, 4MiB.",
+          "minimum": 0,
+          "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "batch_max_size": {
+          "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192.",
+          "type": "integer"
+        },
         "compression": {
           "description": "Compression of the export requests: gzip, the default, or none.",
           "type": [
@@ -1721,6 +1740,19 @@
       },
       "then": {
         "properties": {
+          "batch_max_bytes": {
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "minimum": 65536
+              }
+            ]
+          },
+          "batch_max_size": {
+            "minimum": 0
+          },
           "compression": {
             "enum": [
               "gzip",

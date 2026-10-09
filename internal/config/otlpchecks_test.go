@@ -107,3 +107,41 @@ func TestServiceNameIsNotAResourceAttribute(t *testing.T) {
 		t.Fatalf("service_name and another attribute: %v", err)
 	}
 }
+
+// otlp.batch_max_size is not negative and otlp.batch_max_bytes, when it is
+// set, at least 64KiB, in a size written with a unit too; left out, or 0,
+// they are 8192 points and 4MiB. A block switched off is not checked.
+func TestOTLPBatchBoundsAreCheckedAtLoad(t *testing.T) {
+	for name, test := range map[string]struct {
+		change func(*model.OTLPConfig)
+		want   string
+	}{
+		"a negative size":        {func(o *model.OTLPConfig) { o.BatchMaxSize = -1 }, "otlp.batch_max_size must not be negative; got -1, and leaving it out, or 0, is the default, 8192"},
+		"a byte under the least": {func(o *model.OTLPConfig) { o.BatchMaxBytes = 64<<10 - 1 }, "otlp.batch_max_bytes is 65535 bytes, under the least, 64KiB; set at least 64KiB, or leave it out, or 0, for the default, 4MiB"},
+		"one byte":               {func(o *model.OTLPConfig) { o.BatchMaxBytes = 1 }, "otlp.batch_max_bytes is 1 bytes, under the least, 64KiB"},
+	} {
+		if err := Validate(otlpSettings(test.change)); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: error %v, want %q", name, err, test.want)
+		}
+		off := otlpSettings(test.change)
+		off.OTLP.Enabled = false
+		if err := Validate(off); err != nil {
+			t.Errorf("%s, with enabled: false: %v", name, err)
+		}
+	}
+	unset := otlpSettings(func(*model.OTLPConfig) {})
+	least := otlpSettings(func(o *model.OTLPConfig) { o.BatchMaxSize, o.BatchMaxBytes = 1, 64<<10 })
+	if err := model.JoinProblems(Validate(unset), Validate(least)); err != nil {
+		t.Fatal(err)
+	}
+	if unset.OTLP.BatchMaxSize != 8192 || unset.OTLP.BatchMaxBytes != 4<<20 || least.OTLP.BatchMaxSize != 1 || least.OTLP.BatchMaxBytes != 64<<10 {
+		t.Fatalf("bounds %d and %d left out, %d and %d at the least", unset.OTLP.BatchMaxSize, unset.OTLP.BatchMaxBytes, least.OTLP.BatchMaxSize, least.OTLP.BatchMaxBytes)
+	}
+	// Written as text, with a unit, the size is held to the same least.
+	for written, want := range map[string]string{"4MiB": "", "64KiB": "", "1KiB": "otlp.batch_max_bytes is 1024 bytes, under the least, 64KiB", `"65535"`: "otlp.batch_max_bytes is 65535 bytes"} {
+		_, err := Load(testutil.WriteFile(t, "config.yaml", "otlp:\n  enabled: true\n  endpoint: http://collector.invalid:4318/v1/metrics\n  batch_max_bytes: "+written+"\n"+testutil.MinimalConfig))
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("batch_max_bytes: %s: error %v, want %q", written, err, want)
+		}
+	}
+}

@@ -463,6 +463,8 @@ func TestSchemaAndExporterAgreeOnEnabled(t *testing.T) {
 			return model.OTLPCompressionGzip
 		case field.Type == reflect.TypeOf(model.Duration(0)):
 			return "10s"
+		case field.Type == reflect.TypeOf(model.ByteSize(0)):
+			return "4MiB"
 		case field.Type.Kind() == reflect.Bool:
 			return "true"
 		case field.Type.Kind() == reflect.Int:

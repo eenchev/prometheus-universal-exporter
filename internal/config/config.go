@@ -910,6 +910,20 @@ func validateOTLP(o *model.OTLPConfig) error {
 	if o.MaxPendingPoints == 0 {
 		o.MaxPendingPoints = model.DefaultOTLPMaxPendingPoints
 	}
+	switch {
+	case o.BatchMaxSize < 0:
+		return fmt.Errorf("otlp.batch_max_size must not be negative; got %d, and leaving it out, or 0, is the default, %d", o.BatchMaxSize, model.DefaultOTLPBatchMaxSize)
+	case o.BatchMaxSize == 0:
+		o.BatchMaxSize = model.DefaultOTLPBatchMaxSize
+	}
+	// Under the least, a request would hold little more than its resource
+	// and the names of its metrics.
+	switch {
+	case o.BatchMaxBytes == 0:
+		o.BatchMaxBytes = model.DefaultOTLPBatchMaxBytes
+	case o.BatchMaxBytes < model.MinOTLPBatchMaxBytes:
+		return fmt.Errorf("otlp.batch_max_bytes is %d bytes, under the least, 64KiB; set at least 64KiB, or leave it out, or 0, for the default, 4MiB", o.BatchMaxBytes)
+	}
 	if o.UnreadyAfterFailures < 0 {
 		return errors.New("otlp.unready_after_failures must not be negative")
 	}

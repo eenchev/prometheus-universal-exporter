@@ -187,6 +187,8 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, numberAlone: "limits.max_script_memory must be 0, for no limit, or at least 32MiB", size: true},
 		{key: "collectors[].request.max_response_bytes", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
+		{key: "otlp.batch_max_bytes", document: switchedOnOTLP, at: "  # otlp\n", setting: "  batch_max_bytes: %s\n", valid: "4MiB", invalid: "lots", absent: true, size: true},
+		{key: "otlp.batch_max_bytes", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  batch_max_bytes: %s\n", valid: "4MiB", invalid: "lots", absent: true, size: true},
 		// Durations: "" is no duration, to both, and the number 0 is one.
 		{key: "collectors[].cache.ttl", document: jqCollector, at: collector, setting: "    cache:\n      ttl: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "collectors[].cache.stale_if_error", document: jqCollector, at: collector, setting: "    cache:\n      stale_if_error: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},

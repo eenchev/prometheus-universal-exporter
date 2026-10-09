@@ -332,6 +332,11 @@ type OTLPConfig struct {
 	// MaxPendingPoints bounds the data points waiting for export while the
 	// endpoint is failing; past it the oldest are dropped.
 	MaxPendingPoints int `yaml:"max_pending_points"`
+	// BatchMaxSize and BatchMaxBytes bound one export request: the data
+	// points it carries, and the bytes of its body before compression. An
+	// export of more is sent as several requests (exporter/otlp.go).
+	BatchMaxSize  int      `yaml:"batch_max_size"`
+	BatchMaxBytes ByteSize `yaml:"batch_max_bytes"`
 	// UnreadyAfterFailures makes /ready answer 503 after this many failed
 	// exports in a row; 0, the default, leaves readiness to the configuration.
 	UnreadyAfterFailures int `yaml:"unready_after_failures"`
@@ -346,6 +351,17 @@ func (o *OTLPConfig) UnmarshalYAML(n *yaml.Node) error {
 
 // DefaultOTLPMaxPendingPoints is otlp.max_pending_points when unset.
 const DefaultOTLPMaxPendingPoints = 100000
+
+// The defaults of otlp.batch_max_size and otlp.batch_max_bytes, and the
+// least otlp.batch_max_bytes. 8192 data points is what the OpenTelemetry
+// Collector's batch processor sends at once, and 4MiB the largest message a
+// gRPC receiver takes by default, well under the 20MiB an OTLP/HTTP
+// receiver takes.
+const (
+	DefaultOTLPBatchMaxSize  = 8192
+	DefaultOTLPBatchMaxBytes = 4 << 20
+	MinOTLPBatchMaxBytes     = 64 << 10
+)
 
 // The values of otlp.compression.
 const (

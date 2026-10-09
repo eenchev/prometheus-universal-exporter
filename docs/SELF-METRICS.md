@@ -137,10 +137,10 @@ happens to OTLP:
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
-| `http_exporter_otlp_exports_total{result}` | counter | Exports, by `result`: `success` or `failure`. An export is one delivery of everything pending; a retried export that got through is one success. |
+| `http_exporter_otlp_exports_total{result}` | counter | Exports, by `result`: `success` or `failure`. An export is one delivery of everything pending, however many requests it is sent in (`otlp.batch_max_size`, `otlp.batch_max_bytes`); a retried export that got through is one success, and one of which the endpoint refused a request is a failure. |
 | `http_exporter_otlp_export_retries_total` | counter | Attempts repeated after a network error, `429`, `502`, `503` or `504`. |
 | `http_exporter_otlp_points_dropped_total` | counter | Data points given up on: refused by the endpoint with an answer that is not retried, rejected by an export the endpoint accepted (its `partialSuccess`), the oldest waiting past `otlp.max_pending_points`, or those of the last export before exiting when it failed. Data points of an earlier export that ran out of retries are kept for the next and not counted until then. |
-| `http_exporter_otlp_export_duration_seconds` | gauge | Duration of the most recent export, retries included. |
+| `http_exporter_otlp_export_duration_seconds` | gauge | Duration of the most recent export, all its requests and retries included. |
 | `http_exporter_otlp_last_export_success_timestamp_seconds` | gauge | Unix time of the last export that got through; `0` before the first. |
 
 ```promql

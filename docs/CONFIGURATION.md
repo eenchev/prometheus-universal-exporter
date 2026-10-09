@@ -2763,8 +2763,9 @@ written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
 `otlp` block with `enabled: false`, which is kept unchecked, do both take a
 negative one. Unchecked is of the whole block, to both: switched off, it may
-hold a `compression` that is neither `gzip` nor `none` and a negative
-`max_pending_points` or `unready_after_failures`, as it may an endpoint that
+hold a `compression` that is neither `gzip` nor `none`, a negative
+`max_pending_points`, `unready_after_failures` or `batch_max_size` and a
+`batch_max_bytes` under its least, as it may an endpoint that
 is no URL, and only what is not of a key's type at all — text for a number, a
 list for text — is refused there. What is written negative is negative
 however small: `-0.4ns`,

@@ -110,8 +110,9 @@ func sizeKeys(schema map[string]any) []string {
 
 // Every key of the schemas that takes a size is put through the ways a
 // number of bytes is written (sizeForms): its row says so, and a size key
-// that is added fails here until its row does. The configuration and a
-// collector file have five, and the target file none.
+// that is added fails here until its row does. A collector file has five,
+// the configuration those and otlp.batch_max_bytes, and the target file
+// none.
 func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T) {
 	marked := map[string]bool{}
 	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys()) {
@@ -128,10 +129,10 @@ func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T)
 			t.Errorf("%s takes a size and no row of schemakeys_*_test.go says size: true of it", key)
 		}
 	}
-	if len(sizes) != 5 || len(marked) != len(sizes) {
-		t.Errorf("the configuration's schema has the size keys %v, and the rows mark %d: want the five sizes, each marked", sizes, len(marked))
+	if len(sizes) != 6 || len(marked) != len(sizes) {
+		t.Errorf("the configuration's schema has the size keys %v, and the rows mark %d: want the six sizes, each marked", sizes, len(marked))
 	}
-	if inFile := sizeKeys(loadSchemaFile(t, collectorFileSchemaFile)); !slices.Equal(inFile, sizes) {
+	if inFile := sizeKeys(loadSchemaFile(t, collectorFileSchemaFile)); !slices.Equal(append(slices.Clone(inFile), "otlp.batch_max_bytes"), sizes) {
 		t.Errorf("a collector file's schema has the size keys %v, and the configuration's %v", inFile, sizes)
 	}
 	if inTargets := sizeKeys(loadSchemaFile(t, staticTargetsSchemaFile)); len(inTargets) != 0 {

@@ -11,6 +11,8 @@ otlp:
   interval: 30s
   # compression: gzip
   # max_pending_points: 100000
+  # batch_max_size: 8192
+  # batch_max_bytes: 4MiB
   # unready_after_failures: 0
   # headers:
   #   X-OTLP-Tenant: production
@@ -199,13 +201,30 @@ Collector accepts; set `otlp.compression: none` for an endpoint that does not.
 Any other value is refused when the configuration loads, in a block that is
 switched on.
 
-An export that fails with a network error, or with `429`, `502`, `503` or
+An export is sent in requests of at most `otlp.batch_max_size` data points,
+8192 by default, and at most `otlp.batch_max_bytes` of JSON before
+compression, 4MiB by default and at least 64KiB: a receiver refuses a request
+past its own bound — the OpenTelemetry Collector's OTLP/HTTP receiver one of
+over 20MiB, its gRPC receiver one of over 4MiB — and an export of every point
+that waited, which after an outage can be `otlp.max_pending_points` of them,
+would otherwise be refused whole. Nearly every export is one request. One of
+more is split in the order of its resources, their metrics and their points,
+each request as full as the bounds let it be, and a resource or a metric that
+goes on in the next request is written again there; a single data point
+larger than `otlp.batch_max_bytes` on its own is sent in a request of its own,
+for the receiver to take or refuse. The requests of one export are sent one
+after another, within the export's time, each with its own retries, and the
+export stays one export to the [self-metrics](SELF-METRICS.md#otlp-export-status).
+
+A request that fails with a network error, or with `429`, `502`, `503` or
 `504` — the answers the OTLP specification makes retryable — is tried again
 after 1 second, then 2, 4, and so on up to 16, or after the `Retry-After` the
 endpoint asks for. Retries go on while another attempt can still start within
 `otlp.interval`, so an export never runs into the next one. When they run out,
-the data points are kept and sent with the next export, unless a newer value of
-the same series has arrived in the meantime. Only the latest value of each
+the data points of that request and of the requests of the export not sent
+yet are kept and sent with the next export, unless a newer value of the same
+series has arrived in the meantime; those of the requests the endpoint took
+before it are not sent again. Only the latest value of each
 series is kept, but an outage long enough can still see many series come and
 go, so what waits is bounded by `otlp.max_pending_points`, 100000 by default:
 past it the oldest data points — those of failed exports first, the
@@ -213,13 +232,14 @@ longest-waiting of them first however many exports in a row have failed — are
 dropped, down to nine tenths of the limit, counted in
 `http_exporter_otlp_points_dropped_total` and logged as a warning. Any other
 answer, such as `400` or `401`,
-would be given again: the data points are dropped and counted rather than sent
-again forever, and the warning quotes the start of the endpoint's explanation
-as `response_body`. An endpoint can also accept an export but reject some of
+would be given again: the data points of that request are dropped and counted
+rather than sent again forever, the warning quotes the start of the endpoint's
+explanation as `response_body`, and the export goes on with its next request.
+An endpoint can also accept a request but reject some of
 its data points, saying so in the answer's `partialSuccess`: those points are
 counted in `http_exporter_otlp_points_dropped_total` too, and the warning
-carries `rejected_points` and the endpoint's `error_message`. The export itself
-still counts as a success. A `partialSuccess` with a message and nothing
+carries `rejected_points` and the endpoint's `error_message`, for each request
+that says so. The export itself still counts as a success. A `partialSuccess` with a message and nothing
 rejected is logged as a warning only. Each failure is logged as a warning, and the export status is in
 the [self-metrics](SELF-METRICS.md#otlp-export-status):
 

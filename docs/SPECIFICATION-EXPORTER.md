@@ -5019,18 +5019,19 @@ http_exporter_otlp_export_duration_seconds                 gauge
 http_exporter_otlp_last_export_success_timestamp_seconds   gauge
 ```
 
-An export is one delivery of everything pending, its retries included:
+An export is one delivery of everything pending, its retries included,
+however many requests it is sent in (§ 42.1a):
 `http_exporter_otlp_exports_total` MUST count it once, with `result`
-`success` when it got through and `failure` when it did not, both published
-from the start. Retries MUST be counted in
-`http_exporter_otlp_export_retries_total`. Data points dropped because the
+`success` when the endpoint accepted every request and `failure` when it did
+not, both published from the start. Retries of every request MUST be counted
+in `http_exporter_otlp_export_retries_total`. Data points dropped because the
 endpoint refused them, because an export it accepted rejected them
 (`partialSuccess`, § 42.1a), because they were the oldest waiting past
 `otlp.max_pending_points` (§ 42.1a), or because the last export at shutdown
 failed (§ 42.1a), MUST be counted in
 `http_exporter_otlp_points_dropped_total`; data points kept for the next
 export MUST NOT be. The duration MUST be that of the most recent export,
-retries included, and the timestamp that of the last export that got through,
+every request and retry included, and the timestamp that of the last export that got through,
 0 before the first. An export cut short by shutdown MUST NOT be counted, since
 the last export delivers its data. These families MUST be part of the one
 self-metric set, so they are also exported over OTLP.
@@ -6437,9 +6438,11 @@ every key of the block: what the exporter refuses of a key only in a block
 that is switched on, the schemas MUST refuse only there, under a rule that
 goes by `enabled` being `true`. Of the `otlp` block that is a negative
 `timeout` or `interval`, a `compression` that is neither `gzip` nor `none`,
-and a negative `max_pending_points` or `unready_after_failures`; the rest of
-what the exporter checks of the block — the endpoint, the headers, the `tls`
-files, the least interval, `service.name` among the attributes — no schema
+a negative `max_pending_points`, `unready_after_failures` or
+`batch_max_size`, and a `batch_max_bytes` written as a number under its
+least; the rest of what the exporter checks of the block — the endpoint, the
+headers, the `tls` files, the least interval, `service.name` among the
+attributes, a `batch_max_bytes` under its least written as text — no schema
 can tell. What is not of a key's type at all — text for a number, a list for
 text, an unknown key — is not a setting kept for later, and MUST be refused
 by both in a block switched off as in one switched on. A test MUST put every
@@ -8740,6 +8743,8 @@ Test environment variable expansion:
   binaries with the Dockerfile's `GO_VERSION` at its newest patch release.
 - The golangci-lint version pinned in the Makefile and the one pinned in CI are
   the same.
+- CI's golangci-lint action builds the linter with `install-mode: goinstall`,
+  and `make lint-install` builds it with `go install` of the pinned version.
 
 ## 34.38 Path parameter tests
 
@@ -20920,6 +20925,45 @@ The failure log holds little per subject, a turned-away probe is no cache miss, 
   dropped, with `dropped_points`; an export before the shutdown that fails
   the same way still keeps its points, counts none dropped and says so.
 
+## 34.127 OTLP exports in batches
+
+An export is sent in requests within `otlp.batch_max_size` and `otlp.batch_max_bytes`, each delivered and accounted on its own (§ 22.0c, § 42.1a):
+
+- An OTLP export within `otlp.batch_max_size` and `otlp.batch_max_bytes` is
+  the one request it was before exports were split, byte for byte, gzipped
+  and not, over generated resources of every kind of point and name clash
+  (the old code as an oracle), at no more than one allocation more; told what
+  series its points are of, a resource's conversion makes the same metrics.
+- An export over either bound is split into requests each within both: every
+  point is in one of them, in the order of the one request it would be, each
+  carries the resource, scope and metric of its points, written again where
+  one goes on in the next, each is as full as the bounds let it be, and they
+  are the same when made again; a point larger alone than `batch_max_bytes`
+  is sent in a request of its own. A payload of n bytes of JSON is one
+  request within n bytes and two within n - 1.
+- 90,000 points, more than 20MiB of JSON, are all delivered once with the
+  default bounds to a receiver that answers 413 to a body over 20MiB; the
+  export is one success with nothing dropped or pending.
+- The endpoint refusing the second request of an export drops and counts its
+  10 points alone, logs one warning with `dropped_points=10` and the
+  request's number, delivers the requests after it, and counts a failed
+  export.
+- The second request failing with 503 until the budget runs out keeps its
+  points and those of every later request for the next export, and none of
+  the first request's, which was delivered; at the last export before
+  exiting the same 20 points are dropped, counted and logged as dropped.
+- Shutdown cutting an export short in its second request keeps that
+  request's points and the later ones, not the first request's, and counts
+  no export.
+- The `partialSuccess` of each request is counted: two requests rejecting 3
+  points each drop 6, logged twice, and the export is a success.
+- `otlp.batch_max_size` and `otlp.batch_max_bytes` default to 8192 and 4MiB,
+  0 being the default; a negative `batch_max_size` and a `batch_max_bytes`
+  under 64KiB, as a number or as text with a unit, are refused when the
+  block is switched on, naming the value and the least, and kept unchecked
+  when it is switched off; the schema agrees, but for a size under the least
+  written as text, which the exporter alone refuses.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -21382,7 +21426,23 @@ Export requests MUST be gzipped, with `Content-Encoding: gzip`, unless
 MUST be rejected when the configuration loads, in a block that is switched
 on (§ 24.3).
 
-An export that fails with a network error, `429`, `502`, `503` or `504` — the
+An export MUST be sent in requests of at most `otlp.batch_max_size` data
+points, 8192 by default, whose bodies hold at most `otlp.batch_max_bytes` of
+JSON before compression, 4MiB by default; a negative `batch_max_size`, and a
+`batch_max_bytes` under 64KiB, MUST be rejected when the configuration loads,
+in a block that is switched on, 0 being the default of either. An export
+within both MUST be the one request it would be without them. One over
+either MUST be split in the order of its resources, their metrics and their
+data points, each request taking as many as fit within both before the next
+is begun; a request MUST carry the resource and the scope of each of its data
+points, and the metric — name, kind, description — of each, written again in
+every request a resource or a metric goes on in. A data point that is over
+`batch_max_bytes` alone MUST be sent in a request of its own. The requests of
+an export MUST be sent one after another, each with its own retries, and a
+request after the first MUST NOT be started when the export has no time left
+for an attempt.
+
+A request that fails with a network error, `429`, `502`, `503` or `504` — the
 responses the OTLP/HTTP specification makes retryable — MUST be retried with
 exponential backoff, 1 second doubling up to 16, or after the delay a
 `Retry-After` header gives in seconds or as an HTTP date. `otlp.timeout` MUST
@@ -21390,18 +21450,23 @@ bound each attempt. Retries MUST stop when another attempt could not start
 within `otlp.interval` of the export's start, so one export never runs into the
 next, and MUST stop at once when the exporter shuts down.
 
-When retries run out, the data points of the export MUST be kept for the next
-export, except where a newer value of the same series has been queued since;
-the self-metric snapshot MUST NOT be kept, since the next export takes a new
-one. Any other non-2xx response MUST NOT be retried, and the export's data
-points MUST be dropped rather than kept, since the endpoint would refuse them
-again; its warning MUST include the start of the response body, where the
-endpoint says why. Every failed export MUST be logged as a warning with the
-retries made, and counted (§ 22.0c).
+When the retries of a request run out, or no time is left to send it, the
+export MUST stop, and the data points of that request and of every request of
+the export not yet sent MUST be kept for the next export, except where a
+newer value of the same series has been queued since; those of the requests
+the endpoint accepted before it MUST NOT be kept, and the self-metric
+snapshot MUST NOT be kept, since the next export takes a new one. Any other
+non-2xx response MUST NOT be retried, and the data points of that request,
+and only those, MUST be dropped rather than kept, since the endpoint would
+refuse them again; the export MUST go on with its next request. Each refused
+request MUST be logged as a warning with the number of data points dropped
+and the start of the response body, where the endpoint says why. Every
+failed export MUST be logged as a warning with the retries made, and counted
+(§ 22.0c).
 
 A 2xx JSON response MAY carry a `partialSuccess` with `rejectedDataPoints`,
-written as a string or a number, and an `errorMessage`. Rejected data points
-MUST be counted in `http_exporter_otlp_points_dropped_total` and logged as a
+written as a string or a number, and an `errorMessage`, for the request it
+answers. Rejected data points MUST be counted in `http_exporter_otlp_points_dropped_total` and logged as a
 warning with the count and the message, and MUST NOT be sent again; the export
 is still a success. A message with no rejected data points MUST be logged as a
 warning. A response that is empty, not JSON, or has no `partialSuccess` is a
@@ -22999,10 +23064,13 @@ workflow. The release workflow MUST build its binaries with the Go version the
 Dockerfile pins, resolved to that minor's newest patch release, so a release's
 archives and image carry the same Go. A workflow MUST NOT install Go from the `go`
 directive (`go-version-file`), since that installs exactly the minimum the
-module declares, which may be a patch release missing security fixes. The pinned golangci-lint version MUST be a release built
-with at least that Go: golangci-lint ships as a binary carrying its own type
-checker, which cannot read standard-library sources from a newer toolchain and
-panics rather than reporting a lint failure. The linter version MUST be pinned
+module declares, which may be a patch release missing security fixes. CI MUST
+build the pinned golangci-lint from source with the Go its job installed (the
+action's `install-mode: goinstall`), as `make lint-install` does with `go
+install`: a released golangci-lint binary carries the type checker of the Go it
+was built with, which cannot read what a newer toolchain compiles (Go 1.27.2's
+export data against the v2.13.2 binary) and fails rather than reporting a lint
+finding. The linter version MUST be pinned
 identically in the Makefile and in CI, and a test MUST keep the two in step, so
 that a clean local `make lint` continues to mean a clean CI run. The `go` directive in `go.mod` MUST remain the minimum the
 module requires — it is raised by dependency updates, not by the toolchain the

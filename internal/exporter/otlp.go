@@ -208,14 +208,148 @@ func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 	return identity
 }
 
-// pushOTLP sends resources to the endpoint, and retries a network error, 429,
-// 502, 503 or 504 — the responses the OTLP specification makes retryable —
-// with exponential backoff, or after the Retry-After the endpoint asks for,
-// for as long as another attempt can start within budget. Each attempt is
-// bounded by otlp.timeout. Any other status is an otlpRefusedError, not
-// retried. It returns the number of retries made, and the partial success the
-// endpoint reported when it accepted the export without some of it.
-func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources []otlpResourceSet, budget time.Duration) (int, otlpPartialSuccess, error) {
+// otlpRequests are the requests of one export, in the order they are sent:
+// each one's body, and, where there are several, the request whose points
+// each series is sent in last, by its place among the resources of the
+// export and in its resource's set; an export of one request has none. A
+// series is accounted for by that request alone: one whose points are in
+// two requests — a histogram exported as gauges under its samples' names —
+// is kept again when the later fails, and a series none of whose points is
+// sent, left out for another written later (otlpMetricsOf), is the first
+// request's.
+type otlpRequests struct {
+	bodies [][]byte
+	last   [][]int
+}
+
+// otlpRequestsOf makes the requests that send resources to the endpoint. Of
+// up to otlp.batch_max_size data points and otlp.batch_max_bytes bytes of
+// JSON, as nearly every export is, it is one request, of every resource
+// (otlpPayloadOf). An export of more is split (splitOTLP), and its points
+// are then gone through again to know which series each request carries
+// (otlpPointSources), so that a request that fails is accounted for by the
+// series of its own points.
+func (s *Server) otlpRequestsOf(cfg model.OTLPConfig, resources []otlpResourceSet) (otlpRequests, error) {
+	payload, now := s.otlpPayloadOf(cfg, resources)
+	if len(payload.ResourceMetrics) == 0 {
+		return otlpRequests{}, nil
+	}
+	maxPoints, maxBytes := otlpBatchBounds(cfg)
+	if otlpPayloadPoints(payload) <= maxPoints {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
+		}
+		if len(raw) <= maxBytes {
+			body, err := compressOTLP(raw, cfg.Compression)
+			if err != nil {
+				return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
+			}
+			return otlpRequests{bodies: [][]byte{body}}, nil
+		}
+	}
+	split, err := splitOTLP(payload, maxPoints, maxBytes)
+	if err != nil {
+		return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
+	}
+	requests := otlpRequests{bodies: make([][]byte, len(split)), last: make([][]int, len(resources))}
+	for r := range resources {
+		requests.last[r] = make([]int, len(resources[r].Set.Metrics))
+	}
+	// The resources that have a place in the payload, in its order, and the
+	// series of each of their points.
+	var made []int
+	var sources []otlpPointSources
+	for r := range resources {
+		if len(resources[r].Set.Metrics) > 0 {
+			made = append(made, r)
+			sources = append(sources, otlpPointSources{index: map[string]int{}})
+			otlpMetricsWith(resources[r], now, nil, &sources[len(sources)-1])
+		}
+	}
+	for k, pieces := range split {
+		part := otlpPayload{}
+		for p, piece := range pieces {
+			rm := &payload.ResourceMetrics[piece.resource]
+			if p == 0 || pieces[p-1].resource != piece.resource {
+				part.ResourceMetrics = append(part.ResourceMetrics, otlpResourceMetrics{Resource: rm.Resource, ScopeMetrics: []otlpScopeMetrics{{Scope: rm.ScopeMetrics[0].Scope}}})
+			}
+			scope := &part.ResourceMetrics[len(part.ResourceMetrics)-1].ScopeMetrics[0]
+			scope.Metrics = append(scope.Metrics, otlpMetricPart(rm.ScopeMetrics[0].Metrics[piece.metric], piece.from, piece.to))
+			series := sources[piece.resource].of[piece.metric]
+			for _, i := range series[piece.from:piece.to] {
+				requests.last[made[piece.resource]][i] = k
+			}
+		}
+		raw, err := json.Marshal(part)
+		if err != nil {
+			return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
+		}
+		if requests.bodies[k], err = compressOTLP(raw, cfg.Compression); err != nil {
+			return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
+		}
+	}
+	return requests, nil
+}
+
+// otlpBatchBounds are otlp.batch_max_size and otlp.batch_max_bytes, their
+// defaults where they are unset.
+func otlpBatchBounds(cfg model.OTLPConfig) (maxPoints, maxBytes int) {
+	maxPoints, maxBytes = cfg.BatchMaxSize, int(min(cfg.BatchMaxBytes, math.MaxInt32))
+	if maxPoints <= 0 {
+		maxPoints = model.DefaultOTLPBatchMaxSize
+	}
+	if maxBytes <= 0 {
+		maxBytes = model.DefaultOTLPBatchMaxBytes
+	}
+	return maxPoints, maxBytes
+}
+
+// from are the series of pending sent last in request k or one after it:
+// what the export has not delivered when request k fails for a reason worth
+// retrying, or was not sent. pending are the resources of the export without
+// the exporter's own series, which come after a resource's queued ones.
+func (q otlpRequests) from(pending []otlpResourceSet, k int) []otlpResourceSet {
+	if q.last == nil {
+		return pending
+	}
+	var out []otlpResourceSet
+	for r := range pending {
+		var kept otlpResourceSet
+		for i, m := range pending[r].Set.Metrics {
+			if q.last[r][i] >= k {
+				kept.Set.Metrics = append(kept.Set.Metrics, m)
+				kept.seqs = append(kept.seqs, pending[r].seqs[i])
+			}
+		}
+		if len(kept.Set.Metrics) > 0 {
+			kept.Identity = pending[r].Identity
+			out = append(out, kept)
+		}
+	}
+	return out
+}
+
+// of is how many series of pending are sent last in request k: the points
+// dropped when the endpoint refuses it.
+func (q otlpRequests) of(pending []otlpResourceSet, k int) int {
+	if q.last == nil {
+		return countPoints(pending)
+	}
+	n := 0
+	for r := range pending {
+		for i := range pending[r].Set.Metrics {
+			if q.last[r][i] == k {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// otlpPayloadOf is the payload of every resource of an export with a series,
+// and the time its points are exported at that have none of their own.
+func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet) (otlpPayload, string) {
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
 	s.otlpStarts.bound(cfg.MaxPendingPoints)
@@ -228,13 +362,17 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 		s.logOTLPNameClashes(resource.Identity, key, clashes)
 		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: metrics}}})
 	}
-	if len(payload.ResourceMetrics) == 0 {
-		return 0, otlpPartialSuccess{}, nil
-	}
-	body, err := encodeOTLP(payload, cfg.Compression)
-	if err != nil {
-		return 0, otlpPartialSuccess{}, fmt.Errorf("encoding the export: %w", err)
-	}
+	return payload, now
+}
+
+// deliverOTLP sends one request's body, and retries a network error, 429,
+// 502, 503 or 504 — the responses the OTLP specification makes retryable —
+// with exponential backoff, or after the Retry-After the endpoint asks for,
+// for as long as another attempt can start before deadline. Each attempt is
+// bounded by otlp.timeout. Any other status is an otlpRefusedError, not
+// retried. It returns the number of retries made, and the partial success the
+// endpoint reported when it accepted the request without some of it.
+func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
 	timeout := time.Duration(cfg.Timeout)
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -243,7 +381,6 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 	if cfg.InsecureSkipVerify {
 		tlsSettings.InsecureSkipVerify = true
 	}
-	deadline := time.Now().Add(budget)
 	for retries := 0; ; retries++ {
 		attempt := min(timeout, time.Until(deadline))
 		answer, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
@@ -406,6 +543,11 @@ func encodeOTLP(payload otlpPayload, compression string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return compressOTLP(raw, compression)
+}
+
+// compressOTLP gzips a request's JSON unless compression is none.
+func compressOTLP(raw []byte, compression string) ([]byte, error) {
 	if compression == model.OTLPCompressionNone {
 		return raw, nil
 	}
@@ -418,6 +560,162 @@ func encodeOTLP(payload otlpPayload, compression string) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// An export of more data points than otlp.batch_max_size, or of more bytes
+// of JSON than otlp.batch_max_bytes, is sent as several requests. A receiver
+// refuses a request past its own bound — the OpenTelemetry Collector's
+// OTLP/HTTP receiver one of over 20MiB, its gRPC receiver one of over 4MiB —
+// and a refused request is dropped, so one export of every point waiting
+// would be dropped whole, at every interval, once there were enough of them.
+//
+// The points are taken in the order of the export — its resources, the
+// metrics of each, the points of each metric — and each request is filled
+// with as many as it holds within both bounds before the next is begun. A
+// request carries the resource and the scope of each of its points, and the
+// name, the kind and the description of each of their metrics, so those of
+// a resource or a metric that does not fit in one request are written again
+// in the next. A point whose request would be over otlp.batch_max_bytes with
+// it alone is sent alone, for the receiver to take or refuse. What a request
+// holds is measured, not encoded, as it is filled: the JSON of a request is
+// the JSON of each of its parts, so its size is the sum of theirs, which is
+// exact.
+
+// otlpPiece is what a request carries of one metric: its points from up to
+// to, of the metric'th metric of the resource'th resource of the payload.
+type otlpPiece struct {
+	resource, metric, from, to int
+}
+
+// splitOTLP is the requests a payload is sent in, each within maxPoints data
+// points and maxBytes bytes of JSON, as the pieces each is made of.
+func splitOTLP(payload otlpPayload, maxPoints, maxBytes int) ([][]otlpPiece, error) {
+	size := func(v any) (int, error) {
+		b, err := json.Marshal(v)
+		return len(b), err
+	}
+	empty, err := size(otlpPayload{ResourceMetrics: []otlpResourceMetrics{}})
+	if err != nil {
+		return nil, err
+	}
+	var requests [][]otlpPiece
+	var pieces []otlpPiece
+	used, points := empty, 0
+	for r := range payload.ResourceMetrics {
+		rm := &payload.ResourceMetrics[r]
+		scope := rm.ScopeMetrics[0]
+		resourceSize, err := size(otlpResourceMetrics{Resource: rm.Resource, ScopeMetrics: []otlpScopeMetrics{{Scope: scope.Scope, Metrics: []otlpMetric{}}}})
+		if err != nil {
+			return nil, err
+		}
+		for m := range scope.Metrics {
+			metricSize, err := size(otlpMetricPart(scope.Metrics[m], 0, 0))
+			if err != nil {
+				return nil, err
+			}
+			n := otlpMetricPoints(scope.Metrics[m])
+			for j := range n {
+				pointSize, err := size(otlpMetricPoint(scope.Metrics[m], j))
+				if err != nil {
+					return nil, err
+				}
+				// What the point adds: itself, and what it needs before it in
+				// the request, each part after another of its kind with a
+				// comma between them.
+				adds := func() int {
+					switch last := len(pieces) - 1; {
+					case last < 0:
+						return resourceSize + metricSize + pointSize
+					case pieces[last].resource != r:
+						return 1 + resourceSize + metricSize + pointSize
+					case pieces[last].metric != m:
+						return 1 + metricSize + pointSize
+					}
+					return 1 + pointSize
+				}
+				if points > 0 && (points+1 > maxPoints || used+adds() > maxBytes) {
+					requests = append(requests, pieces)
+					pieces, used, points = nil, empty, 0
+				}
+				used += adds()
+				points++
+				if last := len(pieces) - 1; last >= 0 && pieces[last].resource == r && pieces[last].metric == m {
+					pieces[last].to++
+				} else {
+					pieces = append(pieces, otlpPiece{resource: r, metric: m, from: j, to: j + 1})
+				}
+			}
+		}
+	}
+	if len(pieces) > 0 {
+		requests = append(requests, pieces)
+	}
+	return requests, nil
+}
+
+// otlpPayloadPoints is how many data points a payload carries.
+func otlpPayloadPoints(payload otlpPayload) int {
+	n := 0
+	for r := range payload.ResourceMetrics {
+		for _, scope := range payload.ResourceMetrics[r].ScopeMetrics {
+			for m := range scope.Metrics {
+				n += otlpMetricPoints(scope.Metrics[m])
+			}
+		}
+	}
+	return n
+}
+
+// otlpMetricPoints is how many data points a metric has.
+func otlpMetricPoints(m otlpMetric) int {
+	switch {
+	case m.Histogram != nil:
+		return len(m.Histogram.DataPoints)
+	case m.Summary != nil:
+		return len(m.Summary.DataPoints)
+	case m.Sum != nil:
+		return len(m.Sum.DataPoints)
+	case m.Gauge != nil:
+		return len(m.Gauge.DataPoints)
+	}
+	return 0
+}
+
+// otlpMetricPoint is the j'th data point of a metric.
+func otlpMetricPoint(m otlpMetric, j int) any {
+	switch {
+	case m.Histogram != nil:
+		return m.Histogram.DataPoints[j]
+	case m.Summary != nil:
+		return m.Summary.DataPoints[j]
+	case m.Sum != nil:
+		return m.Sum.DataPoints[j]
+	}
+	return m.Gauge.DataPoints[j]
+}
+
+// otlpMetricPart is a metric with its data points from up to to alone: none,
+// written [], for from equal to to.
+func otlpMetricPart(m otlpMetric, from, to int) otlpMetric {
+	switch {
+	case m.Histogram != nil:
+		h := *m.Histogram
+		h.DataPoints = h.DataPoints[from:to:to]
+		m.Histogram = &h
+	case m.Summary != nil:
+		summary := *m.Summary
+		summary.DataPoints = summary.DataPoints[from:to:to]
+		m.Summary = &summary
+	case m.Sum != nil:
+		sum := *m.Sum
+		sum.DataPoints = sum.DataPoints[from:to:to]
+		m.Sum = &sum
+	case m.Gauge != nil:
+		gauge := *m.Gauge
+		gauge.DataPoints = gauge.DataPoints[from:to:to]
+		m.Gauge = &gauge
+	}
+	return m
 }
 
 func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
@@ -629,8 +927,45 @@ type otlpNameClash struct {
 // been a point of its series to the start times, a count the series had
 // (otlpStartTimes).
 func otlpMetricsOf(resource otlpResourceSet, now string, start func(m model.Metric, at string) string) ([]otlpMetric, []otlpNameClash) {
+	return otlpMetricsWith(resource, now, start, nil)
+}
+
+// otlpPointSources are the series the points of a resource's metrics are
+// of: of[m][j] is the place in the resource's set of the series the j'th
+// point of the m'th metric is of. index and kinds are what otlpPoints keeps
+// to find the metric of a name and a kind a point is added to.
+type otlpPointSources struct {
+	index map[string]int
+	kinds []int
+	of    [][]int
+}
+
+// add says that the next point made is of the series'th series, for the
+// metric of name and kind, found as otlpPoints finds it.
+func (o *otlpPointSources) add(series int, name string, kind int) {
+	at, seen := o.index[name]
+	if !seen || o.kinds[at] != kind {
+		at = len(o.of)
+		o.index[name] = at
+		o.kinds = append(o.kinds, kind)
+		o.of = append(o.of, nil)
+	}
+	o.of[at] = append(o.of[at], series)
+}
+
+// otlpMetricsWith is otlpMetricsOf, which, given sources, says in them what
+// series each point it makes is of. A point is made after keep is asked of
+// it, and only then, so sources are told of a point where keep says yes.
+func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Metric, at string) string, sources *otlpPointSources) ([]otlpMetric, []otlpNameClash) {
 	set, own := resource.Set, len(resource.seqs)
-	out, shared := otlpPoints(set, own, now, start, nil)
+	var keep func(series int, name string, kind int, attributes []otlpAttribute) bool
+	if sources != nil {
+		keep = func(series int, name string, kind int, _ []otlpAttribute) bool {
+			sources.add(series, name, kind)
+			return true
+		}
+	}
+	out, shared := otlpPoints(set, own, now, start, keep)
 	if !shared {
 		return out, nil
 	}
@@ -696,9 +1031,18 @@ func otlpMetricsOf(resource otlpResourceSet, now string, start func(m model.Metr
 		return out, nil
 	}
 	n := 0
-	out, _ = otlpPoints(set, own, now, start, func(int, string, int, []otlpAttribute) bool {
+	if sources != nil {
+		*sources = otlpPointSources{index: map[string]int{}}
+	}
+	out, _ = otlpPoints(set, own, now, start, func(series int, name string, kind int, _ []otlpAttribute) bool {
 		n++
-		return !leftOut[n-1]
+		if leftOut[n-1] {
+			return false
+		}
+		if sources != nil {
+			sources.add(series, name, kind)
+		}
+		return true
 	})
 	reported := make([]otlpNameClash, 0, len(clashes))
 	for _, name := range model.SortedKeys(clashes) {
@@ -894,9 +1238,10 @@ func otlpSummaryPoint(m model.Metric, attributes []otlpAttribute, at string) otl
 //	http_exporter_otlp_export_duration_seconds
 //	http_exporter_otlp_last_export_success_timestamp_seconds
 //
-// An export is one delivery of everything pending, its retries included, so a
-// retried export that got through is one success, and one that ran out of
-// retries is one failure. They are exported over OTLP too, so the backend
+// An export is one delivery of everything pending, its retries included,
+// however many requests it is sent in, so a retried export that got through
+// is one success, and one that ran out of retries, or of which the endpoint
+// refused a request, is one failure. They are exported over OTLP too, so the backend
 // learns of a failed export at the next one that gets through.
 //
 // With otlp.unready_after_failures set, consecutive failures also make the
@@ -1226,12 +1571,17 @@ func (s *Server) FlushOTLP() {
 }
 
 // exportOTLP sends everything pending, with a self-metric snapshot, retrying
-// within budget. Metrics that could not be delivered for a reason worth
-// retrying — a network error, 429, 502, 503, 504, or the export being cut short
-// by shutdown — are queued again for the next export, unless a newer value of
-// the same series has been queued since; the self-metrics are not, since the
-// next export takes a new snapshot. Metrics the endpoint refused outright are
-// dropped and counted, since sending them again would be refused again.
+// within budget, in as many requests as otlp.batch_max_size and
+// otlp.batch_max_bytes make of it, one after another. Metrics that could not
+// be delivered for a reason worth retrying — a network error, 429, 502, 503,
+// 504, the budget running out, or the export being cut short by shutdown —
+// are queued again for the next export, with those of every request not sent
+// yet, unless a newer value of the same series has been queued since; the
+// self-metrics are not, since the next export takes a new snapshot, and
+// neither are the metrics of the requests delivered before. Metrics the
+// endpoint refused outright are dropped and counted, those of the request it
+// refused, since sending them again would be refused again, and the export
+// goes on with the next request.
 func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 	s.exportOTLPOnce(ctx, budget, false)
 }
@@ -1240,6 +1590,10 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 // says so (FlushOTLP): there is no next export then, so the metrics a
 // failure would queue again for it are dropped instead, counted in
 // http_exporter_otlp_points_dropped_total and logged as dropped.
+//
+// It is one export to the self-metrics however many requests it is sent
+// in: its duration is the whole export's, its retries those of every
+// request, and it is a success when the endpoint accepted every request.
 func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last bool) {
 	cfg := s.manager.Get().OTLP
 	pending := s.drainOTLP()
@@ -1249,35 +1603,61 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 	// The copy keeps the self-metrics out of pending, which may be queued again.
 	resources := appendToResource(append([]otlpResourceSet(nil), pending...), defaultResourceIdentity(cfg), s.selfMetricSet())
 	start := time.Now()
-	retries, partial, err := s.pushOTLP(ctx, cfg, resources, budget)
-	if err != nil && ctx.Err() != nil {
-		// Shutting down: the last export sends these.
-		s.requeueOTLP(pending)
-		return
+	deadline := start.Add(budget)
+	requests, err := s.otlpRequestsOf(cfg, resources)
+	retries, ok := 0, true
+	for k := 0; err == nil && k < len(requests.bodies); k++ {
+		// A request after the first is only worth starting if it has time
+		// to finish; the first is sent as an export of one request always
+		// was.
+		if k > 0 && time.Until(deadline) < otlpMinAttempt {
+			err = fmt.Errorf("the export ran out of time after %d of its %d requests", k, len(requests.bodies))
+			pending = requests.from(pending, k)
+			break
+		}
+		var tries int
+		var partial otlpPartialSuccess
+		tries, partial, err = s.deliverOTLP(ctx, cfg, requests.bodies[k], deadline)
+		retries += tries
+		if err != nil && ctx.Err() != nil {
+			// Shutting down: the last export sends these.
+			s.requeueOTLP(requests.from(pending, k))
+			return
+		}
+		if err == nil {
+			// The endpoint took the request but not all of it. The rejected
+			// points would be rejected again, so they are dropped and counted
+			// like a refused request's.
+			switch {
+			case partial.rejected > 0:
+				s.otlp.drop(int(min(partial.rejected, int64(math.MaxInt32))))
+				s.logger.Warn("OTLP endpoint accepted an export but rejected some of its data points; they are dropped", "rejected_points", partial.rejected, "error_message", partial.message, "retries", tries)
+			case partial.message != "":
+				s.logger.Warn("OTLP endpoint accepted an export with a warning", "error_message", partial.message)
+			}
+			continue
+		}
+		var refused *otlpRefusedError
+		if errors.As(err, &refused) {
+			ok, err = false, nil
+			points := requests.of(pending, k)
+			s.otlp.drop(points)
+			attrs := []any{"status", refused.status, "dropped_points", points, "retries", tries}
+			if len(requests.bodies) > 1 {
+				attrs = append(attrs, "request", k+1, "requests", len(requests.bodies))
+			}
+			if refused.body != "" {
+				attrs = append(attrs, "response_body", refused.body)
+			}
+			s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", attrs...)
+			continue
+		}
+		// Worth retrying, and out of retries: this request and those after
+		// it are what is left to deliver.
+		pending = requests.from(pending, k)
 	}
-	s.otlp.record(cfg.Endpoint, time.Since(start), retries, err == nil)
+	s.otlp.record(cfg.Endpoint, time.Since(start), retries, ok && err == nil)
 	if err == nil {
-		// The endpoint took the export but not all of it. The rejected
-		// points would be rejected again, so they are dropped and counted
-		// like a refused export's.
-		switch {
-		case partial.rejected > 0:
-			s.otlp.drop(int(min(partial.rejected, int64(math.MaxInt32))))
-			s.logger.Warn("OTLP endpoint accepted an export but rejected some of its data points; they are dropped", "rejected_points", partial.rejected, "error_message", partial.message, "retries", retries)
-		case partial.message != "":
-			s.logger.Warn("OTLP endpoint accepted an export with a warning", "error_message", partial.message)
-		}
-		return
-	}
-	var refused *otlpRefusedError
-	if errors.As(err, &refused) {
-		points := countPoints(pending)
-		s.otlp.drop(points)
-		attrs := []any{"status", refused.status, "dropped_points", points, "retries", retries}
-		if refused.body != "" {
-			attrs = append(attrs, "response_body", refused.body)
-		}
-		s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", attrs...)
 		return
 	}
 	if last {

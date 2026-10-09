@@ -1565,9 +1565,6 @@
         "headers": [
           "enabled"
         ],
-        "insecure_skip_verify": [
-          "enabled"
-        ],
         "interval": [
           "enabled"
         ],
@@ -1647,9 +1644,6 @@
             ]
           },
           "type": "object"
-        },
-        "insecure_skip_verify": {
-          "type": "boolean"
         },
         "interval": {
           "description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s.",

@@ -145,3 +145,24 @@ func TestOTLPBatchBoundsAreCheckedAtLoad(t *testing.T) {
 		}
 	}
 }
+
+// The check of the OTLP endpoint's certificate is turned off by one key,
+// otlp.tls.insecure_skip_verify, as a collector's by request.tls's. An
+// insecure_skip_verify beside tls is no key of the otlp block: it is refused
+// by the loader and by the schema, so a configuration that writes it is told
+// so rather than having either key decide.
+func TestOnlyTheTLSBlockTurnsOffTheOTLPCertificateCheck(t *testing.T) {
+	const otlp = "otlp:\n  enabled: true\n  endpoint: https://collector.invalid/v1/metrics\n"
+	path := testutil.WriteFile(t, "config.yaml", otlp+"  insecure_skip_verify: true\n"+testutil.MinimalConfig)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), `line 4: unknown key "insecure_skip_verify" in otlp`) {
+		t.Errorf("otlp.insecure_skip_verify beside tls: error %v, want it refused as an unknown key", err)
+	}
+	path = testutil.WriteFile(t, "config.yaml", otlp+"  tls: {insecure_skip_verify: true}\n"+testutil.MinimalConfig)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("otlp.tls.insecure_skip_verify: %v", err)
+	}
+	if !cfg.OTLP.TLS.InsecureSkipVerify {
+		t.Error("otlp.tls.insecure_skip_verify: true is not read")
+	}
+}

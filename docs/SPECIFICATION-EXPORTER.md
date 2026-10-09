@@ -20984,6 +20984,12 @@ The documentation's lists of credential words, of the keys a static target may s
 - docs/DEPENDENCIES.md names every module `go.mod` requires directly that
   the exporter's non-test code imports.
 
+## 34.129 One key turns off the OTLP certificate check
+
+- `otlp.insecure_skip_verify` beside `tls` is refused at load as `unknown key
+  "insecure_skip_verify" in otlp`, naming its line, and `otlp.tls` with
+  `insecure_skip_verify: true` loads with the check turned off (§ 42.9).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -21749,8 +21755,8 @@ otlp:
 `ca_file` MUST extend the system trust roots, while `cert_file` and `key_file`
 MUST configure an optional client certificate for mutual TLS. Setting
 `insecure_skip_verify: true` MUST disable server certificate verification only
-when explicitly requested; `otlp.insecure_skip_verify`, beside `tls`, MUST do
-the same, the verification being off when either is `true`. The exporter MUST retain TLS 1.2 or newer and MUST
+when explicitly requested, and it MUST be the only key that does: the `otlp`
+block MUST NOT have an `insecure_skip_verify` of its own beside `tls`. The exporter MUST retain TLS 1.2 or newer and MUST
 not log certificate contents or credentials. The OTLP HTTP client MUST use the
 same configured timeout and best-effort failure behavior as other OTLP exports.
 `tls.server_name`, here and on a collector's request, MUST set the name the

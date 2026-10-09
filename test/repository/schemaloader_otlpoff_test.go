@@ -41,8 +41,7 @@ var otlpKeys = map[string]struct {
 		checked: []otlpValue{{"{cert_file: /nonexistent/client.pem}", "otlp.tls sets only one of cert_file and key_file"}, {"{ca_file: /nonexistent/ca.pem}", "otlp.tls cannot be used"}},
 		noValue: []string{"x", "{insecure_skip_verify: maybe}", "{unknown: 1}", "{ca_file: [a]}"},
 	},
-	"insecure_skip_verify": {noValue: []string{"maybe", "1", "[true]"}},
-	"service_name":         {noValue: []string{"[a]", "{a: b}"}},
+	"service_name": {noValue: []string{"[a]", "{a: b}"}},
 	"resource_attributes": {
 		checked: []otlpValue{{"{service.name: x}", "otlp.resource_attributes sets service.name, which otlp.service_name sets"}},
 		noValue: []string{"[a]", "{a: [b]}", "x"},

@@ -378,9 +378,6 @@ func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []b
 		timeout = 5 * time.Second
 	}
 	tlsSettings := cfg.TLS
-	if cfg.InsecureSkipVerify {
-		tlsSettings.InsecureSkipVerify = true
-	}
 	for retries := 0; ; retries++ {
 		attempt := min(timeout, time.Until(deadline))
 		answer, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)

@@ -320,7 +320,6 @@ type OTLPConfig struct {
 	Timeout            Duration          `yaml:"timeout"`
 	Interval           Duration          `yaml:"interval"`
 	TLS                TLSConfig         `yaml:"tls"`
-	InsecureSkipVerify bool              `yaml:"insecure_skip_verify"`
 	ServiceName        string            `yaml:"service_name"`
 	ResourceAttributes map[string]string `yaml:"resource_attributes"`
 	// ProbeAttributes adds collector and target attributes to the points a

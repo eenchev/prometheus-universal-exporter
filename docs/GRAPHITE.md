@@ -307,8 +307,11 @@ as a failing target is — and a read that skips none again logs that it did.
 
 A [static target](STATIC-TARGETS.md) of a `graphite` collector is scraped by
 the exporter on its interval. Its `target` is the Graphite server's URL, and
-under `request` it may set everything a probe can, and its own `targets`,
-`from` and `until`, which replace the collector's:
+under `request` it may set `path`, `timeout`, `insecure_skip_verify`,
+`follow_redirects`, `enable_http2`, `retry`, static `headers`, the credential
+keys (`basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`),
+its own [`accept_status`](REQUESTS.md#accepting-other-statuses), and its own
+`targets`, `from` and `until`, which replace the collector's:
 
 ```yaml
 interval: 1m

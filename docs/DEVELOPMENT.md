@@ -728,7 +728,7 @@ prints lists the types it carries, and a test in every build holds it to that.
 
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
-in `targetsSchemaRules` for the target file, both in
+in `staticTargetsSchemaRules` for the target file, both in
 `internal/config/configschema.go`.
 
 When the exporter comes to refuse a value, give the schema the rule too where
@@ -2089,8 +2089,14 @@ it. `test/repository/goversion_test.go` ties them together — it checks that ev
 workflows request, and the one the Dockerfile pins, satisfies the go directive —
 so `go test ./...` catches the mismatch instead of the next red build.
 
-GitHub Actions uses changed-path detection: Go tests/build/vet/race checks run
-for Go source or module changes, while Helm lint/template checks run for changes
-under `charts/`. A change under `charts/` runs the Go suite too, because the
-template guard above lives there and is worth least on exactly the changes that
-would break it. Documentation-only changes do not run either suite.
+GitHub Actions uses changed-path detection (`.github/workflows/ci.yml`): the Go
+tests/build/vet/race checks run for changes to anything the repository tests
+read — Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
+`examples/`, `testdata/`, `docs/` and every top-level `*.md`, the
+`Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml` and
+`test/python/` — so a documentation-only change runs the Go suite too, whose
+repository tests check the docs. The Helm lint/template checks run for changes
+under `charts/`, `configs/` and `testdata/chart/`, the files the chart steps
+render. A change under `charts/` runs the Go suite because the template guard
+above lives there and is worth least on exactly the changes that would break
+it.

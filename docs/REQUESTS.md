@@ -884,8 +884,8 @@ request.denied_targets` — without the target being contacted, whatever
 
 Connections to targets are kept and reused, so an HTTPS target pays for one TLS
 handshake rather than one per scrape. Every collector and scrape with the same
-TLS settings — `tls.ca_file`, `cert_file`, `key_file` and
-`insecure_skip_verify` — the same `enable_http2` and the same
+TLS settings — the whole `tls` block: `ca_file`, `cert_file`, `key_file`,
+`insecure_skip_verify` and `server_name` — the same `enable_http2` and the same
 `allowed_targets` and `denied_targets` shares one connection pool; a scrape
 overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
 settings. Collectors with different target lists never share a connection,

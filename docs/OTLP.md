@@ -16,6 +16,7 @@ otlp:
   # unready_after_failures: 0
   # headers:
   #   X-OTLP-Tenant: production
+  # insecure_skip_verify: false   # the same as tls.insecure_skip_verify
   # tls:
   #   ca_file: /etc/prometheus/tls/ca.crt
   #   cert_file: /etc/prometheus/tls/client.crt
@@ -55,6 +56,11 @@ loads, as a collector's request is, rather than failing every export:
 - `resource_attributes` may not set `service.name`, which `service_name`
   sets — the resource would carry it twice. The same holds for a static
   target's `otlp.resource_attributes` and its `otlp.service_name`.
+
+`tls.insecure_skip_verify: true` turns off the check of the endpoint's
+certificate. `otlp.insecure_skip_verify`, beside `tls`, does the same: the
+check is off when either is `true`, and `false` in one does not turn it back
+on when the other is `true`.
 
 An attribute of `resource_attributes` written `""` is the attribute left
 out, as a [`transform.labels`](CONFIGURATION.md#collector-wide-labels) value

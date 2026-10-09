@@ -643,9 +643,12 @@ transform:
 The entire `response` block may be omitted. The exporter infers CSV for the
 `csv` transform, and header-based CSV parsing is enabled by default. Use
 `response.csv` only when changing CSV behavior, such as selecting a custom
-delimiter or disabling the header row. Likewise, `decoder.type: text` is
-unnecessary for a regex or Python transform unless an explicit decoder is
-needed for an ambiguous endpoint.
+delimiter or disabling the header row. Likewise, a regex transform implies
+`decoder.type: text`. A Python transform implies no decoder: without
+`decoder.type` its collector decodes each response by its `Content-Type`
+header (a `localfile` collector by the file's extension), and by the content
+when that does not say, and every configuration load warns about it; set
+`decoder.type` (for example `text` or `json`) to fix what the script reads.
 
 `error_mode` applies after decoding, when an individual metric is extracted.
 Decode failures and response/transform incompatibilities are collector-level

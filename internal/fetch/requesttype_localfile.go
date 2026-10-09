@@ -407,8 +407,9 @@ func checkMaxAge(c *model.Collector, full string, modified time.Time) error {
 	return nil
 }
 
-// localFileResponse presents a file read as a response: status 200, and
-// Content-Type from the extension, Content-Length and Last-Modified.
+// localFileResponse presents a file read as a response: no status for rules
+// (the status gauge reads 200), and Content-Type from the extension,
+// Content-Length and Last-Modified.
 func localFileResponse(name string, body []byte, info fs.FileInfo, c *model.Collector) *HTTPResponse {
 	headers := http.Header{}
 	if contentType := localFileContentType(name); contentType != "" {

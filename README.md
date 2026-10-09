@@ -83,7 +83,9 @@ curl 'http://localhost:8080/probe?target=http://127.0.0.1:9000&collector=app_jso
 
 The response is ordinary Prometheus exposition, which is what Prometheus
 scrapes. `configs/config.example.yaml` is a complete working
-document covering every decoder.
+document with JSON, text, CSV and Prometheus collectors, over HTTP and local
+files; the other decoders have their examples under `examples/` and in
+[Configuration](docs/CONFIGURATION.md).
 
 Or run the published image:
 

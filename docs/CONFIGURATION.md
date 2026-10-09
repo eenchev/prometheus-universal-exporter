@@ -155,7 +155,7 @@ library itself
 fails on fails the scrape in the `decode` stage like any other that cannot be
 decoded (`the YAML library failed on the document: ...`); should the exporter's
 own code fail while it decodes one, the error says so and where (`the exporter
-failed on the YAML document (yamlkeys.go:605 decode.(*yamlMap).set): ...; this
+failed on the YAML document (yamlkeys.go:<line> decode.(*yamlMap).set): ...; this
 is a defect of the exporter and not of the document, please report it`), which
 is what to report. XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text
@@ -1994,8 +1994,10 @@ table is in [gRPC](GRPC.md#a-collector).
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
-`param_<name>` — only `timeout` when it reads a directory — and its `target`
-is optional. `graphite` accepts what `http` does but `method` and `body`,
+`param_<name>` — when it reads a directory, `timeout` and only the
+`param_<name>` its [label values' placeholders](REQUESTS.md#in-label-values)
+name, never `path` ([Reading a directory](LOCALFILE.md#reading-a-directory)) —
+and its `target` is optional. `graphite` accepts what `http` does but `method` and `body`,
 and `from` and `until`, which no other type accepts. `grpc` accepts
 `timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
@@ -2718,8 +2720,9 @@ server, start a configuration with
 ```
 
 and the editor completes keys, shows what each one does, and flags unknown keys
-and values that are not allowed as you type. The example configurations start
-with it.
+and values that are not allowed as you type. The example configurations in
+`configs/`, `config.example.yaml` and `config.otlp.example.yaml`, start with
+it; the ones under `examples/` do not.
 
 The [static target file](STATIC-TARGETS.md) has a schema of its own,
 [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
@@ -3616,6 +3619,11 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   budget and cannot lift it: `timeout=1h` still ends after 30s, and the error says the parameter was capped. `0` leaves
   such a probe unbounded; a negative value is a command-line error.
 - A probe answered from the [response cache](#response-caching) needs no budget.
+  Identical probes that [share one request](#identical-probes-share-one-request)
+  share the budget of the probe that started it.
+- The offset covers writing the answer and the network between the exporter
+  and Prometheus. Raise it if Prometheus still times out first; `0` uses the
+  whole scrape timeout. A negative value is a command-line error.
 
 Once the exporter starts writing an answer, the client has 30 seconds to read
 it, on every endpoint. An answer can be megabytes — a passed-through
@@ -3625,11 +3633,6 @@ stopped reading would otherwise hold the request, and the answer in memory,
 for as long as it kept the connection open. After 30 seconds its connection is
 closed, which the log notes at `debug` level only. The time a probe takes to
 make its answer does not count: that is the probe's budget above.
-  Identical probes that [share one request](#identical-probes-share-one-request)
-  share the budget of the probe that started it.
-- The offset covers writing the answer and the network between the exporter
-  and Prometheus. Raise it if Prometheus still times out first; `0` uses the
-  whole scrape timeout. A negative value is a command-line error.
 
 Static targets are unaffected: their scrapes are bounded by their own
 `interval` (see [Static targets](STATIC-TARGETS.md#scraping)).
@@ -4120,8 +4123,11 @@ probe. The report redacts:
   included ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
-  credentials: any name containing `auth`, `cookie`, `token`, `secret`,
-  `password`, `passwd`, `key`, `session`, `signature` or `credential`.
+  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): any
+  name containing, in any case, `auth`, `cookie`, `token`, `secret`,
+  `password`, `passwd`, `passphrase`, `passcode`, `key`, `session`,
+  `signature`, `credential` or `jwt`, or with `sig`, `pwd`, `pw` or `pass` as
+  a whole word of it, as in `X-Sig` or `X-Db-Pwd`.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it, so turn the flag on

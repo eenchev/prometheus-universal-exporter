@@ -188,8 +188,18 @@ func TestAnOTLPExportWithinTheBatchBoundsIsTheOneRequestItWas(t *testing.T) {
 	server, _ := batchServer("http://collector.invalid/v1/metrics", nil)
 	cfg := server.manager.Get().OTLP
 	was, _ := alloctest.Allocations(5, func() { _, _ = server.otlpBodyAsItWas(cfg, resources) })
-	is := alloctest.AllocsAtMost(5, was+1, func() { _, _ = server.otlpRequestsOf(cfg, resources) })
-	if is > was+1 {
+	// The one allocation more is the list of bodies. Under the race detector
+	// the count of the same call moves by up to some fifteen allocations from
+	// one measurement to the next (in CI the least of five came to 6880 for
+	// the export and 6874 for the oracle), so there a hundredth of the count is
+	// allowed beside it: still far less than a second conversion or a copy of
+	// the body would cost.
+	most := was + 1
+	if alloctest.RaceDetector {
+		most += was / 100
+	}
+	is := alloctest.AllocsAtMost(5, most, func() { _, _ = server.otlpRequestsOf(cfg, resources) })
+	if is > most {
 		t.Errorf("an export of one request costs %v allocations, and cost %v", is, was)
 	}
 	t.Logf("an export of one request costs %v allocations, and cost %v", is, was)

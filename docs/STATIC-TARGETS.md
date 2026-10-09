@@ -61,8 +61,10 @@ for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
 with `target` optional, for [`graphite`](GRAPHITE.md#static-targets) all
 but `method` and `body`, plus its own `targets`, `from` and `until`, and for
 [`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
-with its `codes`, and its own `message` and `metadata`. It also takes static `headers` and its own target
-credentials, inline or file-backed, as basic authentication or a bearer token.
+with its `codes`, and its own `message` and `metadata`. An `http` or
+`graphite` target also takes static `headers`, and every target but a
+`localfile` one its own target credentials, inline or file-backed, as basic
+authentication or a bearer token.
 A target's own credential is sent instead of the collector's, whose
 `bearer_token_file` or `basic_auth_file` is then not read for that target: a
 collector's credential file that is missing fails only the targets that

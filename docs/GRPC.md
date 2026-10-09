@@ -480,8 +480,10 @@ A [static target](STATIC-TARGETS.md) of a `grpc` collector is scraped by the
 exporter on its interval. Its `target` is the server, and under `request` it
 may set `message`, which replaces the collector's, `metadata`, sent besides
 the collector's with its own value for a key of both, `timeout`,
-`insecure_skip_verify`, `retry`, whose `codes` replaces the collector's, and
-the credential keys:
+`insecure_skip_verify`, `retry`, whose `codes` replaces the collector's,
+[`accept_codes`](#errors-and-retries), which replaces the collector's, and
+the credential keys (`basic_auth`, `basic_auth_file`, `bearer_token`,
+`bearer_token_file`):
 
 ```yaml
 interval: 1m
@@ -513,7 +515,8 @@ collector's most recent call: `0` for `OK`, `14` for `UNAVAILABLE`, and `-1`
 before the first call, or when a scrape made none, as when the message did
 not fit. Only `grpc` collectors have it, so an exporter without them does not
 show the family. `http_exporter_scrape_http_status_code` reads `200` after an
-`OK` call and `0` after any other. With verbose self-metrics, a call's `url`
+`OK` call or one ending in a code of [`accept_codes`](#errors-and-retries),
+and `0` after any other. With verbose self-metrics, a call's `url`
 label is `grpc://host:port/package.Service/Method`, `grpcs://` over TLS, and
 its `http_method` is `POST`, which is what gRPC sends over HTTP/2. See
 [Self-metrics](SELF-METRICS.md).

@@ -931,8 +931,8 @@ lines: it only pulls. Its keys:
   whitespace, MUST be answered `400`, and so must either for a collector of
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
-  `retry`, `headers`, the basic and bearer credential keys, and `targets`,
-  `from` and `until`, which replace the collector's. A static target's
+  `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
+  and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
   the probe parameters of the same name, so it shares cached results with a
@@ -1083,8 +1083,9 @@ keys:
   `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>` and
   `message`, which replaces `request.message`, placeholders and all; a
   parameter only another type accepts MUST be answered `400`. A static target
-  MAY set `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`
-  and the basic and bearer credential keys; its message and metadata MUST NOT
+  MAY set `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`,
+  `accept_codes` and the basic and bearer credential keys; its message and
+  metadata MUST NOT
   hold placeholders, its message MUST be JSON, and with descriptors read at
   load fit the input type. Its message MUST enter its cache key as the probe
   parameter `message`, and its metadata and retry codes a section a probe's
@@ -1874,7 +1875,7 @@ The YAML decoder MUST:
   the exporter that was running when it was raised, the standard library's
   passed over, and the exporter's own MUST say that it is a defect of the
   exporter, and where, the file, the line and the function (`the exporter
-  failed on the YAML document (yamlkeys.go:605 decode.(*yamlMap).set):
+  failed on the YAML document (yamlkeys.go:<line> decode.(*yamlMap).set):
   interface conversion: interface {} is int, not string; this is a defect
   of the exporter and not of the document, please report it`), and no
   stack. A runtime error MUST be recognised by the log (§ 25.1) by its text
@@ -6241,8 +6242,8 @@ when a key the configuration reads is missing from the schema or the schema has
 a key the configuration does not read, when any shipped configuration (the
 examples, the demo configurations and the chart's default configuration) does
 not validate against it, and when it accepts any of a set of invalid documents.
-The example configurations MUST begin with the `yaml-language-server` modeline
-pointing at the published schema.
+The example configurations in `configs/` MUST begin with the
+`yaml-language-server` modeline pointing at the published schema.
 
 The configuration schema MUST require `collectors` or `collector_files`, each
 non-empty when it is the one present. The repository MUST also publish
@@ -8518,11 +8519,14 @@ reads of operator-supplied file paths, fall in this category.
 
 CI SHOULD use changed-path detection to avoid running unrelated suites:
 
-- Go tests, race tests, vet, formatting, and build run when Go source or Go
-  module files change (`**/*.go`, `go.mod`, or `go.sum`).
-- Helm lint and template scenarios run when chart files change (`charts/**`).
-- A documentation-only or unrelated change MAY complete without running either
-  suite.
+- Go tests, race tests, vet, formatting, and build run when anything the
+  repository tests read changes (§ 42.12): Go source and module files, the
+  workflows, the chart, `configs`, `examples`, `testdata`, the docs and
+  READMEs, the Dockerfile, `.dockerignore`, the Makefile, `tools`, the lint
+  configuration and `test/python`.
+- Helm lint and template scenarios run when chart files, or the `configs` and
+  `testdata/chart` files they render, change.
+- A change to none of these MAY complete without running either suite.
 
 The path filter MUST evaluate the correct comparison base for both push and
 pull-request workflows.
@@ -20962,6 +20966,24 @@ An export is sent in requests within `otlp.batch_max_size` and `otlp.batch_max_b
   when it is switched off; the schema agrees, but for a size under the least
   written as text, which the exporter alone refuses.
 
+## 34.128 Facts of the documentation held to the code
+
+The documentation's lists of credential words, of the keys a static target may set, of the exporter's direct dependencies and of the schema rule functions, and the Prometheus Operator page's relabeling, are held to the code (§ 35):
+
+- Every list in the docs and the specification of what makes a name read as
+  a credential's names every word of `credentialWords` and `credentialParts`
+  in `internal/fetch/redact.go`, the debug report's header redaction
+  included.
+- The Static targets sections of docs/GRAPHITE.md, docs/GRPC.md and
+  docs/LOCALFILE.md name every key the request type's `TargetFields` lets a
+  static target set.
+- The relabeling docs/PROMETHEUS-OPERATOR.md shows replaces `__address__`
+  with the address the chart renders for the release and namespace it names.
+- The schema rule functions docs/DEVELOPMENT.md names are functions of
+  `internal/config`.
+- docs/DEPENDENCIES.md names every module `go.mod` requires directly that
+  the exporter's non-test code imports.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -21727,7 +21749,8 @@ otlp:
 `ca_file` MUST extend the system trust roots, while `cert_file` and `key_file`
 MUST configure an optional client certificate for mutual TLS. Setting
 `insecure_skip_verify: true` MUST disable server certificate verification only
-when explicitly requested. The exporter MUST retain TLS 1.2 or newer and MUST
+when explicitly requested; `otlp.insecure_skip_verify`, beside `tls`, MUST do
+the same, the verification being off when either is `true`. The exporter MUST retain TLS 1.2 or newer and MUST
 not log certificate contents or credentials. The OTLP HTTP client MUST use the
 same configured timeout and best-effort failure behavior as other OTLP exports.
 `tls.server_name`, here and on a collector's request, MUST set the name the
@@ -22447,12 +22470,13 @@ The target document MUST be reloadable on the same terms as the exporter
 configuration: an invalid document MUST be rejected with the previous document
 left in force.
 
-Each target MUST accept every per-scrape parameter the `/probe` endpoint
-accepts — `method`, `path`, `body`, `timeout`, `insecure_skip_verify`,
-`retry.attempts`, and `retry.backoff` — with the same semantics, overriding the
-collector's own request settings for that target only. Each target MUST also
-accept static request `headers` and its own target credentials, as inline or
-file-backed basic authentication or a bearer token. A request that carries an
+Within what its type accepts, a target MUST accept every per-scrape parameter
+the `/probe` endpoint accepts — for `http`, `method`, `path`, `body`,
+`timeout`, `insecure_skip_verify`, `retry.attempts`, and `retry.backoff` — with
+the same semantics, overriding the collector's own request settings for that
+target only. An `http` or `graphite` target MUST also accept static request
+`headers`, and a target of every type but `localfile` its own target
+credentials, as inline or file-backed basic authentication or a bearer token. A request that carries an
 `Authorization` of its own — a static target's credential, or one a probe
 forwards — sends it instead of the collector's, and the collector's
 credential files MUST NOT be read for it: a missing or empty one MUST fail
@@ -22735,7 +22759,8 @@ The Helm chart MUST expose both as list-valued `params` entries on each
 
 Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
-CA, client certificate and key files and `insecure_skip_verify` — and HTTP/2
+CA, client certificate and key files, `insecure_skip_verify` and
+`server_name` — and HTTP/2
 choice, shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
@@ -23225,9 +23250,11 @@ reported as `500: probe failed: internal error: <panic>` (a debug scrape:
 `target up 0`, the scrape failed with that internal error).
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
-the values of request or response headers whose names contain `auth`,
-`cookie`, `token`, `secret`, `password`, `passwd`, `key`, `session`,
-`signature` or `credential`, in any case.
+the values of request or response headers whose names read as a credential's
+by the rule below: they contain, in any case, `auth`, `cookie`,
+`token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
+`session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
+`pass` as a whole word.
 
 With the same flag, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request

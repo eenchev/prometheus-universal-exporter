@@ -30,7 +30,7 @@ Example ServiceMonitor pattern:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: generic-http-exporter-target
+  name: prometheus-universal-exporter-target
 spec:
   selector:
     matchLabels:
@@ -47,7 +47,7 @@ spec:
         - sourceLabels: [__param_target]
           targetLabel: instance
         - targetLabel: __address__
-          replacement: generic-http-exporter:8080
+          replacement: prometheus-universal-exporter.monitoring.svc:8080
 ```
 
 The example must be tested against Prometheus Operator semantics.
@@ -160,7 +160,8 @@ message saying the floor and why: the Go memory limit would leave the heap
 almost nothing and the Go runtime would spend its time collecting garbage,
 and the exporter refuses such a flag (SPECIFICATION-EXPORTER.md § 30). A
 number MUST be written out, without an exponent, however small, so the
-message refusing `1e-5` says `0.00001`, never `1e-05`. Its digits MUST be
+templates' message refusing `1e-5`, which is seen with the values schema
+skipped, says `0.00001`, never `1e-05`. Its digits MUST be
 those Helm's `toJson` gives it, so every number a template printed without
 an exponent before renders as it did. A string MUST be checked as written,
 and the values schema's pattern for it takes no exponent.
@@ -363,7 +364,7 @@ relabelings:
   - sourceLabels: [__param_target]
     targetLabel: instance
   - targetLabel: __address__
-    replacement: <exporter-service>:<port>
+    replacement: <fullname>.<namespace>.svc:<service.port>
 ```
 
 Each monitor entry MUST have a unique name and select one collector. Multiple

@@ -1,6 +1,6 @@
 # Exporter self-metrics
 
-Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers `GET` and `HEAD`, and any other method `405` with `Allow: GET, HEAD`; and like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)). The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
+Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers `GET` and `HEAD`, and any other method `405` with `Allow: GET, HEAD`; and like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)). The Helm chart's self-metrics monitor, `<fullname>-self`, scrapes the exporter itself, apart from the target-probing monitors of `monitors`. It is configured by the `selfMetrics` block: `enabled`, `type: service` (a ServiceMonitor) or `type: pod` (a PodMonitor), `path`, `interval`, `scrapeTimeout`, `labels`, `annotations`, and Prometheus Operator `relabelings` and `metricRelabelings` (see the [chart README](../charts/prometheus-universal-exporter/README.md#4-configure-prometheus)).
 
 ## Collector metrics
 
@@ -12,7 +12,7 @@ configured:
 | `http_exporter_scrapes_total` | counter | Probes served, cache hits included. |
 | `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. |
 | `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
-| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read or a gRPC call answered `OK`. |
+| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, or a gRPC call answered `OK` or with a code of its `accept_codes`. |
 | `http_exporter_scrape_grpc_status_code` | gauge | [`grpc`](GRPC.md#self-metrics) collectors only: the gRPC status code of the most recent call, `0` for `OK`, `14` for `UNAVAILABLE`; `-1` before the first call, or when a scrape made none, as when the message did not fit. An exporter without `grpc` collectors has no such series. |
 | `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body. |
 | `http_exporter_decode_success_total` | counter | Responses decoded. |

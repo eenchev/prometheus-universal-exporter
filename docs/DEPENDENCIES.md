@@ -3,13 +3,15 @@
 Updates are proposed, never applied: each one arrives as a pull request.
 
 Dependabot handles the Go modules and the GitHub Actions, configured in
-`.github/dependabot.yml`. Each ecosystem is grouped into one pull request, and
-major bumps are excluded — a Go major version lives at a different import path
-and needs real work. It also handles the Python modules only the tests use,
-pinned in `test/python/requirements.txt` — `prometheus-client`, whose strict
-OpenMetrics parser the suite runs the exporter's answers through; CI runs the
-suite on a change to that file, with the module required
-(see [Repeatable tests](DEVELOPMENT.md#repeatable-tests)).
+`.github/dependabot.yml`. The Go modules' minor and patch updates are grouped
+into one pull request, and their major bumps are excluded — a Go major version
+lives at a different import path and needs real work. The GitHub Actions'
+updates are grouped into one pull request, major versions included. It also
+handles the Python modules only the tests use, pinned in
+`test/python/requirements.txt`, neither grouped nor excluding major bumps —
+`prometheus-client`, whose strict OpenMetrics parser the suite runs the
+exporter's answers through; CI runs the suite on a change to that file, with
+the module required (see [Repeatable tests](DEVELOPMENT.md#repeatable-tests)).
 
 The Dockerfile is updated by `.github/workflows/update-docker-deps.yml` instead.
 Dependabot cannot read it: `GO_VERSION`, `PYTHON_VERSION` and the pip pins are
@@ -128,8 +130,14 @@ fix, which `apt-get upgrade` then applies.
 
 The exporter's direct dependencies are `gojq` (jq and yq expressions),
 `antchfx/xmlquery`, `antchfx/htmlquery` and `antchfx/xpath` (XPath), `goquery`
-(CSS selectors), `gopkg.in/yaml.v3`, and `golang.org/x/net` for its
-`http/httpproxy` package, which reads the proxy environment variables per
+(CSS selectors) and `andybalholm/cascadia`, the selector compiler goquery uses
+underneath, which the exporter calls itself to compile each CSS selector once
+and keep it (`internal/expr/exprcache.go`), `gopkg.in/yaml.v3`,
+`golang.org/x/text` for its character encodings (`encoding/htmlindex`,
+`encoding/unicode`), which convert a response in an encoding other than UTF-8
+to UTF-8 (`internal/decode/textencoding.go`, see [Character
+encodings](CONFIGURATION.md#character-encodings)), and `golang.org/x/net` for
+its `http/httpproxy` package, which reads the proxy environment variables per
 transport rather than once per process; `golang.org/x/net` was already in the
 build for goquery's HTML parser. The Prometheus text format is parsed by
 the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module

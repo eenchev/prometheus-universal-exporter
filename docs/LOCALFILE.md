@@ -342,10 +342,11 @@ as `windows-1252`, unless it starts with a byte order mark (see
 `include`, `exclude`, `rename` and the
 [collector-wide labels](CONFIGURATION.md#collector-wide-labels) apply as usual.
 
-Transforms and Python scripts see the file as a response with status `200` and
-three headers: `Content-Type` from the extension, `Content-Length`, and
-`Last-Modified`, the file's modification time. A pre-script can use the last to
-publish the file's age.
+Transforms and Python scripts see the file as a response without a status
+(`$status` is `null` in jq and yq, `response.status_code` is `None` in Python)
+and with three headers: `Content-Type` from the extension, `Content-Length`,
+and `Last-Modified`, the file's modification time. A pre-script can use the
+last to publish the file's age.
 
 ## What it takes from node_exporter
 

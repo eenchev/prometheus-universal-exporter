@@ -4,7 +4,9 @@ The exporter is scraped like any other exporter, with one addition: the real
 target travels in the `target` query parameter, so every monitor needs the
 relabeling that moves the discovered address into it.
 
-The chart's generated ServiceMonitor and PodMonitor show the required relabeling:
+The chart's generated ServiceMonitor and PodMonitor show the required
+relabeling, here as rendered for a release `exporter` in the namespace
+`monitoring`:
 
 ```yaml
 params:
@@ -15,8 +17,12 @@ relabelings:
   - sourceLabels: [__param_target]
     targetLabel: instance
   - targetLabel: __address__
-    replacement: generic-http-exporter:8080
+    replacement: exporter-prometheus-universal-exporter.monitoring.svc:8080
 ```
+
+The last rule sends every scrape to the exporter's Service, addressed as
+`<fullname>.<namespace>.svc:<service.port>`, so it reaches the exporter from
+any namespace Prometheus runs in.
 
 One ServiceMonitor endpoint selects one collector. Use multiple endpoints or monitor resources for multiple collector configurations. The same pattern works for PodMonitor.
 

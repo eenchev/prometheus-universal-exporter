@@ -8,6 +8,6 @@ type: application
 version: 0.1.0
 dependencies:
   - name: prometheus-universal-exporter
-    version: 1.5.0
+    version: 1.6.0
     repository: file://../../../charts/prometheus-universal-exporter
     condition: prometheus-universal-exporter.enabled

@@ -73,7 +73,7 @@ The chart is published to GitHub Container Registry as an OCI artifact:
 ```bash
 helm install prometheus-universal-exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
-  --version 1.5.0 \
+  --version 1.6.0 \
   --namespace monitoring \
   --create-namespace \
   -f values.yaml
@@ -108,7 +108,7 @@ helm install prometheus-universal-exporter \
 ```bash
 helm upgrade prometheus-universal-exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
-  --version 1.5.0 \
+  --version 1.6.0 \
   --namespace monitoring \
   -f values.yaml
 ```
@@ -857,7 +857,7 @@ The chart can be a dependency of your own chart. Its values then go under its na
 # Chart.yaml of the parent chart
 dependencies:
   - name: prometheus-universal-exporter
-    version: 1.5.0
+    version: 1.6.0
     repository: oci://ghcr.io/eenchev/charts
     condition: prometheus-universal-exporter.enabled
 ```

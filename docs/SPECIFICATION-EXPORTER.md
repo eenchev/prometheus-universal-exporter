@@ -8743,8 +8743,6 @@ Test environment variable expansion:
   binaries with the Dockerfile's `GO_VERSION` at its newest patch release.
 - The golangci-lint version pinned in the Makefile and the one pinned in CI are
   the same.
-- CI's golangci-lint action builds the linter with `install-mode: goinstall`,
-  and `make lint-install` builds it with `go install` of the pinned version.
 
 ## 34.38 Path parameter tests
 
@@ -23064,13 +23062,11 @@ workflow. The release workflow MUST build its binaries with the Go version the
 Dockerfile pins, resolved to that minor's newest patch release, so a release's
 archives and image carry the same Go. A workflow MUST NOT install Go from the `go`
 directive (`go-version-file`), since that installs exactly the minimum the
-module declares, which may be a patch release missing security fixes. CI MUST
-build the pinned golangci-lint from source with the Go its job installed (the
-action's `install-mode: goinstall`), as `make lint-install` does with `go
-install`: a released golangci-lint binary carries the type checker of the Go it
-was built with, which cannot read what a newer toolchain compiles (Go 1.27.2's
-export data against the v2.13.2 binary) and fails rather than reporting a lint
-finding. The linter version MUST be pinned
+module declares, which may be a patch release missing security fixes. The pinned golangci-lint version MUST be a release that
+supports that Go: golangci-lint type-checks with the `golang.org/x/tools` it was
+released with, which cannot read the standard library of a newer toolchain or a
+newer export data format (Go 1.27.2's against v2.13.2) and fails rather than
+reporting a lint finding. The linter version MUST be pinned
 identically in the Makefile and in CI, and a test MUST keep the two in step, so
 that a clean local `make lint` continues to mean a clean CI run. The `go` directive in `go.mod` MUST remain the minimum the
 module requires — it is raised by dependency updates, not by the toolchain the

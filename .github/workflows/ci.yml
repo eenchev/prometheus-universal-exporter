@@ -106,17 +106,16 @@ jobs:
             exit 1
           fi
         if: steps.changes.outputs.go == 'true'
-      # golangci-lint's released binary is built with a particular Go release,
-      # and its type checker cannot read what a newer one compiles: against
-      # Go 1.27.2 the v2.13.2 binary fails with "export data version 5 is
-      # greater than maximum supported version 4". So the action builds the
-      # pinned version from source with the Go setup-go installed, as
-      # `make lint-install` does locally. The Makefile pins the same version
-      # and a test keeps the two in step.
+      # golangci-lint type-checks with the golang.org/x/tools it was released
+      # with, which reads only the export data formats known when it was made:
+      # v2.13.2 cannot read Go 1.27.2's ("export data version 5 is greater than
+      # maximum supported version 4"). So this version has to be one that
+      # supports the Go the build uses, which is the current stable release,
+      # and moves when a Go release changes the format. The Makefile pins the
+      # same version and a test keeps the two in step.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.2
-          install-mode: goinstall
+          version: v2.14.0
         if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.

@@ -1,9 +1,9 @@
 APP := prometheus-universal-exporter
 
-# Must be a release built with at least the Go the build uses; an older one
-# panics on standard-library sources from a newer toolchain. Kept in step with
-# .github/workflows/ci.yml by a test.
-GOLANGCI_LINT_VERSION := v2.13.2
+# Must be a release that supports the Go the build uses: an older one cannot
+# read a newer toolchain's standard library or export data (v2.13.2 against Go
+# 1.27.2). Kept in step with .github/workflows/ci.yml by a test.
+GOLANGCI_LINT_VERSION := v2.14.0
 # gopls is the Go language server: what VS Code and other editors show as
 # problems comes from it. Some of its analyzers exist nowhere else (writestring,
 # for one), so golangci-lint cannot stand in for it, and `make gopls-check`, the

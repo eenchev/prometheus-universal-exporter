@@ -1966,16 +1966,16 @@ it once. The tests are left to `make test` and CI, since the race run takes
 minutes.
 
 That pin is coupled to the Go toolchain in a way worth knowing about.
-A golangci-lint binary is built with a particular Go release, and its type
-checker cannot read what a newer one compiles — run an older build against a
-newer toolchain and it does not report a lint failure, it fails with `file
-requires newer Go version` or, as the v2.13.2 release binary does against Go
-1.27.2, `export data version 5 is greater than maximum supported version 4`.
-So neither side uses a prebuilt binary: `make lint-install` builds the pinned
-version with `go install`, and CI's golangci-lint action builds it from source
-with the job's Go (`install-mode: goinstall`). A new Go minor can still need a
-newer golangci-lint release, when the pinned one's sources do not support it.
-Beyond the standard linters it enables `bodyclose`, `errorlint`,
+golangci-lint type-checks with the `golang.org/x/tools` it was released with,
+which knows only the Go releases and export data formats that existed then — run
+an older release against a newer toolchain and it does not report a lint
+failure, it fails on the standard library: `file requires newer Go version` for a
+new minor, or, as v2.13.2 does against Go 1.27.2, `export data version 5 is
+greater than maximum supported version 4`. Building it from source with the new
+Go does not help, since the format reader comes from its pinned `x/tools`. Since
+the build uses the current stable Go, the pinned linter has to be a release that
+supports that Go (v2.14.0 for Go 1.27.2), and needs bumping when a Go release —
+usually a new minor, here a patch — outruns it. Beyond the standard linters it enables `bodyclose`, `errorlint`,
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.

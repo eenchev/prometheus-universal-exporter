@@ -441,32 +441,6 @@ func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
 	}
 }
 
-// The released golangci-lint binary is built with one Go release and cannot
-// type-check what a newer one compiles (Go 1.27.2's export data against the
-// v2.13.2 binary), while CI lints with the current stable Go. So CI builds the
-// pinned linter from source with the Go its job installed, as `make
-// lint-install` does with `go install`.
-func TestCIBuildsTheLinterWithTheGoItLintsWith(t *testing.T) {
-	workflow, err := os.ReadFile(".github/workflows/ci.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	step := regexp.MustCompile(`(?m)golangci/golangci-lint-action@\S+\n\s+with:\n((?:[ \t]+\S.*\n)+)`).FindSubmatch(workflow)
-	if step == nil {
-		t.Fatal("ci.yml no longer runs the golangci-lint action with inputs")
-	}
-	if !regexp.MustCompile(`(?m)^\s+install-mode:[ \t]*goinstall[ \t]*$`).Match(step[1]) {
-		t.Errorf("the golangci-lint action in ci.yml installs a prebuilt binary; set install-mode: goinstall so it is built with the job's Go:\n%s", step[1])
-	}
-	makefile, err := os.ReadFile("Makefile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !regexp.MustCompile(`(?m)^\tgo install github\.com/golangci/golangci-lint/v2/cmd/golangci-lint@\$\(GOLANGCI_LINT_VERSION\)$`).Match(makefile) {
-		t.Error("make lint-install no longer builds golangci-lint with go install")
-	}
-}
-
 // Pinning the version is only half of it: `make lint` has to refuse a
 // different installed release, since another release enables different checks
 // and passes locally what CI fails. And the pre-commit hook has to run it, so

@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -192,8 +193,24 @@ func TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget(t *testing.T) {
 		runtime.KeepAlive(drained)
 		return start, pending
 	}
-	shortStart, shortPending := held("")
-	longStart, longPending := held(strings.Repeat("a", 8000))
+	// The heap is the process's: a goroutine an earlier test left running
+	// may free or take memory while one measurement runs, which once made
+	// a point waiting cost -4900 bytes. Each size is measured three times,
+	// in turn, and the median of each kept, so that one disturbed
+	// measurement does not decide.
+	var shortStarts, shortPendings, longStarts, longPendings []float64
+	for range 3 {
+		start, pending := held("")
+		shortStarts, shortPendings = append(shortStarts, start), append(shortPendings, pending)
+		start, pending = held(strings.Repeat("a", 8000))
+		longStarts, longPendings = append(longStarts, start), append(longPendings, pending)
+	}
+	median := func(values []float64) float64 {
+		slices.Sort(values)
+		return values[len(values)/2]
+	}
+	shortStart, shortPending := median(shortStarts), median(shortPendings)
+	longStart, longPending := median(longStarts), median(longPendings)
 	t.Logf("per series: a start time %.0f bytes for a short target, %.0f for one of 8 KiB; a point waiting %.0f and %.0f", shortStart, longStart, shortPending, longPending)
 	if longStart > shortStart+512 {
 		t.Errorf("a start time keeps %.0f bytes for a target of 8 KiB, %.0f for a short one", longStart, shortStart)

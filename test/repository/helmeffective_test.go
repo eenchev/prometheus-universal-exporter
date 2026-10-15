@@ -921,7 +921,7 @@ var helmCheckMutations = []struct {
 		"the job of the workflow continues on error", "ci.yml",
 		"  test:\n    runs-on: ubuntu-latest\n",
 		"  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
-		[]string{".github/workflows/ci.yml:13: the job test: the job has continue-on-error", "\tcontinue-on-error: true"},
+		[]string{".github/workflows/ci.yml:22: the job test: the job has continue-on-error", "\tcontinue-on-error: true"},
 	},
 	{
 		"a step of the workflow never runs", "ci.yml",
@@ -1207,12 +1207,12 @@ var helmCheckMutations = []struct {
 	{
 		"the job of the workflow never runs", "ci.yml",
 		"  test:\n    runs-on: ubuntu-latest\n", "  test:\n    if: false\n    runs-on: ubuntu-latest\n",
-		[]string{".github/workflows/ci.yml:12: the job test: the job has an `if`, so the chart steps do not run whenever the chart changed", "\tif: false"},
+		[]string{".github/workflows/ci.yml:21: the job test: the job has an `if`, so the chart steps do not run whenever the chart changed", "\tif: false"},
 	},
 	{
 		"the job of the workflow runs for one event only", "ci.yml",
 		"  test:\n    runs-on: ubuntu-latest\n", "  test:\n    runs-on: ubuntu-latest\n    if: github.event_name == 'workflow_dispatch'\n",
-		[]string{".github/workflows/ci.yml:13: the job test: the job has an `if`", "\tif: github.event_name == 'workflow_dispatch'"},
+		[]string{".github/workflows/ci.yml:22: the job test: the job has an `if`", "\tif: github.event_name == 'workflow_dispatch'"},
 	},
 	{
 		"the chart filter of the workflow no longer names the chart", "ci.yml",
@@ -1222,12 +1222,12 @@ var helmCheckMutations = []struct {
 	{
 		"the workflow's steps run in a shell without -e", "ci.yml",
 		"jobs:\n  test:\n", "defaults:\n  run:\n    shell: bash {0}\njobs:\n  test:\n",
-		[]string{".github/workflows/ci.yml:12: the workflow: the shell is not bash or sh started with -e", "\tshell: bash {0}"},
+		[]string{".github/workflows/ci.yml:21: the workflow: the shell is not bash or sh started with -e", "\tshell: bash {0}"},
 	},
 	{
 		"the job's steps run in a shell without -e", "ci.yml",
 		"  test:\n    runs-on: ubuntu-latest\n", "  test:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: sh {0}\n",
-		[]string{".github/workflows/ci.yml:15: the job test: the shell is not bash or sh started with -e", "\tshell: sh {0}"},
+		[]string{".github/workflows/ci.yml:24: the job test: the shell is not bash or sh started with -e", "\tshell: sh {0}"},
 	},
 	{
 		"a step of the workflow has a shell that reads its script and runs nothing", "ci.yml",

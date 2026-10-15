@@ -14,6 +14,11 @@ of that commit started concluded `success` — a run whose changed paths skipped
 the Go suite counts as it concluded — and runs started by a pull request do
 not count, since they tested a merge rather than the commit.
 
+CI runs on a push to `main`, on a push of any tag and on a pull request; a
+push to another branch runs nothing of its own, its pull request's run being
+the one that tests it. A release tag on a commit that is not on `main` is
+still tested, by the run its own push starts.
+
 Pushing the tag starts a CI run of its own, and a tag is often pushed right
 after its commit, so while the commit's runs are queued or running, or none
 has started yet, the job waits, for up to an hour, looking every 30 seconds.

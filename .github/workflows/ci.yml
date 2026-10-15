@@ -1,6 +1,15 @@
 name: ci
+# A push to main and a push of any tag run CI; a pull request runs it on the
+# pull request. A push to a pull request's branch is left to the
+# pull_request run, so a pull request's checks run once, not twice. A tag
+# push still runs CI on the commit it names, which the release workflows wait
+# for (tools/ci-passed.py counts push runs alone).
 on:
   push:
+    branches:
+      - main
+    tags:
+      - '**'
   pull_request:
 # Read-only: CI reads the repository and publishes nothing. paths-filter
 # lists a pull request's changed files through the API.

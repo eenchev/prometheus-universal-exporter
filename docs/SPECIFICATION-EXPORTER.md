@@ -22738,6 +22738,13 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
   cancel request ended, with the same SQLSTATE, is not, nor is another
   driver's failure.
 
+## 34.144 CI runs once for a pull request
+
+- ci.yml runs on a push to main, on a push of every tag and on a pull
+  request, and on no other push, so a pull request's commit is not run
+  twice and a release tag's commit still gets the push run the release
+  workflows wait for.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

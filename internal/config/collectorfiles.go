@@ -174,6 +174,9 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	if err != nil {
 		return nil, fmt.Errorf("collector file %s: %w", path, err)
 	}
+	if err := refuseNotScalarKeys(b); err != nil {
+		return nil, fmt.Errorf("collector file %s: %w", path, err)
+	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
 		return nil, fmt.Errorf("collector file %s: %w", path, err)
@@ -260,8 +263,9 @@ func duplicateCollectorError(name, first, second string) error {
 }
 
 // collectorFilesStamp describes the collector files a configuration reads —
-// which files a pattern matches now, and each one's modification time and
-// size — so the watch can tell when one was edited, added or removed. An entry
+// which files a pattern matches now, and each one's modification time, size
+// and mode — so the watch can tell when one was edited, added or removed, or
+// its permissions changed, which may have made it readable again. An entry
 // that cannot be resolved is part of the stamp too, so its file appearing is
 // also a change.
 func collectorFilesStamp(configPath string, entries []string) string {
@@ -280,6 +284,8 @@ func collectorFilesStamp(configPath string, entries []string) string {
 			b.WriteString(strconv.FormatInt(st.ModTime().UnixNano(), 10))
 			b.WriteByte(0)
 			b.WriteString(strconv.FormatInt(st.Size(), 10))
+			b.WriteByte(0)
+			b.WriteString(st.Mode().String())
 		}
 		b.WriteString("\n")
 	}

@@ -211,3 +211,45 @@ func TestExporterCredentialValidation(t *testing.T) {
 		t.Fatalf("a disabled basic_auth was checked: %v", err)
 	}
 }
+
+// The exporter's own Basic username holds no colon: a client's credential
+// ends the username at the first one (RFC 7617), so the username could never
+// be presented and every request was refused as unauthorised. One written in
+// web.basic_auth.username, and one in its username_file, is refused when the
+// configuration loads, naming the key; a username file rotated to one later
+// refuses every request with 500, as a file that cannot be read does, rather
+// than with 401 to the right credential. A password may hold one.
+func TestTheExportersOwnBasicUsernameWithAColonIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	colon := testutil.WriteIn(t, dir, "colon", "admin:ops\n")
+	for name, tc := range map[string]struct {
+		auth model.ExporterBasicAuth
+		want string
+	}{
+		"written":   {model.ExporterBasicAuth{Username: "admin:ops", Password: "p"}, `web.basic_auth.username holds a colon (":")`},
+		"in a file": {model.ExporterBasicAuth{UsernameFile: colon, Password: "p"}, `web.basic_auth.username_file ` + colon + ` holds a colon (":")`},
+	} {
+		tc.auth.Enabled = true
+		if _, err := webAuthServer(t, &tc.auth); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
+		}
+	}
+	username := testutil.WriteIn(t, dir, "username", "exporter\n")
+	server, err := webAuthServer(t, &model.ExporterBasicAuth{Enabled: true, UsernameFile: username, Password: "s3:cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := selfMetricsAs(t, server, "exporter", "s3:cret"); got != http.StatusOK {
+		t.Fatalf("a password with a colon was refused: %d", got)
+	}
+	if err := os.WriteFile(username, []byte("export:er\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(username, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got := selfMetricsAs(t, server, "export:er", "s3:cret"); got != http.StatusInternalServerError {
+		t.Fatalf("a username file rotated to a colon answered %d", got)
+	}
+}

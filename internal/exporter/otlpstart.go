@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"sync"
 	"time"
 
@@ -35,7 +36,9 @@ import (
 // limit. One export carries at most max_pending_points points, so the bound
 // leaves room for every series being exported and for some churn; past it,
 // the series seen least recently is forgotten first, and starts again if it
-// comes back.
+// comes back. And each is remembered by a key of at most otlpKeyLongest
+// bytes, a longer one by its digest (otlpKeyOf), whatever its labels hold:
+// a probe's target, with otlp.probe_attributes, may be 8 KiB.
 
 const (
 	otlpStartForget = time.Hour
@@ -90,17 +93,22 @@ func (t *otlpStartTimes) bound(maxPending int) {
 // after its length as a part of a key is written (appendKeyPart), and then
 // its own (otlpSeriesKey): where the one ends and the other begins is not
 // read from what either holds, so no series of one resource has the start
-// time of a series of another.
+// time of a series of another. The key is remembered as itself or by its
+// digest (otlpKeyOf), and is made where the point's start time is found,
+// so a series already seen is found without an allocation.
 func (t *otlpStartTimes) forResource(resource string) func(m model.Metric, at string) string {
 	of := string(appendKeyPart(nil, resource))
 	return func(m model.Metric, at string) string {
-		return t.start(otlpSeriesKey(of, &m), cumulativeCount(m), at)
+		var room [otlpKeyRoom]byte
+		var digest [sha256.Size]byte
+		return t.start(otlpKeyOf(appendOTLPKey(room[:0], of, m.Labels, m.Name, string(m.Type)), &digest), cumulativeCount(m), at)
 	}
 }
 
 // start is when the series key began counting, given a point of count at
-// time at: the time of its first point, or of the first after a reset.
-func (t *otlpStartTimes) start(key string, count float64, at string) string {
+// time at: the time of its first point, or of the first after a reset. key
+// is the series' key as it is remembered (otlpKeyOf).
+func (t *otlpStartTimes) start(key []byte, count float64, at string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -110,15 +118,15 @@ func (t *otlpStartTimes) start(key string, count float64, at string) string {
 		t.forgetLocked(back)
 	}
 	var s *otlpStart
-	if element := t.series[key]; element != nil {
+	if element := t.series[string(key)]; element != nil {
 		s = element.Value.(*otlpStart)
 		t.recent.MoveToFront(element)
 		if count < s.last {
 			s.start = at
 		}
 	} else {
-		s = &otlpStart{key: key, start: at}
-		t.series[key] = t.recent.PushFront(s)
+		s = &otlpStart{key: string(key), start: at}
+		t.series[s.key] = t.recent.PushFront(s)
 		limit := t.max
 		if limit <= 0 {
 			limit = otlpStartMaxSeries(0)

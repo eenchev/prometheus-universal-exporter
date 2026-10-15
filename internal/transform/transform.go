@@ -138,7 +138,7 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 		}
 		set, err = transformCSS(ctx, h.Document, c.Metrics, c)
 	case "csv":
-		set, err = transformCSV(ctx, d.Data, c.Metrics, c)
+		set, err = transformCSVColumns(ctx, d.Data, d.Columns, c.Metrics, c)
 	case "xpath":
 		if h, ok := d.Data.(*decode.HTMLDecoded); ok {
 			set, err = transformHTMLXPath(ctx, h.Document, c.Metrics, c)
@@ -2258,25 +2258,31 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 	// The rule adds its series to the set itself, with room made for one of
 	// each item.
 	out.Metrics = growSeries(ctx, out.Metrics, items.Length())
+	// What a selector matches within every item is found once, for all the
+	// items together, when the first item needs it (cssWithinItems).
+	var valueWithin *cssWithin
+	labelsWithin := make([]*cssWithin, len(rule.Labels))
+	labelErrs := make([]error, len(rule.Labels))
 	// one is the trimmed text of the element selector matches within item, or
 	// false when it matches none.
-	one := func(item *goquery.Selection, index int, selector string, matcher goquery.Matcher) (string, bool, error) {
-		found := item.FindMatcher(matcher)
-		switch found.Length() {
+	one := func(within *cssWithin, index int, selector string) (string, bool, error) {
+		switch within.count[index] {
 		case 0:
 			return "", false, nil
 		case 1:
-			return strings.TrimSpace(htmlText(found.Nodes[0])), true, nil
+			return strings.TrimSpace(htmlText(within.first[index])), true, nil
 		default:
-			return "", false, model.Errorf("metric %q item %d: CSS selector %q matched %d elements; within an item it must match at most one", rule.Name, model.Position(index), selector, model.Size(found.Length()))
+			return "", false, model.Errorf("metric %q item %d: CSS selector %q matched %d elements; within an item it must match at most one", rule.Name, model.Position(index), selector, model.Size(within.count[index]))
 		}
 	}
 	for index := range items.Length() {
 		if err := interrupted(ctx, rule); err != nil {
 			return err
 		}
-		item := items.Eq(index)
-		text, found, err := one(item, index, rule.Expression, valueMatcher)
+		if valueWithin == nil {
+			valueWithin = cssWithinItems(items.Nodes, valueMatcher)
+		}
+		text, found, err := one(valueWithin, index, rule.Expression)
 		if err == nil && (!found || isBlank(text)) {
 			if !requiredRule(rule, c) {
 				continue
@@ -2295,7 +2301,7 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 			}
 		}
 		labels := make(map[string]string, len(rule.Labels))
-		for _, label := range rule.Labels {
+		for l, label := range rule.Labels {
 			if err != nil {
 				break
 			}
@@ -2303,13 +2309,20 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 				labels[label.Name] = label.Value
 				continue
 			}
-			matcher, compileErr := expr.CompileCSS(label.Expression)
-			if compileErr != nil {
-				err = fmt.Errorf("metric %q label %q CSS selector %q: %w", rule.Name, label.Name, label.Expression, compileErr)
+			if labelsWithin[l] == nil && labelErrs[l] == nil {
+				matcher, compileErr := expr.CompileCSS(label.Expression)
+				if compileErr != nil {
+					labelErrs[l] = fmt.Errorf("metric %q label %q CSS selector %q: %w", rule.Name, label.Name, label.Expression, compileErr)
+				} else {
+					labelsWithin[l] = cssWithinItems(items.Nodes, matcher)
+				}
+			}
+			if labelErrs[l] != nil {
+				err = labelErrs[l]
 				break
 			}
 			var labelText string
-			if labelText, _, err = one(item, index, label.Expression, matcher); err == nil {
+			if labelText, _, err = one(labelsWithin[l], index, label.Expression); err == nil {
 				labels[label.Name] = labelText
 			}
 		}
@@ -2330,6 +2343,89 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 		out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 	}
 	return nil
+}
+
+// cssWithin is what one selector matches within each item of a css rule
+// with items: count[i] is how many nodes it matches among the descendants of
+// items[i], and first[i] the first of them in document order, as
+// goquery's FindMatcher on that item alone finds them.
+type cssWithin struct {
+	count []int
+	first []*html.Node
+}
+
+// cssWithinItems finds what selector matches within every item in one walk
+// of the items' subtrees. Matching item by item walked each item's subtree
+// on its own: items nested in one another, divs or list entries hundreds
+// deep, were walked once for every item around them, and the matches each
+// found were copied out, which cost the depth times the body. Whether a node
+// matches a selector depends on the node and the document around it, never
+// on the item it is looked for in, so each node is matched once here, and
+// what lies within an item is the run of matches found while its subtree is
+// walked. items are in document order, as a selection from the document
+// holds them, so the walk meets the items nested in the one it walks in that
+// order. As goquery does, an item's candidates are its element children and
+// everything beneath them: a text node directly under an item is none of
+// that item's, but is one of every item around it.
+func cssWithinItems(items []*html.Node, selector goquery.Matcher) *cssWithin {
+	w := &cssWithinWalk{
+		items:    items,
+		selector: selector,
+		matched:  make([]*html.Node, 0, len(items)),
+		within:   &cssWithin{count: make([]int, len(items)), first: make([]*html.Node, len(items))},
+	}
+	for w.next < len(items) {
+		w.next++
+		w.item(w.next - 1)
+	}
+	return w.within
+}
+
+// cssWithinWalk is the state of cssWithinItems' walk: matched holds every
+// match found so far, in document order, and next is the item the walk
+// meets next.
+type cssWithinWalk struct {
+	items    []*html.Node
+	selector goquery.Matcher
+	matched  []*html.Node
+	next     int
+	within   *cssWithin
+}
+
+// item walks what is beneath items[i] and counts what was matched among its
+// element children's subtrees as its own.
+func (w *cssWithinWalk) item(i int) {
+	first := -1
+	for child := w.items[i].FirstChild; child != nil; child = child.NextSibling {
+		before := len(w.matched)
+		w.node(child)
+		if child.Type != html.ElementNode || len(w.matched) == before {
+			continue
+		}
+		w.within.count[i] += len(w.matched) - before
+		if first < 0 {
+			first = before
+		}
+	}
+	if first >= 0 {
+		w.within.first[i] = w.matched[first]
+	}
+}
+
+// node matches a node beneath an item, and walks what is beneath it: as an
+// item of its own when it is the item the walk meets next.
+func (w *cssWithinWalk) node(n *html.Node) {
+	if w.selector.Match(n) {
+		w.matched = append(w.matched, n)
+	}
+	if w.next < len(w.items) && w.items[w.next] == n {
+		w.next++
+		w.item(w.next - 1)
+		return
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		w.node(child)
+	}
 }
 
 // csvRow is a decoded CSV row as a mapping of column to value: by header
@@ -2458,6 +2554,10 @@ type csvColumns struct {
 	rows []any
 	// table is the rows the csv decoder gave, which rows then is not.
 	table *decode.CSVRows
+	// columns is the columns a sql statement returned, which its rows
+	// leave out where they are NULL, all of them for a column NULL in
+	// every row.
+	columns []string
 	// has is whether the response has a column, for each one asked after;
 	// absent the error of each that it does not have.
 	has    map[string]bool
@@ -2500,6 +2600,8 @@ func (k *csvColumns) inResponse(column string) bool {
 			break
 		}
 	}
+	// A sql statement's column NULL in every row is in no row.
+	has = has || slices.Contains(k.columns, column)
 	if k.has == nil {
 		k.has = map[string]bool{}
 	}
@@ -2534,6 +2636,10 @@ func (k *csvColumns) notInResponse(column string) csvAbsentColumn {
 func (k *csvColumns) describe(column string) string {
 	if !k.listed {
 		named, longest := map[string]struct{}{}, 0
+		for _, name := range k.columns {
+			named[name] = struct{}{}
+			k.names = append(k.names, name)
+		}
 		if k.table != nil {
 			// The rows of a header have the columns it names, and the
 			// longest of those without one the columns read by number.
@@ -2627,6 +2733,13 @@ func csvColumnsText(names []string, numbered, column string) string {
 }
 
 func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+	return transformCSVColumns(ctx, data, nil, rules, c)
+}
+
+// transformCSVColumns is transformCSV of rows that a sql statement returned
+// with columns: a column of them that no row has, NULL in every row, is in
+// the response, and reads as a column NULL in some rows reads in those.
+func transformCSVColumns(ctx context.Context, data any, columns []string, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	// The csv decoder's rows (decode.CSVRows), or those a pre-script left,
 	// which are a list of dicts and lists.
 	table, decoded := data.(*decode.CSVRows)
@@ -2705,7 +2818,7 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 			out.Metrics = growSeries(ctx, out.Metrics, count*columns)
 		}
 	}
-	responseColumns := csvColumns{rows: rows, table: table}
+	responseColumns := csvColumns{rows: rows, table: table, columns: columns}
 	// unreadable is the rules that have failed for a label whose column the
 	// response does not have, which fail once and make no series.
 	var unreadable []bool

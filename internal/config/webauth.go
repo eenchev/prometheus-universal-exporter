@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -39,7 +40,14 @@ func validateWebAuth(a *model.ExporterBasicAuth) error {
 	if strings.TrimSpace(a.Username) == "" && a.UsernameFile == "" {
 		return errors.New("web.basic_auth requires a username or username_file when enabled")
 	}
-	if _, _, err := WebAuthCredentials(a); err != nil {
+	// A client sends a username with a colon as a shorter one, which would
+	// never be matched.
+	if err := fetch.CheckBasicUsername(a.Username); err != nil {
+		return fmt.Errorf("web.basic_auth.username %w", err)
+	}
+	// The digests the requests are compared with are made here, when the
+	// configuration loads, and again only when a file changes.
+	if _, err := WebAuthDigests(a); err != nil {
 		return err
 	}
 	return nil
@@ -65,8 +73,84 @@ func WebAuthCredentials(a *model.ExporterBasicAuth) (string, string, error) {
 	return username, password, nil
 }
 
-// credentialFileCache keeps each credential file's content until the file's
-// size or modification time changes, so a request costs a stat, not a read.
+// WebAuthDigest is the SHA-256 digest of the exporter's own username and of
+// its password. A request's credential is compared with these, digested in
+// turn, rather than with the credential itself: subtle.ConstantTimeCompare
+// takes no time for slices of different lengths, so comparing a presented
+// password with the configured one told by its speed whether their lengths
+// differed, and so the configured password's length. Digests are all the
+// same length, whatever was presented.
+type WebAuthDigest struct {
+	Username, Password [sha256.Size]byte
+}
+
+// WebAuthDigests returns the digests of the username and password, as
+// WebAuthCredentials reads them. A file's digest is made when the file is
+// read, and one written in the configuration once for its value, so a
+// request digests only what it presents.
+//
+// A username file that holds a colon is refused, as a username written in
+// the configuration is (validateWebAuth): no client could present it.
+func WebAuthDigests(a *model.ExporterBasicAuth) (WebAuthDigest, error) {
+	var digests WebAuthDigest
+	var err error
+	if a.UsernameFile != "" {
+		const key = "web.basic_auth.username_file"
+		entry, err := credentialFiles.entry(key, a.UsernameFile)
+		if err != nil {
+			return WebAuthDigest{}, err
+		}
+		if err := fetch.CheckBasicUsername(entry.value); err != nil {
+			return WebAuthDigest{}, fmt.Errorf("%s %s %w", key, a.UsernameFile, err)
+		}
+		digests.Username = entry.digest
+	} else {
+		digests.Username = inlineDigests.of(a.Username)
+	}
+	if digests.Password, err = credentialDigest("web.basic_auth.password_file", a.PasswordFile, a.Password); err != nil {
+		return WebAuthDigest{}, err
+	}
+	return digests, nil
+}
+
+// credentialDigest is the digest of the credential file at path, or of value
+// when there is no file.
+func credentialDigest(key, path, value string) ([sha256.Size]byte, error) {
+	if path != "" {
+		entry, err := credentialFiles.entry(key, path)
+		return entry.digest, err
+	}
+	return inlineDigests.of(value), nil
+}
+
+// inlineDigestCache keeps the digests of the credentials written in the
+// configuration, by value. A reload that changes one adds its digest; the
+// cache is emptied when it holds more than a configuration's two, so it
+// does not grow with every reload.
+type inlineDigestCache struct {
+	mu      sync.Mutex
+	digests map[string][sha256.Size]byte
+}
+
+var inlineDigests = &inlineDigestCache{digests: map[string][sha256.Size]byte{}}
+
+func (c *inlineDigestCache) of(value string) [sha256.Size]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if digest, ok := c.digests[value]; ok {
+		return digest
+	}
+	if len(c.digests) >= 8 {
+		clear(c.digests)
+	}
+	digest := sha256.Sum256([]byte(value))
+	c.digests[value] = digest
+	return digest
+}
+
+// credentialFileCache keeps each credential file's content, and its digest,
+// until the file's size or modification time changes, so a request costs a
+// stat, not a read.
 type credentialFileCache struct {
 	mu      sync.Mutex
 	entries map[string]credentialFileEntry
@@ -74,31 +158,38 @@ type credentialFileCache struct {
 
 type credentialFileEntry struct {
 	stamp, value string
+	digest       [sha256.Size]byte
 }
 
 var credentialFiles = &credentialFileCache{entries: map[string]credentialFileEntry{}}
 
 func (c *credentialFileCache) read(key, path string) (string, error) {
+	entry, err := c.entry(key, path)
+	return entry.value, err
+}
+
+func (c *credentialFileCache) entry(key, path string) (credentialFileEntry, error) {
 	st, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("%s %s cannot be read: %w", key, path, err)
+		return credentialFileEntry{}, fmt.Errorf("%s %s cannot be read: %w", key, path, err)
 	}
 	stamp := strconv.FormatInt(st.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(st.Size(), 10)
 	c.mu.Lock()
 	entry, ok := c.entries[path]
 	c.mu.Unlock()
 	if ok && entry.stamp == stamp {
-		return entry.value, nil
+		return entry, nil
 	}
 	value, err := fetch.ReadCredentialFile(path)
 	if err != nil {
-		return "", fmt.Errorf("%s %s cannot be read: %w", key, path, err)
+		return credentialFileEntry{}, fmt.Errorf("%s %s cannot be read: %w", key, path, err)
 	}
 	if value == "" {
-		return "", fmt.Errorf("%s %s is empty", key, path)
+		return credentialFileEntry{}, fmt.Errorf("%s %s is empty", key, path)
 	}
+	entry = credentialFileEntry{stamp: stamp, value: value, digest: sha256.Sum256([]byte(value))}
 	c.mu.Lock()
-	c.entries[path] = credentialFileEntry{stamp: stamp, value: value}
+	c.entries[path] = entry
 	c.mu.Unlock()
-	return value, nil
+	return entry, nil
 }

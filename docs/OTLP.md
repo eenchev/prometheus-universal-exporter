@@ -100,7 +100,11 @@ knows when each began to count, and their points start at that time (see
 The start times remembered are bounded too, at twice
 [`otlp.max_pending_points`](#delivery) (200000 by default), so series whose labels
 keep changing cannot grow them without limit; past it the series exported
-least recently is forgotten first, and starts again if it comes back.
+least recently is forgotten first, and starts again if it comes back. Each
+keeps at most 256 bytes of its series, a series whose resource, name and
+labels take more by a digest of them, so a start time is a few hundred bytes
+however long a label is — a probe's target, with `probe_attributes`, may be
+8 KiB — and the start times at their bound take at most about 80 MB.
 
 A series is its resource, its name, its type and its labels, exactly as they
 are. A label's value may be any text a target gives, an `=` or a NUL
@@ -230,8 +234,15 @@ yet are kept and sent with the next export, unless a newer value of the same
 series has arrived in the meantime; those of the requests the endpoint took
 before it are not sent again. Only the latest value of each
 series is kept, but an outage long enough can still see many series come and
-go, so what waits is bounded by `otlp.max_pending_points`, 100000 by default:
-past it the oldest data points — those of failed exports first, the
+go, so what waits is bounded by `otlp.max_pending_points`, 100000 by default.
+A data point waiting keeps its labels, and of its series no more than 256
+bytes besides, a digest of a longer series; with `probe_attributes`, the
+points of one probe share one copy of its target, and nothing else of the
+probe's request. So a point is a few hundred bytes, and one whose probe's
+target is long that much more: with every point of a different probe whose
+target is 8 KiB, the most a target may be, the points at the default bound
+take about 870 MB, which a lower `max_pending_points` lowers. Past the bound
+the oldest data points — those of failed exports first, the
 longest-waiting of them first however many exports in a row have failed — are
 dropped, down to nine tenths of the limit, counted in
 `http_exporter_otlp_points_dropped_total` and logged as a warning. Any other

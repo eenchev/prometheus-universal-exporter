@@ -210,6 +210,64 @@ type RequestConfig struct {
 	ProtosetFile     string            `yaml:"protoset_file"`
 	ProtoFiles       []string          `yaml:"proto_files"`
 	ProtoImportPaths []string          `yaml:"proto_import_paths"`
+	// Username, the credential files and KnownHostsFile belong to the
+	// sshfile type: the account a file is read as on the remote host, its
+	// private key (with the file of the key's passphrase) or password, and
+	// the known_hosts file the host's key is verified against. The
+	// keepalive settings and IdleTimeout say how long the connection it
+	// keeps to a host lives; nil is the default, and 0 switches each off.
+	// MaxOpenConnections is the most connections the collector holds open
+	// at once, 0 for no limit (fetch/requesttype_sshfile.go).
+	Username           string    `yaml:"username"`
+	PrivateKeyFile     string    `yaml:"private_key_file"`
+	PassphraseFile     string    `yaml:"passphrase_file"`
+	PasswordFile       string    `yaml:"password_file"`
+	KnownHostsFile     string    `yaml:"known_hosts_file"`
+	KeepaliveInterval  *Duration `yaml:"keepalive_interval"`
+	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
+	IdleTimeout        *Duration `yaml:"idle_timeout"`
+	MaxOpenConnections int       `yaml:"max_open_connections"`
+	// Driver, Database, Statement, Args, Options and ServiceName belong to
+	// the sql type, with Username, PasswordFile, PrivateKeyFile and
+	// PassphraseFile above: the database driver, the database, the one
+	// statement run and the values bound to its placeholders, the driver's
+	// allow-listed settings, and an Oracle database's service. MaxRows
+	// bounds the rows a statement may return, 0 for the default, and
+	// Connections how the type keeps connections to a target
+	// (fetch/requesttype_sql.go).
+	//
+	// They are left out of a collector written as YAML when empty, as the
+	// fingerprint of its cache writes it (exporter/cache.go): a collector of
+	// another type is written, and costs, as it did before they were added.
+	Driver      string            `yaml:"driver,omitempty"`
+	Database    string            `yaml:"database,omitempty"`
+	Statement   string            `yaml:"statement,omitempty"`
+	Args        []string          `yaml:"args,omitempty"`
+	Options     map[string]string `yaml:"options,omitempty"`
+	ServiceName string            `yaml:"service_name,omitempty"`
+	MaxRows     int               `yaml:"max_rows,omitempty"`
+	Connections *SQLConnections   `yaml:"connections,omitempty"`
+}
+
+// SQLConnections is a sql collector's request.connections, and a static
+// target's: how many connections the collector keeps to a target, how
+// long, and how they are kept alive. A key left out is nil, the default,
+// or, in a static target's block, the collector's.
+type SQLConnections struct {
+	MaxPerTarget     *int          `yaml:"max_per_target"`
+	MaxIdlePerTarget *int          `yaml:"max_idle_per_target"`
+	MaxTargets       *int          `yaml:"max_targets"`
+	IdleTimeout      *Duration     `yaml:"idle_timeout"`
+	MaxLifetime      *Duration     `yaml:"max_lifetime"`
+	Keepalive        *SQLKeepalive `yaml:"keepalive"`
+}
+
+// SQLKeepalive is request.connections.keepalive: how often a kept
+// connection is checked, 0 for never, and how: tcp, by TCP keepalives, or
+// ping, by asking the database.
+type SQLKeepalive struct {
+	Interval *Duration `yaml:"interval"`
+	Check    string    `yaml:"check"`
 }
 
 // RetryConfig is request.retry: how often a failed request is tried again,

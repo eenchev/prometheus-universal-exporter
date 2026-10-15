@@ -35,13 +35,15 @@ the ones above them in this list:
 | --- | --- |
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite` and `grpc`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go` behind its tag — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go` and `sql`'s pools, rows and drivers in `sql*.go` behind their tags, and the file reading `localfile` and `sshfile` share in `filereads.go` and `localfile_directory.go`, behind the tags of both — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
+| `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |
+| `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the type's build tag, so a build without the type compiles no SSH code even for its tests. |
 
 A package's tests live beside it, unless they need more than it can import: a
 test that validates a whole configuration lives in `internal/config`, and one
@@ -642,6 +644,44 @@ into a build in which nothing calls it is what the linter reports as unused
 when it is run with that build's tags
 (`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`).
 
+### The sql request type
+
+The `sql` type's drivers each live in a file of their own,
+`internal/fetch/sqldriver_<name>.go`: `mysql`, `postgres` and `sqlserver`
+under the type's constraint, and `oracle`, `clickhouse`, `snowflake` and
+`vertica` under the type's and their own tag,
+
+```go
+//go:build (!select_request_types || request_type_sql) && sql_driver_oracle
+```
+
+which `tools/request-type-tags.sh` gives from its second argument, the
+`SQL_DRIVERS` list: `sh tools/request-type-tags.sh '' oracle,snowflake`, and,
+with `snowflake`, gosnowflake's `minicore_disabled`, which keeps its native
+library out (a test of the snowflake driver fails in a build without it). A
+test of an opt-in driver carries its tag too, and runs in the build with every
+opt-in driver, which `make build-sql-drivers` and `make test-sql-drivers`
+vet, build and test, `make lint-sql-drivers` lints with golangci-lint (no
+other lint run compiles the drivers, and a build with more packages can give
+the analyses more to see), CI runs, and `make ci` includes; a test keeps their
+lists naming every opt-in driver of the tree. That build's snowflake driver takes a
+few minutes to compile the first time.
+
+The tests of the query path reach the stand-in database of `internal/sqltest`
+through the type's pools and connectors, the driver alone replaced
+(`sqlConnectHook` in the package, `fetch.UseSQLTestDriver` from others), and
+wait for the pools' events (`sqlPoolEvent`), not for time. The tests against
+real databases (`TestLiveSQL`, `internal/fetch`) are skipped unless a variable
+names a database — `PUE_TEST_POSTGRES`, `PUE_TEST_MYSQL`, `PUE_TEST_SQLSERVER`
+as `host:port`, each with `_USER` and `_PASSWORD` — and `make test-sql-live`
+runs them; CI's `sql-live` job runs them against PostgreSQL, MySQL and SQL
+Server service containers:
+
+```sh
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres:17
+PUE_TEST_POSTGRES=127.0.0.1:5432 PUE_TEST_POSTGRES_USER=postgres PUE_TEST_POSTGRES_PASSWORD=pw make test-sql-live
+```
+
 ## Test data
 
 The files under `testdata/` are what the tests read, a directory per format
@@ -721,10 +761,16 @@ the test suite fails:
 make schemas
 ```
 
-The committed files are the schemas of a build with every request type, which
-is what `make schemas` runs, and the test that compares them with what the
-code generates runs in that build alone: the schema a single-type binary
-prints lists the types it carries, and a test in every build holds it to that.
+The committed files are the schemas of a build with every request type and
+the sql type's default drivers alone, which is what `make schemas` runs, and
+the tests that compare them with what the code generates run in that build
+alone: the schema a single-type binary prints lists the types it carries, and
+one built with `SQL_DRIVERS` the opt-in drivers it carries, as its loader
+takes them, and a test in every build holds it to that. So the file of those
+comparisons, `test/repository/schema_fullbuild_test.go`, is built without
+`select_request_types` and without any `sql_driver_<name>` tag, a test
+keeping its constraint naming every opt-in driver of the tree; the rest of
+`test/repository` passes in the build with every opt-in driver too.
 
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
@@ -743,7 +789,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite` and `localfile`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile` and `sql`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
@@ -1702,6 +1748,30 @@ times are the range of four runs, old and new in turn):
 | `start/n=100` | 130–205 µs, 86.0 kB, 912 allocations | 122–209 µs, 67.6 kB, 515 allocations |
 | `start/n=5000` | 6.0–10.8 ms, 4.53 MB, 45,069 allocations | 5.8–8.2 ms, 3.61 MB, 25,071 allocations |
 
+A key is remembered — where a point waits, and where a start time is kept —
+as itself up to 256 bytes (`otlpKeyLongest`), and past that by its SHA-256
+digest (`otlpKeyOf`), so that what a series keeps there is bounded whatever
+its labels hold: with `otlp.probe_attributes` a probe's target, up to 8 KiB,
+was a copy in every point waiting and in every start time, 8.4 KiB each, 1.6
+GiB at the start times' bound
+(`TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget`). Shorter keys are
+not made digests: a digest of a key of 100 bytes takes about half a
+microsecond on the machine above, a fifth more than a point costs in the
+queue. A long key is made again from its point for the moment a queue is
+emptied, so the points are still in the order of their keys, and an export is
+what it was byte for byte
+(`TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests`, against
+the export with every key whole). A key is now made where its caller has
+room, one allocation up to 256 bytes and two past it, and a start time
+already known is found with none:
+
+| Benchmark | Keys whole | Keys up to 256 bytes, digests past it |
+| --- | --- | --- |
+| `queue/n=100` | 262–283 µs, 87.2 kB, 420 allocations | 220–247 µs, 87.2 kB, 420 allocations |
+| `queue/n=5000` | 13.8–16.2 ms, 4.89 MB, 20,057 allocations | 13.2–15.2 ms, 4.89 MB, 20,057 allocations |
+| `start/n=100` | 236–292 µs, 67.6 kB, 515 allocations | 173–217 µs, 51.8 kB, 415 allocations |
+| `start/n=5000` | 10.9–11.7 ms, 3.62 MB, 25,120 allocations | 8.5–9.0 ms, 2.82 MB, 20,134 allocations |
+
 `BenchmarkDescriptorFilesCheck` (`internal/fetch/grpcdescriptors_bench_test.go`)
 is what a call of a grpc collector with descriptor files costs before it
 uses them when they did not change: the look at each file the set was read
@@ -2004,7 +2074,8 @@ and checks that the step cannot fail the job.
 What is scanned is what ships and what the workflows run: the exporter, the
 package at the root, and the repository's tools (`. ./tools/...`), each with
 everything it imports. The packages only tests use — `internal/grpctest`, the
-stand-in gRPC server of the grpc tests, `internal/testutil` with its
+stand-in gRPC server of the grpc tests, `internal/sshtest`, the stand-in SSH
+and SFTP server of the sshfile tests, `internal/testutil` with its
 `alloctest`, and `test/repository` — are left out, so an advisory for code
 that only a test reaches, such as the gRPC server the exporter never is, raises
 no warning; the price is that such an advisory is not reported at all. A test
@@ -2100,3 +2171,13 @@ under `charts/`, `configs/` and `testdata/chart/`, the files the chart steps
 render. A change under `charts/` runs the Go suite because the template guard
 above lives there and is worth least on exactly the changes that would break
 it.
+
+Every workflow sets `permissions` at its top, read-only, so no job runs with
+the repository's default token, which may write to everything; a job that has
+to write grants itself the scopes it needs, and
+`test/repository/workflowpermissions_test.go` lists each job's write grants and
+fails for any other, so a new one is a deliberate change to that list. The
+release workflows publish only once CI has passed on the tagged commit:
+their `preflight` job runs `tools/ci-passed.py`, which `cipassed_test.go`
+runs against a stand-in of the GitHub API (`docs/RELEASING.md` says what
+counts as passed and how to release once it has).

@@ -2,6 +2,11 @@ name: ci
 on:
   push:
   pull_request:
+# Read-only: CI reads the repository and publishes nothing. paths-filter
+# lists a pull request's changed files through the API.
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -117,6 +122,16 @@ jobs:
         with:
           version: v2.14.0
         if: steps.changes.outputs.go == 'true'
+      # The sql request type's four opt-in drivers are compiled by no lint run
+      # above, and a build with more packages can give the linters' analyses
+      # more to see: lint the build with all of them too, as make
+      # lint-sql-drivers does. The tags are what tools/request-type-tags.sh
+      # prints for them; a test keeps the two in step.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --build-tags sql_driver_oracle,sql_driver_clickhouse,sql_driver_snowflake,minicore_disabled,sql_driver_vertica
+        if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.
       - name: gopls check
@@ -139,7 +154,7 @@ jobs:
       # its own too, so code one type needs cannot quietly depend on another.
       - name: Build with each request type on its own
         run: |
-          for type in graphite grpc http localfile; do
+          for type in graphite grpc http localfile sql sshfile; do
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...
@@ -151,10 +166,18 @@ jobs:
       # without -race, which the runs above cover with every type.
       - name: Test with each request type on its own
         run: |
-          for type in graphite grpc http localfile; do
+          for type in graphite grpc http localfile sql sshfile; do
             tags="$(sh tools/request-type-tags.sh "$type")"
             go test -count=1 -tags "$tags" ./...
           done
+        if: steps.changes.outputs.go == 'true'
+      # The sql request type's four opt-in drivers are compiled by no build
+      # above: vet, build and test a build with all of them, whose tests of
+      # each driver's connection settings are in files built only with it.
+      - name: Build and test with every opt-in sql driver
+        run: |
+          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$tags" ./internal/fetch/
         if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter
         if: steps.changes.outputs.chart == 'true'
@@ -231,7 +254,7 @@ jobs:
         run: |
           set -eu
           out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml)"
-          echo "$out" | grep -q -- '--static-targets-file=/etc/prometheus-universal-exporter/static-targets.yaml'
+          echo "$out" | grep -q -- '--static-targets-file=/etc/prometheus-universal-exporter-static-targets/static-targets.yaml'
           echo "$out" | grep -q -- '--web.static-targets-path=/static-targets'
           echo "$out" | grep -q 'name: .*-static-targets$'
           echo "$out" | grep -q 'path: "/static-targets"'
@@ -239,7 +262,7 @@ jobs:
           echo "$out" | grep -q -- '--web.static-targets-path=/targets'
           echo "$out" | grep -q 'kind: PodMonitor'
           out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.monitor.enabled=false)"
-          if echo "$out" | grep -q -- '-static-targets$'; then
+          if echo "$out" | grep -q 'kind: .*Monitor$'; then
             echo "the static targets monitor rendered with staticTargets.monitor.enabled false" >&2
             exit 1
           fi
@@ -466,3 +489,62 @@ jobs:
             fi
           done
         if: steps.changes.outputs.chart == 'true'
+  # The sql request type against real databases: PostgreSQL, MySQL and SQL
+  # Server in service containers, and the live tests, which the default suite
+  # skips without the variables that name them (internal/fetch, TestLiveSQL).
+  sql-live:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: exporter-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: exporter-test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pexporter-test"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Exporter-Test-1
+        ports:
+          - 1433:1433
+    env:
+      PUE_TEST_POSTGRES: 127.0.0.1:5432
+      PUE_TEST_POSTGRES_USER: postgres
+      PUE_TEST_POSTGRES_PASSWORD: exporter-test
+      PUE_TEST_MYSQL: 127.0.0.1:3306
+      PUE_TEST_MYSQL_USER: root
+      PUE_TEST_MYSQL_PASSWORD: exporter-test
+      PUE_TEST_SQLSERVER: 127.0.0.1:1433
+      PUE_TEST_SQLSERVER_USER: sa
+      PUE_TEST_SQLSERVER_PASSWORD: Exporter-Test-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 'stable'
+      # SQL Server's image has no health check of its own: its own sqlcmd is
+      # asked until the server answers.
+      - name: Wait for SQL Server
+        run: |
+          for attempt in $(seq 60); do
+            if docker exec "${{ job.services.sqlserver.id }}" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$PUE_TEST_SQLSERVER_PASSWORD" -Q "SELECT 1" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "SQL Server did not answer" >&2
+          exit 1
+      - run: make test-sql-live

@@ -21,10 +21,17 @@ var grpcOnlyModules = []string{
 // the given request types.
 func linkedPackages(t *testing.T, types string) []string {
 	t.Helper()
+	return linkedPackagesWith(t, types, "")
+}
+
+// linkedPackagesWith is linkedPackages of a build with the sql request
+// type's opt-in drivers too, as SQL_DRIVERS names them.
+func linkedPackagesWith(t *testing.T, types, drivers string) []string {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go command")
 	}
-	tags, err := exec.Command("sh", "tools/request-type-tags.sh", types).Output()
+	tags, err := exec.Command("sh", "tools/request-type-tags.sh", types, drivers).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,18 +57,43 @@ func linksAny(packages, modules []string) []string {
 	return found
 }
 
-// Every build without the grpc type leaves gRPC and protobuf out; a build
-// with it alone links them.
-func TestOnlyTheGRPCRequestTypeLinksGRPC(t *testing.T) {
-	for _, types := range []string{"http", "localfile", "graphite", "graphite,http,localfile"} {
-		if found := linksAny(linkedPackages(t, types), grpcOnlyModules); len(found) > 0 {
-			t.Errorf("REQUEST_TYPES=%s links %s", types, strings.Join(found, ", "))
+// sshfileOnlyModules are the modules only the sshfile request type needs:
+// its SSH client and host key check, and its SFTP client. The rest of
+// golang.org/x/crypto is not the type's alone: the sql type's sqlserver
+// driver links its MD4, for NTLM.
+var sshfileOnlyModules = []string{
+	"golang.org/x/crypto/ssh",
+	"github.com/pkg/sftp",
+}
+
+// Each request type's own modules are linked by a build that carries the
+// type and by no other: every build of one type, as REQUEST_TYPES names
+// it, links the gRPC and protobuf modules only when the type is grpc, and
+// the SSH and SFTP modules only when it is sshfile; a build of the other
+// four together links neither, and the default build, of every type, links
+// both. go list is asked of the main package, the exporter as it ships;
+// the packages only tests import, such as internal/grpctest and
+// internal/sshtest, are not among its dependencies.
+func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
+	for _, types := range []string{"graphite", "grpc", "http", "localfile", "sql", "sshfile", "graphite,http,localfile"} {
+		packages := linkedPackages(t, types)
+		for _, own := range []struct {
+			requestType string
+			modules     []string
+		}{{"grpc", grpcOnlyModules}, {"sshfile", sshfileOnlyModules}} {
+			found := linksAny(packages, own.modules)
+			switch {
+			case types == own.requestType && len(found) == 0:
+				t.Errorf("REQUEST_TYPES=%s links none of %s", types, strings.Join(own.modules, ", "))
+			case types != own.requestType && len(found) > 0:
+				t.Errorf("REQUEST_TYPES=%s links %s, which only the %s type may", types, strings.Join(found, ", "), own.requestType)
+			}
 		}
 	}
-	grpc := linkedPackages(t, "grpc")
-	for _, module := range []string{"google.golang.org/grpc", "github.com/bufbuild/protocompile"} {
-		if len(linksAny(grpc, []string{module})) == 0 {
-			t.Errorf("REQUEST_TYPES=grpc does not link %s", module)
+	all := linkedPackages(t, "")
+	for _, module := range []string{"google.golang.org/grpc", "github.com/bufbuild/protocompile", "golang.org/x/crypto/ssh", "github.com/pkg/sftp"} {
+		if len(linksAny(all, []string{module})) == 0 {
+			t.Errorf("the default build does not link %s", module)
 		}
 	}
 }

@@ -31,6 +31,20 @@ func collectorAuthorization(c *model.Collector, forwarded ...http.Header) (strin
 	return requestAuthorization(c)
 }
 
+// CheckBasicUsername refuses the username of a Basic credential that holds
+// a colon. The credential is the username and the password joined by a
+// colon (RFC 7617), and a server splits it at the first one: a username
+// with one in it reaches the server as a shorter username and a password
+// that starts with the rest of it, and is refused there on every scrape, or
+// is never matched by the exporter's own web.basic_auth. The value itself is
+// never shown.
+func CheckBasicUsername(username string) error {
+	if strings.Contains(username, ":") {
+		return errors.New(`holds a colon (":"), which ends the username of a Basic credential (RFC 7617): the server reads the username up to it and the rest as the start of the password, so a Basic username cannot hold one`)
+	}
+	return nil
+}
+
 // requestAuthorization is the Authorization value a collector's credential
 // keys make, or "" when it sets none. Credential files are read on every
 // call, so a rotated secret is picked up at the next request.
@@ -49,6 +63,9 @@ func requestAuthorization(c *model.Collector) (string, error) {
 		}
 		if username == "" || password == "" {
 			return "", errors.New("basic auth credential files must not be empty")
+		}
+		if err := CheckBasicUsername(username); err != nil {
+			return "", fmt.Errorf("basic auth username file %s %w", c.Request.BasicAuthFile.Username, err)
 		}
 	}
 	if username != "" || password != "" {

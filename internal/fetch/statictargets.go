@@ -76,6 +76,8 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 	if t.Request.AcceptCodes != nil {
 		out.AcceptCodes = append([]string{}, t.Request.AcceptCodes...)
 	}
+	out.SSHUsername, out.SSHPrivateKeyFile, out.SSHPassphraseFile, out.SSHPasswordFile = t.Request.Username, t.Request.PrivateKeyFile, t.Request.PassphraseFile, t.Request.PasswordFile
+	out.SQLConnections = t.Request.Connections
 	if t.Request.InsecureSkipVerify != nil {
 		value := *t.Request.InsecureSkipVerify
 		out.InsecureSkipVerify = &value
@@ -137,6 +139,9 @@ func TargetHeaders(t *model.StaticTarget) (http.Header, error) {
 		password = value
 		if username == "" || password == "" {
 			return nil, errors.New("basic auth credential files must not be empty")
+		}
+		if err := CheckBasicUsername(username); err != nil {
+			return nil, fmt.Errorf("basic auth username file %s %w", t.Request.BasicAuthFile.Username, err)
 		}
 	}
 	if username != "" || password != "" {

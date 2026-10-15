@@ -17,6 +17,8 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Per-scrape overrides through `/probe` parameters, which monitors render as `params`
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
+* SSH keys, passwords and known hosts for `sshfile` collectors, from a Secret and the values
+* Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
 * Static targets the exporter scrapes itself and delivers over OTLP
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
@@ -293,7 +295,7 @@ request:
 
 Bearer authentication is also supported.
 
-`targetAuth.mountPath` must be a path of its own: the configuration directory, `webAuth.mountPath` or an `extraVolumeMounts` entry at the same path fails rendering, and so does a path inside or above either directory, or an `extraVolumeMounts` entry inside it, since a mount point cannot be created in a read-only Secret or ConfigMap volume.
+`targetAuth.mountPath` must be a path of its own: the configuration directory, `webAuth.mountPath`, `sshAuth.mountPath`, `sqlAuth.mountPath` or an `extraVolumeMounts` entry at the same path fails rendering, and so does a path inside or above the configuration directory or another credential's directory, or an `extraVolumeMounts` entry inside it, since a mount point cannot be created in a read-only Secret, ConfigMap or projected volume.
 
 ### Monitor authentication
 
@@ -369,9 +371,165 @@ monitors:
     collector: example
 ```
 
-With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering, and so is a path inside or above either directory, or an `extraVolumeMounts` entry inside it.
+With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath`, `sshAuth.mountPath`, `sqlAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering, and so is a path inside or above the configuration directory or another credential's directory, or an `extraVolumeMounts` entry inside it.
 
 The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while it shuts down and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; a rejected reload of its configuration leaves it ready, serving the configuration in force; see [Readiness](../../docs/CONFIGURATION.md#readiness).
+
+## SSH file collectors
+
+An `sshfile` collector reads a file over SSH (SFTP), with a private key or a password from files it names — `private_key_file`, `passphrase_file`, `password_file` — and the server's host key checked against `known_hosts_file`. `sshAuth` mounts all of them from Kubernetes objects into one read-only directory, `sshAuth.mountPath`, `/var/run/prometheus-universal-exporter/ssh` by default, under fixed names:
+
+| File | From |
+| --- | --- |
+| `private_key` | The Secret's `sshAuth.privateKeyKey`. |
+| `passphrase` | The Secret's `sshAuth.passphraseKey`, the private key's passphrase; only beside `privateKeyKey`. |
+| `password` | The Secret's `sshAuth.passwordKey`. |
+| `known_hosts` | The lines of `sshAuth.knownHosts`, or the Secret's `sshAuth.knownHostsSecretKey`. |
+
+Create the Secret from the key, and, to keep the host keys there too, from a `known_hosts` file that `ssh-keyscan` writes:
+
+```bash
+ssh-keyscan -t ed25519 sftp.example.com > known_hosts
+kubectl create secret generic sftp-credentials \
+  --namespace monitoring \
+  --from-file=id_ed25519=./id_ed25519 \
+  --from-file=known_hosts=./known_hosts
+```
+
+```yaml
+sshAuth:
+  enabled: true
+  secretName: sftp-credentials
+  privateKeyKey: id_ed25519
+  knownHostsSecretKey: known_hosts
+```
+
+Or leave `known_hosts` out of the Secret and paste the lines `ssh-keyscan -t ed25519 sftp.example.com` prints into the values; host keys are public, so the chart renders them into a ConfigMap of its own, `<release>-prometheus-universal-exporter-ssh-known-hosts`:
+
+```yaml
+sshAuth:
+  enabled: true
+  secretName: sftp-credentials
+  privateKeyKey: id_ed25519
+  knownHosts: |
+    sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMbWeyhTNTo7zGLaBVnPBDqg4tqfCW7DfdUAsdthK+Ew
+```
+
+Then point the collector at the files,
+
+```yaml
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: sftp_textfile
+          request:
+            type: sshfile
+            username: metrics
+            private_key_file: /var/run/prometheus-universal-exporter/ssh/private_key
+            known_hosts_file: /var/run/prometheus-universal-exporter/ssh/known_hosts
+            root: /var/lib/node_exporter/textfile_collector
+            path: batch.prom
+          transform:
+            type: prometheus
+```
+
+and probe it with the server as the target, `/probe?collector=sftp_textfile&target=ssh://sftp.example.com:22`. The `sshfile` request's other keys — password authentication, directories, keepalives and how long a connection is kept — are in [SSH files](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/SSHFILE.md).
+
+Rendering fails, naming what to set, when `sshAuth.enabled` is true and `secretName` is empty; when neither `privateKeyKey` nor `passwordKey` is set; when `passphraseKey` is set without `privateKeyKey`; when known hosts are given by neither `knownHosts` nor `knownHostsSecretKey`, or by both, since the one `known_hosts` file can come from one of them only; and when `knownHosts` holds no entry. The chart tells an entry by its shape alone: a line that is not a `#` comment and has at least three fields, a host, a key type and a key; whether the key is a valid one is the exporter's to say. The values schema refuses the same, and the templates refuse it again with the schema skipped.
+
+The files have mode `0400`. The kubelet makes them group-owned by the pod's `fsGroup` and lets that group read them, so the exporter, which runs as user and group 65532 with `fsGroup` 65532, reads them and no other user does; a `podSecurityContext` without that `fsGroup` leaves them unreadable to the exporter. The inline `knownHosts` lines are part of the pods' `checksum/config`, so changing them rolls the Deployment, as a configuration change does; a changed Secret reaches the mounted files without a restart, as the kubelet updates them in place. `sshAuth.mountPath` must be a path of its own, as `targetAuth.mountPath` must. With `networkPolicy.egress` rules, add one for the SSH servers' port, 22 by default.
+
+## SQL collectors
+
+An `sql` collector runs one statement on a database and reads the rows it returns, with the password, a Snowflake private key, and the TLS CA bundle and client certificate and key from files it names — `password_file`, `private_key_file`, `tls.ca_file`, `tls.cert_file`, `tls.key_file`. `sqlAuth` mounts them from one Secret into one read-only directory, `sqlAuth.mountPath`, `/var/run/prometheus-universal-exporter/sql` by default, under fixed names:
+
+| File | From |
+| --- | --- |
+| `password` | The Secret's `sqlAuth.passwordKey`. |
+| `private_key` | The Secret's `sqlAuth.privateKeyKey`, an unencrypted key for Snowflake key-pair authentication. |
+| `ca.crt` | The Secret's `sqlAuth.caKey`, the CA bundle the database's certificate is checked against. |
+| `client.crt` | The Secret's `sqlAuth.certKey`, a client certificate; only beside `keyKey`. |
+| `client.key` | The Secret's `sqlAuth.keyKey`, the client certificate's key; only beside `certKey`. |
+
+Create the Secret from the password and the CA bundle:
+
+```bash
+kubectl create secret generic postgres-exporter \
+  --namespace monitoring \
+  --from-literal=password='s3cret' \
+  --from-file=ca.crt=./ca.crt
+```
+
+```yaml
+sqlAuth:
+  enabled: true
+  secretName: postgres-exporter
+  passwordKey: password
+  caKey: ca.crt
+```
+
+Then point the collector at the files,
+
+```yaml
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: pg_connections
+          request:
+            type: sql
+            driver: postgres
+            database: app
+            username: exporter
+            password_file: /var/run/prometheus-universal-exporter/sql/password
+            tls: {ca_file: /var/run/prometheus-universal-exporter/sql/ca.crt}
+            statement: "SELECT state, count(*) AS connections FROM pg_stat_activity GROUP BY 1"
+          transform: {type: csv}
+          metrics:
+            - {name: pg_connections, type: gauge, expression: connections, labels: [{name: state, expression: state}]}
+```
+
+and probe it with the database server as the target, `/probe?collector=pg_connections&target=postgres.databases.svc:5432`. For Snowflake key-pair authentication, in an image built with the Snowflake driver, put the private key in the Secret instead of a password. The exporter cannot read an encrypted key, so there is no passphrase: write the key unencrypted first, as [SQL](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/SQL.md#authentication) shows, `openssl pkcs8 -topk8 -nocrypt -in rsa_key.p8 -out rsa_key_plain.p8`:
+
+```yaml
+sqlAuth:
+  enabled: true
+  secretName: snowflake-exporter
+  privateKeyKey: rsa_key_plain.p8
+```
+
+and name `private_key_file: /var/run/prometheus-universal-exporter/sql/private_key` in the collector. The statement's placeholders take their values from `args`. The drivers and the `sql` request's other keys are in [SQL](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/SQL.md).
+
+Rendering fails, naming what to set, when `sqlAuth.enabled` is true and `secretName` is empty; when none of `passwordKey`, `privateKeyKey`, `caKey`, `certKey` and `keyKey` is set; and when `certKey` is set without `keyKey`, or `keyKey` without `certKey`, since a client certificate is presented with its key. The values schema refuses the same, and the templates refuse it again with the schema skipped. A `sqlAuth.passphraseKey` is refused too, enabled or not: the exporter reads only an unencrypted key, so remove the passphrase as shown above.
+
+The files have mode `0400` and are read by the exporter through the pod's `fsGroup`, as the [SSH file collectors](#ssh-file-collectors)' are; a changed Secret reaches the mounted files without a restart. `sqlAuth.mountPath` must be a path of its own, as `targetAuth.mountPath` must. With `networkPolicy.egress` rules, add one for the databases' ports — 5432 for PostgreSQL, 3306 for MySQL, 1433 for SQL Server, 443 for Snowflake:
+
+```yaml
+networkPolicy:
+  enabled: true
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: databases
+      ports:
+        - port: 5432
+```
+
+`sqlAuth` mounts one set of credentials. Collectors of several databases share it when one Secret holds what they all need — one CA bundle and one password, say. For databases with credentials of their own, mount each further Secret through `extraVolumes` and `extraVolumeMounts`, at a path of its own, and name its files from the collectors; a Secret volume without `items` holds every key of the Secret as a file of that name:
+
+```yaml
+extraVolumes:
+  - name: reporting-db
+    secret:
+      secretName: reporting-db-exporter
+      defaultMode: 0400
+extraVolumeMounts:
+  - name: reporting-db
+    mountPath: /var/run/prometheus-universal-exporter/sql-reporting
+    readOnly: true
+```
 
 ## Common configuration
 
@@ -440,11 +598,11 @@ The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-
 
 ### Configuration mount and rollout
 
-The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`, and its checksum is part of the Deployment pod template — so a configuration change rolls the Deployment rather than waiting for the kubelet to refresh a mounted file. Set `server.watchConfig` instead when the pods should reload in place.
+The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`, and its checksum is part of the Deployment pod template — so a configuration change rolls the Deployment rather than waiting for the kubelet to refresh a mounted file. The checksum covers the inline [`sshAuth.knownHosts`](#ssh-file-collectors) lines too. Set `server.watchConfig` instead when the pods should reload in place.
 
 ### Collector files
 
-Every key of `config.data` becomes a file in the mounted configuration directory, next to `config.yaml`. That is where [collector files](../../docs/CONFIGURATION.md#collector-files) go: add each as a key and list them under `collector_files`, relative to `config.yaml`:
+Every key of `config.data` becomes a file in the mounted configuration directory, next to `config.yaml`. That is where [collector files](../../docs/CONFIGURATION.md#collector-files) go: add each as a key and list them under `collector_files`, relative to `config.yaml`. A key is a ConfigMap key — letters, digits, `-`, `_` and `.`, at most 253 characters, not `.` or `..` — and the directory is flat, so a key such as `collectors/payments.yaml` fails rendering rather than at install: name it `collectors-payments.yaml`, or mount a directory of your own as below:
 
 ```yaml
 config:
@@ -479,7 +637,7 @@ config:
               expression: 'up=(\d+)'
 ```
 
-A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. Name the keys so a pattern matches them and nothing else: `*.yaml` would also match the static target file the chart puts in the same directory. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
+A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. A pattern such as `*.yaml` matches every key but `config.yaml`, which the exporter never reads as a collector file; the static target document is mounted in a directory of its own, `/etc/prometheus-universal-exporter-static-targets`, so no pattern here matches it. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
 
 Every file reaches the pod as it was given, whatever its first line's indentation and whatever its name. A file is rendered into the ConfigMap as readable text; one that YAML text cannot hold unchanged — with carriage returns or control characters, or ending in blank lines or trailing spaces — is rendered base64 under the ConfigMap's `binaryData` instead, and is the same file in the pod.
 
@@ -677,6 +835,8 @@ server:
 
 This allows the exporter to reload the configuration when the mounted ConfigMap changes without requiring a Deployment rollout.
 
+Static targets are not part of that ConfigMap: with `staticTargets.enabled` the chart renders `staticTargets.data` into a ConfigMap of its own, `<release>-prometheus-universal-exporter-static-targets`, whether or not `config.enabled` is on.
+
 ### Environment variables in the configuration
 
 `server.expandEnv` adds `--config.expand-env`, which substitutes `${NAME}` references in the configuration and its collector files from the container's environment before they are parsed; `staticTargets.expandEnv` adds `--static-targets.expand-env`, which does the same for the static target document, independently. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
@@ -785,8 +945,8 @@ extraArgs:
 Three mistakes are rejected while rendering, because each fails in a way that points somewhere other than the values file:
 
 * An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path`, `--log.level`, `--probe.timeout-offset` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
-* An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts — the configuration directory, and `targetAuth.mountPath` and `webAuth.mountPath` while they are enabled — or one another entry uses. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it. Paths are compared without a trailing slash, so `/etc/prometheus-universal-exporter/` is the same path.
-* A mount below a directory the chart mounts from a ConfigMap or a Secret — inside the configuration directory, such as a `subPath` file at `/etc/prometheus-universal-exporter/extra.yaml`, or inside `targetAuth.mountPath` or `webAuth.mountPath` while they are enabled — an `extraVolumeMounts` entry, a credential's `mountPath`, or a credential's `mountPath` above the configuration directory. Kubernetes mounts those volumes read-only, so the mount point cannot be created in them and the container never starts (`CreateContainerError`). The error names the value and the directory to mount outside of; to add a file to the configuration directory, add it to `config.data`.
+* An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts — the configuration directory, the static target directory `/etc/prometheus-universal-exporter-static-targets` while `staticTargets.enabled` is on, and `targetAuth.mountPath`, `webAuth.mountPath`, `sshAuth.mountPath` and `sqlAuth.mountPath` while they are enabled — or one another entry uses. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it. Paths are compared without a trailing slash, so `/etc/prometheus-universal-exporter/` is the same path.
+* A mount below a directory the chart mounts from a ConfigMap, a Secret or both — inside the configuration directory, such as a `subPath` file at `/etc/prometheus-universal-exporter/extra.yaml`, inside the static target directory, or inside `targetAuth.mountPath`, `webAuth.mountPath`, `sshAuth.mountPath` or `sqlAuth.mountPath` while they are enabled — an `extraVolumeMounts` entry, a credential's `mountPath`, or a credential's `mountPath` above the configuration or static target directory. Kubernetes mounts those volumes read-only, so the mount point cannot be created in them and the container never starts (`CreateContainerError`). The error names the value and the directory to mount outside of; to add a file to the configuration directory, add it to `config.data`.
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 
@@ -826,10 +986,10 @@ staticTargets:
 
 | Value | Default | Purpose |
 | --- | --- | --- |
-| `staticTargets.enabled` | `false` | Render `data` into the ConfigMap and pass it with `--static-targets-file`. |
-| `staticTargets.fileName` | `static-targets.yaml` | Its file name in the mounted configuration directory, which is its key in the ConfigMap: letters, digits, `-`, `_` and `.`, and not a key of `config.data`. |
+| `staticTargets.enabled` | `false` | Render `data` into the ConfigMap `<fullname>-static-targets`, mount it at `/etc/prometheus-universal-exporter-static-targets` and pass it with `--static-targets-file`. |
+| `staticTargets.fileName` | `static-targets.yaml` | Its file name in `/etc/prometheus-universal-exporter-static-targets`, which is its key in that ConfigMap: letters, digits, `-`, `_` and `.`. The directory is not the configuration directory, so no `collector_files` pattern matches the document. |
 | `staticTargets.path` | `/static-targets` | Rendered as `--web.static-targets-path`, always: where the targets' latest results are served. It may not be `selfMetrics.path` or another endpoint's. |
-| `staticTargets.data` | `""` | The static target document. A change rolls the Deployment. Required with `config.enabled`; with `config.enabled: false`, which renders no ConfigMap, leave it empty and put the file into your own ConfigMap under `fileName`. |
+| `staticTargets.data` | `""` | The static target document, required with `enabled`, also with `config.enabled: false`. A change rolls the Deployment. |
 | `staticTargets.expandEnv` | `false` | Rendered as `--static-targets.expand-env` with `enabled`: expand `${NAME}` references in `data` from the container's environment. Independent of `server.expandEnv`. |
 | `staticTargets.monitor.enabled` | `true` | Render the monitor that scrapes the endpoint, when `staticTargets.enabled` is. It needs the Prometheus Operator's CRDs. |
 | `staticTargets.monitor.type` | `service` | `service` for a ServiceMonitor, `pod` for a PodMonitor. |
@@ -896,7 +1056,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
-| `staticTargets` | object | disabled | Static targets rendered into the ConfigMap. |
+| `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
@@ -914,6 +1074,22 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `networkPolicy` | object | disabled | `ingress` and `egress` rules, and `allowDNS` with egress rules; see [NetworkPolicy](#networkpolicy). |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
 | `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth, and presented by every monitor without `auth` of its own; see [Exporter authentication](#exporter-authentication). |
+| `sshAuth.enabled` | boolean | `false` | Mount SSH credentials and known hosts for `sshfile` collectors; see [SSH file collectors](#ssh-file-collectors). |
+| `sshAuth.secretName` | string | `""` | The Secret holding the SSH credentials; required when enabled. |
+| `sshAuth.privateKeyKey` | string | `""` | The Secret's key mounted as `private_key`. This or `passwordKey`, or both, when enabled. |
+| `sshAuth.passphraseKey` | string | `""` | The Secret's key mounted as `passphrase`, the private key's passphrase; only with `privateKeyKey`. |
+| `sshAuth.passwordKey` | string | `""` | The Secret's key mounted as `password`. |
+| `sshAuth.knownHosts` | string | `""` | `known_hosts` lines, such as `ssh-keyscan` prints, rendered into a ConfigMap and mounted as `known_hosts`; at least one entry. Not with `knownHostsSecretKey`. |
+| `sshAuth.knownHostsSecretKey` | string | `""` | The Secret's key mounted as `known_hosts`. Not with `knownHosts`; one of the two when enabled. |
+| `sshAuth.mountPath` | string | `/var/run/prometheus-universal-exporter/ssh` | Where the files are mounted, read-only, mode `0400`; a path of its own. |
+| `sqlAuth.enabled` | boolean | `false` | Mount database credentials and TLS files for `sql` collectors; see [SQL collectors](#sql-collectors). |
+| `sqlAuth.secretName` | string | `""` | The Secret holding the database credentials; required when enabled. |
+| `sqlAuth.passwordKey` | string | `""` | The Secret's key mounted as `password`. |
+| `sqlAuth.privateKeyKey` | string | `""` | The Secret's key mounted as `private_key`, an unencrypted key for Snowflake key-pair authentication. |
+| `sqlAuth.caKey` | string | `""` | The Secret's key mounted as `ca.crt`. |
+| `sqlAuth.certKey` | string | `""` | The Secret's key mounted as `client.crt`; only with `keyKey`. |
+| `sqlAuth.keyKey` | string | `""` | The Secret's key mounted as `client.key`; only with `certKey`. At least one of the keys when enabled. |
+| `sqlAuth.mountPath` | string | `/var/run/prometheus-universal-exporter/sql` | Where the files are mounted, read-only, mode `0400`; a path of its own. |
 
 ## Other options
 

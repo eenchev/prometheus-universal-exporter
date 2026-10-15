@@ -115,12 +115,17 @@ fails the scrape saying so, and so does a second YAML document after `---`
 than everything after the first being dropped unseen. A key written twice in
 one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
 already defined at line 1`, rather than the later value replacing the earlier
-unseen: the error names the first ten such problems and counts the rest. An
+unseen: the error names the first ten such problems and counts the rest. A
+mapping key that is a sequence or a mapping (`? [a, b]`, `{x: 1}: 2`), or an
+alias of one, fails the scrape saying so, `yaml: the mapping key at line 3 is
+a sequence; only scalar keys (text, numbers, booleans, null) can be read`:
+the decoded body's keys are the keys of JSON objects, which only a scalar
+can be. An
 error quotes no more than the start of a part of the document, followed by
 the length of the whole — the first 64 bytes of a key written twice (`mapping
 key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
-of a key that is a sequence or a mapping, of a value that does not fit its tag
-and of an anchor's name — so it stays short whatever the document holds. A
+of a value that does not fit its tag and of an anchor's name — so it stays
+short whatever the document holds. A
 YAML body costs time and memory in proportion to its size whatever it holds —
 a mapping of 200,000 keys decodes in about the time it takes to parse, and a
 key written 100,000 times is refused as quickly — so `max_response_bytes`
@@ -1102,7 +1107,9 @@ does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
-row. Without it, the metric is one series: the value is the whole text of the
+row. Items may be nested, `items: li` over nested lists: each selector is
+matched once for all the items, so a deep nesting costs what its size does.
+Without `items`, the metric is one series: the value is the whole text of the
 one element the expression selects, and an expression matching several is a
 failure of the rule, handled by its `error_mode`, with an error pointing at
 `items`. Its labels can only be static `value` labels: a label reading the page
@@ -1939,10 +1946,13 @@ request:
   path: /api/status
 ```
 
-There are four types: `http` asks a URL, `localfile` reads a file from the
+There are six types: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
-asks a Graphite render API for series — see [Graphite](GRAPHITE.md) — and
-`grpc` calls a unary gRPC method — see [gRPC](GRPC.md). A collector
+asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
+`grpc` calls a unary gRPC method — see [gRPC](GRPC.md) — `sshfile`
+reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
+and `sql` runs a statement on a database — see [Databases over SQL](SQL.md).
+A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
 
@@ -1955,7 +1965,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `type` | — | **Required.** `http`. |
 | `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
 | `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). A `%XX` escape in it is sent as written ([Target requests](REQUESTS.md#the-request-url)). |
-| `query` | — | Query parameters added to the request, after the target's own query, which is sent as written; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
+| `query` | — | Query parameters added to the request, after the target's own query, which is sent as written; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). A name is sent escaped, and may not be empty or hold a control character. |
 | `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). Not `Accept-Encoding`, which is the exporter's own ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
@@ -1963,7 +1973,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | See [Target requests](REQUESTS.md#retries). |
-| `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB. |
+| `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
@@ -1991,6 +2001,21 @@ credential keys, `tls`, `retry` with its `codes`, `max_response_bytes`, the
 forwarding keys, `allowed_targets` and `denied_targets` apply as for `http`, and the other `http` keys do not; its
 table is in [gRPC](GRPC.md#a-collector).
 
+For `sshfile`, `root`, `username` and `known_hosts_file` are required, and
+`private_key_file` or `password_file`, or both; `path`, or `files`,
+`max_files` and `max_total_bytes`, `max_age` and `max_response_bytes` are
+`localfile`'s, and `passphrase_file`, `keepalive_interval`,
+`keepalive_count_max`, `idle_timeout`, `max_open_connections`,
+`allowed_targets` and `denied_targets` apply too; its table is in [Files over SSH](SSHFILE.md#a-collector).
+
+For `sql`, `driver`, `statement` and `username` are required, and
+`service_name` for the `oracle` driver; `args`, `database`, `password_file`,
+`private_key_file` (`snowflake` only), `tls`, `options`, `max_rows`,
+`max_response_bytes`, `connections`, `allowed_targets` and `denied_targets`
+apply too, and no `decoder` or `response` setting; its rows are read by a
+`csv`, `jq`, `yq` or `python` transform. Its table is in [Databases over
+SQL](SQL.md#a-collector).
+
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
@@ -2001,6 +2026,9 @@ and its `target` is optional. `graphite` accepts what `http` does but `method` a
 and `from` and `until`, which no other type accepts. `grpc` accepts
 `timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
+`sshfile` accepts `path`, `timeout` and `param_<name>`, as `localfile` does,
+and requires a `target`, the host. `sql` accepts `timeout` and
+`param_<name>`, and requires a `target`, the database server.
 
 `target`, `collector` and each of these parameters is given once. A second
 value gets a `400` naming the parameter rather than one of the two being
@@ -2050,11 +2078,16 @@ only a left-out type accepts is one no request type knows, ignored rather
 than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
-An http-only build leaves `localfile`, `graphite` and `grpc` out, and a build
-with `REQUEST_TYPES=localfile` reads files and makes no HTTP requests to
-targets at all. `grpc` is the only type with libraries of its own, gRPC and
-protobuf, which a build without it does not link: about 6 MB of a stripped
-binary.
+An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile` and
+`sql` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
+their own, which a build without them does not link: gRPC and protobuf, about
+6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
+database drivers, about 6 MB for the three built in by default. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+`vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
+`REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
+`SQL_DRIVERS` build argument ([Building with more
+drivers](SQL.md#building-with-more-drivers)).
 
 ### When a metric cannot be extracted
 
@@ -2357,6 +2390,16 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   `expression` matches maps and cuts it — matched as at the scrape,
   unanchored unless the pattern says otherwise, against the name the target
   wrote, before `metrics_prefix` and `name_escaping`;
+- the labels every series of a collector gets, those of `transform.labels`
+  and a rule's static labels, each name once and as `remove_labels` and
+  `rename_labels` leave them, may be no more than
+  `limits.max_labels_per_metric` — `collector "c" metric "m" gives each of
+  its series 21 labels, its static labels and transform.labels, more than
+  limits.max_labels_per_metric 20`. A label that a series may not have is
+  not counted: a value with a `{{param_...}}` placeholder, which a probe may
+  fill with nothing, a static label of a name some `value_map` may map to
+  `""`, and a label an `expression` gives; nor are the labels the exporter
+  adds afterwards, such as a static target's;
 - an explicit `decoder.type` must be one the transform
   [reads](#collectors);
 - a setting must belong to the decoder or transform the collector has:
@@ -2438,7 +2481,8 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile`. And a boolean is `true` or `false`.
+  of graphite, grpc, http, localfile, sql, sshfile`. And a boolean is `true` or
+  `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label
   value of `NO`, for Norway, is `NO` and not `false` — so a key that takes a
@@ -2735,12 +2779,14 @@ target file one — are in `configs/` with the examples, and are regenerated wit
 you are running; its `request.type` values are the request types that binary
 was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
-expression compiles, that `otlp.interval` is at least `1s` — a duration is
+expression compiles, that `otlp.interval` is at least `1s` and
+`limits.script_timeout` at least `1ms` — a duration is
 text to a schema — that a duration is not too long to be held, that a
 [size](#sizes) is under 2^63 bytes, that any other whole number, such as
 `limits.max_metrics`, is one an int64 holds, from -2^63 to 2^63 - 1, that a
-`limits.max_output_bytes` written
-in quotes or with a unit is not under [its least](#sizes), and that no two
+`limits.max_output_bytes` or a `max_response_bytes` written
+in quotes or with a unit is not under [its least](#sizes), that two
+`request.headers` names are not one header in different case, and that no two
 rules of a collector are
 [the same rule](#two-rules-that-are-the-same-rule), nor a `prometheus`
 [name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
@@ -2760,7 +2806,12 @@ whose `value_map` maps a value to `""`, a rule without a `name` under any
 transform but `prometheus`, a rule's or a label's `name` that is not a
 classic name in a collector whose `name_escaping` is not `underscores` or
 `values`, a `grpc` collector that calls
-another service than `grpc.health.v1.Health` without `descriptors`, and a
+another service than `grpc.health.v1.Health` without `descriptors`, a
+`request.headers` name, a collector's or a static target's, or an
+`otlp.headers` one in a block switched on, that is no header name or is
+`Accept-Encoding`, a `request.query` name that is empty or holds a control
+character, a `forward_headers` entry that is no header name or one that is
+[never forwarded](AUTHENTICATION.md), and a
 negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
@@ -2972,7 +3023,11 @@ replaces the collector's. A key may itself be an alias of an anchored name:
 with `x-names: [&ttl ttl]`, `cache: {*ttl : 1m}` sets `ttl`, as YAML reads
 it, in those blocks as anywhere, and an unknown key so written is refused by
 the name its anchor holds. An alias of `<<` is the text `<<`, not a merge,
-and so an unknown key.
+and so an unknown key. A key is text, a number, a boolean or null: one
+written as a list or a mapping (`? [a, b]`), or an alias of one, is refused
+at its line in all three files, even in an `x-` block nothing uses, as
+`line 3: a mapping key is a sequence; only scalar keys (text, numbers,
+booleans, null) can be read`.
 
 An `x-` key is only ignored at the top level; anywhere else it is an unknown
 key like any other, and so is a bare `x-`. With
@@ -3020,7 +3075,9 @@ collectors:
   file, so `*.yaml` next to it is safe — although another YAML file in the same
   directory, such as a static target file, would be read and refused, so a
   subdirectory or a naming pattern such as `collectors-*.yaml` is the better
-  habit.
+  habit. The Helm chart mounts its static target file in a directory of its
+  own, so in the chart's configuration directory `*.yaml` matches only the
+  collector files of `config.data`.
 - **Only collectors.** Any other key in a collector file — `web`, `otlp`, a
   misspelt `colectors`, or a nested `collector_files` — is an error naming the
   file, the key and its line. The exporter-wide settings belong to the
@@ -3657,14 +3714,29 @@ at startup and with [`--dry-run`](#dry-run) alike, rather than a silently
 disabled watch. Without `--config.watch` no polling loop runs at all,
 and configuration changes take effect on restart.
 
-Changes are detected by modification time and size rather than filesystem
-events: any other time than the one last read is a change, an older one
-included, as `cp -p`, `rsync -t` or a `mv` of a prepared file leave it. The
-files are stamped before they are read, so an edit made while they are is
+Changes are detected by modification time, size and permissions rather than
+filesystem events: any other time than the one last read is a change, an
+older one included, as `cp -p`, `rsync -t` or a `mv` of a prepared file leave
+it, and so is a `chmod`, which may have made a file readable or unreadable.
+The files are stamped before they are read, so an edit made while they are is
 read by the next tick. That is
 deliberate: Kubernetes republishes a mounted ConfigMap by atomically swapping
 the `..data` symlink, which replaces the inode a file-level event watch is
 attached to, so such a watch would stop firing after the first change.
+
+A reload rejected because a file could not be read — the configuration
+file, a collector file or the static target file missing, a directory, or
+unreadable for its permissions or a directory's — is tried again at every
+tick until the file can be read, with the other of the two files when that
+one was rejected only for disagreeing with it, although nothing the stamps
+hold changed:
+a file can become readable through its owner, an ACL or the permissions of
+a directory above it, which no stamp of the file shows. The rejection is
+logged and counted once, as any; a try that fails the same way again logs
+nothing and counts nothing, and one that fails another way — the file
+readable now but invalid — is a rejection of its own, logged and counted
+once, after which the file is again read only when it changes. A reload
+rejected for what a file says is not tried again until a file changes.
 
 The watch follows the [collector files](#collector-files) too: a collector file
 edited, a new file matching a pattern, or a file removed triggers a reload.
@@ -3872,7 +3944,9 @@ the other of the two files, when this one was
 rejected only because it disagrees with the other as in force — a target
 naming a collector the configuration does not have, say — so that a change
 to either may settle it (`the static target file, a file its check opens or
-the configuration changes`). Without `--config.watch` nothing is read again
+the configuration changes`). A file rejected because a file it reads could
+not be read adds that it is tried at every tick (`the configuration changes,
+and at every tick while a file it reads cannot be read`). Without `--config.watch` nothing is read again
 until a reload is asked for, and the line has no `retried_when`.
 
 ## Reloading on demand
@@ -4226,7 +4300,14 @@ and a size of 2^63 bytes (`8388608TiB`) or more, which is past what a size
 can hold. The [schema](#editor-support) flags the same spellings, all but the
 last: the range is checked when the configuration loads.
 
-One size has a least. `limits.max_output_bytes`, which bounds an answer of a
+The response limits, `request.max_response_bytes` and
+`limits.max_response_bytes`, are at least 1 KiB when they are set: a size
+without a unit is a number of bytes, and a limit under a kibibyte is one
+whose unit was left out, `max_response_bytes: 10` for 10 MiB, which would
+fail every scrape. A smaller one fails to load, and the schema flags it, as
+for `limits.max_output_bytes` below, where it is written as a number.
+
+`limits.max_output_bytes`, which bounds an answer of a
 [Python worker](PYTHON.md#how-scripts-run) and is 1 MiB when it is left out
 or `0`, is at least 38 bytes when it is set, the answer of a script that
 emits no metric: a smaller one — `26`, `2.6e1`, `"26"`, `26B`, `0.02KiB` —
@@ -4290,6 +4371,16 @@ or `accept_codes` is listed under `details.request_policies`, by name, with
 those lists as they will be applied — `2XX` as `2xx`, `not_found` as
 `NOT_FOUND` — so a list that lets through more or less than meant shows before
 it is deployed.
+
+The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
+target of one, reads when it connects — its private key, passphrase,
+password and `known_hosts` files — are read too, as a connection would read
+them, which startup does not do: what a scrape would fail on now is listed
+under `details.warnings` of the `config` entry, or of the `static_targets`
+entry for a target's own files, and logged, without failing the check, since
+a file may be put in place after the exporter starts. So are the password,
+private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
+static target's own credential file.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

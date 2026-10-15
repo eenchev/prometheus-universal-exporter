@@ -184,7 +184,7 @@ func TestRetriedWhenSaysWhatItSaidAndNamesImportedFiles(t *testing.T) {
 					if hasStamped {
 						stamped = []string{file.stamped}
 					}
-					attrs := m.retriedWhen([]any{"trigger", "watch"}, file.file, stamped, file.other, waits)
+					attrs := m.retriedWhen([]any{"trigger", "watch"}, file.file, stamped, file.other, waits, false)
 					if !watch {
 						if len(attrs) != 2 {
 							t.Fatalf("without the watch the line carries %v", attrs)
@@ -205,7 +205,7 @@ func TestRetriedWhenSaysWhatItSaidAndNamesImportedFiles(t *testing.T) {
 			false: "the configuration, a file it names or a file one of those imports changes",
 			true:  "the configuration, a file it names, a file one of those imports or the static target file changes",
 		} {
-			if attrs := m.retriedWhen(nil, "the configuration", both, "the static target file", waits); attrs[1] != want {
+			if attrs := m.retriedWhen(nil, "the configuration", both, "the static target file", waits, false); attrs[1] != want {
 				t.Errorf("with imported files, waits %v: retried_when %q, want %q", waits, attrs[1], want)
 			}
 		}

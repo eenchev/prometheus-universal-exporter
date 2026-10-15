@@ -12,20 +12,23 @@ on:
       - 'exporter/**'
       - 'exporter*'
 
+# Read-only unless a job says otherwise; each job grants itself what it needs
+# beyond reading, and a test holds the grants to a list.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
-  release:
+  # Nothing is published unless CI has passed on the commit the tag names
+  # (tools/ci-passed.py says what counts), so a tag pushed on a commit CI
+  # failed, or never ran on, releases nothing.
+  preflight:
     runs-on: ubuntu-latest
-    # The tests that need the strict reference parser fail without it
-    # instead of being skipped (internal/exporter/openmetricsstrict_test.go).
-    env:
-      STRICT_OPENMETRICS_PARSER: required
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Validate the release tag
         env:
@@ -38,6 +41,29 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/checkout@v7
+
+      # The tag push starts a CI run of its own, and a tag is often pushed
+      # right after its commit, so CI is waited for rather than required to
+      # have finished already.
+      - name: Wait for CI to pass on the tagged commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/ci-passed.py --repository "$GITHUB_REPOSITORY" --sha "$(git rev-parse HEAD)"
+
+  release:
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      # The GitHub Release.
+      contents: write
+      # The image on GHCR.
+      packages: write
+    # The tests that need the strict reference parser fail without it
+    # instead of being skipped (internal/exporter/openmetricsstrict_test.go).
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
       # Every tag, so the release can tell whether it is the newest.
       - uses: actions/checkout@v7
         with:

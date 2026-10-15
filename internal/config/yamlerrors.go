@@ -184,6 +184,70 @@ func yamlFound(tag, value string) string {
 	return "!!" + tag
 }
 
+// refuseNotScalarKeys is notScalarKeys; tests set it to one that refuses
+// nothing, to load a document as the loader did before it.
+var refuseNotScalarKeys = notScalarKeys
+
+// notScalarKeys refuses a document with a mapping key that is a sequence or
+// a mapping, or an alias of one, anywhere in it, naming the line of every
+// such key; nil for a document without one, and for one that is no YAML,
+// which the decoder refuses in its own words.
+//
+// The files are read as the JSON their schemas describe, whose keys are
+// text, and such a key has no text to be one. The decoder refuses it in
+// words that do not say so: as a value where a single one belongs, at the
+// key's line ("expected a single value, not a list"), and two of them in
+// one mapping as one key written twice (`mapping key "" already defined`),
+// since it tells keys apart by their text and these have none. A key in an
+// x- block nobody merges in is refused too: the block is YAML of the file,
+// written to be reused.
+func notScalarKeys(document []byte) error {
+	var problems []string
+	said := map[string]bool{}
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		for i, child := range n.Content {
+			if n.Kind == yaml.MappingNode && i%2 == 0 {
+				// Two such keys of a kind on one line, as a flow mapping
+				// writes them, are said once.
+				if what := notScalarKind(child); what != "" {
+					problem := fmt.Sprintf("line %d: a mapping key is %s; only scalar keys (text, numbers, booleans, null) can be read", child.Line, what)
+					if !said[problem] {
+						said[problem] = true
+						problems = append(problems, problem)
+					}
+				}
+			}
+			walk(child)
+		}
+	}
+	var doc yaml.Node
+	if yaml.Unmarshal(document, &doc) == nil {
+		walk(&doc)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(problems, "; "))
+}
+
+// notScalarKind names what key is when it is a sequence or a mapping, or an
+// alias of one, and is "" for any other key. An alias is not followed
+// further: what it names is walked where it is written.
+func notScalarKind(key *yaml.Node) string {
+	kind, alias := key, ""
+	if key.Kind == yaml.AliasNode && key.Alias != nil {
+		kind, alias = key.Alias, "an alias of "
+	}
+	switch kind.Kind {
+	case yaml.SequenceNode:
+		return alias + "a sequence"
+	case yaml.MappingNode:
+		return alias + "a mapping"
+	}
+	return ""
+}
+
 // oneDocument refuses a second YAML document after the one dec has read: a
 // file that goes on after --- would have everything after it ignored without
 // a word. An empty document after a final --- is nothing, and is let be.

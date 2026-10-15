@@ -90,6 +90,13 @@ func targetHint(c *model.Collector, required bool) string {
 		hint = "host:port"
 	case "localfile":
 		hint = "a file or directory under its root"
+	case fetch.RequestTypeSSHFile:
+		hint = "host or host:port"
+	case fetch.RequestTypeSQL:
+		hint = "the database server, host or host:port"
+		if c.Request.Driver == fetch.SQLDriverSnowflake {
+			hint = "the Snowflake account identifier"
+		}
 	}
 	if !required {
 		hint += " (optional)"

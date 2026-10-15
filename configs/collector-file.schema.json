@@ -440,7 +440,15 @@
                 ]
               },
               "max_response_bytes": {
-                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1024
+                  }
+                ],
+                "description": "The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -458,7 +466,7 @@
                 ]
               },
               "script_timeout": {
-                "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
+                "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms.",
                 "maximum": 0,
                 "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -825,9 +833,131 @@
                     "root"
                   ]
                 }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "sql"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "driver": {
+                      "not": {
+                        "const": ""
+                      }
+                    },
+                    "statement": {
+                      "not": {
+                        "const": ""
+                      }
+                    },
+                    "username": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "driver",
+                    "statement",
+                    "username"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "sshfile"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "private_key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "private_key_file"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "password_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "password_file"
+                      ]
+                    }
+                  ],
+                  "if": {
+                    "properties": {
+                      "passphrase_file": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "passphrase_file"
+                    ]
+                  },
+                  "properties": {
+                    "known_hosts_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    },
+                    "root": {
+                      "not": {
+                        "const": ""
+                      }
+                    },
+                    "username": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "root",
+                    "username",
+                    "known_hosts_file"
+                  ],
+                  "then": {
+                    "properties": {
+                      "private_key_file": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "private_key_file"
+                    ]
+                  }
+                }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile and docs/SQL.md for sql.",
             "properties": {
               "accept_codes": {
                 "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
@@ -860,13 +990,24 @@
                 "type": "array"
               },
               "allowed_targets": {
-                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc.",
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile and sql.",
                 "items": {
                   "minLength": 1,
                   "not": {
                     "pattern": "[^\\x00-\\x7F]",
                     "type": "string"
                   },
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "args": {
+                "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders.",
+                "items": {
                   "type": [
                     "string",
                     "number",
@@ -886,6 +1027,11 @@
                     ]
                   },
                   "username": {
+                    "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617).",
+                    "not": {
+                      "pattern": ":",
+                      "type": "string"
+                    },
                     "type": [
                       "string",
                       "number",
@@ -937,6 +1083,86 @@
                   "boolean"
                 ]
               },
+              "connections": {
+                "additionalProperties": false,
+                "description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections.",
+                "properties": {
+                  "idle_timeout": {
+                    "description": "How long an idle connection is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "keepalive": {
+                    "additionalProperties": false,
+                    "description": "How a kept connection is found broken.",
+                    "properties": {
+                      "check": {
+                        "description": "tcp, the default: TCP keepalives on every connection. ping: every idle connection is pinged every interval.",
+                        "enum": [
+                          "tcp",
+                          "ping",
+                          ""
+                        ],
+                        "type": "string"
+                      },
+                      "interval": {
+                        "description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 checks none.",
+                        "maximum": 0,
+                        "minimum": 0,
+                        "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                        "type": [
+                          "string",
+                          "integer"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "max_idle_per_target": {
+                    "description": "How many connections to a target are kept idle between scrapes, across its databases and accounts. Defaults to 1; 0 keeps none.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_lifetime": {
+                    "description": "How long a connection is used before it is closed and made again. Defaults to 1h; 0 uses it as long as it works.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "max_per_target": {
+                    "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_targets": {
+                    "description": "The most targets, servers or Snowflake accounts, the collector keeps connections to, whatever databases and accounts it reaches there; at the limit the pools of the target used longest ago are closed. Defaults to 50; 0 sets no limit.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "database": {
+                "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "denied_targets": {
                 "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is.",
                 "items": {
@@ -963,11 +1189,16 @@
                 ],
                 "type": "string"
               },
+              "driver": {
+                "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md.",
+                "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Mm][Yy][Ss][Qq][Ll]|[Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss]|[Ss][Qq][Ll][Ss][Ee][Rr][Vv][Ee][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "type": "string"
+              },
               "enable_http2": {
                 "type": "boolean"
               },
               "files": {
-                "description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
+                "description": "localfile and sshfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
                 "items": {
                   "type": [
                     "string",
@@ -985,12 +1216,14 @@
                 "type": "boolean"
               },
               "forward_headers": {
+                "description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_\u003cname\u003e parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded.",
                 "items": {
-                  "type": [
-                    "string",
-                    "number",
-                    "boolean"
-                  ]
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Pp][Rr][Oo][Xx][Yy]-[!#$%\u0026'*+.^_`|~0-9A-Za-z-]*|[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]|[Hh][Oo][Ss][Tt]|[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee]|[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Tt][Ee]|[Tt][Rr][Aa][Ii][Ll][Ee][Rr]|[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Uu][Pp][Gg][Rr][Aa][Dd][Ee])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                    "type": "string"
+                  },
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                  "type": "string"
                 },
                 "type": "array"
               },
@@ -1010,10 +1243,54 @@
                     "boolean"
                   ]
                 },
+                "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%\u0026'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders.",
+                "propertyNames": {
+                  "not": {
+                    "pattern": "^[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"
+                  },
+                  "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
+                },
                 "type": "object"
               },
+              "idle_timeout": {
+                "description": "sshfile: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "keepalive_count_max": {
+                "description": "sshfile: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "keepalive_interval": {
+                "description": "sshfile: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 sends none.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "known_hosts_file": {
+                "description": "sshfile, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "max_age": {
-                "description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
+                "description": "localfile and sshfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
                 "maximum": 0,
                 "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -1023,12 +1300,25 @@
                 ]
               },
               "max_files": {
-                "description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
+                "description": "localfile and sshfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_open_connections": {
+                "description": "sshfile: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections.",
                 "minimum": 0,
                 "type": "integer"
               },
               "max_response_bytes": {
-                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1024
+                  }
+                ],
+                "description": "http, graphite, grpc, localfile and sshfile: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -1036,8 +1326,13 @@
                   "string"
                 ]
               },
+              "max_rows": {
+                "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_total_bytes": {
-                "description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
+                "description": "localfile and sshfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -1086,8 +1381,55 @@
                 ],
                 "type": "string"
               },
+              "options": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers.",
+                "type": "object"
+              },
+              "passphrase_file": {
+                "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "password_file": {
+                "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "path": {
-                "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "private_key_file": {
+                "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
                 "type": [
                   "string",
                   "number",
@@ -1131,6 +1473,11 @@
                     "number",
                     "boolean"
                   ]
+                },
+                "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders.",
+                "propertyNames": {
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1F\\x7F]*$"
                 },
                 "type": "object"
               },
@@ -1176,7 +1523,7 @@
                 "type": "object"
               },
               "root": {
-                "description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md.",
+                "description": "localfile and sshfile, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree. See docs/LOCALFILE.md and docs/SSHFILE.md.",
                 "type": [
                   "string",
                   "number",
@@ -1187,6 +1534,30 @@
                 "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md.",
                 "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
+              },
+              "service_name": {
+                "description": "sql, required for the oracle driver and for no other: the service of the database.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "statement": {
+                "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               },
               "targets": {
                 "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md.",
@@ -1244,12 +1615,26 @@
                   "graphite",
                   "grpc",
                   "http",
-                  "localfile"
+                  "localfile",
+                  "sql",
+                  "sshfile"
                 ],
                 "type": "string"
               },
               "until": {
                 "description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "username": {
+                "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. Not blanks alone.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
                 "type": [
                   "string",
                   "number",

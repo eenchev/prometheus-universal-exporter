@@ -511,11 +511,11 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 // `make build` compiled every package and kept nothing, while the docs gave
 // it as the way to build the exporter with only some request types. It
 // builds the main package into bin/, under the name the image gives the
-// binary, with the tags of REQUEST_TYPES, and the docs that give it say
-// where the binary lands.
+// binary, with the tags of REQUEST_TYPES and SQL_DRIVERS, and the docs that
+// give it say where the binary lands.
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
-	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$tags" -o bin/$(APP) .`
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) .`
 	if got := strings.TrimSpace(recipes["build"]); got != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}

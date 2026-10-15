@@ -17,15 +17,21 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build build-request-types ci test test-request-types test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
+.PHONY: build build-request-types build-sql-drivers ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
+# SQL_DRIVERS adds the sql request type's opt-in database drivers,
+# comma-separated, for example `make build SQL_DRIVERS=oracle,snowflake`: any
+# of oracle, clickhouse, snowflake and vertica. Empty, the default, the sql
+# type has its three built-in drivers alone, mysql, postgres and sqlserver.
+# See "Building with more drivers" in docs/SQL.md.
+SQL_DRIVERS ?=
 
 # The exporter's binary, bin/$(APP), built from the main package.
 build:
-	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$$tags" -o bin/$(APP) .
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) .
 
 # What ci.yml's build steps run: every package compiled, then each request
 # type vetted and built on its own, so code one type needs cannot quietly
@@ -33,12 +39,39 @@ build:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in graphite grpc http localfile; do \
+	@set -e; for type in graphite grpc http localfile sql sshfile; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
 		go build -tags "$$tags" ./...; \
 	done
+
+# What ci.yml's build step of the opt-in sql drivers runs: every package
+# vetted and built with all four, which no other build compiles, as the
+# default build compiles the three built-in ones. A test keeps the list
+# naming every opt-in driver in the tree.
+build-sql-drivers:
+	tags="$$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
+
+# golangci-lint over the build with every opt-in sql driver, as ci.yml's second
+# lint step runs it: no other lint run compiles them, and a build with more
+# packages can give the linters' analyses more to see.
+lint-sql-drivers: lint-version
+	tags="$$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && golangci-lint run --build-tags "$$tags"
+
+# The tests of the build with every opt-in sql driver, as ci.yml runs them:
+# the drivers' own tests of how a connection is configured are in files
+# built only with them. Once and without -race.
+test-sql-drivers:
+	tags="$$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$$tags" ./internal/fetch/
+
+# Opt-in: the sql request type against real databases, which the
+# PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
+# (host:port), each with its _USER and _PASSWORD; a database without its
+# variable is skipped. ci.yml's sql-live job runs it against service
+# containers. See docs/DEVELOPMENT.md.
+test-sql-live:
+	go test -count=1 -run TestLiveSQL -v ./internal/fetch/
 
 test:
 	go test ./...
@@ -55,7 +88,7 @@ test:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in graphite grpc http localfile; do \
+	@set -e; for type in graphite grpc http localfile sql sshfile; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \
@@ -235,7 +268,7 @@ helm-test: helm-version
 	@# Static targets without OTLP, and the monitor of their endpoint.
 	@set -eu; \
 	out="$$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml)"; \
-	echo "$$out" | grep -q -- '--static-targets-file=/etc/prometheus-universal-exporter/static-targets.yaml'; \
+	echo "$$out" | grep -q -- '--static-targets-file=/etc/prometheus-universal-exporter-static-targets/static-targets.yaml'; \
 	echo "$$out" | grep -q -- '--web.static-targets-path=/static-targets'; \
 	echo "$$out" | grep -q 'name: .*-static-targets$$'; \
 	echo "$$out" | grep -q 'path: "/static-targets"'; \
@@ -243,7 +276,7 @@ helm-test: helm-version
 	echo "$$out" | grep -q -- '--web.static-targets-path=/targets'; \
 	echo "$$out" | grep -q 'kind: PodMonitor'; \
 	out="$$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.monitor.enabled=false)"; \
-	if echo "$$out" | grep -q -- '-static-targets$$'; then \
+	if echo "$$out" | grep -q 'kind: .*Monitor$$'; then \
 		echo "the static targets monitor rendered with staticTargets.monitor.enabled false" >&2; \
 		exit 1; \
 	fi; \
@@ -417,4 +450,4 @@ helm-test: helm-version
 		fi; \
 	done
 
-ci: fmt-check lint gopls-check test vet build-request-types test-request-types helm-test
+ci: fmt-check lint lint-sql-drivers gopls-check test vet build-request-types test-request-types build-sql-drivers test-sql-drivers helm-test

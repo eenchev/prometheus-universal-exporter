@@ -17,8 +17,7 @@ import (
 // In the chart, every key of config.data is a file beside config.yaml, which is
 // how collector files are supplied. The template renders every key and the
 // whole ConfigMap is mounted, and the example the chart README documents loads
-// as the exporter would load it, beside the static target file the chart
-// renders into the same directory.
+// as the exporter would load it.
 func TestChartSuppliesCollectorFilesAsConfigMapKeys(t *testing.T) {
 	configmap := readChartFile(t, "templates/configmap.yaml")
 	if !strings.Contains(configmap, "range $name, $content := .Values.config.data") {
@@ -54,7 +53,6 @@ func TestChartSuppliesCollectorFilesAsConfigMapKeys(t *testing.T) {
 	for name, content := range values.Config.Data {
 		testutil.WriteIn(t, dir, name, content)
 	}
-	testutil.WriteIn(t, dir, "targets.yaml", "targets: []\n")
 	c, err := config.Load(filepath.Join(dir, "config.yaml"))
 	if err != nil {
 		t.Fatal(err)

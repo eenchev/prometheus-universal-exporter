@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -195,6 +196,9 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 // configDetails summarises a configuration that loaded. A deprecated spelling
 // or a warning still passes, so the check stays ok; the report lists them so
 // the operator knows what to change before a deprecated spelling is removed.
+// The warnings are the configuration's, and what reading the files a request
+// reads, which loading leaves to the request, finds wrong with them now
+// (fetch.FileWarnings): those are the check's alone, not startup's.
 func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	names := make([]string, 0, len(conf.Collectors))
 	for i := range conf.Collectors {
@@ -214,8 +218,12 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	if len(conf.Deprecations) > 0 {
 		details["deprecations"] = conf.Deprecations
 	}
-	if len(conf.Warnings) > 0 {
-		details["warnings"] = conf.Warnings
+	warnings := slices.Clone(conf.Warnings)
+	for i := range conf.Collectors {
+		warnings = append(warnings, fetch.FileWarnings(&conf.Collectors[i], nil)...)
+	}
+	if len(warnings) > 0 {
+		details["warnings"] = warnings
 	}
 	return details
 }
@@ -260,6 +268,21 @@ func checkTargets(path string, options []config.LoadOption, expandEnv bool, conf
 		result := failedCheck("static_targets", path, err)
 		result.Details = details
 		return result
+	}
+	// The files a request reads, which loading leaves to the request, are
+	// read now as a request would read them: what is wrong with one is a
+	// warning, since the file may be put in place after the exporter starts.
+	var warnings []string
+	for i := range file.Targets {
+		target := &file.Targets[i]
+		for j := range conf.Collectors {
+			if c := &conf.Collectors[j]; c.Name == target.Collector {
+				warnings = append(warnings, fetch.FileWarnings(c, target)...)
+			}
+		}
+	}
+	if len(warnings) > 0 {
+		details["warnings"] = warnings
 	}
 	return checkResult{Check: "static_targets", File: path, Status: checkOK, Details: details}
 }

@@ -684,30 +684,11 @@ func carriedOnAnswer(c *model.Collector) model.MetricSet {
 	return answer
 }
 
-// unforwardableHeaders are never forwarded, whatever request.forward_headers
-// lists: Authorization has request.forward_authorization of its own,
-// Accept-Encoding is the exporter's to set (Prometheus asks it for gzip on
-// every scrape, and Go decompresses an answer only when it asked itself), and
-// the rest describe the connection to the exporter, not the request to the
-// target.
-// Neither is any Proxy- header (unforwardable), whatever follows the dash.
-var unforwardableHeaders = map[string]bool{
-	"Accept-Encoding":     true,
-	"Authorization":       true,
-	"Connection":          true,
-	"Content-Length":      true,
-	"Host":                true,
-	"Proxy-Authenticate":  true,
-	"Proxy-Authorization": true,
-	"Te":                  true,
-	"Trailer":             true,
-	"Transfer-Encoding":   true,
-	"Upgrade":             true,
-}
-
-// unforwardable reports whether name, canonical, is never forwarded.
+// unforwardable reports whether name, canonical, is never forwarded, whatever
+// request.forward_headers lists (fetch.UnforwardableReason says which and
+// why); the configuration refuses such an entry when it loads.
 func unforwardable(name string) bool {
-	return unforwardableHeaders[name] || strings.HasPrefix(name, "Proxy-")
+	return fetch.UnforwardableReason(name) != ""
 }
 
 // forwardableHeaders is request.forward_headers as they are forwarded:

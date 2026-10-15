@@ -27,7 +27,11 @@ func TestVersionFlag(t *testing.T) {
 		t.Fatalf("--version exited %d: %s", code, stderr.String())
 	}
 	b := exporter.BuildVersion()
-	want := fmt.Sprintf("prometheus-universal-exporter version %s (revision %s, %s, request types %s)\n", b.Version, b.Revision, runtime.Version(), strings.Join(fetch.BuiltRequestTypes(), ","))
+	drivers := ""
+	if built := fetch.BuiltSQLDrivers(); len(built) > 0 {
+		drivers = ", sql drivers " + strings.Join(built, ",")
+	}
+	want := fmt.Sprintf("prometheus-universal-exporter version %s (revision %s, %s, request types %s%s)\n", b.Version, b.Revision, runtime.Version(), strings.Join(fetch.BuiltRequestTypes(), ","), drivers)
 	if stdout.String() != want {
 		t.Fatalf("--version printed %q, want %q", stdout.String(), want)
 	}

@@ -1,7 +1,10 @@
+{{- include "prometheus-universal-exporter.validateConfigData" . }}
 {{- include "prometheus-universal-exporter.validateTargets" . }}
 {{- include "prometheus-universal-exporter.validateMonitors" . }}
 {{- include "prometheus-universal-exporter.validateProbe" (list "livenessProbe" .Values.livenessProbe) }}
 {{- include "prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe) }}
+{{- include "prometheus-universal-exporter.validateSSHAuth" . }}
+{{- include "prometheus-universal-exporter.validateSQLAuth" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,9 +50,13 @@ spec:
         {{- include "prometheus-universal-exporter.metadataLabels" (list . .Values.podLabels) | nindent 8 }}
       annotations:
         {{- /* checksum/config rolls the pods when the configuration changes,
-               so podAnnotations cannot replace it. */}}
+               or the static target document or the known_hosts lines of
+               sshAuth.knownHosts do, so podAnnotations cannot replace it.
+               Without those their templates render nothing but white space,
+               which is trimmed, so the checksum is the configuration's
+               alone. */}}
         {{- $podAnnotations := deepCopy (.Values.podAnnotations | default dict) -}}
-        {{- $_ := set $podAnnotations "checksum/config" (include (print $.Template.BasePath "/configmap.yaml") . | sha256sum) -}}
+        {{- $_ := set $podAnnotations "checksum/config" (print (include (print $.Template.BasePath "/configmap.yaml") .) (include (print $.Template.BasePath "/statictargetsconfigmap.yaml") . | trim) (include (print $.Template.BasePath "/sshknownhosts.yaml") . | trim) | sha256sum) -}}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
@@ -105,7 +112,7 @@ spec:
             {{- end }}
             - {{ printf "--web.static-targets-path=%s" (include "prometheus-universal-exporter.staticTargetsPath" .) | quote }}
             {{- if .Values.staticTargets.enabled }}
-            - {{ printf "--static-targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.staticTargetsFile" .) | quote }}
+            - {{ printf "--static-targets-file=%s/%s" (include "prometheus-universal-exporter.staticTargetsDir" .) (include "prometheus-universal-exporter.staticTargetsFile" .) | quote }}
             {{- if .Values.staticTargets.expandEnv }}
             - --static-targets.expand-env
             {{- end }}
@@ -180,6 +187,11 @@ spec:
             - name: config
               mountPath: /etc/prometheus-universal-exporter
               readOnly: true
+            {{- if .Values.staticTargets.enabled }}
+            - name: static-targets
+              mountPath: {{ include "prometheus-universal-exporter.staticTargetsDir" . }}
+              readOnly: true
+            {{- end }}
             {{- if and .Values.targetAuth .Values.targetAuth.enabled }}
             - name: target-auth
               mountPath: {{ .Values.targetAuth.mountPath | quote }}
@@ -190,6 +202,16 @@ spec:
               mountPath: {{ .Values.webAuth.mountPath | quote }}
               readOnly: true
             {{- end }}
+            {{- if and .Values.sshAuth .Values.sshAuth.enabled }}
+            - name: ssh-auth
+              mountPath: {{ .Values.sshAuth.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.sqlAuth .Values.sqlAuth.enabled }}
+            - name: sql-auth
+              mountPath: {{ .Values.sqlAuth.mountPath | quote }}
+              readOnly: true
+            {{- end }}
             {{- include "prometheus-universal-exporter.validateMounts" . }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -198,6 +220,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "prometheus-universal-exporter.fullname" . }}
+        {{- if .Values.staticTargets.enabled }}
+        - name: static-targets
+          configMap:
+            name: {{ include "prometheus-universal-exporter.staticTargetsName" . }}
+        {{- end }}
         {{- if and .Values.targetAuth .Values.targetAuth.enabled }}
         - name: target-auth
           secret:
@@ -222,6 +249,58 @@ spec:
                 path: username
               - key: {{ .Values.webAuth.passwordKey | quote }}
                 path: password
+        {{- end }}
+        {{- if and .Values.sshAuth .Values.sshAuth.enabled }}
+        {{- /* One directory of fixed file names, whichever source each comes
+               from. Mode 0400 (256): the kubelet makes the files group-owned
+               by podSecurityContext.fsGroup and adds the group's read bit, so
+               the exporter, of that group, reads them and no other user
+               does. */}}
+        - name: ssh-auth
+          projected:
+            defaultMode: 256
+            sources:
+              - secret:
+                  name: {{ .Values.sshAuth.secretName | quote }}
+                  items:
+                    {{- with .Values.sshAuth.privateKeyKey }}
+                    - key: {{ . | quote }}
+                      path: private_key
+                    {{- end }}
+                    {{- with .Values.sshAuth.passphraseKey }}
+                    - key: {{ . | quote }}
+                      path: passphrase
+                    {{- end }}
+                    {{- with .Values.sshAuth.passwordKey }}
+                    - key: {{ . | quote }}
+                      path: password
+                    {{- end }}
+                    {{- with .Values.sshAuth.knownHostsSecretKey }}
+                    - key: {{ . | quote }}
+                      path: known_hosts
+                    {{- end }}
+              {{- if .Values.sshAuth.knownHosts }}
+              - configMap:
+                  name: {{ include "prometheus-universal-exporter.sshKnownHostsName" . | quote }}
+                  items:
+                    - key: known_hosts
+                      path: known_hosts
+              {{- end }}
+        {{- end }}
+        {{- if and .Values.sqlAuth .Values.sqlAuth.enabled }}
+        {{- /* Fixed file names, mode 0400 (256) as sshAuth's: readable by
+               the exporter through podSecurityContext.fsGroup alone. */}}
+        - name: sql-auth
+          secret:
+            secretName: {{ .Values.sqlAuth.secretName | quote }}
+            defaultMode: 256
+            items:
+              {{- range $item := list (list "passwordKey" "password") (list "privateKeyKey" "private_key") (list "caKey" "ca.crt") (list "certKey" "client.crt") (list "keyKey" "client.key") }}
+              {{- with index $.Values.sqlAuth (first $item) }}
+              - key: {{ . | quote }}
+                path: {{ last $item | quote }}
+              {{- end }}
+              {{- end }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

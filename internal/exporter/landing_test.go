@@ -115,14 +115,15 @@ func TestTheCollectorsPageAsksForRequestParameters(t *testing.T) {
 	)
 }
 
-// Forwarded headers are fields sent as header_<name> probe parameters, the
-// ones never forwarded left out; a forwarded Authorization is a credential
+// Forwarded headers are fields sent as header_<name> probe parameters, each
+// once whatever case it is listed in (the ones never forwarded are refused
+// when the configuration loads); a forwarded Authorization is a credential
 // the script sends as a header, so its fields have no name and never reach
 // the URL.
 func TestTheCollectorsPageAsksForWhatTheTargetNeeds(t *testing.T) {
 	c := testutil.Collector("tenant_status", "text")
 	c.Request.ForwardAuthorization = true
-	c.Request.ForwardHeaders = []string{"x-tenant", "Host", "Authorization", "X-Tenant"}
+	c.Request.ForwardHeaders = []string{"x-tenant", "X-Tenant"}
 	server := landingServer(t, &model.Config{Collectors: []model.Collector{c}})
 	page := getPage(t, server, "/collectors")
 	requireContains(t, page,

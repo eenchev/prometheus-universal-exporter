@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
@@ -153,6 +156,26 @@ type yamlLearnt struct {
 	depths map[*yaml.Node]uint64
 	// compared counts the comparisons of two keys, for the tests.
 	compared int
+	// notScalar is the first key, in the order the document is written,
+	// that is a sequence or a mapping or an alias of one, nil when there is
+	// none (yamlNotScalarKey); notScalarLines is the lines such keys are on,
+	// true for a sequence or a mapping and false for what an alias stands
+	// for, which is where the library says such a key is (ofNotScalarKey).
+	notScalar      *yaml.Node
+	notScalarLines map[int]bool
+}
+
+// notScalarKey takes key, a key that is a sequence or a mapping or an alias
+// of one, as one more such key.
+func (l *yamlLearnt) notScalarKey(key *yaml.Node) {
+	if l.notScalar == nil {
+		l.notScalar, l.notScalarLines = key, map[int]bool{}
+	}
+	if key.Kind != yaml.AliasNode {
+		l.notScalarLines[key.Line] = true
+	} else if _, has := l.notScalarLines[key.Alias.Line]; !has {
+		l.notScalarLines[key.Alias.Line] = false
+	}
 }
 
 // keys is an empty table for the keys of a mapping of so many pairs. It is
@@ -245,7 +268,13 @@ func (l *yamlLearnt) learn(n *yaml.Node, counted bool) {
 		case yaml.ScalarNode:
 		case yaml.AliasNode:
 			l.aliases = true
+			if i%2 == 0 && child.Alias != nil && child.Alias.Kind != yaml.ScalarNode {
+				l.notScalarKey(child)
+			}
 		default:
+			if i%2 == 0 {
+				l.notScalarKey(child)
+			}
 			l.learn(child, counted && (i%2 == 0 || !l.isWrittenTwice(n.Content[i-1])))
 		}
 	}
@@ -479,6 +508,39 @@ func yamlTooDeepAt(line string) error {
 	return model.SameFailureAs(errors.New(library+"line "+line+": "+problem), library+problem)
 }
 
+// yamlNotScalarKey is the error for a document with a mapping key that is
+// a sequence or a mapping, or an alias of one, that the library refused for
+// such a key: key, the first such key in the order the document is written.
+//
+// A decoded document is read as JSON, whose object keys are text, and a
+// sequence or a mapping has no text to be one. The library refuses such a
+// key in words of its own types, `invalid map key: []interface {}{"a"}`,
+// with no line; two of them in one mapping as one key written twice,
+// `mapping key "" already defined`, as it tells keys apart by their text
+// and these have none; and in a mapping that is merged into another it
+// panics (decode.go, mapping). None of these says what is wrong, so the
+// document is refused in words that do (ofNotScalarKey). The failure is
+// recognised without the line, as every error of the library is
+// (yamlFailure).
+func yamlNotScalarKey(key *yaml.Node) error {
+	const library = "yaml: "
+	kind := key
+	if key.Kind == yaml.AliasNode {
+		kind = key.Alias
+	}
+	what := "a sequence"
+	if kind.Kind == yaml.MappingNode {
+		what = "a mapping"
+	}
+	if kind != key {
+		what = "an alias of " + what
+	}
+	problem := func(line string) string {
+		return fmt.Sprintf("the mapping key at line %s is %s; only scalar keys (text, numbers, booleans, null) can be read", line, what)
+	}
+	return model.SameFailureAs(errors.New(library+problem(strconv.Itoa(key.Line))), library+problem(model.MovingMark))
+}
+
 // The ways a document is decoded.
 const (
 	yamlByLibrary = iota
@@ -508,7 +570,7 @@ type yamlReading struct {
 
 // value is the document under root as the YAML library decodes it into
 // plain values, or the error it refuses it with.
-func (r yamlReading) value(root *yaml.Node) (any, error) {
+func (r yamlReading) value(root *yaml.Node) (v any, err error) {
 	learnt := yamlLearnt{large: r.large}
 	learnt.learn(root, true)
 	// A document nested deeper than a response may be is refused before
@@ -516,6 +578,20 @@ func (r yamlReading) value(root *yaml.Node) (any, error) {
 	// where the deepest stack is (deepest).
 	if learnt.tooDeep(root) {
 		return nil, yamlTooDeep()
+	}
+	if learnt.notScalar != nil {
+		// The library panics on a key that is no scalar in a mapping merged
+		// into another (yamlNotScalarKey); a panic of the exporter's own is
+		// the error decodeYAML makes of it.
+		defer func() {
+			if failed := recover(); failed != nil {
+				if at := yamlPanicPlace(); at.library {
+					v, err = nil, yamlNotScalarKey(learnt.notScalar)
+				} else {
+					v, err = nil, yamlPanicked(failed, at)
+				}
+			}
+		}()
 	}
 	switch learnt.way(root) {
 	case yamlByParts:
@@ -527,17 +603,87 @@ func (r yamlReading) value(root *yaml.Node) (any, error) {
 			err = &yaml.TypeError{Errors: walk.problems}
 		}
 		if err != nil {
-			return nil, yamlFailure(err)
+			return nil, learnt.failure(err)
 		}
 		return v, nil
 	case yamlRefused:
-		return nil, learnt.refusal(root)
+		if err := learnt.refusal(root); !learnt.ofNotScalarKey(err) {
+			return nil, err
+		}
+		return nil, yamlNotScalarKey(learnt.notScalar)
 	}
-	var v any
-	if err := root.Decode(&v); err != nil {
-		return nil, yamlFailure(err)
+	// Decoded into a variable of its own, which escapes, so that the result
+	// does not, on the other ways.
+	var decoded any
+	if err := root.Decode(&decoded); err != nil {
+		return nil, learnt.failure(err)
 	}
-	return v, nil
+	return decoded, nil
+}
+
+// failure is the error for a document the library, or the walk in its
+// words, refused with err: yamlFailure's, but for one that is what a key
+// that is no scalar makes of a document that has one (ofNotScalarKey).
+func (l *yamlLearnt) failure(err error) error {
+	if l.ofNotScalarKey(err) {
+		return yamlNotScalarKey(l.notScalar)
+	}
+	return yamlFailure(err)
+}
+
+// ofNotScalarKey reports whether the document has a key that is no scalar
+// and err is what the library makes of such a key, which it reads where it
+// decodes the mapping (decode.go, mapping and merge): a key decoded into an
+// interface is `invalid map key: ` and the value, with no line; two in a
+// mapping are `line N: mapping key "" already defined at line M`, with the
+// lines of the two; and one decoded into text, as a key tagged !!str is and
+// a key of a mapping merged into one of text keys, `line N: cannot
+// unmarshal !!seq into string`, or !!map, or the node's tag followed by its
+// text, which is empty, in back quotes, where for an alias N is the line of
+// what it stands for. A problem is taken as one of such a key only where its
+// lines are those of such keys, so that two keys "" that are text are not:
+// an alias of such a key, which the library tells apart by its anchor's
+// name, is never one written twice.
+//
+// A document with such a key that is refused for anything else, or that
+// decodes, as one does whose key is in a value a merge leaves out, which the
+// library never reads, is refused, or decoded, as it was.
+func (l *yamlLearnt) ofNotScalarKey(err error) bool {
+	if l.notScalar == nil {
+		return false
+	}
+	// line is the line a problem's text starts with, after starts, and the
+	// rest of the text.
+	line := func(text, starts string) (int, string, bool) {
+		rest, ok := strings.CutPrefix(text, starts)
+		digits := 0
+		for ok && digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+			digits++
+		}
+		n, failed := strconv.Atoi(rest[:digits])
+		return n, rest[digits:], ok && digits > 0 && failed == nil
+	}
+	of := func(problem string) bool {
+		n, rest, ok := line(problem, "line ")
+		if _, keyed := l.notScalarLines[n]; !ok || !keyed {
+			return false
+		}
+		if earlier, end, twice := line(rest, `: mapping key "" already defined at line `); twice {
+			return end == "" && l.notScalarLines[n] && l.notScalarLines[earlier]
+		}
+		into, ok := strings.CutSuffix(rest, " into string")
+		return ok && (into == ": cannot unmarshal !!seq" || into == ": cannot unmarshal !!map" || strings.HasPrefix(into, ": cannot unmarshal !!") && strings.HasSuffix(into, " ``"))
+	}
+	var problems *yaml.TypeError
+	if errors.As(err, &problems) {
+		return slices.ContainsFunc(problems.Errors, of)
+	}
+	text := err.Error()
+	if strings.HasPrefix(text, "yaml: invalid map key: ") {
+		return true
+	}
+	listed, ok := strings.CutPrefix(text, "yaml: unmarshal errors:\n  ")
+	return ok && slices.ContainsFunc(strings.Split(listed, "\n  "), of)
 }
 
 // refusal is the error for the document under root, which has keys written

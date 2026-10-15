@@ -154,9 +154,10 @@ func TestOnlyTestsHoldTheShutdownDelay(t *testing.T) {
 var internalLayers = []string{"model", "expr", "fetch", "decode", "transform", "config", "exporter"}
 
 // testOnly are the internal packages only tests import: testutil, with the
-// package within it, alloctest, that measures allocations, and grpctest, the
-// grpc request type's test server.
-var testOnly = map[string]bool{"testutil": true, "grpctest": true}
+// package within it, alloctest, that measures allocations, grpctest, the
+// grpc request type's test server, sshtest, the sshfile request type's, and
+// sqltest, the sql request type's stand-in database.
+var testOnly = map[string]bool{"testutil": true, "grpctest": true, "sshtest": true, "sqltest": true}
 
 // The internal packages stay layered, and the test-only ones stay out of the
 // binary.

@@ -11,10 +11,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -88,91 +86,11 @@ func init() {
 	})
 }
 
-// localFileMethod is the http_method label of a file read, so a file's verbose
-// series are told apart from the per-collector ones, which carry none.
-const localFileMethod = "READ"
-
-// afterLocalFileRead, when set, runs between reading a file and checking
-// whether it changed meanwhile. Only tests set it, to change a file under a
-// read or to hold one up.
-var afterLocalFileRead atomic.Pointer[func(string)]
-
-// localFileAttempts is how often a file that keeps changing under the read is
-// tried before the scrape gives up on it.
-const localFileAttempts = 2
-
 func validateLocalFileRequest(x *model.Collector) error {
-	root := strings.TrimSpace(x.Request.Root)
-	if root == "" {
-		return fmt.Errorf("collector %q request.root is required for request.type localfile: the directory the collector may read files under", x.Name)
-	}
-	if !filepath.IsAbs(root) {
-		return fmt.Errorf("collector %q request.root %q must be an absolute path", x.Name, root)
-	}
-	root = filepath.Clean(root)
-	if root == string(filepath.Separator) {
-		return fmt.Errorf("collector %q request.root must not be the filesystem root; name the narrowest directory that holds the files", x.Name)
-	}
-	x.Request.Root = root
-	if x.Request.MaxAge < 0 {
-		return fmt.Errorf("collector %q request.max_age must not be negative", x.Name)
-	}
-	if HasPathParams(x.Request.Path) {
-		placeholders, err := parsePathParams(x.Request.Path)
-		if err != nil {
-			return fmt.Errorf("collector %q: %w", x.Name, err)
-		}
-		// A default no probe could read a file with (resolveLocalFile) is
-		// refused now, rather than by every probe that leaves the parameter
-		// out.
-		if err := checkPathParamDefaults(x.Name, placeholders, checkLocalFileParamValue); err != nil {
-			return err
-		}
-	}
-	if err := checkLocalFileName("request.path", x.Request.Path); err != nil {
-		return fmt.Errorf("collector %q %w", x.Name, err)
-	}
-	return validateLocalDirectory(x)
-}
-
-// checkLocalFileName requires a path under root: relative, and without ".."
-// reaching above it. Empty is allowed; the target may name the file.
-func checkLocalFileName(what, name string) error {
-	if name == "" {
-		return nil
-	}
-	if strings.ContainsRune(name, 0) {
-		return fmt.Errorf("%s must not contain a NUL byte", what)
-	}
-	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") {
-		return fmt.Errorf("%s %q must be relative to request.root", what, name)
-	}
-	if !filepath.IsLocal(filepath.Clean(name)) {
-		return fmt.Errorf("%s %q leads outside request.root", what, name)
-	}
-	return nil
-}
-
-// checkLocalFileElement requires of a path parameter's value that it is one
-// path element: it may not add directories to the path it is written into.
-func checkLocalFileElement(value string) error {
-	if strings.ContainsAny(value, `/\`) || strings.ContainsRune(value, 0) {
-		return fmt.Errorf("path parameter value %q must be a single file or directory name, without / or \\", value)
-	}
-	return nil
-}
-
-// checkLocalFileParamValue is everything a path parameter's value is held
-// to before a file is read with it, the two steps of resolveLocalFile in
-// one: what any path parameter may not be (bindPathParams), and one path
-// element. An empty value is not refused: the placeholder then adds nothing
-// to the path, as a probe that leaves it out of a path with an empty default
-// has it.
-func checkLocalFileParamValue(name, value string) error {
-	if err := checkPathParamValue(name, value); err != nil {
+	if err := validateFileRequest(x, RequestTypeLocalFile); err != nil {
 		return err
 	}
-	return checkLocalFileElement(value)
+	return validateLocalDirectory(x)
 }
 
 // localFileTargetDir turns a target into a path relative to root. A target
@@ -221,34 +139,7 @@ func resolveLocalFile(target string, c *model.Collector, overrides RequestOverri
 	if err != nil {
 		return "", err
 	}
-	name := c.Request.Path
-	if overrides.PathSet {
-		name = overrides.Path
-		if err := checkLocalFileName("path", name); err != nil {
-			return "", err
-		}
-	} else if bind && HasPathParams(name) {
-		bound, values, err := bindPathParams(name, overrides.Params)
-		if err != nil {
-			return "", err
-		}
-		for i, value := range values {
-			// "." and ".." are already refused by bindPathParams.
-			if err := checkLocalFileElement(value); err != nil {
-				return "", err
-			}
-			bound = strings.Replace(bound, pathToken(i), value, 1)
-		}
-		name = bound
-	}
-	file := filepath.Join(dir, name)
-	if file == "." || file == "" {
-		return "", errors.New("no file to read: set request.path, or give the probe a target naming a file under request.root")
-	}
-	if !filepath.IsLocal(file) {
-		return "", fmt.Errorf("file %q leads outside request.root %q", file, c.Request.Root)
-	}
-	return file, nil
+	return fileUnderRoot(dir, c, overrides, bind, "no file to read: set request.path, or give the probe a target naming a file under request.root")
 }
 
 // localFileLabel is the url label of a file read: its file:// URL, with path
@@ -397,29 +288,6 @@ func fetchLocalFile(ctx context.Context, target string, c *model.Collector, over
 	return resp, nil
 }
 
-// checkMaxAge refuses a file older than request.max_age.
-func checkMaxAge(c *model.Collector, full string, modified time.Time) error {
-	if maxAge := time.Duration(c.Request.MaxAge); maxAge > 0 {
-		if age := time.Since(modified); age > maxAge {
-			return model.Errorf("file %s was last modified %s ago, longer than request.max_age %s; whatever writes it has stopped", full, model.Elapsed(age.Round(time.Second)), maxAge)
-		}
-	}
-	return nil
-}
-
-// localFileResponse presents a file read as a response: no status for rules
-// (the status gauge reads 200), and Content-Type from the extension,
-// Content-Length and Last-Modified.
-func localFileResponse(name string, body []byte, info fs.FileInfo, c *model.Collector) *HTTPResponse {
-	headers := http.Header{}
-	if contentType := localFileContentType(name); contentType != "" {
-		headers.Set("Content-Type", contentType)
-	}
-	headers.Set("Content-Length", strconv.Itoa(len(body)))
-	headers.Set("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
-	return &HTTPResponse{StatusCode: http.StatusOK, NoStatus: true, Headers: headers, Body: body, Collector: c.Name}
-}
-
 // readLocalFile reads root/name, confined to root, and only a regular file. A
 // file whose size or modification time moved while it was read is read again.
 func readLocalFile(rootDir, name string, limit int64) ([]byte, fs.FileInfo, error) {
@@ -433,112 +301,85 @@ func readLocalFile(rootDir, name string, limit int64) ([]byte, fs.FileInfo, erro
 
 // readRootFile reads name in an opened root, as readLocalFile does.
 func readRootFile(root *os.Root, rootDir, name string, limit int64) ([]byte, fs.FileInfo, error) {
-	full := filepath.Join(rootDir, name)
-	for attempt := 1; ; attempt++ {
-		before, err := root.Stat(name)
-		if err != nil {
-			return nil, nil, localFileError(full, err)
-		}
-		if !before.Mode().IsRegular() {
-			return nil, nil, fmt.Errorf("%s is not a regular file (%s)", full, fileKind(before.Mode()))
-		}
-		body, after, err := readOpenedFile(root, name, full, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		if after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) {
-			return body, after, nil
-		}
-		if attempt == localFileAttempts {
-			return nil, nil, fmt.Errorf("%s changed while it was read, %d times; write it to a temporary file in the same directory and rename it into place", full, localFileAttempts)
-		}
-	}
+	return readSourceFile(rootSource{root}, rootDir, name, limit)
 }
 
+// readOpenedFile opens name in root and reads it (readSourceOpened).
 func readOpenedFile(root *os.Root, name, full string, limit int64) ([]byte, fs.FileInfo, error) {
-	// Non-blocking, so a named pipe swapped in after the check above cannot
-	// hold the open; for a regular file the flag changes nothing.
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, nil, localFileError(full, err)
-	}
-	defer func() { _ = f.Close() }()
-	opened, err := f.Stat()
-	if err != nil {
-		return nil, nil, localFileError(full, err)
-	}
-	if !opened.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("%s is not a regular file (%s)", full, fileKind(opened.Mode()))
-	}
-	// The file's size is how long a buffer to read it into, and no more
-	// than that: a file that grew or shrank since is read to its end, and a
-	// file that gives no size, as those of /proc do, as a body of unknown
-	// length.
-	body, err := readBody(f, limit, opened.Size())
-	if err != nil {
-		return nil, nil, localFileError(full, err)
-	}
-	if int64(len(body)) > limit {
-		return nil, nil, model.MarkError(fmt.Errorf("file %s: response size exceeds limit %d", full, limit), model.ErrLimitExceeded)
-	}
-	if hook := afterLocalFileRead.Load(); hook != nil {
-		(*hook)(full)
-	}
-	after, err := f.Stat()
-	if err != nil {
-		return nil, nil, localFileError(full, err)
-	}
-	return body, after, nil
+	return readSourceOpened(rootSource{root}, name, full, limit)
 }
 
-func localFileError(full string, err error) error {
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("file %s does not exist", full)
-	case errors.Is(err, fs.ErrPermission):
-		return fmt.Errorf("file %s cannot be read by the exporter: permission denied", full)
-	case strings.Contains(err.Error(), "escapes from parent"):
-		return fmt.Errorf("file %s leads outside request.root through a symbolic link", full)
+// rootSource reads files from an opened root on the exporter's own
+// filesystem, which the operating system confines every name to.
+type rootSource struct{ root *os.Root }
+
+func (s rootSource) Stat(name string) (fs.FileInfo, error) { return s.root.Stat(name) }
+
+func (s rootSource) OpenFile(name string) (sourceFile, error) {
+	// Non-blocking, so a named pipe swapped in after the check of its kind
+	// (readSourceFile) cannot hold the open; for a regular file the flag
+	// changes nothing.
+	f, err := s.root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Errorf("reading %s: %w", full, err)
+	return f, nil
 }
 
-func fileKind(mode fs.FileMode) string {
-	switch {
-	case mode.IsDir():
-		return "a directory"
-	case mode&fs.ModeNamedPipe != 0:
-		return "a named pipe"
-	case mode&fs.ModeSocket != 0:
-		return "a socket"
-	case mode&fs.ModeDevice != 0:
-		return "a device"
+func (s rootSource) OpenDir(name string) (sourceDir, error) {
+	d, err := s.root.Open(name)
+	if err != nil {
+		return nil, err
 	}
-	return "not a regular file"
+	return d, nil
 }
 
-// localFileContentType lets decoder.type auto pick the decoder a file's
-// extension implies. .prom is the textfile collector's Prometheus text
-// format, and .graphite and .carbon carbon's plaintext lines, which the
-// graphite decoder reads (decode/graphite.go); text/x-graphite is the
-// exporter's own name for them, since they have no registered type. Anything
-// else is detected from its content.
-func localFileContentType(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".json":
-		return "application/json"
-	case ".yaml", ".yml":
-		return "application/yaml"
-	case ".xml":
-		return "application/xml"
-	case ".csv":
-		return "text/csv"
-	case ".html", ".htm":
-		return "text/html"
-	case ".prom":
-		return "text/plain; version=0.0.4"
-	case ".graphite", ".carbon":
-		return GraphiteContentType
+// fetchLocalDirectory reads the directory a probe of a collector with
+// request.files names (localfile_directory.go).
+func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides) (*HTTPResponse, error) {
+	start := time.Now()
+	dir, err := localFileTargetDir(c, target)
+	if err != nil {
+		return nil, err
 	}
-	return ""
+	if overrides.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
+		defer cancel()
+	}
+	full := filepath.Join(c.Request.Root, dir)
+	// As for one file, the reading goes on in its own goroutine, and a read the
+	// probe stops waiting for is one of the collector's abandoned reads until
+	// the filesystem answers.
+	started, err := localFileReads.start(c.Name)
+	if err != nil {
+		return nil, err
+	}
+	progress := &directoryProgress{}
+	done := make(chan error, 1)
+	go func() {
+		defer started.done()
+		done <- readLocalDirectory(c, dir, progress)
+	}()
+	read, err := awaitDirectory(ctx, full, progress, done, started.abandon)
+	if err != nil {
+		return nil, err
+	}
+	for i := range read.Files {
+		if f := read.Files[i].Response; f != nil {
+			f.Target = target
+		}
+	}
+	return &HTTPResponse{StatusCode: 200, NoStatus: true, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: read}, nil
+}
+
+// readLocalDirectory reads the matching files of root/dir into progress
+// (readSourceDirectory), confined to root by the operating system.
+func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgress) error {
+	root, err := os.OpenRoot(c.Request.Root)
+	if err != nil {
+		return fmt.Errorf("opening request.root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	return readSourceDirectory(rootSource{root}, c, dir, progress)
 }

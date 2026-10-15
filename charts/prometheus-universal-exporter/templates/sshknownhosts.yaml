@@ -1,0 +1,25 @@
+{{- if and .Values.sshAuth .Values.sshAuth.enabled .Values.sshAuth.knownHosts }}
+{{- /* The known_hosts lines of sshAuth.knownHosts, which the Deployment
+       projects into sshAuth.mountPath beside the Secret's keys. They are
+       public keys, so a ConfigMap holds them; its content is part of the
+       pods' checksum/config, so a changed host key rolls them. */}}
+{{- $content := .Values.sshAuth.knownHosts | toString }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prometheus-universal-exporter.sshKnownHostsName" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+{{- /* Written as the configuration ConfigMap writes a file: see textFile. */}}
+{{- if eq (include "prometheus-universal-exporter.textFile" $content) "true" }}
+data:
+  known_hosts: |2{{ if not (hasSuffix "\n" $content) }}-{{ end }}
+{{ $content | trimSuffix "\n" | indent 4 }}
+{{- else }}
+binaryData:
+  known_hosts: {{ $content | b64enc | quote }}
+{{- end }}
+{{- end }}

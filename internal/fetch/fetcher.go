@@ -46,6 +46,17 @@ type HTTPResponse struct {
 	// Directory is set instead of Body by a localfile collector reading a
 	// directory: every file it read, each to be decoded on its own.
 	Directory *DirectoryRead
+	// Rows is a sql collector's answer, the rows its statement returned,
+	// each a map of its columns to their values, a column left out where
+	// its value is NULL; Body is the same rows written as JSON, for what
+	// shows an answer. The decoder hands Rows to the transforms as they are
+	// (requesttype_sql.go).
+	Rows []any
+	// Columns is the names of a sql collector's columns, in the statement's
+	// order, a column NULL in every row among them, which no row of Rows
+	// has: a csv rule that reads one is then reading empty cells, not a
+	// column the answer lacks.
+	Columns []string
 }
 
 // Status is the answer's status as rules read it, $status in jq and yq and
@@ -102,6 +113,17 @@ type RequestOverrides struct {
 	// parameter sets them.
 	AcceptStatus []string
 	AcceptCodes  []string
+	// SSHUsername and the SSH credential files are a static target's
+	// request.username, private_key_file, passphrase_file and
+	// password_file, replacing an sshfile collector's, or a sql
+	// collector's; no probe parameter sets them.
+	SSHUsername       string
+	SSHPrivateKeyFile string
+	SSHPassphraseFile string
+	SSHPasswordFile   string
+	// SQLConnections is a static target's request.connections, whose keys
+	// replace a sql collector's; no probe parameter sets it.
+	SQLConnections *model.SQLConnections
 	// formPost sends the query as a form body with POST instead of in the
 	// URL, for a graphite request whose expressions are too long for a URL
 	// (requesttype_graphite.go). Only the type's own fetch sets it.
@@ -500,6 +522,90 @@ func checkHeaderValue(value string) error {
 		if r < 0x20 && r != '\t' || r == 0x7f {
 			return fmt.Errorf("has the control character %q in its value, which a header may not hold", r)
 		}
+	}
+	return nil
+}
+
+// The reasons a header is never forwarded from a probe (UnforwardableReason).
+const (
+	connectionHeader = "it describes the connection to the exporter, not the request to the target"
+	encodingHeader   = "the exporter asks the target for gzip itself and decompresses the answer, which it would not do with the header set; Prometheus sends Accept-Encoding: gzip on every scrape"
+)
+
+// unforwardableHeaders are the headers a probe never forwards, whatever
+// request.forward_headers lists, by their canonical names, with why:
+// Authorization has request.forward_authorization of its own,
+// Accept-Encoding is the exporter's to set, and the rest describe the
+// connection to the exporter, not the request to the target. Neither is any
+// Proxy- header, whatever follows the dash (UnforwardableReason).
+var unforwardableHeaders = map[string]string{
+	"Accept-Encoding":     encodingHeader,
+	"Authorization":       "the probe's Authorization is forwarded by request.forward_authorization: true alone",
+	"Connection":          connectionHeader,
+	"Content-Length":      connectionHeader,
+	"Host":                connectionHeader,
+	"Proxy-Authenticate":  connectionHeader,
+	"Proxy-Authorization": connectionHeader,
+	"Te":                  connectionHeader,
+	"Trailer":             connectionHeader,
+	"Transfer-Encoding":   connectionHeader,
+	"Upgrade":             connectionHeader,
+}
+
+// UnforwardablePrefix starts the name of every header that is never
+// forwarded besides the ones listed (UnforwardableHeaderNames).
+const UnforwardablePrefix = "Proxy-"
+
+// UnforwardableReason says why the header name, canonical, is never
+// forwarded from a probe, or "" when it may be: the probe's forwarding
+// (the exporter's forwardableHeaders) and the check of
+// request.forward_headers at load (checkForwardHeaders) ask it alike.
+func UnforwardableReason(name string) string {
+	if reason, ok := unforwardableHeaders[name]; ok {
+		return reason
+	}
+	if strings.HasPrefix(name, UnforwardablePrefix) {
+		return connectionHeader
+	}
+	return ""
+}
+
+// UnforwardableHeaderNames are the names of the headers a probe never
+// forwards but for those starting with UnforwardablePrefix, canonical and
+// sorted, for the schemas to refuse in request.forward_headers as the
+// configuration does.
+func UnforwardableHeaderNames() []string {
+	return model.SortedKeys(unforwardableHeaders)
+}
+
+// lineBreakAdvice ends the message of a credential refused for a control
+// character: the usual one is the line break that the Secret or the
+// environment variable it came from ends with, which --config.expand-env
+// keeps, and which the file form of the key trims.
+const lineBreakAdvice = "; a line break at its end is usually one the Secret or the environment variable it came from ends with: remove it, or read the credential from a file with the key's _file form, which trims it"
+
+// checkInlineCredentials refuses a credential written in the configuration
+// or a static target that holds a control character other than tab. A
+// bearer_token is sent as it is, in the Authorization header or the
+// authorization metadata, which Go refuses to send with such a character,
+// failing every scrape. A basic_auth username or password is sent encoded,
+// but may hold no control character either (RFC 7617): one there would fail
+// every scrape at the target instead; nor may a username hold a colon
+// (CheckBasicUsername). The value itself is never shown.
+func checkInlineCredentials(bearerToken string, basic *model.BasicAuth) error {
+	if err := checkHeaderValue(bearerToken); err != nil {
+		return fmt.Errorf("request.bearer_token %w%s", err, lineBreakAdvice)
+	}
+	if basic == nil {
+		return nil
+	}
+	for _, field := range []struct{ key, value string }{{"username", basic.Username}, {"password", basic.Password}} {
+		if err := checkHeaderValue(field.value); err != nil {
+			return fmt.Errorf("request.basic_auth.%s %s, which a Basic credential may not hold%s", field.key, strings.TrimSuffix(err.Error(), ", which a header may not hold"), lineBreakAdvice)
+		}
+	}
+	if err := CheckBasicUsername(basic.Username); err != nil {
+		return fmt.Errorf("request.basic_auth.username %w", err)
 	}
 	return nil
 }

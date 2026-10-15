@@ -82,12 +82,13 @@ func TestSchemaAndExporterAgreeOnTheCSVDelimiter(t *testing.T) {
 	}
 }
 
-// sizedCollector is a configuration of one collector whose
-// limits.max_response_bytes is as written: a size that is held to nothing
-// but being one. limits.max_output_bytes, which the sizes below were first
-// written at, has a least of its own (limitedCollector).
-func sizedCollector(size string) string {
-	return limitedCollector("max_response_bytes", size)
+// sizedDocument is a configuration whose otlp.batch_max_bytes, in a block
+// that is switched off, is as written: a size that is held to nothing but
+// being one, to both. limits.max_output_bytes, which the sizes below were
+// first written at, and limits.max_response_bytes, which they were written
+// at next, have a least of their own (limitedCollector).
+func sizedDocument(size string) string {
+	return "otlp:\n  enabled: false\n  batch_max_bytes: " + size + "\n" + testutil.MinimalConfig
 }
 
 // limitedCollector is a configuration of one collector whose limit of the
@@ -123,7 +124,7 @@ func TestSchemaAndExporterAgreeOnSizes(t *testing.T) {
 		".inf": false, "+.inf": false, "-.inf": false, ".nan": false, "1e400": false, "0x1p3": false,
 		`"1e3"`: false, "'1E3'": false, "'1e+3'": false, `"1.0"`: false, "'1.'": false, "'2.5e2'": false, "'+1000'": false, "'0e0'": false, "!!str 1e3": false,
 	} {
-		agree(t, schema, "max_response_bytes: "+written, sizedCollector(written), accepted)
+		agree(t, schema, "batch_max_bytes: "+written, sizedDocument(written), accepted)
 	}
 	for written, message := range map[string]string{
 		"8388608TiB":              `size "8388608TiB" is too large; a size is under 8EiB, which is 2^63 bytes`,
@@ -141,12 +142,12 @@ func TestSchemaAndExporterAgreeOnSizes(t *testing.T) {
 		"9007199254740992.5":     `size "9007199254740992.5" is not a whole number of bytes`,
 		"1e-400":                 `size "1e-400" is not a number of bytes or a number with a unit`,
 	} {
-		loadersAlone(t, schema, "max_response_bytes: "+written, sizedCollector(written), message)
+		loadersAlone(t, schema, "batch_max_bytes: "+written, sizedDocument(written), message)
 	}
 	// A whole number under 0 is refused by both, and by the exporter as
 	// negative however it is written.
 	for _, written := range []string{"-1", "-1e3", "-1.0", "-1e19"} {
-		refusedByBoth(t, schema, "max_response_bytes: "+written, sizedCollector(written), "size "+written+" is negative; a size is a number of bytes from 0, or a number with a unit such as 10MiB")
+		refusedByBoth(t, schema, "batch_max_bytes: "+written, sizedDocument(written), "size "+written+" is negative; a size is a number of bytes from 0, or a number with a unit such as 10MiB")
 	}
 }
 
@@ -277,6 +278,76 @@ func TestSchemaAndExporterAgreeOnTheOTLPInterval(t *testing.T) {
 	agree(t, schema, "otlp.interval: -1s, switched off", otlp(false, "-1s"), true)
 	if description, _ := schema["properties"].(map[string]any)["otlp"].(map[string]any)["properties"].(map[string]any)["interval"].(map[string]any)["description"].(string); !strings.Contains(description, "At least 1s, which the exporter checks when the configuration loads") {
 		t.Errorf("the description of otlp.interval does not say who checks its least: %q", description)
+	}
+}
+
+// request.max_response_bytes and limits.max_response_bytes are sizes that,
+// when set, are at least 1KiB (config.MinResponseBytes), to the exporter and,
+// where the size is written as a number, to the schema, however the number
+// is written: 1, 10 and 1023 are refused by both, a limit whose unit was left
+// out, and 1024, 0, which is the default, and every size with a unit past
+// the least are taken by both. A size written as text under the least is the
+// exporter's alone to refuse, as for limits.max_output_bytes.
+func TestSchemaAndExporterAgreeOnTheLeastResponseLimit(t *testing.T) {
+	schema := loadSchema(t)
+	inRequest := func(written string) string {
+		return strings.Replace(limitedCollector("max_metrics", "0"), "    request: {type: http}\n", "    request: {type: http, max_response_bytes: "+written+"}\n", 1)
+	}
+	for key, document := range map[string]func(string) string{
+		"limits.max_response_bytes":  func(written string) string { return limitedCollector("max_response_bytes", written) },
+		"request.max_response_bytes": inRequest,
+	} {
+		tooSmall := func(size int) string {
+			return fmt.Sprintf(`collector "sized" %s is %d bytes, under the least, 1KiB; a size without a unit is a number of bytes, so write the unit, such as 10MiB, or leave it out, or 0, for the default, 10MiB`, key, size)
+		}
+		for _, written := range []string{"0", "0.0", "-0", "1024", "1.024e3", "1024.0", "0x400", "1KiB", "1MiB", "'1024'", "10MiB", "0B", "0.0001KiB"} {
+			agree(t, schema, key+": "+written, document(written), true)
+		}
+		for written, size := range map[string]int{"1": 1, "10": 10, "1e1": 10, "100": 100, "1023": 1023, "1.023e3": 1023, "+1023": 1023} {
+			refusedByBoth(t, schema, key+": "+written, document(written), tooSmall(size))
+		}
+		for written, size := range map[string]int{"'10'": 10, "10B": 10, "1kB": 1000, "0.5KiB": 512, "1023 B": 1023} {
+			loadersAlone(t, schema, key+": "+written, document(written), tooSmall(size))
+		}
+	}
+}
+
+// limits.script_timeout is a duration to both, and its least, 1ms, is the
+// exporter's to check, as otlp.interval's is: a duration is text to a
+// schema. 0 is the default, to both.
+func TestSchemaAndExporterAgreeOnTheLeastScriptTimeout(t *testing.T) {
+	schema := loadSchema(t)
+	for written, accepted := range map[string]bool{"0": true, "0s": true, "1ms": true, "1000us": true, "100ms": true, "5s": true, "soon": false, "5": false, "-1ms": false} {
+		agree(t, schema, "script_timeout: "+written, limitedCollector("script_timeout", written), accepted)
+	}
+	for written, shown := range map[string]string{"1ns": "1ns", "999us": "999µs", "0.5ms": "500µs", "999999ns": "999.999µs"} {
+		loadersAlone(t, schema, "script_timeout: "+written, limitedCollector("script_timeout", written), `collector "sized" limits.script_timeout is `+shown+`, under the least, 1ms`)
+	}
+	if description, _ := schemaNodeOf(schema, "collectors", "limits", "script_timeout")["description"].(string); !strings.Contains(description, "At least 1ms, which the exporter checks when the configuration loads") {
+		t.Errorf("the description of limits.script_timeout does not say who checks its least: %q", description)
+	}
+}
+
+// schemaNodeOf is the node of a collector's key in the configuration's
+// schema: of the collector, under block, the key.
+func schemaNodeOf(schema map[string]any, collectors, block, key string) map[string]any {
+	collector := schema["properties"].(map[string]any)[collectors].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	node, _ := collector[block].(map[string]any)["properties"].(map[string]any)[key].(map[string]any)
+	return node
+}
+
+// The names of otlp.headers are header names to both once the block is
+// switched on, an HTTP token that is not Accept-Encoding, and are kept
+// unchecked by both in a block that is switched off. The schema took any
+// name, switched on too.
+func TestSchemaAndExporterAgreeOnTheOTLPHeaderNames(t *testing.T) {
+	schema := loadSchema(t)
+	otlp := func(enabled bool, name string) string {
+		return fmt.Sprintf("otlp:\n  enabled: %v\n  endpoint: http://collector.invalid:4318/v1/metrics\n  headers: {%s: v}\n", enabled, name) + testutil.MinimalConfig
+	}
+	for name, accepted := range map[string]bool{"X-Scope-OrgID": true, "api-key": true, "1": true, `"X Bad"`: false, `"X:Bad"`: false, `""`: false, "accept-encoding": false, `"X-Tenant{{"`: false} {
+		agree(t, schema, "otlp.headers "+name, otlp(true, name), accepted)
+		agree(t, schema, "otlp.headers "+name+", switched off", otlp(false, name), true)
 	}
 }
 

@@ -151,7 +151,7 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 	testutil.WriteIn(t, root, "c.prom", small)
 	testutil.WriteIn(t, root, "d.prom", small)
 	c := dirCollector("dir", root, "*.prom")
-	c.Request.MaxResponseBytes = 1000
+	c.Request.MaxResponseBytes = 1024
 	c.Request.MaxTotalBytes = model.ByteSize(3*len(small) - 1)
 	server := fileServer(t, c)
 	logs := testutil.CaptureLogs(t)
@@ -163,7 +163,7 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 		`localfile_scrape_error{file="d.prom"} 1`,
 		`localfile_mtime_seconds{file="b-huge.prom"}`,
 	)
-	for _, want := range []string{"more than the collector's limit of 1000 for one file", "past request.max_total_bytes"} {
+	for _, want := range []string{"more than the collector's limit of 1024 for one file", "past request.max_total_bytes"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the log is missing %q:\n%s", want, logs.String())
 		}

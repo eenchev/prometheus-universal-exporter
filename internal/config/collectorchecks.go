@@ -58,6 +58,43 @@ func checkLimits(x *model.Collector) error {
 	return nil
 }
 
+// MinResponseBytes is the least a response limit that is set may be,
+// request.max_response_bytes or limits.max_response_bytes: no answer
+// needs less than a byte, so no smaller limit is wrong in itself, but a
+// size is a number of bytes when it has no unit, and a limit under a
+// kibibyte is one whose unit was left out, max_response_bytes: 10 for
+// 10MiB, which fails every scrape with an answer over ten bytes.
+const MinResponseBytes = 1 << 10
+
+// MinScriptTimeout is the least limits.script_timeout that is set may be.
+// A script's time runs from the line its worker writes once it has read the
+// request to the answer it writes back, and the two lines going through the
+// pipes take some tens of microseconds on an idle machine: under a
+// millisecond, the time measures them and the machine's load more than the
+// script, and even a script that does nothing times out by chance.
+const MinScriptTimeout = time.Millisecond
+
+// checkLeastLimits refuses a response limit under MinResponseBytes and a
+// script_timeout under MinScriptTimeout. 0, like the key left out, is the
+// default, as for every limit.
+func checkLeastLimits(x *model.Collector) error {
+	for _, limit := range []struct {
+		key   string
+		value model.ByteSize
+	}{
+		{"request.max_response_bytes", x.Request.MaxResponseBytes},
+		{"limits.max_response_bytes", x.Limits.MaxResponseBytes},
+	} {
+		if limit.value > 0 && limit.value < MinResponseBytes {
+			return fmt.Errorf("collector %q %s is %d bytes, under the least, 1KiB; a size without a unit is a number of bytes, so write the unit, such as 10MiB, or leave it out, or 0, for the default, 10MiB", x.Name, limit.key, limit.value)
+		}
+	}
+	if t := time.Duration(x.Limits.ScriptTimeout); t > 0 && t < MinScriptTimeout {
+		return fmt.Errorf("collector %q limits.script_timeout is %s, under the least, 1ms, in which even a script that does nothing may not answer; leave it out, or 0, for the default, 100ms", x.Name, t)
+	}
+	return nil
+}
+
 // labelPath is a label of a metric rule in a field's path.
 var labelPath = regexp.MustCompile(`^labels\[(\d+)\]\.`)
 
@@ -80,7 +117,7 @@ func checkPlaceholdersAreFilled(x *model.Collector) error {
 	filled := fetch.TemplatedFields(x)
 	var errs []error
 	refuse := func(where string) {
-		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
+		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, a sql collector's database and args, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
 	}
 	collector := reflect.ValueOf(x).Elem()
 	for i := 0; i < collector.NumField(); i++ {

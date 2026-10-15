@@ -702,7 +702,10 @@ func yamlOtherError(root *yaml.Node, library yamlOutcome) string {
 // written twice and a large mapping is refused without the library: with
 // the library's error
 // where that is of keys written twice alone and the document has no alias
-// and no merge, and with an error of its keys written twice otherwise.
+// and no merge, and with an error of its keys written twice otherwise. A
+// document the library refused, or failed on, for a key that is a sequence
+// or a mapping is refused for that key in words of its own
+// (yamlNotScalarKey), on every way.
 //
 // Under the race detector 600 documents are drawn and the files are cut off
 // after every twelfth line, a thousand documents in all, each still decoded
@@ -739,6 +742,14 @@ func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMappin
 			}
 		})
 		mostHands = max(mostHands, hands)
+		// A key that is a sequence or a mapping, which the library refused
+		// or failed on, is refused in words of its own, whatever the way;
+		// where the walk meets another error first, that is held to what the
+		// library made of the document, below.
+		if now := library.keyRefusalNow(root); got.same(now) && !got.same(library) {
+			counted["refused for a key that is a sequence or a mapping"]++
+			return
+		}
 		switch way := yamlWayOf(root, large); {
 		case way == yamlByLibrary:
 			counted["by the library"]++
@@ -770,6 +781,13 @@ func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMappin
 			if !got.same(library) {
 				t.Fatalf("%q, large past %d keys, is in parts\n%s\nand by the library alone\n%s", document, large, got.text(), library.text())
 			}
+		case got.err != nil && strings.HasPrefix(got.err.Error(), "yaml: the mapping key at line "):
+			// Keys that are sequences or mappings written twice, which are
+			// refused for what they are, where the library met another error.
+			if before := yamlRefusalBefore(root, large); !got.same(yamlOutcome{err: yamlKeyRefusalNow([]byte(document), before)}) {
+				t.Fatalf("%q, large past %d keys, is\n%s\nand was refused with %v", document, large, got.text(), before)
+			}
+			counted["refused for keys that are sequences or mappings written twice"]++
 		case got.err == nil || !onlyKeysWrittenTwice(got.err) || got.failed != nil:
 			t.Fatalf("%q, large past %d keys, has keys written twice and is\n%s", document, large, got.text())
 		case got.same(library):
@@ -824,17 +842,17 @@ func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMappin
 	t.Logf("%d documents, of at most %d parts: %v", len(documents), mostHands, counted)
 	leasts := map[string]int{
 		"not parsed": 100, "by the library": 30000, "beside a mapping of 129 keys": 5000, "in parts": 50000, "in parts and refused": 5000,
-		"in parts, where the library fails outright": 10, "in parts, refused with another error than the library's": 4,
-		"refused as the library does": 3000, "refused otherwise: the library met another error": 100, "refused otherwise: an alias or a merge": 100,
+		"in parts, where the library fails outright": 2, "in parts, refused with another error than the library's": 4,
+		"refused for a key that is a sequence or a mapping": 5000, "refused as the library does": 3000, "refused otherwise: the library met another error": 100, "refused otherwise: an alias or a merge": 100,
 		"drawn: error": 3000, "drawn: map[string]interface": 5000, "drawn: map[interface": 2000, "drawn: []interface": 2000,
 	}
 	if raceDetector {
 		// The same outcomes, of the fewer documents; those the written
 		// documents make are as many as they were.
 		leasts = map[string]int{
-			"not parsed": 100, "by the library": 1200, "beside a mapping of 129 keys": 80, "in parts": 1400, "in parts and refused": 250,
-			"in parts, where the library fails outright": 10, "in parts, refused with another error than the library's": 4,
-			"refused as the library does": 100, "refused otherwise: the library met another error": 6, "refused otherwise: an alias or a merge": 4,
+			"not parsed": 100, "by the library": 1200, "beside a mapping of 129 keys": 80, "in parts": 1400, "in parts and refused": 200,
+			"in parts, where the library fails outright": 2, "in parts, refused with another error than the library's": 4,
+			"refused for a key that is a sequence or a mapping": 100, "refused as the library does": 100, "refused otherwise: the library met another error": 6, "refused otherwise: an alias or a merge": 4,
 			"drawn: error": 80, "drawn: map[string]interface": 100, "drawn: map[interface": 80, "drawn: []interface": 80,
 		}
 	}
@@ -1042,7 +1060,9 @@ func TestKeysWrittenTwiceInALargeYAMLMappingAreRefusedAsTheLibraryRefusedThem(t 
 		if way := yamlWayOf(root, yamlLargeMapping); way != yamlRefused {
 			t.Fatalf("%.200q is decoded the way %d", document, way)
 		}
-		library, got := yamlByTheLibraryAlone(root), yamlWith(root, yamlLargeMapping, func(*yaml.Node) { t.Fatalf("%.200q is handed to the library", document) })
+		// A key that is a sequence or a mapping written twice has since been
+		// refused in words of its own.
+		library, got := yamlByTheLibraryAlone(root).keyRefusalNow(root), yamlWith(root, yamlLargeMapping, func(*yaml.Node) { t.Fatalf("%.200q is handed to the library", document) })
 		if library.err == nil || !got.same(library) {
 			t.Fatalf("%.300q is refused with\n%.1500s\nand by the library with\n%.1500s", document, got.text(), library.text())
 		}

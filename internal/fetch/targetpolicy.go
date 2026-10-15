@@ -234,6 +234,12 @@ func (p *targetPolicy) hasAddressRules() bool {
 // allowed it. Without resolve the addresses are left to the connection
 // (checkConnection).
 func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bool, error) {
+	return p.checkHost(ctx, host, resolve, false)
+}
+
+// checkHost is check, and with ownDial the check of a driver that dials by
+// itself (checkOwnDial), for which a failed lookup fails.
+func (p *targetPolicy) checkHost(ctx context.Context, host string, resolve, ownDial bool) (bool, error) {
 	host, err := canonicalHost(host)
 	if err != nil {
 		return false, err
@@ -251,6 +257,9 @@ func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bo
 		return nameAllowed, nil
 	}
 	addrs, err := resolveHost(ctx, host)
+	if err != nil && ownDial {
+		return nameAllowed, fmt.Errorf("%s has to be looked up here to hold its addresses to the target lists before the driver, which dials by itself, connects, and the lookup failed: %w", host, err)
+	}
 	if err != nil {
 		return nameAllowed, p.unresolved(host, nameAllowed, err)
 	}

@@ -85,8 +85,8 @@ func TestTheImageUserIsNumeric(t *testing.T) {
 	}
 }
 
-// tools/request-type-tags.sh turns REQUEST_TYPES into build tags for the
-// Dockerfile and the Makefile.
+// tools/request-type-tags.sh turns REQUEST_TYPES, and SQL_DRIVERS, into
+// build tags for the Dockerfile and the Makefile.
 func TestRequestTypeTagsScript(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
@@ -120,6 +120,41 @@ func TestRequestTypeTagsScript(t *testing.T) {
 			t.Errorf("%q: got %q err=%v stderr=%q, want it refused", list, got, err, stderr)
 		}
 	}
+	// A second list adds the sql type's opt-in drivers: to every type, or
+	// to a build whose types include sql, snowflake with gosnowflake's
+	// minicore_disabled, once. A default driver, one that does not exist and
+	// drivers for a build without sql are refused.
+	withDrivers := func(types, drivers string) (string, string, error) {
+		cmd := exec.Command("sh", "tools/request-type-tags.sh", types, drivers)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return strings.TrimSpace(stdout.String()), stderr.String(), err
+	}
+	for lists, want := range map[[2]string]string{
+		{"", ""}:                        "",
+		{"", "oracle"}:                  "sql_driver_oracle",
+		{"", "oracle,snowflake,oracle"}: "sql_driver_oracle,sql_driver_snowflake,minicore_disabled",
+		{"", "snowflake,snowflake"}:     "sql_driver_snowflake,minicore_disabled",
+		{"sql", "snowflake"}:            "select_request_types,request_type_sql,sql_driver_snowflake,minicore_disabled",
+		{"sql", "vertica"}:              "select_request_types,request_type_sql,sql_driver_vertica",
+		{"http,sql", "clickhouse"}:      "select_request_types,request_type_http,request_type_sql,sql_driver_clickhouse",
+		{"http", ""}:                    "select_request_types,request_type_http",
+	} {
+		got, stderr, err := withDrivers(lists[0], lists[1])
+		if err != nil || got != want {
+			t.Errorf("%q: got %q err=%v %s, want %q", lists, got, err, stderr, want)
+		}
+	}
+	for lists, want := range map[[2]string]string{
+		{"", "mysql"}:      `the sql driver "mysql" is built in with the sql request type and needs no SQL_DRIVERS entry`,
+		{"", "db2"}:        `no sql driver "db2"`,
+		{"http", "oracle"}: `SQL drivers "oracle" need the sql request type, which the request types "http" leave out`,
+	} {
+		if got, stderr, err := withDrivers(lists[0], lists[1]); err == nil || !strings.Contains(stderr, want) {
+			t.Errorf("%q: got %q err=%v stderr=%q, want %q", lists, got, err, stderr, want)
+		}
+	}
 }
 
 func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
@@ -127,7 +162,7 @@ func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
 	if err != nil {
 		t.Skipf("no Dockerfile to check: %v", err)
 	}
-	for _, want := range []string{"ARG REQUEST_TYPES\n", `sh tools/request-type-tags.sh "${REQUEST_TYPES}"`, `-tags "${tags}"`} {
+	for _, want := range []string{"ARG REQUEST_TYPES\n", "ARG SQL_DRIVERS\n", `sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}"`, `-tags "${tags}"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("the Dockerfile is missing %q", want)
 		}

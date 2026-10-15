@@ -90,7 +90,8 @@ func TestTheCheckOfTheLimitsIsWhatItWasButForAnOutputLimitUnderTheLeast(t *testi
 // The schemas of the configuration and of a collector file say the least of
 // limits.max_output_bytes as the loader has it: beside what a size is held
 // to, a number is 0 or at least transform.MinPythonOutputBytes, and its
-// description says the number. The other four sizes are described as every
+// description says the number. The two response limits say theirs,
+// MinResponseBytes, the same way. The other two sizes are described as every
 // size was: a whole number from 0 or text of the pattern, and nothing more.
 func TestTheSchemasHoldAnOutputLimitToTheLeastOfTheLoader(t *testing.T) {
 	size := map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": model.ByteSizePattern}
@@ -104,7 +105,15 @@ func TestTheSchemasHoldAnOutputLimitToTheLeastOfTheLoader(t *testing.T) {
 		if description, _ := output["description"].(string); !reflect.DeepEqual(output, want) || !containsAll(description, "At least 38 bytes", "0, like the key left out, is the default, 1MiB") {
 			t.Errorf("%s: limits.max_output_bytes is described as %v", name, output)
 		}
-		for key, node := range map[string]any{"limits.max_response_bytes": limits["max_response_bytes"], "limits.max_script_memory": limits["max_script_memory"], "request.max_response_bytes": request["max_response_bytes"], "request.max_total_bytes": request["max_total_bytes"]} {
+		for key, node := range map[string]any{"limits.max_response_bytes": limits["max_response_bytes"], "request.max_response_bytes": request["max_response_bytes"]} {
+			described, _ := node.(map[string]any)
+			want := map[string]any{"type": size["type"], "minimum": 0, "pattern": model.ByteSizePattern, "description": described["description"],
+				"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": MinResponseBytes}}}
+			if description, _ := described["description"].(string); !reflect.DeepEqual(described, want) || !containsAll(description, "At least 1KiB", "0, like the key left out, is the default") {
+				t.Errorf("%s: %s is described as %v", name, key, described)
+			}
+		}
+		for key, node := range map[string]any{"limits.max_script_memory": limits["max_script_memory"], "request.max_total_bytes": request["max_total_bytes"]} {
 			described, _ := node.(map[string]any)
 			without := map[string]any{}
 			for keyword, value := range described {

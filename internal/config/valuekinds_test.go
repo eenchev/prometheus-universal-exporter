@@ -214,7 +214,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	collector := []string{
 		"decoder.type", "error_handling.on_decode_error", "error_handling.on_fetch_error", "error_handling.on_transform_error",
 		"metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
-		"request.accept_codes[]", "request.descriptors", "request.method", "request.redirect_trusted_hosts[]", "request.retry.codes[]", "request.rpc", "request.type",
+		"request.accept_codes[]", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.forward_headers[]", "request.method", "request.redirect_trusted_hosts[]", "request.retry.codes[]", "request.rpc", "request.type",
 		"response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string
@@ -227,7 +227,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	}{
 		"the configuration":      {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]"}, ofCollectors...)},
 		"a collector file":       {reflect.TypeOf(collectorFile{}), ofCollectors},
-		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.method", "targets[].request.retry.codes[]"}},
+		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check", "targets[].request.method", "targets[].request.retry.codes[]"}},
 	} {
 		got := model.SortedKeys(textOnlyKeys(tc.file))
 		slices.Sort(tc.want)

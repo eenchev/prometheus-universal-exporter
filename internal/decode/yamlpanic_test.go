@@ -11,21 +11,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A document the YAML library panics on is refused, with the library's own
-// words and no panic: a merge into a mapping that has a key that is no text,
-// where the merged mapping has a sequence for a key, makes the library hash
-// what cannot be hashed. The panic left decodeYAML and took the probe with
-// it. The failure is recognised by its text up to the runtime error's own
-// words, which can hold numbers of the document, and by the function of the
-// library that raised it, without a line.
+// A document the YAML library panics on is refused, and no panic leaves
+// decodeYAML, where it took the probe with it: a merge into a mapping that
+// has a key that is no text, where the merged mapping has a sequence for a
+// key, makes the library hash what cannot be hashed. Such a document is
+// refused for its key (yamlNotScalarKey); a panic of the library is the
+// decode's failure in the library's own words, recognised by its text up to
+// the runtime error's own words, which can hold numbers of the document,
+// and by the function of the library that raised it, without a line, as the
+// library raises it when it is handed the document alone.
 func TestAYAMLDocumentTheLibraryPanicsOnIsRefused(t *testing.T) {
-	for _, document := range []string{
-		"a: 1\n2: 3\n<<: {[x]: 1}\n",
-		"2: 3\n<<: {{k: v}: 1}\n",
+	for document, what := range map[string]string{
+		"a: 1\n2: 3\n<<: {[x]: 1}\n": "line 3 is a sequence",
+		"2: 3\n<<: {{k: v}: 1}\n":    "line 2 is a mapping",
 	} {
 		v, err := decodeYAML([]byte(document))
+		if want := "yaml: the mapping key at " + what + yamlNotScalarKeyWords; err == nil || err.Error() != want {
+			t.Fatalf("%q decodes into %v, %v; want it refused with %q", document, v, err, want)
+		}
+		err = func() (err error) {
+			defer func() {
+				if failed := recover(); failed != nil {
+					err = yamlPanicked(failed, yamlPanicPlace())
+				}
+			}()
+			var v any
+			return parsedYAML(t, document).Decode(&v)
+		}()
 		if err == nil {
-			t.Fatalf("%q decodes into %v, want it refused", document, v)
+			t.Fatalf("%q is decoded by the library", document)
 		}
 		const said = "the YAML library failed on the document: runtime error"
 		if !strings.HasPrefix(err.Error(), said+": hash of unhashable type") {

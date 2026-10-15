@@ -4,10 +4,39 @@ The exporter and the Helm chart are released independently, each from its own
 tag and workflow. A chart fix does not require an exporter release, and an
 exporter release does not republish the chart.
 
+## CI has to pass first
+
+Neither release publishes anything unless CI has passed on the commit the tag
+names. The first job of each workflow, `preflight`, checks the tag's format
+and then runs `tools/ci-passed.py`, which reads the commit's `ci.yml` runs
+through the GitHub API. CI has passed when the newest finished run that a push
+of that commit started concluded `success` — a run whose changed paths skipped
+the Go suite counts as it concluded — and runs started by a pull request do
+not count, since they tested a merge rather than the commit.
+
+Pushing the tag starts a CI run of its own, and a tag is often pushed right
+after its commit, so while the commit's runs are queued or running, or none
+has started yet, the job waits, for up to an hour, looking every 30 seconds.
+When every run has finished and the newest did not succeed, or the hour runs
+out, the release stops with `CI has not passed on <sha>: run CI or wait for it,
+then push the tag again or re-run this release`, before anything is built or
+pushed. To release that commit once CI is green — after re-running a failed CI
+run, say — re-run the failed release run from its page under Actions (*Re-run
+all jobs*), or delete the tag and push it again:
+
+```sh
+git push --delete origin exporter/prometheus-universal-exporter-v1.0.0
+git push origin exporter/prometheus-universal-exporter-v1.0.0
+```
+
+When CI fails on the commit for a reason of the commit's own, fix it in a new
+commit and tag that one instead.
+
 ## Exporter
 
 An `exporter/prometheus-universal-exporter-vMAJOR.MINOR.PATCH` tag runs
-`release.yml`, which runs the test suite against the Python and libraries the
+`release.yml`, which, once CI has passed on the tagged commit, runs the test
+suite against the Python and libraries the
 image ships (the Dockerfile's `PYTHON_VERSION`, `LXML_VERSION`,
 `PYYAML_VERSION` and `PYTHON_DATEUTIL_VERSION`, as CI does), publishes the
 container image to GHCR, builds the cross-platform archives, and creates a
@@ -54,7 +83,8 @@ git tag -a chart/prometheus-universal-exporter-0.2.0 -m "Chart 0.2.0"
 git push origin chart/prometheus-universal-exporter-0.2.0
 ```
 
-The workflow re-runs the chart lint and template checks, checks that the image
+Once CI has passed on the tagged commit, the workflow re-runs the chart lint
+and template checks, checks that the image
 the chart deploys by default, `ghcr.io/eenchev/prometheus-universal-exporter:<appVersion>`,
 exists (`docker buildx imagetools inspect`), packages the chart exactly as
 `Chart.yaml` declares it, pushes it to

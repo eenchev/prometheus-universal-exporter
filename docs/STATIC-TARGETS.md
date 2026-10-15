@@ -51,7 +51,10 @@ targets:
 ```
 
 `interval` and `targets` are required, and the file refuses keys it does not
-know. Each target names a collector from the exporter configuration and takes
+know. A target's `target` is checked when the file loads as its collector's
+type reads it: an `http` or `graphite` target is an absolute URL, and one
+whose port is 0 or past 65535, which no connection can use, is refused
+naming the port, as a `grpc`, `sshfile` or `sql` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the
 `retry` settings — overriding the collector's own request for that target only.
@@ -61,10 +64,19 @@ for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
 with `target` optional, for [`graphite`](GRAPHITE.md#static-targets) all
 but `method` and `body`, plus its own `targets`, `from` and `until`, and for
 [`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
-with its `codes`, and its own `message` and `metadata`. An `http` or
+with its `codes`, and its own `message` and `metadata`, and for
+[`sshfile`](SSHFILE.md#static-targets) `path` and `timeout`, and its own
+account and credential files, `username`, `private_key_file`,
+`passphrase_file` and `password_file`, and for [`sql`](SQL.md#static-targets)
+`timeout`, its own `username` and `password_file` or `private_key_file`, and
+`connections`, but `max_targets`, a target whose `connections` change a
+setting being a target of its own for the collector's limits. An `http` or
 `graphite` target also takes static `headers`, and every target but a
-`localfile` one its own target credentials, inline or file-backed, as basic
-authentication or a bearer token.
+`localfile`, `sshfile` or `sql` one its own target credentials, inline or
+file-backed, as basic authentication or a bearer token; a basic username
+holds no colon, which is refused at startup written in the target and fails
+the target's scrape read from its file
+([Authentication](AUTHENTICATION.md#credentials-in-the-configuration)).
 A target's own credential is sent instead of the collector's, whose
 `bearer_token_file` or `basic_auth_file` is then not read for that target: a
 collector's credential file that is missing fails only the targets that
@@ -128,7 +140,8 @@ written there is exported as the text it is.
 A `{{param_…}}` placeholder anywhere a target writes a value of its own — its
 `target`, `request.path`, `request.body` or a header value — is refused when
 the file loads, naming the target and the field: there is no probe to fill
-it, and it would reach the target as text. Braces that do not open
+it, and it would reach the target as text. So is `{{` in an `sshfile` or
+`sql` target's `username` and credential files, which are used as written. Braces that do not open
 `{{param_` are left alone, so a JSON body is written as usual. The same holds
 for a value an environment variable supplies, since the file is checked after
 it is expanded.

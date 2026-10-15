@@ -111,27 +111,38 @@ For HTTPS, the certificate is still checked against the address the target
 names; set [`tls.server_name`](#tls) to the virtual host too. A header value
 holding a control character other than tab — a line break pasted into a
 token — is refused at startup, collector and static target alike, since it
-could never be sent. So is a header name that is not one, such as one with a
-space, and two names that are the same header in different case, `X-Tenant`
-and `x-tenant`, of which a scrape would otherwise send either.
+could never be sent, and so is a `bearer_token` or a `basic_auth` credential
+holding one, and a `basic_auth` username holding a colon, which a target
+would read as the end of the username
+([Authentication](AUTHENTICATION.md#credentials-in-the-configuration)).
+So is a header name that is not one, such as one with a space, and two names
+that are the same header in different case, `X-Tenant` and `x-tenant`, of
+which a scrape would otherwise send either.
 
 ### Compression and the response size
 
 The exporter asks every target for gzip itself and decompresses the answer, so
 `Accept-Encoding` is its own: one under `request.headers`, a collector's or a
 static target's, is refused at startup, since with it set Go would hand the
-decoder the compressed bytes. One the probe carries is never forwarded, even
-listed in `forward_headers` — Prometheus sends `Accept-Encoding: gzip` on every
-scrape.
+decoder the compressed bytes. One the probe carries is never forwarded —
+Prometheus sends `Accept-Encoding: gzip` on every scrape — and listing it in
+`forward_headers` is refused at startup.
 
 `max_response_bytes` counts the answer as the decoder gets it, decompressed.
 An answer whose `Content-Length` is over the limit is refused before its body
-is read — `response size 5000 exceeds limit 100` — and one without a
+is read — `response size 5000 exceeds limit 1024` — and one without a
 `Content-Length` once reading passes the limit, `response size exceeds limit
-100`, its size then unknown. A `HEAD` answer's `Content-Length` is the size of
+1024`, its size then unknown. A `HEAD` answer's `Content-Length` is the size of
 a body it does not have, and is not held against it. There is no "no limit":
 the largest value that can be written, `9223372036854775807`, is held one
-byte lower and reads the whole answer.
+byte lower and reads the whole answer. Nor is there a limit under 1 KiB: a
+size without a unit is a number of bytes, and `max_response_bytes: 10`,
+written for 10 MiB, would fail every scrape, so a limit from 1 to 1023 bytes,
+this one or `limits.max_response_bytes`, is refused at startup:
+
+```text
+collector "api" request.max_response_bytes is 10 bytes, under the least, 1KiB; a size without a unit is a number of bytes, so write the unit, such as 10MiB, or leave it out, or 0, for the default, 10MiB
+```
 
 `max_response_bytes` bounds the body. The response's status line and headers
 have a bound of their own, 1 MiB, which no setting changes: a target that
@@ -207,7 +218,7 @@ values `.` and `..` are rejected
 with `400`, since a server resolving them would serve a different path than the
 one configured. Defaults are escaped the same way, and a default of `.` or
 `..` stops the exporter at startup, since no probe could use it. A `localfile`
-path holds a default to what it holds a value to, so there one with `/` or
+or `sshfile` path holds a default to what it holds a value to, so there one with `/` or
 `\` in it [stops it too](LOCALFILE.md#which-file-is-read).
 
 **Mistakes are errors, not fallbacks.** A `param_` parameter the collector
@@ -345,8 +356,9 @@ rather than sent as text. A brace before a placeholder is a brace:
 expression needs, `app.{{{param_host}},db}.cpu`. Header names and query
 names cannot hold placeholders.
 
-**Only there.** Placeholders are filled in the places above, in the
-collector's [fixed label values](#in-label-values), and nowhere else.
+**Only there.** Placeholders are filled in the places above, in a `sql`
+collector's `database` and `args` ([SQL](SQL.md)), in the collector's
+[fixed label values](#in-label-values), and nowhere else.
 A `{{param_...}}` in any other setting of a collector — `bearer_token`,
 `basic_auth`, a credential or TLS file, `tls.server_name`, a `value_map`, a
 label's name, a `rename_labels` target, a prometheus transform's `include`
@@ -355,7 +367,7 @@ it and the value mapped to `{{param_region}}`, so it stops the exporter at
 startup, naming the field:
 
 ```text
-collector "api" request.bearer_token has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label
+collector "api" request.bearer_token has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, a sql collector's database and args, and the label values of transform.labels and of a metric rule's static label
 ```
 
 To send a token the probe supplies, put it in a header value:
@@ -407,8 +419,8 @@ collectors:
 
 One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
-at all. It works with every request type — `http`, `grpc`, `graphite` and
-`localfile` — and under every transform: `transform.labels` are applied
+at all. It works with every request type — `http`, `grpc`, `graphite`,
+`localfile` and `sshfile` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
@@ -537,7 +549,8 @@ the data points that wait for the next export, which
 [`otlp.max_pending_points`](OTLP.md#delivery) bounds, and in the start
 times of the counters, histograms and summaries exported, each kept until
 its series has not been exported for an hour, twice `otlp.max_pending_points`
-of them at most. Its verbose self-metrics never carry a value. A collector
+of them at most, each by at most 256 bytes of its series, a longer series by
+a digest of it. Its verbose self-metrics never carry a value. A collector
 whose label values hold no placeholder pays nothing for the feature; one
 that has some makes a copy of its labels for each probe.
 
@@ -751,7 +764,7 @@ rather than silently changing behaviour.
 Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
-`graphite` and `grpc` collectors:
+`graphite`, `grpc`, [`sshfile`](SSHFILE.md) and [`sql`](SQL.md#the-target) collectors:
 
 ```yaml
 request:
@@ -767,7 +780,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite` and `grpc` collector refuses the cloud metadata
+Every `http`, `graphite`, `grpc`, `sshfile` and `sql` collector refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
 and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
 credentials of the machine the exporter runs on, to whoever can name it as a
@@ -918,7 +931,8 @@ A proxy URL may carry credentials, `http://user:password@proxy:3128`, sent as
 environment applies to the whole exporter, and is read once, when the exporter
 first connects. In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
-affected.
+affected, and neither are `sshfile` and `sql` collectors, which connect to
+their hosts directly.
 
 ## Retries
 
@@ -1023,7 +1037,7 @@ and `response.headers`, which keeps each header's values as a list under its
 canonical name (`response.headers["Retry-After"]`); `response.header("retry-after")`
 joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the call's status
 code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
-`localfile` collector, which has no status, it is `null`.
+`localfile` or `sshfile` collector, which has no status, it is `null`.
 
 ## TLS
 

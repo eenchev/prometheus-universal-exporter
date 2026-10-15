@@ -30,6 +30,10 @@ config.*.local.yaml
 # Files Claude (Cowork) leaves in the working copy for review
 /Claude outputs/
 
+# Dependencies are fetched from the module proxy against go.sum; a vendor
+# directory made with `go mod vendor` (to work offline) is local only.
+/vendor/
+
 # Packaged Helm charts are build output; the release workflow packages the
 # chart from source and pushes it to GHCR.
 *.tgz

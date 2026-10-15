@@ -97,7 +97,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, for editors, and exit")
-	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
+	showVersion := flags.Bool("version", false, "Print the version, revision, Go version, request types and sql drivers of this build, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and static target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -314,7 +314,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"static_targets", len(manager.StaticTargets()), "config_watch", manager.WatchEnabled(),
-		"config_expand_env", *expandEnv, "static_targets_expand_env", *expandStaticTargetsEnv, "request_types", fetch.BuiltRequestTypes()}
+		"config_expand_env", *expandEnv, "static_targets_expand_env", *expandStaticTargetsEnv, "request_types", fetch.BuiltRequestTypes(), "sql_drivers", fetch.BuiltSQLDrivers()}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
 	// configuration can be.
@@ -369,6 +369,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		<-exportLoopDone
 		<-scrapeLoopDone
 		server.FlushOTLP()
+		// Nothing reads any more: the connections kept across scrapes, an
+		// sshfile collector's to its hosts and a sql collector's to its
+		// databases, are closed rather than dropped with the process.
+		fetch.CloseConnections()
 	}
 	return 0
 }

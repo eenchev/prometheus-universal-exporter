@@ -88,6 +88,15 @@ type TargetRequestConfig struct {
 	// request.accept_status and accept_codes for this target.
 	AcceptStatus []string `yaml:"accept_status"`
 	AcceptCodes  []string `yaml:"accept_codes"`
+	// Username and the credential files replace an sshfile or a sql
+	// collector's for this target: the account it reads as.
+	Username       string `yaml:"username"`
+	PrivateKeyFile string `yaml:"private_key_file"`
+	PassphraseFile string `yaml:"passphrase_file"`
+	PasswordFile   string `yaml:"password_file"`
+	// Connections replaces, key by key, a sql collector's
+	// request.connections for this target.
+	Connections *SQLConnections `yaml:"connections,omitempty"`
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets

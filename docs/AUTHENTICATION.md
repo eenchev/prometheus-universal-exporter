@@ -10,7 +10,16 @@ exporter refuses a configuration that tries.
 Everything in this section applies to `http` and `graphite` collectors, and
 to `grpc` ones, which send the credential as the `authorization` metadata of
 the call and forwarded headers as metadata, lower-cased; see
-[gRPC](GRPC.md#authentication).
+[gRPC](GRPC.md#authentication). An `sshfile` collector authenticates to the
+host with an SSH private key or a password from a file, and verifies the
+host's key against a `known_hosts` file; nothing here applies to it, since it
+sends no headers and follows no redirects: see
+[Files over SSH](SSHFILE.md#authentication). Nor does it apply to a `sql`
+collector, which logs in to the database as `request.username` with a
+password from `request.password_file`, or, for `snowflake`, a private key
+from `request.private_key_file`, over the TLS its driver's option and the
+`tls` block set, and forwards nothing of the probe's: see
+[Databases over SQL](SQL.md#authentication).
 
 The credential and the collector's headers are for the target: its origin,
 the scheme, host and port the request is made to. When the collector
@@ -27,7 +36,7 @@ leads, so a token never belongs in them.
 
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 
-For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`. Headers that describe the connection to the exporter rather than the request are never forwarded, even when listed: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `TE`, `Upgrade`, and every `Proxy-` header; nor is `Accept-Encoding`, which the exporter sets itself to decompress the answer ([Target requests](REQUESTS.md#compression-and-the-response-size)); `Authorization` has `forward_authorization` of its own:
+For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`. Headers that describe the connection to the exporter rather than the request are never forwarded: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `TE`, `Upgrade`, and every `Proxy-` header; nor is `Accept-Encoding`, which the exporter sets itself to decompress the answer ([Target requests](REQUESTS.md#compression-and-the-response-size)); `Authorization` has `forward_authorization` of its own. Listing one of them in `forward_headers`, in any case, or an entry that is no header name, is refused at startup, saying why, since nothing listed there would ever reach the target:
 
 ```yaml
 # exporter config
@@ -97,7 +106,15 @@ line 3: web.basic_auth sets username and password but not enabled; say enabled: 
 ```
 
 Set one of `username` and `username_file`, and one of `password` and
-`password_file`. Leading and trailing whitespace, such as the newline an
+`password_file`. A request's username and password are checked by comparing
+their SHA-256 digests with those of the configured ones, both always and in
+constant time, so neither how long the configured password is nor which of
+the two was wrong can be told from how long the refusal takes. The username holds
+no colon: a client's Basic credential ends the username at the first one, so
+no client could present it, and one in `username`, or in the file
+`username_file` names, is refused when the configuration loads
+(`web.basic_auth.username holds a colon (":"), which ends the username of a
+Basic credential (RFC 7617) ...`); a password may hold one. Leading and trailing whitespace, such as the newline an
 editor adds, is removed. A file that is missing or empty when the
 configuration loads is refused like any other invalid configuration. A file
 changed on disk is read again by the next request, so a rotated Kubernetes
@@ -178,3 +195,37 @@ collectors:
 ```
 
 For the Helm chart, set `targetAuth.enabled: true`, `targetAuth.type: basic`, `targetAuth.secretName`, `usernameKey`, and `passwordKey`. The mounted Secret is read by the exporter and sent as HTTP Basic Auth to the underlying endpoint. For bearer auth, use `type: bearer`, `secretKey`, `fileName`, and `request.bearer_token_file`. The selected monitor can independently use its `auth.type: basic` to authenticate its scrape of the exporter; `request.forward_authorization` must remain `false`.
+
+A credential file — `bearer_token_file`, or `basic_auth_file`'s username and
+password — is read at every request, and the whitespace around what it holds
+is trimmed, such as the line break that `echo token >file` or a Secret made
+from such a file leaves at its end. A username file that holds a colon fails
+the scrape and sends nothing, naming the file but not what it holds (`basic
+auth username file /var/run/.../username holds a colon (":"), ...`), as a
+username written in the configuration with one is refused at startup (next).
+
+### Credentials in the configuration
+
+A credential written in the configuration or a static target, `bearer_token`
+or `basic_auth`, is used as it is written, and one holding a control
+character other than a tab is refused at startup, collector and static
+target alike, naming the key and the character but never the value: Go
+refuses to send a bearer token with one, which would fail every scrape, and
+RFC 7617 lets no Basic credential hold one. The usual one is the line break
+at the end of a variable that
+[`--config.expand-env`](CONFIGURATION.md#environment-variables) substitutes,
+taken from a Secret made from a file that ends with one:
+
+```text
+collector "api" request.bearer_token has the control character '\n' in its value, which a header may not hold; a line break at its end is usually one the Secret or the environment variable it came from ends with: remove it, or read the credential from a file with the key's _file form, which trims it
+```
+
+A `basic_auth` username holding a colon is refused at startup too, collector
+and static target alike, without the value: the Basic credential is the
+username and the password joined by a colon (RFC 7617), and the target splits
+it at the first one, so it would read a shorter username and a password that
+starts with the rest, and refuse every scrape. A password may hold a colon.
+
+```text
+collector "api" request.basic_auth.username holds a colon (":"), which ends the username of a Basic credential (RFC 7617): the server reads the username up to it and the rest as the start of the password, so a Basic username cannot hold one
+```

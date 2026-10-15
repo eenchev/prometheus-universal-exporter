@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_http || request_type_graphite || request_type_localfile
+//go:build !select_request_types || request_type_http || request_type_graphite || request_type_localfile || request_type_sshfile
 
 package fetch
 
@@ -6,8 +6,8 @@ import "fmt"
 
 // The load-time rule of a request.path placeholder's default, for the types
 // that bind path parameters: http and graphite, in a URL's path, and
-// localfile, in a file's. grpc has no request.path, so a build with only it
-// leaves this out.
+// localfile and sshfile, in a file's. grpc has no request.path, so a build
+// with only it leaves this out.
 
 // checkPathParamDefaults refuses, when the configuration loads, a
 // request.path placeholder whose default no probe could be sent with: every

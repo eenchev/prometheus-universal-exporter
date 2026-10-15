@@ -326,6 +326,9 @@ func TestAYAMLFailureWithFewDifferentProblemsReadsAndIsRecognisedAsItWas(t *test
 		// But for the parser's refusal of a document for its depth, which
 		// has since been given the exporter's words for one.
 		was = yamlDepthRefusalNow(was)
+		// And but for a key that is a sequence or a mapping, which has since
+		// been refused in words of its own.
+		was = yamlKeyRefusalNow([]byte(document), was)
 		_, err := decodeYAML([]byte(document))
 		if (err == nil) != (was == nil) {
 			t.Fatalf("%q is refused with %v; it was with %v", document, err, was)

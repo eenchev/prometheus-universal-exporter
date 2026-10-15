@@ -225,7 +225,7 @@ func TestAPlaceholderWhereNoneIsFilledIsRefused(t *testing.T) {
 			document = strings.Replace(document, "    transform: {type: jq}\n", collector, 1)
 		}
 		_, err := Load(testutil.WriteFile(t, "config.yaml", document))
-		want := fmt.Sprintf(`collector "a" %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label`, test.where)
+		want := fmt.Sprintf(`collector "a" %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, a sql collector's database and args, and the label values of transform.labels and of a metric rule's static label`, test.where)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: error %v, want %q", name, err, want)
 		}

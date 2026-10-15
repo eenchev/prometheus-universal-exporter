@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_localfile
+//go:build !select_request_types || request_type_localfile || request_type_sshfile
 
 package fetch
 
@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,6 +48,11 @@ import (
 //
 // A refused file is a failed file: its mtime is reported, and its scrape
 // error reads 1.
+//
+// An sshfile collector with request.files reads a directory on a remote host
+// by the same code, through an SFTP session instead of an os.Root
+// (readSourceDirectory, fileSource), so this file carries both types' build
+// constraint.
 
 const (
 	// DefaultLocalFileMaxFiles is request.max_files when unset.
@@ -137,35 +141,16 @@ func maxListedEntries(c *model.Collector) int {
 	return max(10*c.Request.MaxFiles, 1000)
 }
 
-func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides) (*HTTPResponse, error) {
-	start := time.Now()
-	dir, err := localFileTargetDir(c, target)
-	if err != nil {
-		return nil, err
-	}
-	if overrides.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
-		defer cancel()
-	}
-	full := filepath.Join(c.Request.Root, dir)
-	// As for one file, the reading goes on in its own goroutine, and a read the
-	// probe stops waiting for is one of the collector's abandoned reads until
-	// the filesystem answers.
-	started, err := localFileReads.start(c.Name)
-	if err != nil {
-		return nil, err
-	}
-	progress := &directoryProgress{}
-	done := make(chan error, 1)
-	go func() {
-		defer started.done()
-		done <- readLocalDirectory(c, dir, progress)
-	}()
+// awaitDirectory waits for a directory read, done, or for ctx to end,
+// whichever comes first, and answers what progress holds then. When ctx
+// ends first, abandon is called, the read is told to start no further file,
+// and the files it has not read fail alone; only a directory not yet listed
+// fails the whole read.
+func awaitDirectory(ctx context.Context, full string, progress *directoryProgress, done <-chan error, abandon func()) (*DirectoryRead, error) {
 	var read *DirectoryRead
 	select {
 	case <-ctx.Done():
-		started.abandon()
+		abandon()
 		// What was read before the deadline is answered; a file the read had
 		// not reached, or was still reading, fails alone. The read stops
 		// starting new files.
@@ -183,12 +168,7 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 		}
 		read = progress.snapshot(nil)
 	}
-	for i := range read.Files {
-		if f := read.Files[i].Response; f != nil {
-			f.Target = target
-		}
-	}
-	return &HTTPResponse{StatusCode: 200, NoStatus: true, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: read}, nil
+	return read, nil
 }
 
 // directoryProgress is a directory read as far as it has got, so a probe that
@@ -252,23 +232,18 @@ func (p *directoryProgress) snapshot(unfinished func(name string) error) *Direct
 	return &out
 }
 
-// readLocalDirectory reads the matching files of root/dir into progress: it
-// lists the directory, decides from each file's size which are read, and reads
-// those, several at a time. An error is returned only when the directory
+// readSourceDirectory reads the matching files of root/dir in src into
+// progress: it lists the directory, decides from each file's size which are
+// read, and reads those, several at a time. An error is returned only when the directory
 // itself cannot be read; a file that cannot be is recorded as failed.
-func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgress) error {
+func readSourceDirectory(src fileSource, c *model.Collector, dir string, progress *directoryProgress) error {
 	rootDir := c.Request.Root
-	root, err := os.OpenRoot(rootDir)
-	if err != nil {
-		return fmt.Errorf("opening request.root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
 	name := dir
 	if name == "" {
 		name = "."
 	}
 	full := filepath.Join(rootDir, dir)
-	d, err := root.Open(name)
+	d, err := src.OpenDir(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("directory %s does not exist", full)
@@ -284,6 +259,9 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 		return fmt.Errorf("%s is not a directory; a collector with request.files reads a directory", full)
 	}
 	names, listed, truncated, err := listMatchingFiles(d, c)
+	// The directory is closed once listed, rather than after its files are
+	// read: an sshfile listing holds an SSH session of its own until then.
+	_ = d.Close()
 	if err != nil {
 		return localFileError(full, err)
 	}
@@ -319,7 +297,7 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 			return nil
 		}
 		fileFull := filepath.Join(full, base)
-		info, err := root.Stat(filepath.Join(dir, base))
+		info, err := src.Stat(filepath.Join(dir, base))
 		if err != nil {
 			progress.finish(i, FileRead{Err: localFileError(fileFull, err)}, 0)
 			continue
@@ -360,7 +338,7 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 				base := names[p.index]
 				rel := filepath.Join(dir, base)
 				fileFull := filepath.Join(full, base)
-				body, after, err := readRootFile(root, rootDir, rel, min(limit, p.size+slack))
+				body, after, err := readSourceFile(src, rootDir, rel, min(limit, p.size+slack))
 				if err != nil {
 					if errors.Is(err, model.ErrLimitExceeded) && p.size+slack < limit {
 						err = model.MarkError(fmt.Errorf("file %s grew while the directory was read, past what request.max_total_bytes leaves it: %w", fileFull, err), model.ErrLimitExceeded)
@@ -391,7 +369,7 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 
 // listMatchingFiles lists the directory in batches and keeps the names that
 // match, stopping after maxListedEntries entries.
-func listMatchingFiles(d *os.File, c *model.Collector) (names []string, listed int, truncated bool, err error) {
+func listMatchingFiles(d sourceDir, c *model.Collector) (names []string, listed int, truncated bool, err error) {
 	limit := maxListedEntries(c)
 	for {
 		entries, err := d.ReadDir(localFileListBatch)

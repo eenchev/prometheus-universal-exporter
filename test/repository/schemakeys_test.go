@@ -294,11 +294,15 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 }
 
 // schemaAsItWas is a committed schema with what "" being the key left out,
-// the number 0 being a duration, the rules of value_map keys, the rule
-// that a label's expression is not blanks alone, the rules of an entry of
-// transform.include and transform.exclude, the rule that a python rule's
-// label sets no value and the rule that a collector's name_escaping says
-// which names its rules and labels may have added to it taken out again, and
+// the number 0 being a duration, the rules of value_map keys, the rule that
+// an sshfile request's account and credential keys are not blanks alone, the
+// rule that a label's expression is not blanks alone, the rules of an entry of
+// transform.include and transform.exclude, the rules of the names of
+// request.headers and request.query and of an entry of
+// request.forward_headers, the rule that a python rule's
+// label sets no value, the rule that a collector's name_escaping says
+// which names its rules and labels may have added to it and the rules that a
+// Basic username holds no colon taken out again, and
 // with what a switched-off otlp block was held to put back: the schema before, kept as
 // an oracle, so that the tables show what each change changed and that the
 // schemas say of every other case what they said. The values of an optional
@@ -339,11 +343,27 @@ func schemaAsItWas(t *testing.T, file string) map[string]any {
 	}
 	walk(schema)
 	if file == staticTargetsSchemaFile {
+		delete(schemaNode(t, schema, "targets[].request.headers"), "propertyNames")
 		delete(schemaNode(t, schema, "targets[].collector"), "minLength")
 		delete(schemaNode(t, schema, "targets[].labels{}"), "minLength")
+		// An sshfile target's account and credential keys took blanks.
+		for _, key := range []string{"username", "private_key_file", "passphrase_file", "password_file"} {
+			delete(schemaNode(t, schema, "targets[].request."+key), "not")
+		}
+		// A Basic username took a colon.
+		delete(schemaNode(t, schema, "targets[].request.basic_auth.username"), "not")
 		return schema
 	}
+	// An sshfile collector's account and credential keys took blanks.
+	for _, key := range []string{"username", "private_key_file", "passphrase_file", "password_file", "known_hosts_file"} {
+		delete(schemaNode(t, schema, "collectors[].request."+key), "not")
+	}
+	// A Basic username took a colon, the collector's and the exporter's own.
+	delete(schemaNode(t, schema, "collectors[].request.basic_auth.username"), "not")
 	if file == configSchemaFile {
+		auth := schemaNode(t, schema, "web.basic_auth")
+		delete(auth, "if")
+		delete(auth, "then")
 		// What the block's then holds a key to once it is switched on, the
 		// key itself was held to.
 		then, _ := schemaNode(t, schema, "otlp")["then"].(map[string]any)
@@ -391,6 +411,15 @@ func schemaAsItWas(t *testing.T, file string) map[string]any {
 	for _, key := range []string{"collectors[].request.allowed_targets[]", "collectors[].request.denied_targets[]"} {
 		delete(schemaNode(t, schema, key), "minLength")
 	}
+	// A name of request.headers or request.query was any text, and an entry
+	// of forward_headers any text, number or boolean.
+	for _, key := range []string{"collectors[].request.headers", "collectors[].request.query"} {
+		delete(schemaNode(t, schema, key), "propertyNames")
+	}
+	forwarded := schemaNode(t, schema, "collectors[].request.forward_headers[]")
+	delete(forwarded, "pattern")
+	delete(forwarded, "not")
+	forwarded["type"] = []any{"string", "number", "boolean"}
 	for _, condition := range schemaNode(t, schema, "collectors[].request")["allOf"].([]any) {
 		condition := condition.(map[string]any)
 		condition["then"] = map[string]any{"required": condition["then"].(map[string]any)["required"]}

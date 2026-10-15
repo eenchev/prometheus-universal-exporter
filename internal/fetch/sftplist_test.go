@@ -1107,6 +1107,7 @@ func TestSSHFileListsAgainOnANewConnectionWhenTheListingLosesIt(t *testing.T) {
 		}
 	})
 	server.Store(f.server)
+	events := sshEvents(t, f.server.Addr)
 	entry := f.connect(t)
 	dropAt.Store(2)
 	lister := newSFTPLister(entry.client, f.root)
@@ -1115,6 +1116,12 @@ func TestSSHFileListsAgainOnANewConnectionWhenTheListingLosesIt(t *testing.T) {
 	if !errors.Is(err, sftp.ErrSSHFxConnectionLost) || errors.Is(err, errListingSessionEnded) {
 		t.Errorf("err=%v, want the connection lost", err)
 	}
+	// The kept connection the server dropped is let go of when the
+	// connection's watch sees it end, which it does on a goroutine of its
+	// own: a scrape before then is handed the ended connection, loses the
+	// listing on it, and spends its one more try on a connection whose
+	// listing the server drops too.
+	waitEvent(t, events, "closed: ended")
 	testutil.WriteIn(t, f.root, "a.prom", sshPromFile)
 	c := f.collector(t, "dir", "", func(r *model.RequestConfig) { r.Files = []string{"a.prom"} })
 	// The new connection's own session is the third, its listing's the

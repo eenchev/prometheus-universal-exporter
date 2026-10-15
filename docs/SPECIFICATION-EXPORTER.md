@@ -1509,7 +1509,8 @@ of objects, one a row, of its columns by name. Its keys:
   as `database/sql` would without the rest, and the exporter's own use of
   the driver's connection (`Conn.Raw`) MUST reach the driver's.
   `postgres` MUST also set `statement_timeout` to the time left, in the
-  transaction, and its cancel request MUST go through the exporter's dialer,
+  transaction, the server ending the statement at it reported as the
+  deadline coming first though the scrape's own deadline is a moment away, and its cancel request MUST go through the exporter's dialer,
   under the policy, to the address the statement's connection reached, and
   to no other.
 - **Rows.** Integers and floating-point numbers MUST be numbers; the text of
@@ -22728,6 +22729,14 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
   `sql_driver_<name>` tag of every opt-in sql driver of the tree, which a
   test in the default build holds it to; `go test ./test/repository/` passes
   in the build with every opt-in driver.
+
+## 34.143 A postgres statement timeout is the scrape's deadline
+
+- A postgres statement the server ends at its statement_timeout (SQLSTATE
+  57014, "statement timeout") fails saying the scrape's deadline came first
+  and is a deadline, though the scrape's context has not ended yet; one a
+  cancel request ended, with the same SQLSTATE, is not, nor is another
+  driver's failure.
 
 # 35. Documentation requirements
 

@@ -489,62 +489,66 @@ jobs:
             fi
           done
         if: steps.changes.outputs.chart == 'true'
-  # The sql request type against real databases: PostgreSQL, MySQL and SQL
-  # Server in service containers, and the live tests, which the default suite
-  # skips without the variables that name them (internal/fetch, TestLiveSQL).
-  sql-live:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: exporter-test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 30
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: exporter-test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -pexporter-test"
-          --health-interval 5s --health-timeout 5s --health-retries 30
-      sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: 'Y'
-          MSSQL_SA_PASSWORD: Exporter-Test-1
-        ports:
-          - 1433:1433
-    env:
-      PUE_TEST_POSTGRES: 127.0.0.1:5432
-      PUE_TEST_POSTGRES_USER: postgres
-      PUE_TEST_POSTGRES_PASSWORD: exporter-test
-      PUE_TEST_MYSQL: 127.0.0.1:3306
-      PUE_TEST_MYSQL_USER: root
-      PUE_TEST_MYSQL_PASSWORD: exporter-test
-      PUE_TEST_SQLSERVER: 127.0.0.1:1433
-      PUE_TEST_SQLSERVER_USER: sa
-      PUE_TEST_SQLSERVER_PASSWORD: Exporter-Test-1
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: 'stable'
-      # SQL Server's image has no health check of its own: its own sqlcmd is
-      # asked until the server answers.
-      - name: Wait for SQL Server
-        run: |
-          for attempt in $(seq 60); do
-            if docker exec "${{ job.services.sqlserver.id }}" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$PUE_TEST_SQLSERVER_PASSWORD" -Q "SELECT 1" >/dev/null 2>&1; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "SQL Server did not answer" >&2
-          exit 1
-      - run: make test-sql-live
+  # The sql-live job is turned off for now: it would run the live tests
+  # against PostgreSQL, MySQL and SQL Server service containers on every
+  # push and pull request. `make test-sql-live` runs them locally
+  # (docs/DEVELOPMENT.md). Uncomment the job to run them in CI again.
+  ## The sql request type against real databases: PostgreSQL, MySQL and SQL
+  ## Server in service containers, and the live tests, which the default suite
+  ## skips without the variables that name them (internal/fetch, TestLiveSQL).
+  #sql-live:
+  #  runs-on: ubuntu-latest
+  #  services:
+  #    postgres:
+  #      image: postgres:17
+  #      env:
+  #        POSTGRES_PASSWORD: exporter-test
+  #      ports:
+  #        - 5432:5432
+  #      options: >-
+  #        --health-cmd "pg_isready -U postgres"
+  #        --health-interval 5s --health-timeout 5s --health-retries 30
+  #    mysql:
+  #      image: mysql:8.4
+  #      env:
+  #        MYSQL_ROOT_PASSWORD: exporter-test
+  #      ports:
+  #        - 3306:3306
+  #      options: >-
+  #        --health-cmd "mysqladmin ping -h 127.0.0.1 -pexporter-test"
+  #        --health-interval 5s --health-timeout 5s --health-retries 30
+  #    sqlserver:
+  #      image: mcr.microsoft.com/mssql/server:2022-latest
+  #      env:
+  #        ACCEPT_EULA: 'Y'
+  #        MSSQL_SA_PASSWORD: Exporter-Test-1
+  #      ports:
+  #        - 1433:1433
+  #  env:
+  #    PUE_TEST_POSTGRES: 127.0.0.1:5432
+  #    PUE_TEST_POSTGRES_USER: postgres
+  #    PUE_TEST_POSTGRES_PASSWORD: exporter-test
+  #    PUE_TEST_MYSQL: 127.0.0.1:3306
+  #    PUE_TEST_MYSQL_USER: root
+  #    PUE_TEST_MYSQL_PASSWORD: exporter-test
+  #    PUE_TEST_SQLSERVER: 127.0.0.1:1433
+  #    PUE_TEST_SQLSERVER_USER: sa
+  #    PUE_TEST_SQLSERVER_PASSWORD: Exporter-Test-1
+  #  steps:
+  #    - uses: actions/checkout@v7
+  #    - uses: actions/setup-go@v7
+  #      with:
+  #        go-version: 'stable'
+  #    # SQL Server's image has no health check of its own: its own sqlcmd is
+  #    # asked until the server answers.
+  #    - name: Wait for SQL Server
+  #      run: |
+  #        for attempt in $(seq 60); do
+  #          if docker exec "${{ job.services.sqlserver.id }}" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$PUE_TEST_SQLSERVER_PASSWORD" -Q "SELECT 1" >/dev/null 2>&1; then
+  #            exit 0
+  #          fi
+  #          sleep 2
+  #        done
+  #        echo "SQL Server did not answer" >&2
+  #        exit 1
+  #    - run: make test-sql-live

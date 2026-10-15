@@ -467,7 +467,10 @@ func encryptedKey(public ed25519.PublicKey, private ed25519.PrivateKey, passphra
 		return nil, err
 	}
 	sealed := make([]byte, len(plain))
-	cipher.NewCTR(block, derived[32:]).XORKeyStream(sealed, plain)
+	// The IV is the second part of what bcrypt derives from the passphrase
+	// and a random salt, as OpenSSH's key format has it; gosec sees a slice
+	// of a value and calls it hard-coded.
+	cipher.NewCTR(block, derived[32:]).XORKeyStream(sealed, plain) //nolint:gosec // G407: the IV is derived, per OpenSSH's format
 	body := ssh.Marshal(struct {
 		CipherName, KdfName, KdfOptions string
 		Keys                            uint32

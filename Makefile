@@ -68,8 +68,8 @@ test-sql-drivers:
 # Opt-in: the sql request type against real databases, which the
 # PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
 # (host:port), each with its _USER and _PASSWORD; a database without its
-# variable is skipped. ci.yml's sql-live job runs it against service
-# containers. See docs/DEVELOPMENT.md.
+# variable is skipped. ci.yml's sql-live job, which ran it against service
+# containers, is commented out for now. See docs/DEVELOPMENT.md.
 test-sql-live:
 	go test -count=1 -run TestLiveSQL -v ./internal/fetch/
 

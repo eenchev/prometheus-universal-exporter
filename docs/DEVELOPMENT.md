@@ -674,8 +674,9 @@ wait for the pools' events (`sqlPoolEvent`), not for time. The tests against
 real databases (`TestLiveSQL`, `internal/fetch`) are skipped unless a variable
 names a database — `PUE_TEST_POSTGRES`, `PUE_TEST_MYSQL`, `PUE_TEST_SQLSERVER`
 as `host:port`, each with `_USER` and `_PASSWORD` — and `make test-sql-live`
-runs them; CI's `sql-live` job runs them against PostgreSQL, MySQL and SQL
-Server service containers:
+runs them. CI does not run them: its `sql-live` job, which ran them against
+PostgreSQL, MySQL and SQL Server service containers, is commented out in
+`.github/workflows/ci.yml` for now. Locally:
 
 ```sh
 docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres:17

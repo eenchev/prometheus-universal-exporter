@@ -5,11 +5,13 @@ package fetch
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
@@ -106,4 +108,26 @@ func postgresStandIn(t *testing.T) (port string, statements chan struct{}, cance
 	}()
 	_, port, _ = net.SplitHostPort(listener.Addr().String())
 	return port, statements, cancels
+}
+
+// postgres ends a statement at the statement_timeout the exporter sets to
+// the scrape's time left, and its clock may do so a moment before the
+// scrape's context ends: the failure still says the deadline came first,
+// and is a deadline. A statement a cancel request ended, though it has the
+// same SQLSTATE, is not, nor is another driver's failure.
+func TestAPostgresStatementTimeoutIsTheScrapesDeadline(t *testing.T) {
+	postgres := &sqlPool{driver: sqlDriverTable[SQLDriverPostgres]}
+	timeout := &pgconn.PgError{Severity: "ERROR", Code: "57014", Message: "canceling statement due to statement timeout"}
+	err := postgres.sqlDeadline(context.Background(), "running the statement", timeout)
+	if !strings.Contains(err.Error(), "running the statement: the scrape's deadline came first") || !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, new(*pgconn.PgError)) {
+		t.Errorf("a statement timeout: %v", err)
+	}
+	cancelled := &pgconn.PgError{Severity: "ERROR", Code: "57014", Message: "canceling statement due to user request"}
+	if err := postgres.sqlDeadline(context.Background(), "running the statement", cancelled); strings.Contains(err.Error(), "deadline") || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a cancel request: %v", err)
+	}
+	mysql := &sqlPool{driver: sqlDriverTable[SQLDriverMySQL]}
+	if err := mysql.sqlDeadline(context.Background(), "running the statement", timeout); strings.Contains(err.Error(), "deadline") {
+		t.Errorf("another driver: %v", err)
+	}
 }

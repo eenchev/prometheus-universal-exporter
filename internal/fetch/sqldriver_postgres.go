@@ -10,9 +10,11 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -34,6 +36,7 @@ func init() {
 		tlsModes:  map[string]sqlTLSMode{"disable": sqlTLSOff, "require": sqlTLSInsecure, "verify-full": sqlTLSVerify},
 		connect:   connectPostgres,
 		run:       sqlReadOnlyTx(postgresStatementTimeout),
+		timedOut:  postgresTimedOut,
 		readOnly:  "transaction",
 	})
 }
@@ -45,6 +48,14 @@ func postgresStatementTimeout(timeout time.Duration) []string {
 		return nil
 	}
 	return []string{"SET LOCAL statement_timeout = " + strconv.FormatInt(max(timeout.Milliseconds(), 1), 10)}
+}
+
+// postgresTimedOut recognises the server ending a statement at its
+// statement_timeout: SQLSTATE 57014, query_canceled, with the message the
+// server gives a statement timeout, not the one of a cancel request.
+func postgresTimedOut(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "57014" && strings.Contains(pgErr.Message, "statement timeout")
 }
 
 // postgresPinned is the connection string postgresConfig parses: every

@@ -810,7 +810,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	stmtCtx, stop := context.WithCancel(ctx)
 	rows, done, err := p.driver.run(stmtCtx, conn, col.Request.Statement, args, timeout)
 	if err != nil {
-		err = sqlDeadline(ctx, "running the statement", err)
+		err = p.sqlDeadline(ctx, "running the statement", err)
 		traceOutcome(ctx, "error: "+err.Error())
 		return nil, stop, err
 	}
@@ -822,7 +822,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		if p.driver.rowsError != nil {
 			err = p.driver.rowsError(err)
 		}
-		err = sqlDeadline(ctx, "reading the rows", err)
+		err = p.sqlDeadline(ctx, "reading the rows", err)
 		traceOutcome(ctx, "error: "+err.Error())
 		return nil, finish, err
 	}
@@ -1021,6 +1021,17 @@ func sqlDeadline(ctx context.Context, doing string, err error) error {
 		return fmt.Errorf("%s: the scrape's deadline came first: %w", doing, err)
 	}
 	return fmt.Errorf("%s: %w", doing, err)
+}
+
+// sqlDeadline is the package's sqlDeadline, which also says the deadline
+// came first when the server reports that it ended the statement at the
+// time limit the driver set it to, the scrape's time left: the server's
+// clock may end it a moment before the scrape's context ends.
+func (p *sqlPool) sqlDeadline(ctx context.Context, doing string, err error) error {
+	if ctx.Err() == nil && p.driver.timedOut != nil && p.driver.timedOut(err) {
+		return fmt.Errorf("%s: the scrape's deadline came first (%w): %w", doing, context.DeadlineExceeded, err)
+	}
+	return sqlDeadline(ctx, doing, err)
 }
 
 // traceSQL records a statement in a debug probe's request section: the

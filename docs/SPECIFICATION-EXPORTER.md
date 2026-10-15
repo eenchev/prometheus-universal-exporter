@@ -9193,6 +9193,16 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
 The path filter MUST evaluate the correct comparison base for both push and
 pull-request workflows.
 
+CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
+suite and the tests of each single-type selection — beside the rest rather
+than after it. Every job that runs Go checks MUST start with the same setup
+steps (checkout, the changed-path filter, Go, the image's Python with its
+libraries and the test-only modules, the module download) and the same
+environment, and MUST gate its steps on that filter's output rather than with
+a job-level condition, so that a job with nothing to do still succeeds under
+its own name; a test MUST keep those setups identical, and MUST keep the
+matrix of the single-type tests naming every request type of the tree.
+
 CI SHOULD additionally run fuzz smoke tests, image tests, and Kubernetes integration tests in a dedicated pipeline stage when infrastructure is available.
 
 No feature should be considered complete if its relevant tests are absent or disabled.
@@ -13169,11 +13179,12 @@ Tests MUST show:
 - A collector without `request.type` is told to add a type the build has:
   `type: http` where the build carries http, and otherwise the first of the
   types it carries, and the message shows no type the build left out.
-- ci.yml has a step that runs `go test -count=1` under the tags of each
-  request type on its own, under the condition of its other Go steps; each of
-  its loops over the request types names every type in the tree, and so does
-  that of `make test-request-types`, which runs the command ci.yml runs and
-  is part of `make ci`.
+- ci.yml has a job of a matrix over the request types, with fail-fast false,
+  whose step runs `go test -count=1` under the tags of its type, given as
+  `$type` from the matrix, under the condition of its other Go steps; the
+  matrix and each of its loops over the request types name every type in
+  the tree, and so does that of `make test-request-types`, which runs the
+  command ci.yml runs and is part of `make ci`.
 - In a build with grpc and without http the exporter's grpc fixture carries
   its grpc collector alone, so the grpc probe, static target, collectors
   page, debug probe and stale result tests run there too; with http the
@@ -21514,10 +21525,10 @@ Forwarded header values, the watch interval and readiness after a rejected reloa
 
 The Makefile builds the exporter's binary and `make ci` runs what the CI workflow runs (§ 35):
 
-- Every go command a step of ci.yml's test job runs (beside `go mod
+- Every go command a step of any job of ci.yml runs (beside `go mod
   download`), its loops over the request types and the request-type-tags
   line among them, is run by a target `make ci` reaches, every make target
-  the job runs other than the installing ones is reached by `make ci`, at
+  the jobs run other than the installing ones is reached by `make ci`, at
   least eight go commands are read from ci.yml, and every target of the
   Makefile is `.PHONY`.
 - `make build` runs `go build -tags "$tags" -o bin/$(APP) .` with the tags of
@@ -22744,6 +22755,21 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
   request, and on no other push, so a pull request's commit is not run
   twice and a release tag's commit still gets the push run the release
   workflows wait for.
+
+## 34.145 CI's slowest runs in parallel jobs
+
+The race run and each request type's run in jobs of their own beside the test job, with one setup (§ 42.12):
+
+- ci.yml runs the race suite in a job of its own (`race`) and each request
+  type's tests in a job of a matrix (`request-types`), beside the `test` job;
+  every job of ci.yml other than `test` starts with `test`'s setup steps, the
+  helm setup alone left out, equal to them in their order, has `test`'s env
+  and machine, runs each of its own steps under the condition of the Go
+  steps, and no job of ci.yml has a job-level `if`: a copy of a setup step
+  that differs, a missing environment or a job-level `if` fails the test.
+- The race suite's step is looked for in every job of ci.yml, and the go
+  commands `make ci` must run are read from every job, so moving a step to
+  another job keeps both checks.
 
 # 35. Documentation requirements
 
@@ -24939,9 +24965,9 @@ release line (`v4.3`) unless the version is set at link time as helm's own
 release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
 target MUST pass that flag with the pinned version.
 
-`make ci` MUST run every go command the CI workflow's test job runs, beside
-the `go mod download` that fills its module cache, and reach every make
-target the job runs other than the installing ones, so that a clean local
+`make ci` MUST run every go command the CI workflow's jobs run, beside
+the `go mod download` that fills their module cache, and reach every make
+target the jobs run other than the installing ones, so that a clean local
 `make ci` means a clean CI run; every target of the Makefile MUST be
 `.PHONY`, since none makes a file of its name. A test MUST check both.
 

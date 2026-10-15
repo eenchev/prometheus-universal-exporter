@@ -14,7 +14,7 @@ make build-request-types  # go build ./..., then go vet and go build for each re
 make test-request-types  # go test once for each request type built on its own
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
-make ci         # what CI runs, in its order: fmt-check, lint, gopls-check, test, vet,
+make ci         # what CI runs, one after another: fmt-check, lint, gopls-check, test, vet,
                 #   build-request-types, test-request-types and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
@@ -593,7 +593,7 @@ A build can carry only some request types
 ([Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)),
 and such a build's tests have to pass as the default build's do.
 `make test-request-types` runs the suite once for each type built on its own,
-CI runs the same, and `make ci` includes it. One of them by hand:
+CI runs the same, each type in a job of its own, and `make ci` includes it. One of them by hand:
 
 ```sh
 go test -tags "$(sh tools/request-type-tags.sh localfile)" ./...
@@ -2172,6 +2172,19 @@ under `charts/`, `configs/` and `testdata/chart/`, the files the chart steps
 render. A change under `charts/` runs the Go suite because the template guard
 above lives there and is worth least on exactly the changes that would break
 it.
+
+The two slowest parts of CI run in jobs of their own, beside the `test` job
+and at the same time as it: `race` runs the race suite, and `request-types`,
+a matrix over the request types (its checks are named `test (<type>)`), runs
+each type's tests built on its own; `test` keeps everything else, the
+single-type vet and build and the chart steps among it. Each of the two
+starts with `test`'s setup steps but helm's, written out again, and
+`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
+`test`'s, so change them in all three jobs at once. They gate their steps on
+the same changed-path filter rather than with a job-level `if`: a job whose
+steps are skipped still passes under its own name, while a matrix job skipped
+as a whole is reported under a name no check expects. `make ci` runs the same
+commands one after another.
 
 Every workflow sets `permissions` at its top, read-only, so no job runs with
 the repository's default token, which may write to everything; a job that has

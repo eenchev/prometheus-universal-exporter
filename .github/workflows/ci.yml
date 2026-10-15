@@ -148,13 +148,6 @@ jobs:
         if: steps.changes.outputs.go == 'true'
       - run: go test ./...
         if: steps.changes.outputs.go == 'true'
-      # Twice, in a random order, so a test that depends on the order tests
-      # run in, or on running only once, is caught. The limit is a package's:
-      # go test's own ten minutes are for one run without the race detector,
-      # and this is two with it, on whatever machine the job was given. The
-      # Makefile runs the same command and a test keeps the two in step.
-      - run: go test -race -count=2 -shuffle=on -timeout 20m ./...
-        if: steps.changes.outputs.go == 'true'
       - run: go vet ./...
         if: steps.changes.outputs.go == 'true'
       - run: go build ./...
@@ -167,17 +160,6 @@ jobs:
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...
-          done
-        if: steps.changes.outputs.go == 'true'
-      # And test each: a build with one type is one the exporter ships, so its
-      # tests have to pass too. A test that needs a type says so with a build
-      # constraint, so each run is of the tests that build can pass. Once and
-      # without -race, which the runs above cover with every type.
-      - name: Test with each request type on its own
-        run: |
-          for type in graphite grpc http localfile sql sshfile; do
-            tags="$(sh tools/request-type-tags.sh "$type")"
-            go test -count=1 -tags "$tags" ./...
           done
         if: steps.changes.outputs.go == 'true'
       # The sql request type's four opt-in drivers are compiled by no build
@@ -498,6 +480,218 @@ jobs:
             fi
           done
         if: steps.changes.outputs.chart == 'true'
+  # The race run and the tests of each request type built on its own are
+  # most of CI's time, so they run in jobs of their own, beside test, and CI
+  # takes about as long as its longest job. Each starts with test's setup
+  # steps but helm's, written out the same (a test keeps them identical), and
+  # its Go steps have the condition test's have: a job whose steps are skipped
+  # still succeeds under its own name, which a matrix job skipped by a
+  # job-level `if` would not.
+  race:
+    runs-on: ubuntu-latest
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
+            chart:
+              - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
+      - uses: actions/setup-go@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          go-version: 'stable'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
+      - run: go mod download
+        if: steps.changes.outputs.go == 'true'
+      # Twice, in a random order, so a test that depends on the order tests
+      # run in, or on running only once, is caught. The limit is a package's:
+      # go test's own ten minutes are for one run without the race detector,
+      # and this is two with it, on whatever machine the job was given. The
+      # Makefile runs the same command and a test keeps the two in step.
+      - run: go test -race -count=2 -shuffle=on -timeout 20m ./...
+        if: steps.changes.outputs.go == 'true'
+  # And test each request type built on its own: a build with one type is one
+  # the exporter ships, so its tests have to pass too. A test that needs a
+  # type says so with a build constraint, so each run is of the tests that
+  # build can pass. Once and without -race, which the race job covers with
+  # every type. The matrix names every type in the tree; a test keeps it so.
+  request-types:
+    name: test (${{ matrix.type }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Every type's failures are reported, not only the first type's.
+      fail-fast: false
+      matrix:
+        type:
+          - graphite
+          - grpc
+          - http
+          - localfile
+          - sql
+          - sshfile
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
+            chart:
+              - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
+      - uses: actions/setup-go@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          go-version: 'stable'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
+      - run: go mod download
+        if: steps.changes.outputs.go == 'true'
+      - name: Test with the request type on its own
+        env:
+          type: ${{ matrix.type }}
+        run: |
+          tags="$(sh tools/request-type-tags.sh "$type")"
+          go test -count=1 -tags "$tags" ./...
+        if: steps.changes.outputs.go == 'true'
   # The sql-live job is turned off for now: it would run the live tests
   # against PostgreSQL, MySQL and SQL Server service containers on every
   # push and pull request. `make test-sql-live` runs them locally

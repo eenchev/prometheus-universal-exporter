@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -31,7 +32,18 @@ func checkHTTPTarget(c *model.Collector, target string, static bool) error {
 	// A probe's target is checked for its scheme when it is fetched; a
 	// static target's is known now, and one that is not allowed would fail
 	// every scrape.
-	return checkScheme(c, u.Scheme)
+	if err := checkScheme(c, u.Scheme); err != nil {
+		return err
+	}
+	// url.Parse takes a port of digits however many, which no connection
+	// can use: 0, or one past 65535, would fail every scrape. The URL is not
+	// shown, as it may carry credentials.
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("has the port %q in its target URL; want a number from 1 to 65535", port)
+		}
+	}
+	return nil
 }
 
 // validateHTTPRequest holds the http type's rules. Nothing but type is
@@ -42,6 +54,12 @@ func validateHTTPRequest(x *model.Collector) error {
 		return err
 	}
 	if err := checkTLSSettings(x.Request.TLS); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	if err := checkForwardHeaders(x.Request.ForwardHeaders); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	if err := checkQueryNames(x.Request.Query); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if x.Request.Retry.Attempts < 0 || x.Request.Retry.Attempts > MaxRetryAttempts {
@@ -114,6 +132,24 @@ func validateRequestTemplates(c *model.Collector) error {
 	for _, f := range requestTemplates(c, RequestOverrides{}) {
 		if err := f.check(); err != nil {
 			return fmt.Errorf("collector %q: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+// checkQueryNames refuses a request.query name of nothing, which would be
+// sent as a pair with no name, =value, and one holding a control
+// character, almost always the line break an environment variable ended
+// with. Any other character of a name is sent escaped (url.Values.Encode).
+func checkQueryNames(query map[string]string) error {
+	for _, name := range model.SortedKeys(query) {
+		if name == "" {
+			return errors.New("request.query has a parameter without a name; write its name, or leave the parameter out")
+		}
+		for _, r := range name {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("request.query name %q has the control character %q in it; a parameter's name is sent as written, escaped", name, r)
+			}
 		}
 	}
 	return nil

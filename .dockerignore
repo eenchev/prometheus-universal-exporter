@@ -7,6 +7,9 @@
 .idea/
 .vscode/
 Claude outputs/
+# A local vendor directory would make the image's go build use it instead of
+# the modules go.sum pins.
+vendor/
 bin/
 dist/
 *.tgz

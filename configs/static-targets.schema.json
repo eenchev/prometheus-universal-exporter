@@ -152,6 +152,11 @@
                     ]
                   },
                   "username": {
+                    "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617).",
+                    "not": {
+                      "pattern": ":",
+                      "type": "string"
+                    },
                     "type": [
                       "string",
                       "number",
@@ -202,6 +207,79 @@
                   "boolean"
                 ]
               },
+              "connections": {
+                "additionalProperties": false,
+                "description": "sql: replaces, key by key, the collector's request.connections for this target; not max_targets, which is the collector's and refused here.",
+                "not": {
+                  "required": [
+                    "max_targets"
+                  ]
+                },
+                "properties": {
+                  "idle_timeout": {
+                    "description": "sql: how long an idle connection to this target is kept; 0 keeps it.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "keepalive": {
+                    "additionalProperties": false,
+                    "description": "sql: how a kept connection to this target is found broken.",
+                    "properties": {
+                      "check": {
+                        "description": "sql: tcp or ping.",
+                        "enum": [
+                          "tcp",
+                          "ping",
+                          ""
+                        ],
+                        "type": "string"
+                      },
+                      "interval": {
+                        "description": "sql: how often a connection to this target is checked; at least 1s, 0 for none.",
+                        "maximum": 0,
+                        "minimum": 0,
+                        "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                        "type": [
+                          "string",
+                          "integer"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "max_idle_per_target": {
+                    "description": "sql: how many connections to this target are kept idle; 0 keeps none.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_lifetime": {
+                    "description": "sql: how long a connection to this target is used; 0 uses it as long as it works.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "max_per_target": {
+                    "description": "sql: the most connections open to this target at once; 0 sets no limit.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_targets": {
+                    "description": "A collector's setting, which a static target cannot set: refused here, whatever its value.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
               "enable_http2": {
                 "type": "boolean"
               },
@@ -223,6 +301,13 @@
                     "number",
                     "boolean"
                   ]
+                },
+                "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding.",
+                "propertyNames": {
+                  "not": {
+                    "pattern": "^[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"
+                  },
+                  "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
                 },
                 "type": "object"
               },
@@ -263,8 +348,68 @@
                 ],
                 "type": "string"
               },
+              "passphrase_file": {
+                "description": "sshfile, with the target's private_key_file: the file of its passphrase.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "password_file": {
+                "description": "sshfile and sql: the target's own password file; see private_key_file.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "path": {
                 "description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "private_key_file": {
+                "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
                 "type": [
                   "string",
                   "number",
@@ -333,12 +478,32 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "username": {
+                "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               }
             },
             "type": "object"
           },
           "target": {
-            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one.",
+            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one.",
             "type": [
               "string",
               "number",

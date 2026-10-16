@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -108,6 +109,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := checkLimits(x); err != nil {
 		return err
 	}
+	if err := checkLeastLimits(x); err != nil {
+		return err
+	}
 	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
 		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
 	}
@@ -129,7 +133,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	// for each response. That works, but a response that changes its
 	// Content-Type, or a file its extension, silently changes how it is
 	// read, so the operator is told once on every start and reload.
-	if decoderUnset && x.Decoder.Type == "auto" {
+	if decoderUnset && x.Decoder.Type == "auto" && x.Request.Type != fetch.RequestTypeSQL {
 		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
 	// Retries of a POST or PATCH need retry.non_idempotent, since sending one
@@ -275,7 +279,12 @@ func normalizeFormats(x *model.Collector) error {
 			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a grpc call is answered with; use jq, yq or python", x.Name, x.Transform.Type)
 		}
 	}
-	if x.Decoder.Type == "auto" {
+	if x.Request.Type == fetch.RequestTypeSQL {
+		if err := checkSQLFormats(x); err != nil {
+			return err
+		}
+	}
+	if x.Decoder.Type == "auto" && x.Request.Type != fetch.RequestTypeSQL {
 		switch x.Transform.Type {
 		case "regex":
 			x.Decoder.Type = "text"
@@ -298,6 +307,25 @@ func normalizeFormats(x *model.Collector) error {
 		return err
 	}
 	return checkSettingsApply(x)
+}
+
+// checkSQLFormats holds a sql collector to what reads its rows: they are
+// read by the driver, value by value, so no decoder and no response setting
+// applies to them, and only the transforms that read rows by column or a
+// list of objects can map them.
+func checkSQLFormats(x *model.Collector) error {
+	if x.Decoder.Type != "auto" {
+		return fmt.Errorf("collector %q decodes with %s, but a sql collector's rows are read by its driver, with no body to decode; leave decoder.type out", x.Name, x.Decoder.Type)
+	}
+	switch x.Transform.Type {
+	case "csv", "jq", "yq", "python":
+	default:
+		return fmt.Errorf("collector %q transforms with %s, which cannot read the rows of a statement; use csv, which reads a column by name, one series a row, or jq, yq or python, which read the rows as a list of objects", x.Name, x.Transform.Type)
+	}
+	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) {
+		return fmt.Errorf("collector %q sets response settings, which apply to the body of a response, and a sql collector's rows have none; leave the response block out", x.Name)
+	}
+	return nil
 }
 
 // checkGraphiteResponse checks response.graphite; value left out is last. It
@@ -973,19 +1001,45 @@ func WithStaticTargetsEnvExpansion() LoadOption {
 	return func(o *loadOptions) { o.expandEnv, o.flag = true, staticTargetsEnvFlag }
 }
 
+// readDocument reads a configuration file, a collector file or a static
+// target file. A file it cannot read is a readError, which the watch tries
+// again at every tick (Manager.configUnread).
 func readDocument(path string, opts []LoadOption) ([]byte, error) {
 	var options loadOptions
 	for _, apply := range opts {
 		apply(&options)
 	}
-	b, err := os.ReadFile(path)
+	b, err := readFile(path)
 	if err != nil {
-		return nil, err
+		return nil, &readError{err: err}
 	}
 	if !options.expandEnv {
 		return b, nil
 	}
 	return expandEnvironment(path, b, options.flag)
+}
+
+// readFile reads the file at path for readDocument; tests set it to make a
+// file unreadable in a way the watch's stamps do not see, which the user
+// running the tests may be able to read whatever its permissions.
+var readFile = os.ReadFile
+
+// readError is the error of a file readDocument could not read: missing,
+// unreadable for its permissions or a directory's, or a directory itself. Its
+// text is the error's. A file whose reload is refused for it may become
+// readable without its stamp changing — its owner, an ACL or a directory's
+// permissions changed — so the watch reads it again at every tick while it
+// is refused for it, which a reload refused for what a file says is not.
+type readError struct{ err error }
+
+func (e *readError) Error() string { return e.err.Error() }
+func (e *readError) Unwrap() error { return e.err }
+
+// unreadable reports whether err says a file could not be read (readError),
+// alone or among other problems.
+func unreadable(err error) bool {
+	var re *readError
+	return errors.As(err, &re)
 }
 
 // Load reads the configuration file at path and the collector files it
@@ -1001,6 +1055,9 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.Config, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err = refuseNotScalarKeys(b); err != nil {
 		return nil, err
 	}
 	var c model.Config
@@ -1043,12 +1100,14 @@ type Manager struct {
 	current atomic.Pointer[inForce]
 	path    string
 	logger  *slog.Logger
-	// lastMod and lastSize are the configuration file's modification time
-	// and size when it was last read: a change to either is a change, so a
-	// file replaced by one with an older time, as cp -p and rsync -t leave
-	// it, is read too.
+	// lastMod, lastSize and lastMode are the configuration file's
+	// modification time, size and mode when it was last read: a change to
+	// any is a change, so a file replaced by one with an older time, as cp -p
+	// and rsync -t leave it, is read too, and so is a file whose permissions
+	// were changed, which may have made it readable again, or unreadable.
 	lastMod  time.Time
 	lastSize int64
+	lastMode fs.FileMode
 	// collectorFiles is the stamp of the collector files the configuration
 	// read when last loaded (collectorFilesStamp), and watchedFiles the
 	// collector_files entries it was taken from: those of the file last
@@ -1077,8 +1136,10 @@ type Manager struct {
 	retryImports   bool
 	targetPath     string
 	targetsLastMod time.Time
-	// targetsLastSize is lastSize for the static target file.
+	// targetsLastSize and targetsLastMode are lastSize and lastMode for the
+	// static target file.
 	targetsLastSize int64
+	targetsLastMode fs.FileMode
 	pythonPath      string
 	watchInterval   time.Duration
 	expandEnv       bool
@@ -1118,6 +1179,19 @@ type Manager struct {
 	// only because the other file, as in force, disagrees with it, so a
 	// change to the other file reads it again (apply).
 	configWaits, targetsWaits bool
+	// configUnread and targetsUnread say that file's last reload was
+	// refused because a file it reads could not be read (readError). The
+	// watch reads it again at every tick while it is: the file may have
+	// become readable without anything its stamps hold changing, through
+	// its owner, an ACL or a directory's permissions (reloadChanged).
+	// configRefusal and targetsRefusal are the text the last refusal of
+	// that file is recognised by (model.SameFailureText), "" once it is in
+	// force; and configQuiet and targetsQuiet say the reload under way reads
+	// that file only to try it again, so a refusal it gets with the text of
+	// the last is neither logged nor counted again (rejectConfig).
+	configUnread, targetsUnread   bool
+	configRefusal, targetsRefusal string
+	configQuiet, targetsQuiet     bool
 	// reloads records how loading each file has gone, for the self-metrics.
 	Reloads *reloadStatus
 	// reloadMu serializes reloads, whatever triggers them.
@@ -1163,19 +1237,20 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	// Its descriptor files are stamped when the watch is turned on
 	// (SetWatchInterval), and not at all without it.
 	if st, err := os.Stat(path); err == nil && c != nil {
-		m.lastMod, m.lastSize = st.ModTime(), st.Size()
+		m.lastMod, m.lastSize, m.lastMode = st.ModTime(), st.Size(), st.Mode()
 	}
 	return m
 }
 
 // Stamp is what the watch compares files against to see a change: their
-// modification times and sizes, and the collector files a configuration
-// lists. Taken before the files are read, it makes a change written while
-// they were being read a change the next watch tick sees, rather than part of
-// what was read.
+// modification times, sizes and modes, and the collector files a
+// configuration lists. Taken before the files are read, it makes a change
+// written while they were being read a change the next watch tick sees,
+// rather than part of what was read.
 type Stamp struct {
 	mod            time.Time
 	size           int64
+	mode           fs.FileMode
 	found          bool
 	entries        []string
 	collectorFiles string
@@ -1189,7 +1264,7 @@ type Stamp struct {
 func TakeStamp(path string, listsCollectorFiles bool, opts ...LoadOption) Stamp {
 	var s Stamp
 	if st, err := os.Stat(path); err == nil {
-		s.mod, s.size, s.found = st.ModTime(), st.Size(), true
+		s.mod, s.size, s.mode, s.found = st.ModTime(), st.Size(), st.Mode(), true
 	}
 	if listsCollectorFiles {
 		if listed, ok := listedCollectorFiles(path, opts); ok {
@@ -1220,7 +1295,7 @@ func LoadStamped(path string, s *Stamp, opts ...LoadOption) (*model.Config, erro
 // read with the stamp (LoadStamped), its descriptor files against.
 func (m *Manager) UseStamp(s Stamp) {
 	if s.found {
-		m.lastMod, m.lastSize = s.mod, s.size
+		m.lastMod, m.lastSize, m.lastMode = s.mod, s.size, s.mode
 	}
 	if s.entries != nil {
 		m.watchedFiles, m.collectorFiles = s.entries, s.collectorFiles
@@ -1233,7 +1308,7 @@ func (m *Manager) UseStamp(s Stamp) {
 // UseTargetsStamp is UseStamp for the static target file.
 func (m *Manager) UseTargetsStamp(s Stamp) {
 	if s.found {
-		m.targetsLastMod, m.targetsLastSize = s.mod, s.size
+		m.targetsLastMod, m.targetsLastSize, m.targetsLastMode = s.mod, s.size, s.mode
 	}
 }
 
@@ -1346,7 +1421,7 @@ func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 	}
 	if path != "" {
 		if st, err := os.Stat(path); err == nil {
-			m.targetsLastMod, m.targetsLastSize = st.ModTime(), st.Size()
+			m.targetsLastMod, m.targetsLastSize, m.targetsLastMode = st.ModTime(), st.Size(), st.Mode()
 		}
 	}
 }
@@ -1449,6 +1524,14 @@ func (m *Manager) reloadChanged() {
 	configChanged, descriptorsChanged, targetsChanged := m.configChanged(), m.descriptors.changed(), m.targetsChanged()
 	doConfig := configChanged || descriptorsChanged || targetsChanged && m.configWaits
 	doTargets := targetsChanged || configChanged && m.targetsWaits || descriptorsChanged && m.targetsFollowDescriptors()
+	// A file refused because a file it reads could not be read is read
+	// again at every tick, although nothing changed, and so is the other
+	// file when it waits for that one. Read for that alone, it is quiet: the
+	// same refusal again is neither logged nor counted.
+	m.configQuiet = !doConfig && (m.configUnread || m.configWaits && m.targetsUnread && !doTargets)
+	m.targetsQuiet = !doTargets && (m.targetsUnread || m.targetsWaits && m.configUnread && !doConfig)
+	defer func() { m.configQuiet, m.targetsQuiet = false, false }()
+	doConfig, doTargets = doConfig || m.configQuiet, doTargets || m.targetsQuiet
 	if !doConfig && !doTargets {
 		return
 	}
@@ -1473,7 +1556,7 @@ func (m *Manager) configChanged() bool {
 	// file it was checked against, as that was before the refused load read
 	// it (loading). The files are only stamped: nothing is read, and nothing
 	// logged, for a tick that finds them as they were.
-	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles ||
+	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || st.Mode() != m.lastMode || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles ||
 		len(m.retryFiles) > 0 && filesStamp(m.retryFiles) != m.retryStamp || m.loading.changed()
 }
 
@@ -1505,7 +1588,7 @@ func (m *Manager) targetsChanged() bool {
 		return false
 	}
 	st, err := os.Stat(m.targetPath)
-	return err == nil && (!st.ModTime().Equal(m.targetsLastMod) || st.Size() != m.targetsLastSize ||
+	return err == nil && (!st.ModTime().Equal(m.targetsLastMod) || st.Size() != m.targetsLastSize || st.Mode() != m.targetsLastMode ||
 		len(m.targetsRetryFiles) > 0 && filesStamp(m.targetsRetryFiles) != m.targetsRetryStamp)
 }
 
@@ -1658,7 +1741,7 @@ func listedCollectorFiles(path string, opts []LoadOption) ([]string, bool) {
 // loadConfig reads and checks the configuration on its own. reloadMu is held.
 func (m *Manager) loadConfig() (*model.Config, error) {
 	if st, err := os.Stat(m.path); err == nil {
-		m.lastMod, m.lastSize = st.ModTime(), st.Size()
+		m.lastMod, m.lastSize, m.lastMode = st.ModTime(), st.Size(), st.Mode()
 	}
 	// The collector files watched from now are the ones this file lists,
 	// read on its own, so a refused file that added one is read again
@@ -1703,7 +1786,7 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 // held.
 func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	if st, err := os.Stat(m.targetPath); err == nil {
-		m.targetsLastMod, m.targetsLastSize = st.ModTime(), st.Size()
+		m.targetsLastMod, m.targetsLastSize, m.targetsLastMode = st.ModTime(), st.Size(), st.Mode()
 	}
 	// Reading the file on its own opens no other: one refused here is read
 	// again when it changes, and for nothing else.
@@ -1751,7 +1834,7 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 // installedConfig records and logs that c was put in force, and lets what is
 // kept for a configuration follow it. reloadMu is held.
 func (m *Manager) installedConfig(trigger string, c *model.Config) {
-	m.configWaits = false
+	m.configWaits, m.configUnread, m.configRefusal = false, false, ""
 	// In force, the configuration is not read again for a certificate or a
 	// credential file it names: what uses one reads it again itself. It is
 	// for its descriptor files, which it is checked against: they are
@@ -1775,7 +1858,7 @@ func (m *Manager) installedConfig(trigger string, c *model.Config) {
 // installedTargets records and logs that f was put in force. reloadMu is
 // held.
 func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
-	m.targetsWaits = false
+	m.targetsWaits, m.targetsUnread, m.targetsRefusal = false, false, ""
 	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
 	m.Reloads.record(ReloadFileStaticTargets, true)
 	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
@@ -1783,9 +1866,17 @@ func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 
 // rejectConfig refuses a configuration, which stays as it was. waits says it
 // was refused only by the static target file in force, and is read again when
-// that changes. reloadMu is held.
+// that changes. A refusal because a file could not be read is tried again
+// at every tick (configUnread); one that such a try gets with the text of
+// the last refusal (configQuiet) is not a new refusal, and is neither logged
+// nor counted: the line and the count of failed reloads say each distinct
+// refusal once, as they do when a tick finds nothing changed and reads
+// nothing. reloadMu is held.
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
+	same := model.SameFailureText(err)
+	quiet := m.configQuiet && same == m.configRefusal
+	m.configUnread, m.configRefusal = !waits && unreadable(err), same
 	// With the watch on, the descriptor files of the configuration that was
 	// read, named and imported, were stamped before it was validated, and
 	// stay watched as they were then (loading): were they looked at again
@@ -1810,15 +1901,20 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	if m.retryImports {
 		stamped = append(stamped, "a file one of those imports")
 	}
-	attrs = m.retriedWhen(attrs, "the configuration", stamped, "the static target file", waits)
-	m.logger.Error("configuration reload rejected", attrs...)
-	m.Reloads.record(reloadFileConfig, false)
+	attrs = m.retriedWhen(attrs, "the configuration", stamped, "the static target file", waits, m.configUnread)
+	if !quiet {
+		m.logger.Error("configuration reload rejected", attrs...)
+		m.Reloads.record(reloadFileConfig, false)
+	}
 	return fmt.Errorf("configuration %s: %w", m.path, err)
 }
 
 // rejectTargets is rejectConfig for the static target file.
 func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	m.targetsWaits = waits
+	same := model.SameFailureText(err)
+	quiet := m.targetsQuiet && same == m.targetsRefusal
+	m.targetsUnread, m.targetsRefusal = !waits && unreadable(err), same
 	// The files its check opens are those the collectors name and those
 	// that these import, which with the watch on were stamped before the
 	// check read them (apply).
@@ -1830,9 +1926,11 @@ func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	if len(m.targetsRetryFiles) > 0 {
 		stamped = append(stamped, "a file its check opens")
 	}
-	attrs = m.retriedWhen(attrs, "the static target file", stamped, "the configuration", waits)
-	m.logger.Error("static target reload rejected", attrs...)
-	m.Reloads.record(ReloadFileStaticTargets, false)
+	attrs = m.retriedWhen(attrs, "the static target file", stamped, "the configuration", waits, m.targetsUnread)
+	if !quiet {
+		m.logger.Error("static target reload rejected", attrs...)
+		m.Reloads.record(ReloadFileStaticTargets, false)
+	}
 	return fmt.Errorf("static target file %s: %w", m.targetPath, err)
 }
 
@@ -1861,9 +1959,12 @@ func retryImported(files []string, stamp string, configs ...*model.Config) (all 
 // while it is refused (retryFiles, targetsRetryFiles), when there are such;
 // and the other file, when this one waits for it. Each is named only when it
 // holds, so the line never reads as if one change alone helped, nor promises
-// a retry for a file nothing looks at. Without the watch nothing is read
-// again until a reload is asked for, and the line says nothing.
-func (m *Manager) retriedWhen(attrs []any, file string, stamped []string, other string, waits bool) []any {
+// a retry for a file nothing looks at. A file refused because a file it
+// reads could not be read, unread, is also read again at every tick until
+// it can be, which the line then says after the changes. Without the watch
+// nothing is read again until a reload is asked for, and the line says
+// nothing.
+func (m *Manager) retriedWhen(attrs []any, file string, stamped []string, other string, waits, unread bool) []any {
 	if !m.WatchEnabled() {
 		return attrs
 	}
@@ -1875,7 +1976,11 @@ func (m *Manager) retriedWhen(attrs []any, file string, stamped []string, other 
 	if last := len(whens) - 1; last > 0 {
 		when = strings.Join(whens[:last], ", ") + " or " + whens[last]
 	}
-	return append(attrs, "retried_when", when+" changes")
+	when += " changes"
+	if unread {
+		when += ", and at every tick while a file it reads cannot be read"
+	}
+	return append(attrs, "retried_when", when)
 }
 
 // checkPythonLibrary rejects a declared library the image does not install.
@@ -1908,7 +2013,7 @@ func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 // transform implies none, decodes what it reads.
 func undecidedDecoderWarning(x *model.Collector) string {
 	how := "by the Content-Type header of each response"
-	if x.Request.Type == fetch.RequestTypeLocalFile {
+	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile {
 		how = "by the extension of each file"
 	}
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)

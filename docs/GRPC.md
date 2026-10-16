@@ -385,6 +385,7 @@ stage, under `error_handling.on_fetch_error` like any fetch error:
 | `UNIMPLEMENTED` | once, with fresh descriptors | The server does not know the service or the method. |
 | `UNAUTHENTICATED`, `PERMISSION_DENIED` | no | Logged with the server's message, never the credentials. |
 | `RESOURCE_EXHAUSTED` | no | Includes an answer over `max_response_bytes`, which counts in `http_exporter_series_limit_exceeded_total`. An answer that arrives within the limit but is over it as JSON fails the same way, counted the same way, with the gauge at `0`, since the call itself was `OK`. |
+| `INTERNAL` | no | Includes an answer whose headers, or trailers, are over 1 MiB, the bound an `http` answer's headers have ([Target requests](REQUESTS.md#compression-and-the-response-size)): `the answer's headers or trailers are larger than 1048576 bytes, the most the exporter reads of a response's headers`, counted in `http_exporter_series_limit_exceeded_total` and never retried, whatever `retry.codes` and `accept_codes` say. The exporter tells the server the bound; a server that keeps to it, as grpc-go's does, ends the call itself instead, which reads `stream terminated by RST_STREAM with error code: INTERNAL_ERROR` and is not counted as a limit. |
 | anything else | no | The status and the server's message. |
 
 The Retried column is the default, `retry.codes: [UNAVAILABLE]`: the server

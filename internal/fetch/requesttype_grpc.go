@@ -145,6 +145,9 @@ func validateGRPCRequest(x *model.Collector) error {
 	if err := checkGRPCMetadata(r.Metadata, true, r.BasicAuth != nil || r.BasicAuthFile != nil || r.BearerToken != "" || r.BearerTokenFile != ""); err != nil {
 		return fmt.Errorf("collector %q request.metadata %w", x.Name, err)
 	}
+	if err := checkForwardHeaders(r.ForwardHeaders); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
 	for _, name := range r.ForwardHeaders {
 		if err := checkGRPCMetadataName(strings.ToLower(strings.TrimSpace(name))); err != nil {
 			return fmt.Errorf("collector %q request.forward_headers %q: %w", x.Name, name, err)

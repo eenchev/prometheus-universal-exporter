@@ -108,7 +108,11 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 		}
 		creds = credentials.NewTLS(cfg)
 	}
-	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpc.WithConnectParams(grpcConnectParams())}
+	// An answer's headers, and its trailers, are each held to the bound an
+	// http answer's headers are, where grpc-go's own is 16 MiB, all of it
+	// kept as the response's headers: the connection advertises it, and
+	// stops reading an answer past it (headerListTooLarge).
+	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpc.WithConnectParams(grpcConnectParams()), grpc.WithMaxHeaderListSize(maxResponseHeaderBytes)}
 	// Behind a proxy grpc-go's own dialer connects through it, which a
 	// dialer of the exporter's would bypass; the call resolved and checked
 	// the server's addresses instead.

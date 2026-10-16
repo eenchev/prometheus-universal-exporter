@@ -173,13 +173,16 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 // counted as what they are.
 func TestFailuresAreCountedByKind(t *testing.T) {
 	requirePython(t)
-	target := textTarget(t, "value=42\n")
+	// The answer is over the least response limit a collector may have,
+	// 1KiB, which kind_large is held to, and within kind_missing's.
+	target := textTarget(t, "value=42\n"+strings.Repeat("# padding\n", 200))
 	misleading := pythonCollector("kind_script", `raise ValueError("value is missing and the response size exceeds limit")`)
 	missing := testutil.Collector("kind_missing", "text")
 	missing.Metrics[0].Expression = `absent=(\d+)`
 	missing.Metrics[0].ErrorMode = model.ErrorModeFail
+	missing.Limits.MaxResponseBytes = 1 << 20
 	large := testutil.Collector("kind_large", "text")
-	large.Limits.MaxResponseBytes = 4
+	large.Limits.MaxResponseBytes = 1024
 	server := verboseServer(t, false, misleading, missing, large)
 	for _, collector := range []string{"kind_script", "kind_missing", "kind_large"} {
 		probeOnce(t, server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil)

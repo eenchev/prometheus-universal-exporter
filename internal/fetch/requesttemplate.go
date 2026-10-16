@@ -66,6 +66,11 @@ var jsonNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9
 // Graphite's grammar gives a meaning.
 var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
 
+// sqlDatabaseName is what a placeholder may be filled with in a sql
+// collector's request.database: the characters of a database name that
+// need no quoting in any of the databases.
+var sqlDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.$-]+$`)
+
 // parsePlaceholders finds the placeholders of text, reported as where. strict
 // makes every `{{` a placeholder; otherwise only `{{param_`. filters allows a
 // |filter.
@@ -157,8 +162,8 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header", "query" or "graphite", which decides the
-	// encoding.
+	// kind is "body", "header", "query", "graphite", "database" or "arg",
+	// which decides the encoding.
 	kind string
 }
 
@@ -187,6 +192,15 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	for _, name := range model.SortedKeys(c.Request.Metadata) {
 		if value := c.Request.Metadata[name]; HasPathParams(value) {
 			out = append(out, templateField{"request.metadata." + name, value, "header"})
+		}
+	}
+	// A sql collector's database and the values bound to its statement.
+	if HasPathParams(c.Request.Database) {
+		out = append(out, templateField{"request.database", c.Request.Database, "database"})
+	}
+	for i, arg := range c.Request.Args {
+		if HasPathParams(arg) {
+			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
 		}
 	}
 	// A static target's own targets replace the collector's, placeholders
@@ -265,6 +279,16 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		return value, nil
 	case "query":
 		// url.Values.Encode escapes the whole value.
+		return value, nil
+	case "arg":
+		// Sent as a value, bound to the statement or written into it by
+		// the driver quoted as a literal, never as SQL, so any text is
+		// safe.
+		return value, nil
+	case "database":
+		if !sqlDatabaseName.MatchString(value) {
+			return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . $, since it names the database the statement runs on", f.where, p.Name, value)
+		}
 		return value, nil
 	case "graphite":
 		if !graphiteValue.MatchString(value) {

@@ -199,9 +199,9 @@ extraArgs: []
 # the configuration directory would hide config.yaml and crash-loop the pod.
 # So is a path two entries share. Paths are compared without a trailing slash.
 # A path inside the configuration directory, or inside an enabled
-# targetAuth or webAuth mountPath, is rejected too: those are read-only
-# volumes in which no mount point can be created, so the pod would never
-# start. Add a file to the configuration directory through config.data.
+# targetAuth, webAuth, sshAuth or sqlAuth mountPath, is rejected too: those
+# are read-only volumes in which no mount point can be created, so the pod
+# would never start. Add a file to the configuration directory through config.data.
 extraVolumes: []
 extraVolumeMounts: []
 
@@ -221,9 +221,11 @@ extraVolumeMounts: []
 # several releases, each with a document of its own.
 staticTargets:
   enabled: false
-  # File name inside the mounted configuration directory: its key in the
-  # configuration ConfigMap, so letters, digits, -, _ and ., and not a key
-  # config.data already uses.
+  # File name of the static target document: its key in a ConfigMap of its
+  # own, <fullname>-static-targets, mounted at
+  # /etc/prometheus-universal-exporter-static-targets, outside the
+  # configuration directory, so no collector_files pattern there, such as
+  # *.yaml, matches it. Letters, digits, -, _ and ..
   fileName: static-targets.yaml
   # Rendered as --web.static-targets-path: where the targets' latest results
   # are served. A path of plain segments that is not selfMetrics.path.
@@ -235,11 +237,9 @@ staticTargets:
   # only ${NAME} is substituted, $$ writes a literal dollar, and an unset
   # variable stops the exporter at startup.
   expandEnv: false
-  # The static target document. Rendered into the exporter ConfigMap, so a
-  # change to it rolls the Deployment through the existing checksum annotation.
-  # Required with config.enabled. With config.enabled: false the chart renders
-  # no ConfigMap: put the file into your own under fileName, and leave this
-  # empty, or rendering fails rather than dropping it.
+  # The static target document, required with enabled. Rendered into the
+  # static target ConfigMap, also with config.enabled: false, so a change to
+  # it rolls the Deployment through the existing checksum annotation.
   data: ""
   # Example:
   # data: |
@@ -283,8 +283,12 @@ staticTargets:
 
 # The exporter configuration, rendered into the exporter ConfigMap. Every key of
 # data becomes a file next to config.yaml, so collector files can be added as
-# keys and listed under collector_files, relative to config.yaml. A collector
-# name must be unique across config.yaml and every collector file:
+# keys and listed under collector_files, relative to config.yaml. A key is a
+# ConfigMap key: letters, digits, -, _ and ., at most 253 characters, and no
+# /, since the directory is flat; a key Kubernetes would refuse fails
+# rendering. The static target document is mounted elsewhere, so a pattern
+# such as *.yaml does not match it. A collector name must be unique across
+# config.yaml and every collector file:
 #
 #   data:
 #     config.yaml: |
@@ -549,8 +553,9 @@ targetAuth:
   usernameFileName: username
   passwordFileName: password
 # mountPath must be a path of its own: not the configuration directory,
-# webAuth.mountPath or an extraVolumeMounts entry's, nor inside or above
-# either directory, or rendering fails.
+# webAuth.mountPath, sshAuth.mountPath, sqlAuth.mountPath or an
+# extraVolumeMounts entry's, nor inside or above the configuration directory
+# or another credential's, or rendering fails.
 # For basic auth from a Secret, set enabled: true and type: basic, then
 # reference the mounted files from a collector:
 # request:
@@ -580,3 +585,70 @@ webAuth:
   usernameKey: username
   passwordKey: password
   mountPath: /var/run/prometheus-universal-exporter/web-auth
+
+# SSH credentials and known hosts for sshfile collectors, which read files
+# over SSH. The Secret's keys and the known_hosts lines are mounted read-only
+# as one directory, files of mode 0400 readable by the exporter through
+# podSecurityContext.fsGroup:
+#   <mountPath>/private_key  from privateKeyKey
+#   <mountPath>/passphrase   from passphraseKey (only beside privateKeyKey)
+#   <mountPath>/password     from passwordKey
+#   <mountPath>/known_hosts  from knownHosts or knownHostsSecretKey
+# Point a collector at them:
+#
+#   request:
+#     type: sshfile
+#     username: metrics
+#     private_key_file: /var/run/prometheus-universal-exporter/ssh/private_key
+#     known_hosts_file: /var/run/prometheus-universal-exporter/ssh/known_hosts
+#
+# Enabled, it needs secretName, privateKeyKey or passwordKey (or both), and
+# known hosts from exactly one of knownHosts, lines ssh-keyscan prints, which
+# the chart renders into a ConfigMap of its own whose change rolls the pods,
+# and knownHostsSecretKey, a key of the Secret. knownHosts must hold at least
+# one entry: a line that is not a comment, with a host, a key type and a key.
+# mountPath must be a path of its own, as targetAuth.mountPath must.
+sshAuth:
+  enabled: false
+  secretName: ""
+  privateKeyKey: ""
+  passphraseKey: ""
+  passwordKey: ""
+  knownHosts: ""
+  knownHostsSecretKey: ""
+  mountPath: /var/run/prometheus-universal-exporter/ssh
+
+# Database credentials and TLS files for sql collectors. The Secret's keys are
+# mounted read-only as one directory, files of mode 0400 readable by the
+# exporter through podSecurityContext.fsGroup:
+#   <mountPath>/password     from passwordKey
+#   <mountPath>/private_key  from privateKeyKey (Snowflake key-pair auth,
+#                            an unencrypted key)
+#   <mountPath>/ca.crt       from caKey
+#   <mountPath>/client.crt   from certKey (only beside keyKey)
+#   <mountPath>/client.key   from keyKey (only beside certKey)
+# Point a collector at them:
+#
+#   request:
+#     type: sql
+#     driver: postgres
+#     database: app
+#     username: exporter
+#     password_file: /var/run/prometheus-universal-exporter/sql/password
+#     tls:
+#       ca_file: /var/run/prometheus-universal-exporter/sql/ca.crt
+#     statement: SELECT state, count(*) AS connections FROM pg_stat_activity GROUP BY 1
+#
+# Enabled, it needs secretName and at least one of the keys. It mounts one
+# set of credentials; for databases with credentials of their own, mount
+# each further Secret through extraVolumes and extraVolumeMounts.
+# mountPath must be a path of its own, as targetAuth.mountPath must.
+sqlAuth:
+  enabled: false
+  secretName: ""
+  passwordKey: ""
+  privateKeyKey: ""
+  caKey: ""
+  certKey: ""
+  keyKey: ""
+  mountPath: /var/run/prometheus-universal-exporter/sql

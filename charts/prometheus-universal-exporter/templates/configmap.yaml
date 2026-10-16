@@ -8,16 +8,13 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
   annotations:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
-{{- /* Every key of config.data is a file of the configuration directory,
-       and so is the static target document. */}}
+{{- /* Every key of config.data is a file of the configuration directory.
+       The static target document is not: it has a ConfigMap of its own
+       (statictargetsconfigmap.yaml). */}}
 {{- $text := dict }}
 {{- $binary := dict }}
 {{- range $name, $content := .Values.config.data }}
 {{- $_ := set (ternary $text $binary (eq (include "prometheus-universal-exporter.textFile" (toString $content)) "true")) $name (toString $content) }}
-{{- end }}
-{{- if .Values.staticTargets.enabled }}
-{{- $content := .Values.staticTargets.data | default "" | toString }}
-{{- $_ := set (ternary $text $binary (eq (include "prometheus-universal-exporter.textFile" $content) "true")) (include "prometheus-universal-exporter.staticTargetsFile" .) $content }}
 {{- end }}
 {{- /* A name is quoted, so one YAML reads as something other than a string,
        such as 123 or true, stays a key. A file is a block scalar with an

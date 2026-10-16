@@ -18,7 +18,9 @@ import (
 func yamlAsTheLibrary(t *testing.T, document string, large int) yamlOutcome {
 	t.Helper()
 	root := parsedYAML(t, document)
-	library := yamlByTheLibraryAlone(root)
+	// A key that is a sequence or a mapping, which the library refused or
+	// failed on, has since been refused in words of its own.
+	library := yamlByTheLibraryAlone(root).keyRefusalNow(root)
 	got := yamlWith(root, large, func(handed *yaml.Node) {
 		if pairs := largestYAMLMapping(handed, map[*yaml.Node]bool{}); pairs > max(large, 1) {
 			t.Fatalf("%.300q, large past %d keys: the library is handed a mapping of %d", document, large, pairs)
@@ -218,7 +220,9 @@ func TestAYAMLSequenceOfItemsOfTheWalkAndOfTheLibraryIsWhatTheLibraryMakesOfIt(t
 			switch got := yamlAsTheLibrary(t, document, large); {
 			case got.err == nil:
 				decoded++
-			case onlyProblems(got.err):
+			// A key that is a sequence tagged as text, `{? !!str [a] : 1}`,
+			// the library listed as a problem, and is refused for it now.
+			case onlyProblems(got.err) || strings.HasPrefix(got.err.Error(), "yaml: the mapping key at line "):
 				problems++
 			default:
 				refused++
@@ -264,10 +268,12 @@ func yamlNumbers(count int) string {
 //     mapping, where the mapping or the list, its key and the node made for
 //     the pair come to 1001 nodes at 995 to 997 numbers;
 //   - the alias as a key of a mapping of 129 keys: of a list, which is
-//     refused as no key (`invalid map key`) and not for its aliases, where
-//     the key and the mapping made for it come to 1001 nodes at 998 numbers;
-//     and of a list tagged as text, which is listed as a problem, among the
-//     mapping's own keys and in a mapping merged into it.
+//     refused as no key (yamlNotScalarKey, `invalid map key` in the
+//     library's words) and not for its aliases, where the key and the
+//     mapping made for it come to 1001 nodes at 998 numbers; and of a list
+//     tagged as text, which the library listed as a problem, among the
+//     mapping's own keys and in a mapping merged into it, and which is
+//     refused as no key too.
 //
 // Each is what the library alone makes of the whole document.
 func TestAliasesInThePartsOfALargeYAMLMappingAreCountedAsTheLibraryCountsThem(t *testing.T) {
@@ -317,9 +323,9 @@ func TestAliasesInThePartsOfALargeYAMLMappingAreCountedAsTheLibraryCountsThem(t 
 			switch got := yamlAsTheLibrary(t, document, yamlLargeMapping); {
 			case got.err == nil:
 				decoded++
-			case onlyProblems(got.err) && strings.Contains(got.err.Error(), "cannot unmarshal !!str `` into string"):
+			case strings.HasPrefix(got.err.Error(), "yaml: the mapping key at line ") && strings.Contains(document, "&d !!str"):
 				problems++
-			case strings.HasPrefix(got.err.Error(), "yaml: invalid map key: []interface {}{1, "):
+			case strings.HasPrefix(got.err.Error(), "yaml: the mapping key at line "):
 				noKeys++
 			default:
 				t.Fatalf("%.300q is refused: %.300v", document, got.err)

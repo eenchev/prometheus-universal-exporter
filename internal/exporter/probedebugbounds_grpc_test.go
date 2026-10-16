@@ -19,13 +19,13 @@ import (
 )
 
 // A gRPC status the collector accepts is its answer, and the status message
-// is the answer's grpc-message header, which the server makes as long as it
-// likes: of a megabyte, the report shows its first 1,024 bytes and its
-// length, where it had the megabyte in one line, and says the status and
-// what a probe would have answered as it did. Under the race detector the
-// message is 64 kB.
+// is the answer's grpc-message header, which the server makes as long as the
+// answer's trailers may be: of nearly a megabyte, just under the 1 MiB they
+// may take, the report shows its first 1,024 bytes and its length, where it
+// had the message in one line, and says the status and what a probe would
+// have answered as it did. Under the race detector the message is 64 kB.
 func TestAGRPCStatusMessageOfAMegabyteIsShownByItsStartInTheReport(t *testing.T) {
-	size := alloctest.UnlessRaced(1<<20, 1<<16)
+	size := alloctest.UnlessRaced(1<<20-1<<10, 1<<16)
 	upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: func(context.Context, string, string) (string, error) {
 		return "", status.Error(codes.FailedPrecondition, strings.Repeat("s", size))
 	}})

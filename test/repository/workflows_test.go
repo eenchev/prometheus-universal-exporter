@@ -3,6 +3,7 @@ package repository
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -369,19 +370,56 @@ func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
 }
 
 // A build with one request type is one the exporter ships, so CI runs the
-// tests of each, under the condition of its other Go steps, and
-// `make test-request-types`, which `make ci` includes, runs the same command
-// over the same types: a test that needs a type its build lacks fails there,
-// not in somebody's single-type build.
+// tests of each, in a job of a matrix over every type in the tree that lets
+// each type finish when another fails, the type handed to the step as $type,
+// under the condition of its other Go steps; and `make test-request-types`,
+// which `make ci` includes, runs the same command over the same types: a
+// test that needs a type its build lacks fails there, not in somebody's
+// single-type build.
 func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 	const tags, command = `tags="$(sh tools/request-type-tags.sh "$type")"`, `go test -count=1 -tags "$tags" ./...`
-	steps := workflowSteps(t, ".github/workflows/ci.yml")["test"]
-	index := stepIndex(steps, "for type in ", tags, command)
-	if index < 0 {
-		t.Fatalf("ci.yml has no step that runs %s for each request type", command)
+	var job string
+	for name, steps := range workflowSteps(t, ".github/workflows/ci.yml") {
+		index := stepIndex(steps, tags, command)
+		if index < 0 {
+			continue
+		}
+		if job != "" {
+			t.Fatalf("ci.yml tests each request type in the jobs %s and %s, where one job of a matrix over the types was meant", job, name)
+		}
+		job = name
+		step := steps[index]
+		if run, _ := step["run"].(string); strings.Contains(run, "for type in ") {
+			t.Errorf("ci.yml's job %s tests the request types one after another in a loop, not each in a job of a matrix", name)
+		}
+		if env, _ := step["env"].(map[string]any); env["type"] != "${{ matrix.type }}" {
+			t.Errorf("ci.yml's job %s runs %s with type %v in its env, not ${{ matrix.type }}", name, command, env["type"])
+		}
+		if condition := step["if"]; condition != "steps.changes.outputs.go == 'true'" {
+			t.Errorf("ci.yml tests each request type under the condition %q, not that of its Go steps", condition)
+		}
 	}
-	if condition := steps[index]["if"]; condition != "steps.changes.outputs.go == 'true'" {
-		t.Errorf("ci.yml tests each request type under the condition %q, not that of its Go steps", condition)
+	if job == "" {
+		t.Fatalf("ci.yml has no step that runs %s for a request type", command)
+	}
+	definition, _ := workflowDocument(t, ".github/workflows/ci.yml")["jobs"].(map[string]any)[job].(map[string]any)
+	strategy, _ := definition["strategy"].(map[string]any)
+	if strategy["fail-fast"] != false {
+		t.Errorf("ci.yml's job %s has fail-fast %v, so one type's failure cancels the others' runs; set it to false", job, strategy["fail-fast"])
+	}
+	matrix, _ := strategy["matrix"].(map[string]any)
+	values, _ := matrix["type"].([]any)
+	var matrixTypes []string
+	for _, value := range values {
+		name, _ := value.(string)
+		matrixTypes = append(matrixTypes, name)
+	}
+	sort.Strings(matrixTypes)
+	if types := requestTypesInTheTree(t); !slices.Equal(matrixTypes, types) {
+		t.Errorf("ci.yml's job %s tests the request types %v, but the tree has %v", job, matrixTypes, types)
+	}
+	if len(matrix) != 1 {
+		t.Errorf("ci.yml's job %s has the matrix %v; its one dimension is type", job, matrix)
 	}
 	makefile := read(t, "Makefile")
 	target := regexp.MustCompile(`(?m)^test-request-types:\n((?:\t.*\n)+)`).FindStringSubmatch(makefile)
@@ -447,7 +485,9 @@ func makefileRules(t *testing.T) (prerequisites map[string][]string, recipes map
 // beside the installing ones, has to be run by a target `make ci` reaches,
 // and every target of the Makefile is .PHONY, since none makes a file of
 // its name. go mod download is the one exception: it fills the module cache
-// before CI's steps, which each go command make runs does for itself.
+// before CI's steps, which each go command make runs does for itself. Every
+// job of ci.yml is read, not only test: the race run and each request type's
+// tests are jobs of their own.
 func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 	prerequisites, recipes := makefileRules(t)
 	reached, queue := map[string]bool{}, []string{"ci"}
@@ -469,7 +509,11 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 	}
 	makeCI := run.String()
 	commands := 0
-	for _, step := range workflowSteps(t, ".github/workflows/ci.yml")["test"] {
+	var steps []map[string]any
+	for _, job := range workflowSteps(t, ".github/workflows/ci.yml") {
+		steps = append(steps, job...)
+	}
+	for _, step := range steps {
 		script, _ := step["run"].(string)
 		for line := range strings.SplitSeq(script, "\n") {
 			line = strings.TrimSpace(line)
@@ -511,11 +555,11 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 // `make build` compiled every package and kept nothing, while the docs gave
 // it as the way to build the exporter with only some request types. It
 // builds the main package into bin/, under the name the image gives the
-// binary, with the tags of REQUEST_TYPES, and the docs that give it say
-// where the binary lands.
+// binary, with the tags of REQUEST_TYPES and SQL_DRIVERS, and the docs that
+// give it say where the binary lands.
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
-	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$tags" -o bin/$(APP) .`
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) .`
 	if got := strings.TrimSpace(recipes["build"]); got != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}
@@ -541,12 +585,15 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 // takes several times what it takes without: go test's own limit of ten
 // minutes a package, meant for one plain run, was what a slow machine would
 // have failed on before any test did. So the command carries a limit of its
-// own, at least twice go test's, CI runs it under the condition of its other
-// Go steps, and `make test` runs the very same command, so that what passes
-// here is what passes there.
+// own, at least twice go test's, CI runs it in one step of all its jobs,
+// under the condition of its other Go steps, and `make test` runs the very
+// same command, so that what passes here is what passes there.
 func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 	pattern := regexp.MustCompile(`(?m)^go test -race -count=2 -shuffle=on -timeout (\S+) \./\.\.\.$`)
-	steps := workflowSteps(t, ".github/workflows/ci.yml")["test"]
+	var steps []map[string]any
+	for _, job := range workflowSteps(t, ".github/workflows/ci.yml") {
+		steps = append(steps, job...)
+	}
 	var command string
 	for _, step := range steps {
 		run, _ := step["run"].(string)
@@ -585,6 +632,73 @@ func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 	}
 	if len(raced) != 1 || raced[0] != command {
 		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, command)
+	}
+}
+
+// The race run and each request type's tests run in jobs of their own,
+// beside test, and each starts with the setup steps of test written out
+// again: checkout, the changed-path filter, Go, the image's Python with its
+// libraries and the modules only the tests use, and go mod download, helm's
+// setup alone left out. A copy that drifts from test's — another filter,
+// another Go or Python, a missing module — would have one job run what the
+// others do not, so every other job's steps before its last must be test's
+// setup steps, the same, in their order; its env and machine are test's;
+// each of its own steps has the condition of the Go steps; and no job of
+// ci.yml has a job-level `if`, which would leave a matrix job reported as
+// skipped under a name no check requires.
+func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
+	const path = ".github/workflows/ci.yml"
+	all := workflowSteps(t, path)
+	test := all["test"]
+	download := stepIndex(test, "go mod download")
+	if download < 0 {
+		t.Fatal("ci.yml's job test no longer runs go mod download, where its setup steps end")
+	}
+	var setup []map[string]any
+	for _, step := range test[:download+1] {
+		if step["if"] != chartStepCondition {
+			setup = append(setup, step)
+		}
+	}
+	if len(setup) < 8 {
+		t.Fatalf("only %d setup steps were read from ci.yml's job test; the reader has stopped finding them", len(setup))
+	}
+	jobs, _ := workflowDocument(t, path)["jobs"].(map[string]any)
+	testJob, _ := jobs["test"].(map[string]any)
+	others := 0
+	for name, raw := range jobs {
+		definition, _ := raw.(map[string]any)
+		if _, ok := definition["if"]; ok {
+			t.Errorf("ci.yml's job %s has a job-level `if`; gate its steps with `if: steps.changes.outputs.go == 'true'` instead", name)
+		}
+		if name == "test" {
+			continue
+		}
+		others++
+		steps := all[name]
+		if len(steps) <= len(setup) {
+			t.Errorf("ci.yml's job %s has %d steps, not test's %d setup steps and its own after them", name, len(steps), len(setup))
+			continue
+		}
+		for index, want := range setup {
+			if !reflect.DeepEqual(steps[index], want) {
+				t.Errorf("ci.yml's job %s has step %d\n%s\nwhere test's setup has\n%s", name, index+1, yamlText(steps[index]), yamlText(want))
+			}
+		}
+		for _, step := range steps[len(setup):] {
+			if step["if"] != "steps.changes.outputs.go == 'true'" {
+				t.Errorf("ci.yml's job %s runs a step under the condition %v, not that of its Go steps:\n%s", name, step["if"], yamlText(step))
+			}
+		}
+		for _, key := range []string{"env", "runs-on"} {
+			if !reflect.DeepEqual(definition[key], testJob[key]) {
+				t.Errorf("ci.yml's job %s has the %s %v, but test has %v", name, key, definition[key], testJob[key])
+			}
+		}
+	}
+	// The race job and the request types' matrix.
+	if others < 2 {
+		t.Errorf("ci.yml has %d jobs beside test; the race run and the request types' tests were meant to have one each", others)
 	}
 }
 

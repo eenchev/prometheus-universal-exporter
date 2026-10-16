@@ -3,9 +3,11 @@ package config
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -204,6 +206,87 @@ func onlyBlanks() map[string]any {
 	return map[string]any{"type": "string", "pattern": "^[" + surroundingBlank + "]+$"}
 }
 
+// blanksOrPlaceholder is onlyBlanks, or text with {{ in it: what a static
+// target's account and credential files may not be, a placeholder being
+// used as it is written there (fetch's checkSQLTargetRequest and
+// checkSSHTargetRequest).
+func blanksOrPlaceholder() map[string]any {
+	return map[string]any{"anyOf": []any{onlyBlanks(), map[string]any{"type": "string", "pattern": `\{\{`}}}
+}
+
+// headerNameChars are the characters of a header name, an HTTP token
+// (RFC 9110), as a regular expression class; httpguts.ValidHeaderFieldName,
+// which the exporter asks, takes these and no others.
+const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
+
+// caseless is a regular expression of text matched without regard to case,
+// written so that Go and JavaScript read it alike: each letter as a class of
+// its two cases, anything else escaped as regexp.QuoteMeta escapes it.
+func caseless(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if lower, upper := unicode.ToLower(r), unicode.ToUpper(r); lower != upper {
+			b.WriteByte('[')
+			b.WriteRune(upper)
+			b.WriteRune(lower)
+			b.WriteByte(']')
+			continue
+		}
+		b.WriteString(regexp.QuoteMeta(string(r)))
+	}
+	return b.String()
+}
+
+// headerNames is what the exporter takes as a name of request.headers, a
+// collector's or a static target's, and of otlp.headers
+// (fetch.checkHeaderNames): an HTTP token, and not Accept-Encoding, in any
+// case, which the exporter sets itself. Two names that are one header in
+// different case are the exporter's alone to refuse: a schema sees each name
+// on its own.
+func headerNames() map[string]any {
+	return map[string]any{
+		"pattern": "^[" + headerNameChars + "]+$",
+		"not":     map[string]any{"pattern": "^" + caseless("Accept-Encoding") + "$"},
+	}
+}
+
+// forwardHeaderEntry is what the exporter takes as an entry of
+// request.forward_headers (fetch.checkForwardHeaders): a header name, with
+// blanks around it or not, as a probe's forwarding trims them, that is none
+// of the headers a probe never forwards, in any case. It is text, as every
+// key with a pattern is: an entry YAML reads as a number or a boolean is
+// refused by both, the exporter saying to quote it.
+func forwardHeaderEntry() map[string]any {
+	never := []string{caseless(fetch.UnforwardablePrefix) + "[" + headerNameChars + "]*"}
+	for _, name := range fetch.UnforwardableHeaderNames() {
+		never = append(never, caseless(name))
+	}
+	blanks := "[" + surroundingBlank + "]*"
+	return map[string]any{
+		"pattern": "^" + blanks + "[" + headerNameChars + "]+" + blanks + "$",
+		"not":     map[string]any{"type": "string", "pattern": "^" + blanks + "(" + strings.Join(never, "|") + ")" + blanks + "$"},
+	}
+}
+
+// queryNames is what the exporter takes as a name of request.query
+// (fetch.checkQueryNames): one of at least a character, none of them a
+// control character. Any other is sent escaped.
+func queryNames() map[string]any {
+	return map[string]any{"minLength": 1, "pattern": `^[^\x00-\x1F\x7F]*$`}
+}
+
+// leastResponseRule is the rule of request.max_response_bytes and
+// limits.max_response_bytes: beside what every size is held to, one written
+// as a number is 0, the default, or at least config.MinResponseBytes, as the
+// exporter has it, which, as for limits.max_output_bytes (leastOutputRule),
+// the exporter alone checks of a size written as text.
+func leastResponseRule(description string) map[string]any {
+	return map[string]any{
+		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": MinResponseBytes}},
+		"description": description + " A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+	}
+}
+
 // filterEntry is what an entry of transform.include or transform.exclude may
 // not be: the empty string, and blanks alone. The key keeps the types it
 // takes, as a label's expression does under onlyBlanks: an unquoted 1 is the
@@ -334,37 +417,62 @@ func configSchemaRules() map[string]map[string]any {
 		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
 		"collector_files[]": {"type": "string", "minLength": 1},
 		// What a collector must have, and each of its rules a name.
-		"collectors[]":                              collectorSchemaRule(),
-		"collectors[].name":                         {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
-		"collectors[].metrics_prefix":               {"pattern": optionalPattern(transform.MetricsPrefixRE.String()), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
-		"collectors[].cache":                        {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
-		"collectors[].cache.ttl":                    {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
-		"collectors[].cache.stale_if_error":         {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
-		"collectors[].max_concurrent_probes":        {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
-		"collectors[].coalesce":                     {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
-		"collectors[].request":                      requestSchemaRule(),
-		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method":               {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
-		"collectors[].request.body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
-		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
-		"collectors[].request.root":                 {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
-		"collectors[].request.files":                {"description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
-		"collectors[].request.max_files":            {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
-		"collectors[].request.max_total_bytes":      {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
-		"collectors[].request.max_age":              {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
-		"collectors[].request.targets":              {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
-		"collectors[].request.from":                 {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
-		"collectors[].request.until":                {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
-		"collectors[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
-		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
-		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
-		"collectors[].request.rpc":                  {"pattern": optionalPattern(`^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`), "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
-		"collectors[].request.message":              {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
-		"collectors[].request.metadata":             {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.descriptors":          {"enum": optionalEnum([]string{"reflection", "protoset", "proto"}), "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
-		"collectors[].request.protoset_file":        {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
-		"collectors[].request.proto_files":          {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
-		"collectors[].request.proto_import_paths":   {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
+		"collectors[]":                                         collectorSchemaRule(),
+		"collectors[].name":                                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
+		"collectors[].metrics_prefix":                          {"pattern": optionalPattern(transform.MetricsPrefixRE.String()), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
+		"collectors[].cache":                                   {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
+		"collectors[].cache.ttl":                               {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
+		"collectors[].cache.stale_if_error":                    {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
+		"collectors[].max_concurrent_probes":                   {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
+		"collectors[].coalesce":                                {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].request":                                 requestSchemaRule(),
+		"collectors[].request.type":                            {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
+		"collectors[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
+		"collectors[].request.body":                            {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
+		"collectors[].request.path":                            {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].request.root":                            {"description": "localfile and sshfile, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree. See docs/LOCALFILE.md and docs/SSHFILE.md."},
+		"collectors[].request.files":                           {"description": "localfile and sshfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
+		"collectors[].request.max_files":                       {"description": "localfile and sshfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
+		"collectors[].request.max_total_bytes":                 {"description": "localfile and sshfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
+		"collectors[].request.max_age":                         {"description": "localfile and sshfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
+		"collectors[].request.username":                        {"not": onlyBlanks(), "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. Not blanks alone."},
+		"collectors[].request.private_key_file":                {"not": onlyBlanks(), "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication."},
+		"collectors[].request.passphrase_file":                 {"not": onlyBlanks(), "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with."},
+		"collectors[].request.password_file":                   {"not": onlyBlanks(), "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made."},
+		"collectors[].request.known_hosts_file":                {"not": onlyBlanks(), "description": "sshfile, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys."},
+		"collectors[].request.keepalive_interval":              {"description": "sshfile: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 sends none."},
+		"collectors[].request.keepalive_count_max":             {"minimum": 1, "description": "sshfile: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3."},
+		"collectors[].request.idle_timeout":                    {"description": "sshfile: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
+		"collectors[].request.max_open_connections":            {"minimum": 0, "description": "sshfile: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections."},
+		"collectors[].request.driver":                          {"type": "string", "pattern": sqlDriverName(fetch.BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
+		"collectors[].request.database":                        {"not": onlyBlanks(), "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only."},
+		"collectors[].request.statement":                       {"not": onlyBlanks(), "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
+		"collectors[].request.args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
+		"collectors[].request.options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
+		"collectors[].request.service_name":                    {"not": onlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
+		"collectors[].request.max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},
+		"collectors[].request.connections":                     {"description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections."},
+		"collectors[].request.connections.max_per_target":      {"minimum": 0, "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools."},
+		"collectors[].request.connections.max_idle_per_target": {"minimum": 0, "description": "How many connections to a target are kept idle between scrapes, across its databases and accounts. Defaults to 1; 0 keeps none."},
+		"collectors[].request.connections.max_targets":         {"minimum": 0, "description": "The most targets, servers or Snowflake accounts, the collector keeps connections to, whatever databases and accounts it reaches there; at the limit the pools of the target used longest ago are closed. Defaults to 50; 0 sets no limit."},
+		"collectors[].request.connections.idle_timeout":        {"description": "How long an idle connection is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
+		"collectors[].request.connections.max_lifetime":        {"description": "How long a connection is used before it is closed and made again. Defaults to 1h; 0 uses it as long as it works."},
+		"collectors[].request.connections.keepalive":           {"description": "How a kept connection is found broken."},
+		"collectors[].request.connections.keepalive.interval":  {"description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 checks none."},
+		"collectors[].request.connections.keepalive.check":     {"enum": optionalEnum([]string{"tcp", "ping"}), "description": "tcp, the default: TCP keepalives on every connection. ping: every idle connection is pinged every interval."},
+		"collectors[].request.targets":                         {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
+		"collectors[].request.from":                            {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
+		"collectors[].request.until":                           {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
+		"collectors[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
+		"collectors[].request.retry.non_idempotent":            {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
+		"collectors[].request.retry.codes":                     {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
+		"collectors[].request.rpc":                             {"pattern": optionalPattern(`^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`), "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
+		"collectors[].request.message":                         {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
+		"collectors[].request.metadata":                        {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.descriptors":                     {"enum": optionalEnum([]string{"reflection", "protoset", "proto"}), "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
+		"collectors[].request.protoset_file":                   {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
+		"collectors[].request.proto_files":                     {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
+		"collectors[].request.proto_import_paths":              {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
 		"collectors[].response.graphite.value": {
 			"enum":        optionalEnum(model.GraphiteValues),
 			"description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
@@ -417,7 +525,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
 		"collectors[].request.accept_codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 		"collectors[].request.accept_status":         {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."},
-		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc."},
+		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile and sql."},
 		"collectors[].request.denied_targets":        {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is."},
 		"collectors[].metrics[].labels[].value_map":  {"propertyNames": valueMapKeys(), "description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept."},
 		"collectors[].metrics[].value_map":           {"propertyNames": valueMapKeys(), "description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms."},
@@ -427,10 +535,18 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[]":                     metricRuleSchemaRule(),
 		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
 		"collectors[].limits.max_output_bytes":       leastOutputRule(),
-		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
+		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms."},
+		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
+		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile and sshfile: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
+		"collectors[].request.headers":               {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.forward_headers":       {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
+		"collectors[].request.forward_headers[]":     forwardHeaderEntry(),
+		"collectors[].request.basic_auth.username":   {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"collectors[].request.query":                 {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+		"otlp.headers":                               {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
 		"otlp":                                       otlpSchemaRule(),
 		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
-		"web.basic_auth":                             enabledSwitchRule(reflect.TypeOf(model.ExporterBasicAuth{}), "Basic authentication on the exporter's own endpoints. Off until enabled is true; a block that sets any other key must say enabled, true or false."),
+		"web.basic_auth":                             webBasicAuthRule(),
 		"web.basic_auth.enabled":                     {"description": "Require the credentials. false keeps the block's settings without using them."},
 		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
@@ -491,8 +607,9 @@ func configSchemaRules() map[string]map[string]any {
 // (enabledSwitchRule), whose timeout and interval, once it is on, are not
 // negative, whose compression is then one of its values, whose
 // max_pending_points, unready_after_failures and batch_max_size are then not
-// negative, and whose batch_max_bytes, written as a number, is then 0 or at
-// least its least, as the exporter checks them then (validateOTLP); a size
+// negative, whose batch_max_bytes, written as a number, is then 0 or at
+// least its least, and whose headers' names are then header names
+// (headerNames), as the exporter checks them then (validateOTLP); a size
 // written as text the exporter alone holds to its least, as it does
 // limits.max_output_bytes (leastOutputRule). Switched off, the block is
 // kept unchecked by both: the keys' own pattern takes any duration, and the
@@ -501,6 +618,24 @@ func configSchemaRules() map[string]map[string]any {
 // and above, so an editor flagged in a block kept for later what the
 // exporter loads. What is not of a key's type — text for a number, a list
 // for text — is no value of the key, switched off or on, to both.
+// basicUsernameColon is text with a colon: what the username of a Basic
+// credential may not be (fetch.CheckBasicUsername). It goes under not, so
+// that "" stays the key left out.
+func basicUsernameColon() map[string]any {
+	return map[string]any{"type": "string", "pattern": ":"}
+}
+
+// webBasicAuthRule is web.basic_auth: a block switched on by enabled, whose
+// username, once it is, holds no colon, which no client could present
+// (validateWebAuth); switched off, the block is unchecked, as the exporter
+// leaves it.
+func webBasicAuthRule() map[string]any {
+	rule := enabledSwitchRule(reflect.TypeOf(model.ExporterBasicAuth{}), "Basic authentication on the exporter's own endpoints. Off until enabled is true; a block that sets any other key must say enabled, true or false. Once enabled, username holds no colon, which ends the username in a Basic credential (RFC 7617).")
+	rule["if"] = map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}}
+	rule["then"] = map[string]any{"properties": map[string]any{"username": map[string]any{"not": basicUsernameColon()}}}
+	return rule
+}
+
 func otlpSchemaRule() map[string]any {
 	rule := enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md.")
 	notNegative := map[string]any{"pattern": durationPattern}
@@ -511,6 +646,7 @@ func otlpSchemaRule() map[string]any {
 		"compression":        map[string]any{"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone})},
 		"max_pending_points": fromZero, "unready_after_failures": fromZero, "batch_max_size": fromZero,
 		"batch_max_bytes": map[string]any{"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": model.MinOTLPBatchMaxBytes}}},
+		"headers":         map[string]any{"propertyNames": headerNames()},
 	}}
 	return rule
 }
@@ -634,18 +770,82 @@ func labelSchemaRule() map[string]any {
 // from, descriptors, unless it calls the health service, whose types are
 // built in (fetch.validateDescriptorKeys).
 func requestSchemaRule() map[string]any {
-	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc."}
+	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile and docs/SQL.md for sql."}
 	grpc := writtenKey("rpc")
 	grpc["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
 	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc}[name]
+		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired()}[name]
 		if required != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
 				"then": required,
 			})
+		}
+	}
+	if len(conditions) > 0 {
+		rule["allOf"] = conditions
+	}
+	return rule
+}
+
+// sshfileRequired is what an sshfile collector's request requires, as the
+// exporter does (fetch.validateSSHFileRequest): root, username and
+// known_hosts_file, each written with something other than ""; a private key
+// or a password, or both; and a passphrase only beside a private key.
+func sshfileRequired() map[string]any {
+	keys := []string{"root", "username", "known_hosts_file"}
+	properties := map[string]any{}
+	for _, key := range keys {
+		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
+	}
+	return map[string]any{
+		"required":   keys,
+		"properties": properties,
+		"anyOf":      []any{writtenKey("private_key_file"), writtenKey("password_file")},
+		"if":         writtenKey("passphrase_file"),
+		"then":       writtenKey("private_key_file"),
+	}
+}
+
+// sqlDriverName is the pattern of request.driver naming one of names, as
+// the exporter matches a driver (fetch.validateSQLRequest): in any case, with
+// blanks around it or not. The spec has the driver matched so, as it has
+// request.type, so the schema takes what the exporter takes rather than the
+// exporter refusing what an enum would.
+func sqlDriverName(names ...string) string {
+	alternatives := make([]string, len(names))
+	for i, name := range names {
+		alternatives[i] = caseless(name)
+	}
+	blanks := "[" + surroundingBlank + "]*"
+	return "^" + blanks + "(" + strings.Join(alternatives, "|") + ")" + blanks + "$"
+}
+
+// sqlRequired is what a sql collector's request requires, as the exporter
+// does (fetch.validateSQLRequest): driver, statement and username, each
+// written with something other than ""; for the oracle driver, when it is
+// built, service_name; and for the snowflake driver, when it is built,
+// password_file or private_key_file; each driver named as the exporter
+// matches it (sqlDriverName).
+func sqlRequired() map[string]any {
+	keys := []string{"driver", "statement", "username"}
+	properties := map[string]any{}
+	for _, key := range keys {
+		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
+	}
+	rule := map[string]any{"required": keys, "properties": properties}
+	driverIs := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": sqlDriverName(name)}}, "required": []string{"driver"}}
+	}
+	var conditions []any
+	for _, name := range fetch.BuiltSQLDrivers() {
+		switch name {
+		case fetch.SQLDriverOracle:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": writtenKey("service_name")})
+		case fetch.SQLDriverSnowflake:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{writtenKey("password_file"), writtenKey("private_key_file")}}})
 		}
 	}
 	if len(conditions) > 0 {
@@ -667,7 +867,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
 		"targets[].name":      {"pattern": optionalPattern(targetNameRE.String()), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"minLength": 1, "description": "The collector of the configuration that scrapes this target."},
-		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one."},
+		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one."},
 		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
@@ -677,22 +877,37 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
 			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
-		"targets[].export_via_otlp":              {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
-		"targets[].request":                      {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
-		"targets[].request.method":               {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
-		"targets[].request.path":                 {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.timeout":              {"description": "How long a scrape of this target may take. At most the target's interval."},
-		"targets[].request.targets":              {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.from":                 {"description": "graphite: replaces the collector's request.from for this target."},
-		"targets[].request.until":                {"description": "graphite: replaces the collector's request.until for this target."},
-		"targets[].request.message":              {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.metadata":             {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.accept_status":        {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: replaces the collector's request.accept_status for this target."},
-		"targets[].request.accept_codes":         {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.accept_codes for this target."},
-		"targets[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10."},
-		"targets[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.retry.codes for this target."},
-		"targets[].request.retry":                {"description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's."},
-		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
-		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
+		"targets[].export_via_otlp":                         {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
+		"targets[].request":                                 {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
+		"targets[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
+		"targets[].request.path":                            {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.timeout":                         {"description": "How long a scrape of this target may take. At most the target's interval."},
+		"targets[].request.targets":                         {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.from":                            {"description": "graphite: replaces the collector's request.from for this target."},
+		"targets[].request.until":                           {"description": "graphite: replaces the collector's request.until for this target."},
+		"targets[].request.message":                         {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.headers":                         {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
+		"targets[].request.metadata":                        {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.basic_auth.username":             {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"targets[].request.username":                        {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
+		"targets[].request.private_key_file":                {"not": blanksOrPlaceholder(), "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does."},
+		"targets[].request.passphrase_file":                 {"not": blanksOrPlaceholder(), "description": "sshfile, with the target's private_key_file: the file of its passphrase."},
+		"targets[].request.password_file":                   {"not": blanksOrPlaceholder(), "description": "sshfile and sql: the target's own password file; see private_key_file."},
+		"targets[].request.connections":                     {"not": map[string]any{"required": []string{"max_targets"}}, "description": "sql: replaces, key by key, the collector's request.connections for this target; not max_targets, which is the collector's and refused here."},
+		"targets[].request.connections.max_per_target":      {"minimum": 0, "description": "sql: the most connections open to this target at once; 0 sets no limit."},
+		"targets[].request.connections.max_idle_per_target": {"minimum": 0, "description": "sql: how many connections to this target are kept idle; 0 keeps none."},
+		"targets[].request.connections.max_targets":         {"description": "A collector's setting, which a static target cannot set: refused here, whatever its value."},
+		"targets[].request.connections.keepalive":           {"description": "sql: how a kept connection to this target is found broken."},
+		"targets[].request.connections.idle_timeout":        {"description": "sql: how long an idle connection to this target is kept; 0 keeps it."},
+		"targets[].request.connections.max_lifetime":        {"description": "sql: how long a connection to this target is used; 0 uses it as long as it works."},
+		"targets[].request.connections.keepalive.interval":  {"description": "sql: how often a connection to this target is checked; at least 1s, 0 for none."},
+		"targets[].request.connections.keepalive.check":     {"enum": optionalEnum([]string{"tcp", "ping"}), "description": "sql: tcp or ping."},
+		"targets[].request.accept_status":                   {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: replaces the collector's request.accept_status for this target."},
+		"targets[].request.accept_codes":                    {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.accept_codes for this target."},
+		"targets[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10."},
+		"targets[].request.retry.codes":                     {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.retry.codes for this target."},
+		"targets[].request.retry":                           {"description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's."},
+		"targets[].request.retry.non_idempotent":            {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
+		"targets[].otlp":                                    {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
 	}
 }

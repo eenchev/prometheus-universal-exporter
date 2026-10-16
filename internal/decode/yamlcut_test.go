@@ -28,30 +28,31 @@ func numbersFrom(from, count int) (sequence, syntax string) {
 	return "[" + listed + "]", "[]interface {}{" + listed + "}"
 }
 
-// A mapping key that is a sequence or a mapping is refused with the whole
+// A mapping key that is a sequence or a mapping was refused with the whole
 // key in the library's error, written as Go writes a value: a key of
 // 200,000 numbers was an error of 1.4 MB, logged as one line and answered to
-// the scraper. The error holds the first 256 bytes of what the library wrote
-// of the key and says how long that was, and is under 300 bytes: beside a
-// key that is no text, where the library decodes the document; beside a
-// mapping of 200 keys, where the walk hands the pair to the library; and for
-// a key that is itself a mapping of 20,000 keys, which the walk decodes and
-// refuses in the library's words. It is recognised by the same text with the
-// mark in place of the length, so a key of 150,000 numbers that starts the
-// same is the same failure to the log, and one that starts with another
-// number is another. Under the race detector the keys are of 10,000 and of
-// 7,500 numbers and a mapping of 2,000 keys: each is still a hundred times
-// and more the 256 bytes it is cut to, and the mapping still one of more
-// than yamlLargeMapping keys, which the walk decodes.
-func TestAYAMLKeyThatIsACollectionIsRefusedWithItsStartAndItsLength(t *testing.T) {
-	const said = "yaml: invalid map key: "
+// the scraper. Such a key is now refused in the exporter's words, which
+// hold no part of it (yamlNotScalarKey): the error is under 300 bytes
+// beside a key that is no text, where the library decoded the document;
+// beside a mapping of 200 keys, where the walk handed the pair to the
+// library; and for a key that is itself a mapping of 20,000 keys, which the
+// walk decoded and refused in the library's words. A key of 150,000 numbers,
+// and one that starts with another number, are the same failure to the log.
+// Under the race detector the keys are of 10,000 and of 7,500 numbers and a
+// mapping of 2,000 keys: each is still a hundred times and more the 300
+// bytes, and the mapping still one of more than yamlLargeMapping keys.
+func TestAYAMLKeyThatIsACollectionIsRefusedWithAShortError(t *testing.T) {
 	numbers := alloctest.UnlessRaced(200000, 10000)
-	key, syntax := numbersFrom(1, numbers)
-	want := said + syntax[:yamlPartBytes] + fmt.Sprintf("... (%d bytes)", len(syntax))
-	same := said + syntax[:yamlPartBytes] + "... (# bytes)"
+	key, _ := numbersFrom(1, numbers)
+	want := "yaml: the mapping key at line 2 is a sequence" + yamlNotScalarKeyWords
+	same := "yaml: the mapping key at line # is a sequence" + yamlNotScalarKeyWords
+	shorter, _ := numbersFrom(1, numbers*3/4)
+	other, _ := numbersFrom(2, numbers)
 	for name, document := range map[string]string{
-		"beside a key that is no text": "1: x\n? " + key + "\n: x\n",
-		"beside a mapping of 200 keys": manyYAMLKeys(200) + "1: x\n? " + key + "\n: x\n",
+		"beside a key that is no text":          "1: x\n? " + key + "\n: x\n",
+		"beside a mapping of 200 keys":          "1: x\n? " + key + "\n: x\n" + manyYAMLKeys(200),
+		"a shorter key":                         "1: x\n? " + shorter + "\n: x\n",
+		"a key that starts with another number": "1: x\n? " + other + "\n: x\n",
 	} {
 		v, err := decodeYAML([]byte(document))
 		if err == nil {
@@ -64,33 +65,10 @@ func TestAYAMLKeyThatIsACollectionIsRefusedWithItsStartAndItsLength(t *testing.T
 			t.Errorf("%s: the failure is recognised by %d bytes, %.400q, want %q", name, len(got), got, same)
 		}
 	}
-	shorter, shorterSyntax := numbersFrom(1, numbers*3/4)
-	other, _ := numbersFrom(2, numbers)
-	_, errShorter := decodeYAML([]byte("1: x\n? " + shorter + "\n: x\n"))
-	_, errOther := decodeYAML([]byte("1: x\n? " + other + "\n: x\n"))
-	if errShorter == nil || errOther == nil {
-		t.Fatalf("the documents are refused with %.300v and %.300v", errShorter, errOther)
-	}
-	// 1088909 bytes for the 150,000 numbers of a plain run.
-	if got := model.SameFailureText(errShorter); got != same || !strings.HasSuffix(errShorter.Error(), fmt.Sprintf("... (%d bytes)", len(shorterSyntax))) {
-		t.Errorf("a key of %d numbers is refused with %.400q, recognised by %.400q, want its own length and %q", numbers*3/4, errShorter, got, same)
-	}
-	if got := model.SameFailureText(errOther); got == same || len(got) > 300 {
-		t.Errorf("a key that starts with another number is recognised by %d bytes, %.400q, want another text", len(got), got)
-	}
-	// The walk's own refusal, of a key it decodes itself.
-	// Written out, its 20,000 keys are a length of six digits, and the
-	// 2,000 of a run under the race detector one of five.
-	keys, digits := alloctest.UnlessRaced(20000, 2000), alloctest.UnlessRaced(6, 5)
+	keys := alloctest.UnlessRaced(20000, 2000)
 	_, err := decodeYAML([]byte("1: x\n? {" + manyYAMLPairs(keys, "", ", ") + "}\n: x\n"))
-	if err == nil {
-		t.Fatalf("a key that is a mapping of %d keys is decoded", keys)
-	}
-	if text := err.Error(); len(text) > 300 || !regexp.MustCompile(fmt.Sprintf(`^yaml: invalid map key: map\[string\]interface \{\}\{"key0":0, "key1":1, "key10":10, .*\.\.\. \(\d{%d} bytes\)$`, digits)).MatchString(text) {
-		t.Errorf("a key that is a mapping of %d keys is refused with %d bytes, %.400q", keys, len(text), text)
-	}
-	if got := model.SameFailureText(err); len(got) > 300 || !strings.HasSuffix(got, "... (# bytes)") {
-		t.Errorf("a key that is a mapping of %d keys is recognised by %d bytes, %.400q", keys, len(got), got)
+	if want := "yaml: the mapping key at line 2 is a mapping" + yamlNotScalarKeyWords; err == nil || err.Error() != want {
+		t.Errorf("a key that is a mapping of %d keys is refused with %.400v, want %q", keys, err, want)
 	}
 }
 
@@ -356,6 +334,9 @@ func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 			// But for the parser's refusal of a document for its depth, which
 			// has since been given the exporter's words for one.
 			wasErr = yamlDepthRefusalNow(wasErr)
+			// And but for a key that is a sequence or a mapping, which has
+			// since been refused in words of its own.
+			wasErr = yamlKeyRefusalNow([]byte(document), wasErr)
 			got, gotErr := reading.decode([]byte(document))
 			if (gotErr == nil) != (wasErr == nil) {
 				t.Fatalf("%.300q, large past %d keys, is refused with %.500v; it was with %.500v", document, large, gotErr, wasErr)

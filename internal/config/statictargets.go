@@ -29,6 +29,9 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	if err != nil {
 		return nil, err
 	}
+	if err = refuseNotScalarKeys(b); err != nil {
+		return nil, err
+	}
 	var f model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)

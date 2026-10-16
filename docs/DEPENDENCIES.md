@@ -2,6 +2,12 @@
 
 Updates are proposed, never applied: each one arrives as a pull request.
 
+The repository keeps no `vendor/` directory: builds fetch the modules `go.sum`
+pins from the module proxy. A vendor directory made locally with
+`go mod vendor`, to build without network access, is ignored by git
+(`.gitignore`) and left out of the image's build context (`.dockerignore`),
+where `go build` would otherwise use it in place of the pinned modules.
+
 Dependabot handles the Go modules and the GitHub Actions, configured in
 `.github/dependabot.yml`. The Go modules' minor and patch updates are grouped
 into one pull request, and their major bumps are excluded — a Go major version
@@ -152,7 +158,47 @@ from descriptors (`dynamicpb`, `protodesc`) and the JSON mapping
 (`protojson`); and `github.com/bufbuild/protocompile`, the pure-Go `.proto`
 compiler behind `descriptors: proto`. Only the type's build-tagged files
 import them, so a build without the type does not link them, and a test
-(`TestOnlyTheGRPCRequestTypeLinksGRPC`) keeps it so. Measured with
-`-trimpath -ldflags="-s -w"` as the image builds, they add about 6 MB: 19.7 MB
-for every type against 13.8 MB for `REQUEST_TYPES=http,localfile,graphite`.
+(`TestOnlyTheTypesThatNeedThemLinkTheirModules`) keeps it so. Measured with
+`-trimpath -ldflags="-s -w"` as the image builds, they add about 6 MB: 23.7 MB
+for every type but `sql` against 17.9 MB for
+`REQUEST_TYPES=http,localfile,graphite,sshfile`.
 Dependabot's Go group and `govulncheck` cover them with no change.
+
+The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
+own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a
+host's key against a known_hosts file (`ssh/knownhosts`), and
+`github.com/pkg/sftp`, the SFTP client it reads files with. As for `grpc`,
+only the type's build-tagged files import them, the in-process SSH server of
+its tests (`internal/sshtest`) included, so a build without the type does not
+link the SSH packages and the SFTP client, and a test
+(`TestOnlyTheTypesThatNeedThemLinkTheirModules`) keeps it so; the rest of
+`golang.org/x/crypto` is not its alone, since the `sql` type's `sqlserver`
+driver links its MD4, for NTLM. They add about 1 MB to the binary.
+
+The [`sql`](SQL.md) request type has a direct dependency for each of its
+database drivers, each imported by one build-tagged file
+(`internal/fetch/sqldriver_<name>.go`) and by nothing else:
+
+- built in with the type: `github.com/go-sql-driver/mysql`, for MySQL and
+  MariaDB; `github.com/jackc/pgx/v5`, for PostgreSQL, through its
+  `database/sql` adapter (`stdlib`); and `github.com/microsoft/go-mssqldb`,
+  for SQL Server;
+- built in only with their `sql_driver_<name>` tag (`SQL_DRIVERS`):
+  `github.com/sijms/go-ora/v2`, for Oracle, pure Go;
+  `github.com/ClickHouse/clickhouse-go/v2`, for ClickHouse, which brings
+  `ch-go`, compression libraries and OpenTelemetry's trace API;
+  `github.com/snowflakedb/gosnowflake`, for Snowflake, which brings the AWS
+  and Azure storage SDKs and Apache Arrow, by far the largest; and
+  `github.com/vertica/vertica-sql-go`, for Vertica.
+
+A build without the type links no driver, the default build links the three
+built-in ones and none of the four others, and a build with an opt-in driver
+links its modules and no other's: a test
+(`TestOnlyTheBuildsWithASQLDriverLinkIt`) keeps it so. Measured as the image
+builds, the three built-in drivers add about 6 MB, 29.8 MB for the default
+build against 23.7 MB for one without `sql`, and the four opt-in ones about
+46 MB more: a build with all seven drivers is 76.0 MB, most of it
+Snowflake's. CI vets, builds and
+tests a build with all four opt-in drivers, which no other build compiles
+(see [Development](DEVELOPMENT.md#the-sql-request-type)). The stand-in
+database of the tests (`internal/sqltest`) uses `database/sql/driver` alone.

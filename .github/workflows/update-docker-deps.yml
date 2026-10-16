@@ -12,12 +12,17 @@ on:
   schedule:
     - cron: '0 8 * * 2'
   workflow_dispatch:
+# Read-only unless a job says otherwise; a test holds the grants to a list.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 jobs:
   update:
     runs-on: ubuntu-latest
+    # create-pull-request pushes the deps/dockerfile branch and opens or
+    # updates the pull request from it.
+    permissions:
+      contents: write
+      pull-requests: write
     # The tests that need the strict reference parser fail without it
     # instead of being skipped (internal/exporter/openmetricsstrict_test.go).
     env:

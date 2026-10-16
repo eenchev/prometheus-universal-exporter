@@ -260,9 +260,15 @@ The container arguments MUST reference that path.
 Every key of `config.data` MUST be rendered into the ConfigMap and the whole
 ConfigMap mounted as that directory, so collector files (§ 5.0 of the exporter
 specification) can be supplied as further keys and listed under
-`collector_files` relative to `config.yaml`. A change to any key MUST roll or
+`collector_files` relative to `config.yaml`. A key of `config.data` that
+Kubernetes refuses as a ConfigMap key — anything but letters, digits, `-`,
+`_` and `.`, longer than 253 characters, or `.` or `..` — MUST fail
+rendering, whether or not `config.enabled` is on, naming the key and what a
+key may hold and saying that the directory is flat, so a file goes in under a
+name without `/` or in a directory mounted through `extraVolumes`; the
+values schema MUST refuse the same keys. A change to any key MUST roll or
 reload the exporter as a change to `config.yaml` does (§ 33.3). Every file
-the chart renders into the ConfigMap — each key of `config.data` and the
+the chart renders into a ConfigMap — each key of `config.data` and the
 static target document — MUST reach the pod byte for byte as it was given,
 under a key rendered as a string: the key MUST be quoted, so a name YAML
 reads as a number or a boolean stays a key, and the content MUST NOT depend
@@ -275,9 +281,19 @@ byte order mark, bytes that are not UTF-8, or anything but one line break or
 none after its last visible character — MUST be rendered under `binaryData`
 instead, which the pod mounts as the same file. The checksum annotation
 (§ 33.3) MUST change with any such file, however it is rendered. The chart
-documentation MUST show collector files supplied this way, with a key naming
-pattern that cannot match the static target file rendered into the same
-directory, and a test MUST load that example as the exporter would.
+documentation MUST show collector files supplied this way, and a test MUST
+load that example as the exporter would.
+
+The static target document (`staticTargets`) MUST NOT be a file of the
+configuration directory, where a `collector_files` pattern such as `*.yaml`
+would match it and the exporter would refuse to start reading it as a
+collector file. The chart MUST render it into a ConfigMap of its own,
+`<fullname>-static-targets`, whether or not `config.enabled` is on, mount
+that read-only at `/etc/prometheus-universal-exporter-static-targets` and
+pass `--static-targets-file` with the file there. No other file the chart
+mounts is in the configuration directory either: the credentials and
+`known_hosts` are in their own `mountPath`s, which may not be inside it
+(§ 33.10a).
 
 The chart MUST NOT depend on the collectors' request types: an `http`,
 `localfile`, `graphite` or `grpc` collector is configured in `config.data`
@@ -512,7 +528,7 @@ values schema:
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
-| `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file`, rendered only when enabled |
+| `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file=/etc/prometheus-universal-exporter-static-targets/<fileName>`, rendered only when enabled (§ 33.2) |
 | `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
 | `goMemLimit.enabled`, `goMemLimit.ratio` | `--runtime.memory-limit-ratio`, rendered only when enabled (§ 33.1) |
 | `config` | `--config.file`, always the chart's mount path of `config.yaml` (§ 33.2) |
@@ -628,24 +644,31 @@ other than the values file:
   starts with no `config.yaml` and crash-loops with an error about the missing
   file rather than about the mount that hid it. The reserved set MUST follow the
   values, so a path is reserved only while the chart actually mounts it: the
-  configuration directory always, and `targetAuth.mountPath` and
-  `webAuth.mountPath` while each is enabled.
+  configuration directory always, the static target directory while
+  `staticTargets.enabled` is on, and `targetAuth.mountPath`,
+  `webAuth.mountPath`, `sshAuth.mountPath` and `sqlAuth.mountPath` while
+  each is enabled.
 
 The chart's own mounts MUST NOT collide either, since a pod cannot mount two
-volumes at one path: an enabled `targetAuth.mountPath` or `webAuth.mountPath`
-that is the configuration directory, or the two being one path, MUST fail
+volumes at one path: an enabled `targetAuth.mountPath`, `webAuth.mountPath`,
+`sshAuth.mountPath` or `sqlAuth.mountPath` that is the configuration
+directory, or two of them
+being one path, MUST fail
 rendering, naming the value and what it collides with, and so MUST two
 `extraVolumeMounts` entries of one `mountPath`. Every one of these
 comparisons MUST ignore a trailing slash, so `/etc/prometheus-universal-exporter/`
 collides with `/etc/prometheus-universal-exporter`.
 
-The configuration directory, and `targetAuth.mountPath` and
-`webAuth.mountPath` while each is enabled, are ConfigMap and Secret volumes,
-which Kubernetes mounts read-only, so no mount point can be created in them
+The configuration directory, the static target directory while
+`staticTargets.enabled` is on, and `targetAuth.mountPath`,
+`webAuth.mountPath`, `sshAuth.mountPath` and `sqlAuth.mountPath` while each
+is enabled, are
+ConfigMap, Secret and projected volumes, which Kubernetes mounts read-only, so no mount point can be created in them
 and a mount below one leaves the container unstarted (CreateContainerError).
 An `extraVolumeMounts` entry, a `subPath` file among them, or an enabled
 credential's `mountPath` below one of them, and an enabled credential's
-`mountPath` above the configuration directory, MUST fail rendering, naming the
+`mountPath` above the configuration or static target directory, MUST fail
+rendering, naming the
 value and the directory to mount outside of; the paths MUST be compared
 cleaned, so doubled and dotted segments hide nothing. The values schema MUST
 refuse such a path below the configuration directory where its pattern can
@@ -700,9 +723,10 @@ The schema MUST:
   count flags' and the disruption budget's strings within it (§ 33.10),
   `server.listenAddress` in the same `host:port` shape the render-time check
   enforces, `goGC.percent` as the whole number from 1 to 10000 or the `off`
-  the render-time check accepts (§ 33.1), a mount path inside the
-  configuration directory (§ 33.10a), and the `--` prefix on an
-  `extraArgs` entry; and
+  the render-time check accepts (§ 33.1), the keys of `config.data` and
+  `staticTargets.fileName` as ConfigMap keys (§ 33.2), a mount path inside the
+  configuration directory (§ 33.10a), the rules of an enabled `sshAuth`
+  and of an enabled `sqlAuth` (§ 42.6), and the `--` prefix on an `extraArgs` entry; and
 - stay open where the chart passes a raw Kubernetes shape straight through —
   `resources`, `affinity`, the security contexts, `tolerations`, `env`,
   `envFrom`, `extraVolumes`, relabelings, network policy rules — beyond the
@@ -960,20 +984,18 @@ are skipped and the text checks of the templates still run:
    and a negative offset or default timeout MUST fail rendering; the default
    MUST render `--log.level=info` and neither timeout flag.
 9a. Static targets enabled, which MUST add the `--static-targets-file`
-   argument and render the target document into the exporter ConfigMap. An
+   argument and render the target document into its own ConfigMap, mounted
+   outside the configuration directory (§ 33.2). An
    empty document MUST fail rendering. Static targets MUST render without OTLP
    export in the configuration; when the chart manages the configuration, a
    target setting `export_via_otlp` without `otlp.enabled: true` MUST fail
    rendering with an explicit message naming the target, rather than
    producing a Deployment that cannot start. `staticTargets.fileName` MUST be
-   a ConfigMap key — letters, digits, `-`, `_` and `.`, not `.` or `..` — and,
-   with `config.enabled`, not a key of `config.data`, which it would collide
-   with or replace; otherwise rendering MUST fail, as the values schema MUST
-   refuse the first. With `config.enabled: false` the chart renders no
-   ConfigMap, so `staticTargets.data` MUST NOT be required, and a non-empty
-   one MUST fail rendering, saying to put the file into the supplied
-   ConfigMap under `fileName`, rather than be dropped; the monitor's target
-   names are then not checked. `staticTargets.path` equal to
+   a ConfigMap key — letters, digits, `-`, `_` and `.`, not `.` or `..` —
+   otherwise rendering MUST fail, as the values schema MUST refuse it; it MAY
+   be a key of `config.data` too, being in another ConfigMap. With
+   `config.enabled: false` the static target ConfigMap MUST still render, so
+   `staticTargets.data` MUST be required then too. `staticTargets.path` equal to
    `selfMetrics.path` MUST fail rendering. `staticTargets.expandEnv` MUST add
    `--static-targets.expand-env` with static targets enabled, and nothing
    without; `server.expandEnv` MUST NOT add it.
@@ -1400,13 +1422,108 @@ are skipped and the text checks of the templates still run:
    generated paths, every path the schema's pattern refuses MUST be, cleaned,
    inside the configuration directory, every plain path inside it MUST be
    refused, the directory itself, with trailing slashes, MUST NOT be, the
-   pattern MUST be the same for the three values, and the repository's own
+   pattern MUST be the same for the five values, and the repository's own
    validator MUST refuse a credential's path inside it only while enabled.
 40. Probe monitor timings: a monitor of either type without `interval` and
    `scrapeTimeout` MUST render neither, no `null` anywhere, its `params`
    right after its `path`; one with only `interval` or only `scrapeTimeout`
    MUST render that one alone, a `scrapeTimeout` of `5m` without an interval
    still rendering; and one with both MUST render both as written.
+41. SSH credentials (§ 42.6): the default values, and `sshAuth` disabled with
+   its keys filled in, MUST render byte for byte what the chart renders
+   without the block, with no `ssh-auth` volume and no known hosts
+   ConfigMap. Enabled, a private key with its passphrase and inline lines, a
+   password with known hosts from the Secret at a `mountPath` with a
+   trailing slash, and a key and a password with inline lines lacking a
+   final newline MUST each render the `ssh-auth` mount read-only at
+   `mountPath` and one projected volume of `defaultMode` 0400 whose Secret
+   source names exactly the keys set under their file names, a ConfigMap
+   source and the `-ssh-known-hosts` ConfigMap holding the lines as given
+   only with inline lines, and the pod's `fsGroup` 65532. No `secretName`,
+   no credential, a passphrase without a key, no known hosts, known hosts
+   from both, and inline lines of comments, short lines or blanks alone
+   MUST each be refused by the values schema at the value it names and,
+   with the schema skipped, by the templates' message. A chart of the
+   `validateSSHAuth` helper alone MUST run it over every combination of the
+   block's keys — empty, set and blanks, inline lines with an entry, of
+   comments, short lines, blanks, tabs and carriage returns — reaching all
+   six refusals and none, and the repository's schema validator MUST take
+   exactly the blocks the helper takes, helm's own validator agreeing on
+   one block of each outcome; the schema's entry pattern MUST be the
+   helper's. `checksum/config` MUST be the same for the same lines, differ
+   for another key, an added line, a removed final newline and a carriage
+   return, and with known hosts from the Secret equal the default values'.
+   `sshAuth.mountPath` at the configuration directory, at `webAuth.mountPath`
+   or at an `extraVolumeMounts` entry's MUST fail rendering naming both; and
+   inside the configuration directory, inside `webAuth.mountPath`,
+   `targetAuth.mountPath` inside it, `/etc` above the configuration
+   directory and an `extraVolumeMounts` `subPath` file inside it MUST fail
+   as item 39 says, naming a read-only projected volume, while `sshAuth`
+   beside the other credentials, and not enabled inside the configuration
+   directory or with a mount inside its path, MUST render. The chart
+   README's SSH file collectors section MUST show two `sshAuth` examples,
+   each rendering, with its collector configuration, a volume holding
+   `private_key` and `known_hosts`, and a collector naming both files.
+42. ConfigMap keys of `config.data` (§ 33.2): keys with a `/`, a space, a
+   colon, a letter outside ASCII, `.`, `..` and 254 characters MUST each be
+   refused by the values schema, naming the key, and, with the schema
+   skipped, by the templates' message naming the key, what a key may hold
+   and that the configuration directory is flat; one with a `/` MUST be
+   refused so with `config.enabled: false` too. Keys of digits only,
+   starting with `-` or `_`, of three dots and of 253 characters MUST
+   render, with the schema and without.
+43. The static target directory (§ 33.2): with `collector_files: ["*.yaml"]`
+   in `config.yaml`, a further collector file and static targets enabled,
+   the rendered ConfigMaps laid out at the Deployment's mount paths MUST
+   hold `--static-targets-file` outside the directory of `--config.file`,
+   and MUST load as the exporter loads them at startup: the configuration
+   with its own collector and the collector file's, and the static target
+   document, checked against it. An `extraVolumeMounts` entry at
+   `/etc/prometheus-universal-exporter-static-targets` written with a
+   trailing slash, `webAuth.mountPath` at it, an `extraVolumeMounts` `subPath` file inside
+   it and `targetAuth.mountPath` inside it MUST fail rendering naming the
+   static target directory while static targets are enabled, and render
+   while they are not. With `config.enabled: false` the static target
+   document MUST be the one file of the ConfigMaps rendered, and static
+   targets without `staticTargets.data` MUST fail rendering.
+44. SQL credentials (§ 42.6): the default values, and `sqlAuth` disabled with
+   its keys filled in, MUST render byte for byte what the chart renders
+   without the block, with no `sql-auth` volume. Enabled, a password, a
+   private key, a CA bundle at a `mountPath` with a trailing slash, a
+   client certificate and key, and
+   every key at once MUST each render the `sql-auth` mount read-only at
+   `mountPath` and one Secret volume of `defaultMode` 0400 naming exactly
+   the keys set under their file names, and the pod's `fsGroup` 65532. No
+   `secretName`, no key, a client certificate without its key and a key
+   without its certificate MUST each be refused by the values schema at the
+   value it names and, with the schema skipped, by the templates' message;
+   a `passphraseKey` MUST be refused by the values schema as a key the block
+   does not have and, with the schema skipped, by the templates, whether the
+   block is enabled or not. A chart of
+   the `validateSQLAuth` helper alone MUST run it over every combination of
+   the block's keys — empty, set and blanks — reaching all four refusals
+   and none, and the repository's schema validator MUST take exactly the
+   blocks the helper takes, helm's own validator agreeing on one block of
+   each outcome. `sqlAuth.mountPath` at the configuration directory, at the
+   static target directory, at `targetAuth.mountPath`, `webAuth.mountPath`
+   or `sshAuth.mountPath`, or at an `extraVolumeMounts` entry's MUST fail
+   rendering naming both; inside the configuration directory, inside
+   `sshAuth.mountPath`, `webAuth.mountPath` inside it, `/etc` above the
+   configuration directory and an `extraVolumeMounts` `subPath` file inside
+   it MUST fail as item 39 says, naming a read-only Secret volume; and
+   `sqlAuth` beside every other mount, and not enabled inside the
+   configuration directory or with a mount inside its path, MUST render,
+   with the schema and without. The schema's pattern for a `mountPath`
+   inside the configuration directory MUST be the other credentials', and
+   refuse it only while enabled. The chart README's SQL collectors section
+   MUST show two `sqlAuth` examples, a collector whose `sql` request names
+   the mounted `password_file` and `tls.ca_file` and which the exporter's
+   `config.Load` loads as written, a further database's
+   Secret through `extraVolumes` and an egress rule; the password example
+   with its collector MUST render a volume holding `password` and `ca.crt`,
+   the Snowflake example one holding `private_key` alone, and all
+   of them together the further Secret's volume of mode 0400 beside it and
+   a NetworkPolicy allowing egress to port 5432.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -1521,6 +1638,61 @@ credential as `basicAuth`, since `web.basic_auth` protects `/probe`, the
 self-metrics and the static targets endpoints alike: the self-health and
 static targets monitors, and each probe monitor without `auth.enabled` of its
 own. Without it, a probe monitor gets a `401` on every scrape.
+
+The chart MUST also offer `sshAuth`, for the files an `sshfile` collector
+reads (SPECIFICATION-EXPORTER.md): `enabled`, false by default, `secretName`,
+`privateKeyKey`, `passphraseKey`, `passwordKey`, `knownHosts`,
+`knownHostsSecretKey`, each empty by default, and `mountPath`,
+`/var/run/prometheus-universal-exporter/ssh` by default. Disabled, it MUST
+render nothing, and the chart MUST render exactly what it renders without
+the block. Enabled, it MUST render one projected volume, mounted read-only at
+`mountPath`, with `defaultMode` 0400, holding `private_key` from the Secret's
+`privateKeyKey`, `passphrase` from `passphraseKey` and `password` from
+`passwordKey`, each only when its key is set, and `known_hosts` from the
+Secret's `knownHostsSecretKey` or from `knownHosts`, which the chart MUST
+render as the key `known_hosts` of a ConfigMap of its own,
+`<fullname>-ssh-known-hosts`, written as the configuration's files are
+(§ 33.2). The files are readable by the exporter through the pod's `fsGroup`,
+which the default `podSecurityContext` sets to the exporter's group; the
+chart README MUST say so. The inline lines MUST be part of the pod
+template's `checksum/config`, so changing them rolls the pods (§ 33.3), and
+without them that checksum MUST be the configuration's alone. While it is
+enabled, rendering MUST fail, by the values schema and by the templates with
+the schema skipped, with a message saying what to set, when `secretName` is
+empty; when neither `privateKeyKey` nor `passwordKey` is set; when
+`passphraseKey` is set without `privateKeyKey`; when neither `knownHosts`
+nor `knownHostsSecretKey` is set, or both are, since the one `known_hosts`
+file comes from one source; and when `knownHosts` holds no known_hosts
+entry, a line that, after blanks, does not begin with `#` and has at least
+three blank-separated fields. The schema's pattern for an entry and the
+templates' MUST be one. Its `mountPath` MUST be a path of its own, as
+`webAuth`'s is (§ 33.10a).
+
+The chart MUST also offer `sqlAuth`, for the files an `sql` collector reads
+(SPECIFICATION-EXPORTER.md): `enabled`, false by default, `secretName`,
+`passwordKey`, `privateKeyKey`, `caKey`, `certKey`, `keyKey`, each empty
+by default, and `mountPath`,
+`/var/run/prometheus-universal-exporter/sql` by default. Disabled, it MUST
+render nothing, and the chart MUST render exactly what it renders without
+the block. Enabled, it MUST render one Secret volume, mounted read-only at
+`mountPath`, with `defaultMode` 0400, holding `password` from the Secret's
+`passwordKey`, `private_key` from `privateKeyKey`, `ca.crt` from `caKey`,
+`client.crt` from `certKey` and `client.key` from `keyKey`, each only when
+its key is set; the files are readable by the exporter through the pod's
+`fsGroup`, as `sshAuth`'s are. It MUST NOT offer a passphrase: the exporter
+reads only an unencrypted Snowflake key and refuses `passphrase_file` on an
+`sql` request, and the chart README MUST point to the conversion
+docs/SQL.md gives. A `sqlAuth.passphraseKey` MUST be refused, enabled or not,
+by the values schema and by the templates with the schema skipped.
+While it is enabled, rendering MUST fail, by the values schema and by the
+templates with the schema skipped, with a message saying what to set, when
+`secretName` is empty; when none of `passwordKey`, `privateKeyKey`,
+`caKey`, `certKey` and `keyKey` is set; and when `certKey` is set without `keyKey` or `keyKey`
+without `certKey`. Its `mountPath` MUST be a path of its own, as `webAuth`'s
+is (§ 33.10a). The block mounts one Secret, not a list of them; the chart
+README MUST show how a further database's Secret is mounted through
+`extraVolumes` and `extraVolumeMounts`, and an egress rule for the
+databases' ports for use with `networkPolicy.egress`.
 
 ### 42.6a Shutdown and the grace period
 
@@ -1670,6 +1842,8 @@ workflow, are specified in
 
 The chart release workflow MUST be triggered by tags under `chart` and MUST:
 
+- publish nothing before CI has passed on the commit the tag names
+  ([SPECIFICATION-EXPORTER.md](SPECIFICATION-EXPORTER.md) § 42.12);
 - verify that the version implied by the tag matches the `version` field in
   `Chart.yaml`, failing the release when they disagree;
 - re-run the chart lint and template scenarios;

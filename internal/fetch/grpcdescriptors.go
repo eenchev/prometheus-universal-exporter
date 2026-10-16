@@ -209,7 +209,9 @@ func filesStamp(paths []string) string {
 	var num [20]byte
 	for _, path := range paths {
 		b.WriteString(path)
-		if st, err := os.Stat(path); err == nil {
+		// The paths are the files the configuration names (G703 is reported
+		// only in some builds, as gosec's taint analysis sees more callers).
+		if st, err := os.Stat(path); err == nil { //nolint:gosec // see above
 			b.WriteString(":")
 			b.Write(strconv.AppendInt(num[:0], st.ModTime().UnixNano(), 10))
 			b.WriteString(":")

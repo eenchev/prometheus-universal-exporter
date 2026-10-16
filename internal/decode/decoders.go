@@ -33,6 +33,9 @@ type Decoded struct {
 	// Prometheus reports the sample lines the prometheus decoder left out;
 	// nil when it left out none, and for the others.
 	Prometheus *PrometheusReport
+	// Columns is a sql collector's columns (fetch.HTTPResponse.Columns);
+	// nil for the others.
+	Columns []string
 }
 
 // HTMLDecoded is a parsed HTML document and the body it was parsed from.
@@ -170,6 +173,11 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 
 // decodeBody is Decode, with the error as the decoder made it.
 func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
+	// A sql collector's rows were read by its driver, value by value, and
+	// are handed on as they are: they have no body to decode.
+	if c.Request.Type == fetch.RequestTypeSQL {
+		return &Decoded{Kind: "sql", Data: r.Rows, Raw: r.Body, Columns: r.Columns}, nil
+	}
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)
 	if err != nil {

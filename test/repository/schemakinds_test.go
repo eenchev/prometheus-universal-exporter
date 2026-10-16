@@ -184,6 +184,14 @@ func TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes(t *testing.T) {
 			if least, ok := node["minimum"].(float64); ok && among < least {
 				among = least
 			}
+			// A key held to 0 or a least past it, as the response
+			// limits are, takes the least.
+			alternatives, _ := node["anyOf"].([]any)
+			for _, alternative := range alternatives {
+				if least, ok := alternative.(map[string]any)["minimum"].(float64); ok && among < least {
+					among = least
+				}
+			}
 			if most, ok := node["maximum"].(float64); ok && among > most {
 				among = most
 			}

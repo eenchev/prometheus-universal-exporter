@@ -32,7 +32,7 @@ var otlpKeys = map[string]struct {
 		noValue: []string{"[a]", "{a: b}"},
 	},
 	"headers": {
-		checked: []otlpValue{{`{"bad name": x}`, `otlp.headers "bad name" is not a header name`}, {`{a: "x\ny"}`, "otlp.headers a has the control character"}},
+		checked: []otlpValue{{`{"bad name": x}`, ""}, {`{Accept-Encoding: br}`, ""}, {`{a: "x\ny"}`, "otlp.headers a has the control character"}},
 		noValue: []string{"[a]", "{a: [b]}", "x"},
 	},
 	"timeout":  {checked: []otlpValue{{"-5s", ""}, {"-1ns", ""}}, noValue: []string{"soon", "30", "[5s]"}},

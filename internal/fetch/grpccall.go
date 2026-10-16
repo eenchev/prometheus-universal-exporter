@@ -203,7 +203,8 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) || answered && failed.Code == int(codes.DeadlineExceeded) {
 					silent()
 				}
-				if answered {
+				// Headers over the bound are over it on every attempt.
+				if answered && !errors.Is(err, model.ErrLimitExceeded) {
 					retry, failure := again(attempt, failed.CodeName, err)
 					if retry {
 						continue
@@ -239,6 +240,13 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			if r := refusal.Load(); r != nil {
 				return nil, r
 			}
+		}
+		// An answer whose headers or trailers are over the bound is over
+		// it on every attempt, and whatever the collector accepts: it is
+		// the answer's, as an http answer's headers over it are, and not
+		// a status the server sent.
+		if headerListTooLarge(st) {
+			return nil, headerListError("")
 		}
 		// The deadline that ended the call is the probe's own, not a status
 		// the server sent while it still had time.
@@ -419,8 +427,31 @@ func reflectionError(ctx context.Context, err error) error {
 	if !ok {
 		return err
 	}
+	if headerListTooLarge(st) {
+		return headerListError("asking the reflection service: ")
+	}
 	e := &CallStatusError{Code: int(st.Code()), CodeName: grpcCodeName(st.Code()), Message: "asking the reflection service: " + st.Message(), Err: ctx.Err()}
 	return e
+}
+
+// headerListTooLarge says st is grpc-go's own status for an answer whose
+// headers or trailers are over the bound the connection advertises
+// (grpc.WithMaxHeaderListSize, maxResponseHeaderBytes): the client stopped
+// reading them.
+func headerListTooLarge(st *status.Status) bool {
+	return st.Code() == codes.Internal && st.Message() == "peer header list size exceeded limit"
+}
+
+// headerListError is the failure of a call, or of the reflection question
+// when asking says so, whose answer's headers or trailers are over the
+// bound: counted as a limit, as an http answer's headers over it are, in
+// that error's words. Its status is grpc-go's, INTERNAL.
+func headerListError(asking string) error {
+	return &CallStatusError{
+		Code: int(codes.Internal), CodeName: grpcCodeName(codes.Internal),
+		Message: fmt.Sprintf("%sthe answer's headers or trailers are larger than %d bytes, the most the exporter reads of a response's headers, whatever max_response_bytes allows its body; the target has to send fewer or smaller headers", asking, maxResponseHeaderBytes),
+		Err:     model.ErrLimitExceeded,
+	}
 }
 
 // unavailable says whether err is a gRPC UNAVAILABLE, as a call or a

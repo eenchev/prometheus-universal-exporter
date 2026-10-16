@@ -578,8 +578,8 @@ number and which the exporter MUST refuse.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http`, `localfile`, `graphite` and `grpc` are implemented; FTP is
-anticipated. The
+data. `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql` are implemented;
+FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -641,7 +641,17 @@ type.
 - A library only one type uses MUST be imported only by files behind that
   type's constraint, so a build without the type does not link it; a test
   MUST list the packages a build of each other type links and find none of
-  it. The gRPC and protobuf modules are `grpc`'s alone.
+  it. The gRPC and protobuf modules are `grpc`'s alone, and
+  `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` `sshfile`'s: only files
+  behind the `sshfile` constraint MAY import them, the stand-in SSH server of
+  its tests (`internal/sshtest`) included, and the test MUST also find each
+  type's modules in a build of that type and in the default build. The
+  database drivers are `sql`'s, each imported only by its own file (§ 5.1,
+  `sql`), and the test MUST find none of them in a build without `sql`, the
+  three default drivers and none of the opt-in ones in a build with it, the
+  default build included, and an opt-in driver's modules — Snowflake's AWS
+  and Azure SDKs and Apache Arrow among them — only in a build that asks for
+  that driver.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -654,16 +664,27 @@ type.
   type at all keeps the unknown-type message.
 - `tools/request-type-tags.sh` MUST turn a comma-separated `REQUEST_TYPES` list
   into those tags, printing nothing for an empty list and failing on a name
-  that is not a type in the tree. The Dockerfile's `REQUEST_TYPES` build
-  argument and the Makefile's `REQUEST_TYPES` variable MUST both use it.
+  that is not a type in the tree, and a second list, `SQL_DRIVERS`, into the
+  `sql_driver_<name>` tags of the `sql` type's opt-in drivers, failing on a
+  name that is no opt-in driver of the tree — a default driver included —
+  and on drivers with a `REQUEST_TYPES` that leaves `sql` out. The
+  Dockerfile's `REQUEST_TYPES` and `SQL_DRIVERS` build arguments and the
+  Makefile's variables of those names MUST all use it.
 - The types the binary carries MUST appear on the startup log line and in the
-  `--dry-run` report (§ 30.1).
+  `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
+  log line, as `sql_drivers`, empty in a build without the type.
 - CI MUST vet and build each single-type selection as well as the default
   build, so no type depends on code only another type compiles;
   `make build-request-types`, which `make ci` includes, MUST run the same
   commands. `make build` MUST build the main package into
   `bin/prometheus-universal-exporter`, with the tags of `REQUEST_TYPES`, and
-  the documentation that gives it MUST say where the binary lands.
+  the documentation that gives it MUST say where the binary lands. CI MUST
+  also vet, build and test (the `internal/fetch` package) a build with every
+  opt-in `sql` driver, which `make build-sql-drivers` and
+  `make test-sql-drivers`, which `make ci` includes, MUST run the same; CI
+  MUST lint that build with golangci-lint too, as `make lint-sql-drivers`,
+  which `make ci` includes, does; a test MUST keep these lists naming every
+  opt-in driver of the tree.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, which `make test-request-types`
   runs locally and `make ci` includes. A test that needs a request type —
@@ -686,8 +707,10 @@ type.
   parameter that only left-out types accept is a parameter no type accepts
   and MUST be ignored as one, and the schema the binary prints (§ 24.3)
   lists only its own types. The committed schemas are those of a build with
-  every type, and the test that compares them with what the code generates
-  MUST run in that build alone.
+  every type and the sql type's default drivers alone, and the test that
+  compares them with what the code generates MUST run in that build alone,
+  not in one with an opt-in sql driver, whose schema names that driver as
+  its loader takes it.
 
 #### `http`
 
@@ -697,10 +720,10 @@ type.
 | --- | --- | --- |
 | `method` | `GET` | One of GET, POST, PUT, PATCH, DELETE, HEAD, case-insensitive. |
 | `path` | none | Joined onto the target URL; may carry path parameters (§ 42.10a). Empty is valid, since the target URL may carry the whole path. A percent-escape in it MUST be sent as written (§ 4). |
-| `query` | none | Query parameters added to the request, after the target's own query (§ 4). |
+| `query` | none | Query parameters added to the request, after the target's own query (§ 4). A name MUST NOT be empty or hold a control character, either of which MUST be refused at load; any other name is sent escaped. |
 | `headers` | none | Headers sent to the target. |
 | `body` | none | Raw request body. |
-| `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. |
+| `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. A username with a colon MUST be refused (§ 42.6). |
 | `bearer_token` / `bearer_token_file` | none | Mutually exclusive, and exclusive with basic authentication. |
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
@@ -1050,6 +1073,14 @@ keys:
   second while no connection is made, as a call does (below). The probe's
   budget or `timeout` MUST be the call's deadline. An answer over the
   response limit MUST fail with `RESOURCE_EXHAUSTED` and count as a limit.
+  An answer's headers, and its trailers, MUST each be bounded as an `http`
+  response's headers are (§ 4), at 1 MiB, the bound advertised to the server
+  as the connection's largest header list; an answer whose headers or
+  trailers the client reads past it, the call's or the reflection question's,
+  MUST fail
+  as `INTERNAL`, counted as a limit, with the error that says the headers
+  were too large, and MUST NOT be retried, whatever `retry.codes` and
+  `accept_codes` list.
 - Metadata MUST be the collector's, a static target's own over it, the
   credentials as `authorization`, and the forwarded headers lower-cased over
   all of them, a reserved name left out.
@@ -1094,6 +1125,496 @@ keys:
   MUST be refused; the transform MUST be `jq`, `yq` or `python`.
 - The verbose `url` label MUST be `grpc://host:port/package.Service/Method`,
   `grpcs://` over TLS, and `http_method` MUST be `POST`.
+
+#### `sshfile`
+
+An `sshfile` collector reads a file, or a directory of files, from the
+probe's `target`, a remote host, over SFTP on an SSH connection, and MUST
+present what it read exactly as `localfile` presents a file of its own: the
+same path rules, the same reading of one file and of a directory (§ 5.1a),
+the same response. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `root` | none | **Required.** As `localfile`'s, a directory on the host, but `/` MUST be taken, and a backslash MUST be refused. |
+| `path`, `files`, `max_files`, `max_total_bytes`, `max_age`, `max_response_bytes` | as `localfile` | With `localfile`'s rules; `path` without a backslash. |
+| `username` | none | **Required**, not blanks alone. |
+| `private_key_file` | none | A private key, OpenSSH, PKCS#1 or SEC 1, encrypted or not, or unencrypted PKCS#8. |
+| `passphrase_file` | none | Only with `private_key_file`. |
+| `password_file` | none | One of `private_key_file` and `password_file` MUST be set; both MAY be, the key tried first. |
+| `known_hosts_file` | none | **Required.** |
+| `keepalive_interval` | `30s` | `0`, which sends no keepalive, or at least `1s`. |
+| `keepalive_count_max` | `3` | At least 1. |
+| `idle_timeout` | `5m` | Not negative; `0` keeps an unused connection open. |
+| `max_open_connections` | `0` | Not negative; `0` sets no limit. |
+| `allowed_targets`, `denied_targets` | none | § 26.1. |
+
+- A placeholder in `username` or any file key MUST be refused at load, and
+  so MUST `username` and any file key written with blanks alone, a
+  collector's and a static target's: `""` is the key left out. The
+  credential files and `known_hosts_file` MUST be read when a connection is
+  made, as the other types' credential files are read at a request, not at
+  load; a file that is missing, unreadable, empty, not a key, an encrypted key
+  without `passphrase_file`, or a `known_hosts_file` with no host key line or
+  a line that is not one MUST fail the scrape naming the key and the file,
+  never showing its content; an encrypted PKCS#8 key MUST be named as such,
+  with the `ssh-keygen` command that converts it. Surrounding whitespace MUST
+  be taken off a password and a passphrase as off every credential file.
+  `--dry-run` MUST read those files of every `sshfile` collector, and of
+  every static target that sets credential files of its own, as a connection
+  would, and list what a scrape would fail on as warnings of the `config` or
+  `static_targets` check, logged, without failing the check; startup and
+  reloads MUST NOT read them.
+- `password_file` MUST be offered as the `password` method, and as the
+  answers of the `keyboard-interactive` method only to a host that neither
+  takes nor has refused the `password` method, after every other method of
+  the connection the host takes: a wrong password MUST be given once per
+  connection. A question the host does not echo MUST be answered with the
+  password, one it echoes with `username`, in 3 rounds of questions at most,
+  a round without a question not counted; a host asking more MUST be refused
+  saying so. The documentation MUST say that a one-time code is answered
+  with the password, so a host asking for one cannot be scraped.
+- The target MUST be `host`, `host:port` or `ssh://` followed by either, port
+  22 when left out, an IPv6 address in brackets or bare. It is required: a
+  probe without one MUST be answered `400`, a static target without one
+  refused at load. A target with a user, a path, a query or another scheme,
+  a port outside 1 to 65535, or a host that is no host (§ 26.1) MUST be
+  refused, a probe's with `400`. The host MUST be held to the collector's
+  `allowed_targets` and `denied_targets` and the cloud metadata addresses
+  (§ 26.1): its name before anything is sent, and the address of every
+  connection when it is made, through the same check of a connection as an
+  `http` request's.
+- The host's key MUST always be verified against `known_hosts_file`, plain
+  and hashed lines and `[host]:port` alike, with the target's host as the
+  name looked up; there MUST be no setting that skips it. The host key
+  algorithms asked of the host MUST begin with those of the keys the file
+  holds for it, so a host that offers several keys presents one the file
+  has, and go on with every other the client takes, so a host that offers
+  none of those presents another and is refused as not presenting the listed
+  key; when an `@cert-authority` line holds for the host, or one names every
+  host with a bare `*` and the file holds no plain line of the host, the
+  certificate algorithms MUST come first; a bare `*` line MUST NOT put them
+  before the types of the host's own lines, as OpenSSH's does not. A host
+  certificate that authority signed MUST be taken, a bare `*` line's on
+  every port. A host certificate whose authority no line trusts for the host
+  MUST be checked again as the plain key it certifies, and taken when a line
+  of the host holds that key, unless its authority is `@revoked`. A host the
+  file does not list, one whose key is not the listed one, one presenting a
+  certificate of an authority not trusted for it, and one whose key or
+  certificate authority the file marks `@revoked`, MUST be refused before
+  authenticating, each with its own message naming
+  `request.known_hosts_file` and the presented key's type and SHA-256
+  fingerprint, the first saying how to get the line with `ssh-keyscan` and
+  that its fingerprint is to be checked first, the third naming the
+  authority and `@cert-authority` and saying whether no line holds the key
+  it certifies, the host's line holds another, naming the key certified, or
+  the file marks it `@revoked`, naming it, the fourth `@revoked` and, for an
+  authority, the authority. The documentation MUST say how a line names
+  hosts on a port other than 22 (`[*]:port`). A refused authentication MUST
+  name the user, the credential files and the SSH methods tried.
+- The file read MUST be `root` / `path`, with the `path` probe parameter and
+  path parameters held to `localfile`'s rules; the directory read MUST be
+  `root`, the `path` and `param_<name>` probe parameters refused as for a
+  `localfile` directory. A backslash MUST be refused in `request.path` and a
+  static target's at load, and in the `path` probe parameter with `400`
+  naming it, and a symbolic link whose target has one MUST NOT be followed.
+  Every name MUST be confined to `root` twice:
+  lexically, as `localfile`'s, and on the host, where `root` and then the
+  name are resolved component by component, every symbolic link on the way
+  followed with `lstat` and `readlink`, and a name that resolves outside the
+  resolved `root` refused as leading outside `request.root` through a
+  symbolic link, before it is opened; the resolved path MUST be what is
+  opened. A link loop MUST be refused after 40 links. The documentation MUST
+  say, among the type's limitations, what this leaves to the server: a link
+  changed between the check and the open, since SFTP has no open relative to
+  a directory.
+- A directory MUST be listed in SFTP's batches, the next batch asked of the
+  host only when the entries before it have been looked at, so that the
+  listing stops at its bound (§ 5.1a) having received at most one batch past
+  it, never the whole directory. It MUST be listed on an SSH session of its
+  own, opened on the connection for the listing and closed when the listing
+  ends — at the end of the directory, at the bound, on an error or when the
+  read is abandoned — before the directory's files are read; a listing that
+  does not wait for the host's answer MUST wait, at most 2 seconds and never
+  past the probe's deadline, for the host to close its side of the session
+  (the end of the session's output) before the read goes on, so a scrape
+  right after it is not refused a session the host still counts, and MUST
+  then close the session, the host having closed its side or not, having
+  read at most 512 KiB of what the host sent meanwhile. A listing waiting
+  for the host's answer, to the opening of its session or to a request,
+  MUST NOT be waited for. Once a host has not closed a listing's session
+  within the 2 seconds, the later listings on that connection MUST NOT wait
+  for it, and a session the host then refuses MUST fail the read saying the
+  host did not close an earlier listing's session. A host answering 16
+  requests for entries in a row with no entry but . and .. MUST fail the
+  read saying so. A listing's session that ends under it (the end of its
+  output) MUST be taken for the connection lost, the connection dropped and
+  the read made again once on a new one, only when the connection is not up:
+  a `keepalive@openssh.com` request MUST be sent on it, and when the host
+  answers it, refusing it or not, within 2 seconds and before the probe's
+  deadline, the listing MUST fail saying the host's SFTP server ended the
+  listing's session, the connection MUST be kept, and the listing MUST NOT
+  be tried again. A host that
+  refuses that session MUST fail the read saying that its limit on sessions,
+  OpenSSH's `MaxSessions`, must allow one more for each directory listed at
+  once on the connection; the documentation MUST say so. What the host sends
+  MUST be held to bounds before anything is allocated for it: a packet over
+  256 KiB, a count of entries or of extended attributes larger than the rest
+  of the packet holds, a string or attributes cut short, a name that is
+  empty or holds `/` or a NUL, an answer of another type or to another
+  request MUST fail the listing saying what was wrong. `.` and `..` MUST be
+  left out, and an entry's name, type, mode, size and modification time,
+  and the errors of a directory that does not exist or may not be read,
+  MUST be those pkg/sftp's listing gives.
+- One SSH connection, with one SFTP session, MUST be kept per host and port,
+  username, credential files, `known_hosts_file`, keepalive settings and
+  target lists, and collector for one with `max_open_connections`, made at
+  the first scrape that needs it and shared by every scrape that reaches it,
+  at once or later, of one collector or of several.
+  Scrapes asking for a connection while it is being made MUST wait for that
+  one rather than make their own, each within its own deadline; the making
+  MUST NOT end with the deadline of the scrape that started it, but within
+  the larger of that deadline and 30 seconds, and a connection made when no
+  scrape waits for it any more MUST be kept. A scrape whose deadline comes
+  while it waits MUST say how far the making had got: the TCP connection,
+  the SSH handshake or the start of the SFTP session. A connection MUST be
+  made again at the next scrape when one of its files has changed on disk,
+  or when it has ended, and the making of one so replaced MUST be cancelled
+  once no scrape waits for it; a scrape whose read loses its connection MUST
+  connect again once, within its deadline.
+- Every `keepalive_interval` a `keepalive@openssh.com` request wanting a
+  reply MUST be sent; a reply of any kind is an answer. When
+  `keepalive_count_max` in a row have no answer within an interval, the
+  connection MUST be closed, whatever reads hold it, and the next scrape
+  MUST make a new one. A connection no read has held for `idle_timeout`
+  MUST be closed; with `0` it MUST be kept. A positive `keepalive_interval`
+  under `1s` MUST be refused at load: each keepalive is given the interval to
+  be answered in.
+- A collector with `max_open_connections` above 0 MUST hold at most that many
+  connections open at once, those being made and those a read still holds
+  among them, and MUST share none with another collector. A scrape that needs
+  a new one at the limit MUST first close the collector's connection that no
+  read holds and was used longest ago; when there is none, it MUST cancel the
+  making of one no scrape waits for any more, and wait for it to end; when
+  reads hold, or scrapes wait for, every one, it MUST wait for one to be free
+  within its deadline, and fail at it naming `request.max_open_connections`,
+  its value, and how many of the connections are held by a read and how many
+  being made. A changed limit MUST be held from the next connection the
+  collector makes.
+- Each connection MUST note the collectors whose scrapes used it. When the
+  per-collector state follows a configuration (§ 24), a collector that is
+  gone, or whose settings — its own, or a static target's of it — no longer
+  make the connection, MUST stop being one of them, and a connection left
+  with none MUST be closed once no read holds it, and the making of one
+  MUST be cancelled once no scrape waits for it, at the reload or when the
+  last scrape waiting for it stops waiting. The exporter's shutdown MUST
+  close every connection and cancel the making of every one being made,
+  whether the cache still keeps it or a scrape waits for one it forgot.
+- Making the connection, the handshake with authentication, the start of the
+  SFTP session and the read MUST happen within the probe's `timeout`, budget
+  (§ 3.2a) or context. A probe whose deadline comes during a read MUST
+  return at once, close the files the read has open, and drop the connection
+  when the read has not returned two seconds later, so that a host that stops
+  answering never holds a probe past its deadline nor a read forever. A
+  directory being listed MUST instead be ended at once by closing the session
+  it is listed on, its connection kept. A directory read cut short MUST
+  answer what was read, as § 5.1a says.
+- A read MUST be presented as a `localfile` read is: no status (`$status`
+  `null`, `response.status_code` `None`), `Content-Type` by the extension,
+  `Content-Length` and `Last-Modified`, and a directory as § 5.1a's answer
+  with the same `localfile_*` series. A failed read MUST be reported in the
+  `ssh` stage, follow `on_fetch_error`, and name the host once. A file that does
+  not exist, one outside `root`, one too large (a limit error) and one older
+  than `max_age` MUST each be named as such.
+- It MUST accept the `/probe` parameters `path`, `timeout` and
+  `param_<name>`. A static target MAY set `path`, `timeout`, `username`,
+  `private_key_file`, `passphrase_file` and `password_file`; a target that
+  sets any of the three files MUST use its own three in place of the
+  collector's, held to the collector's rules for them, and its `username`
+  replaces the collector's. These MUST enter its cache key in a section a
+  probe's key never has.
+- A debug probe's request section MUST show each read: `READ`, the host and
+  the file or directory as `sftp://host:port/path`, the user, and whether the
+  connection was made for the probe or kept from an earlier scrape, and no
+  credential. The verbose `url` label MUST be that URL, with path parameters
+  as their placeholders, ending in `/` for a directory, and `http_method`
+  MUST be `READ`.
+
+#### `sql`
+
+A `sql` collector runs one statement on a database, the probe's `target`,
+and MUST hand the rows it returns to the transforms as the values of a list
+of objects, one a row, of its columns by name. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `driver` | none | **Required**: `mysql`, `postgres`, `sqlserver`, `oracle`, `clickhouse`, `snowflake` or `vertica`, matched without regard to case or surrounding whitespace, by the loader and the schema alike. |
+| `statement` | none | **Required**, not blanks alone. |
+| `args` | none | Text, each MAY hold `{{param_...}}` placeholders. |
+| `database` | none | Not blanks alone; MAY hold placeholders; not with `oracle`. |
+| `service_name` | none | **Required** with `oracle`, refused with any other driver. |
+| `username` | none | **Required**, not blanks alone, no control character. |
+| `password_file` | none | A file read when a connection is made. |
+| `private_key_file` | none | `snowflake` only, not beside `password_file`; one of the two MUST be set for `snowflake`. |
+| `tls` | none | The `tls` block of § 4. |
+| `options` | none | The driver's allow-listed options and values (below). |
+| `max_rows` | `10000` | Not negative. |
+| `max_response_bytes` | limit | § 20. |
+| `connections` | defaults | Below. |
+| `allowed_targets`, `denied_targets` | none | § 26.1. |
+
+- **Drivers.** `mysql` (go-sql-driver/mysql), `postgres` (pgx, through its
+  `database/sql` adapter) and `sqlserver` (go-mssqldb) MUST be built in with
+  the type. `oracle` (go-ora), `clickhouse` (clickhouse-go), `snowflake`
+  (gosnowflake) and `vertica` (vertica-sql-go) MUST be built in only with
+  their `sql_driver_<name>` tag as well as the type's. Each driver MUST live
+  in `internal/fetch/sqldriver_<name>.go`, the one file that imports its
+  module, under the type's constraint and, for an opt-in driver, its tag. A
+  collector naming a driver the build left out MUST be refused at load:
+  `collector "x" uses sql driver "oracle", which this build does not include;
+  it was built with: mysql, postgres, sqlserver. Build with SQL_DRIVERS=oracle
+  (make build SQL_DRIVERS=oracle, or the image's SQL_DRIVERS build
+  argument)`. `--version`, the startup log line and
+  `http_exporter_build_info` (§ 22.0d) MUST name the built drivers; of a
+  build without the type, `--version` MUST say nothing of drivers.
+- **Target.** The target MUST be the server alone: `host` or `host:port`, an
+  IPv6 address in brackets, the driver's port when it names none (5432
+  postgres, 3306 mysql, 1433 sqlserver, 1521 oracle, 5433 vertica, 9000
+  clickhouse native, 9440 with `secure`, 8123 http, 8443 with `secure`); a
+  `snowflake` target MUST be an account identifier, reached at
+  `<account>.snowflakecomputing.com:443`. A target holding a scheme, a user,
+  a path or a query MUST be refused, `400` for a probe, so that no probe
+  names a database, an account or an option the configuration does not. A
+  target ending in a colon with no port after it MUST be refused, a static
+  target's at load and a probe's on the scrape, before any connection. An
+  IPv6 address MUST keep its brackets wherever the target is written again,
+  with a port or without. The target is required. The policy (§ 26.1) MUST hold the host's name before a
+  connection and, through the exporter's dialer, every address a connection
+  reaches, for every driver whose driver takes a dialer; for `vertica`,
+  which takes none, the name and every address it resolves to MUST be held
+  before the connection, a name whose addresses cannot be looked up MUST
+  fail the scrape before it, as the driver would look it up itself, and the
+  documentation MUST say so. The exporter's dialer MUST make TCP
+  connections alone, refusing any other network a driver asks for (UDP to
+  the SQL Server Browser) with a sentence saying so. `snowflake`
+  MUST make no request to a host other than the account's: its platform
+  detection (cloud metadata services, AWS STS) MUST be off, and a result's
+  chunks after the first, at cloud storage URLs, MUST NOT be fetched; such a
+  result MUST fail the scrape at once, not at the deadline, saying it came in
+  more than one chunk and to return fewer rows or columns. A connection to
+  the account that the policy refuses MUST fail the connection, or the
+  statement it was made for, at once with the policy's refusal, though the
+  driver would retry it until the deadline. A build with
+  `snowflake` MUST carry gosnowflake's `minicore_disabled` tag, which
+  `tools/request-type-tags.sh` MUST give with `sql_driver_snowflake`.
+- **Credentials.** `password_file` and `private_key_file` MUST be read each
+  time a connection is made, never at load; a file missing, unreadable or
+  empty, a password holding a control character, and a key that is no RSA
+  key in PKCS#8 or PKCS#1, or is encrypted, MUST fail the scrape naming the
+  key and the file and never showing its content. The account and the
+  password MUST reach the driver as written, whatever they hold (`:`, `@`,
+  `/`, `%`, blanks); for `oracle`, whose go-ora would end the account at a
+  `:` its own URL builder leaves unescaped, the exporter MUST build the URL
+  itself. The TLS files MUST be read each time a connection is made, and
+  that connection MUST use what was read for it; for `vertica`, whose
+  driver takes its TLS settings by a registered name and keeps every name
+  for good, a name MUST be held by one connection while it is made and
+  then used again, so that the driver keeps no more names than connections
+  were made at once. No inline password MUST be offered, and `passphrase_file` MUST be refused as a key of another
+  type. `--dry-run` MUST read those files, and the TLS files, of every `sql`
+  collector, and a static target's own credential file, and warn of what a
+  scrape would fail on, as for `sshfile`.
+- **Options and TLS.** Each driver MUST take only its own options, refusing
+  any other naming the ones it takes, and only the listed values of an
+  option that has them: `postgres` `sslmode` (`disable`, `require`,
+  `verify-full`) and `application_name`; `mysql` `tls` (`false`, `true`,
+  `skip-verify`); `sqlserver` `encrypt` (`disable`, `false`, `true`,
+  `strict`); `oracle` `ssl` (`false`, `true`); `clickhouse` `protocol`
+  (`native`, `http`), `compress` (`none`, `lz4`, `zstd`) and `secure`
+  (`false`, `true`); `snowflake` `warehouse`, `role` and `schema`; `vertica`
+  `tlsmode` (`none`, `server`, `server-strict`). `sslmode`, `tls`, `encrypt`,
+  `ssl`, `secure` and `tlsmode` say whether TLS is used; left out, a
+  collector with a `tls` key MUST use TLS, verified against
+  `tls.server_name` or the target's host, and one without none
+  (`snowflake` always uses TLS). A value of the option that does not verify
+  the certificate MUST skip the verification; a `tls` key beside a value that
+  uses no TLS, `tls.ca_file` or `tls.server_name` beside a value that does
+  not verify the certificate (`postgres` `require`, `mysql` `skip-verify`,
+  `vertica` `server`), saying to use the verifying value or leave them out,
+  and `tls.server_name` for `oracle`, which sets the name itself, MUST be
+  refused at load; `cert_file` and `key_file` MAY be set beside a value that
+  does not verify. `sqlserver` with `encrypt` `false` or left
+  out and no `tls` key MUST NOT verify the certificate of the login's TLS,
+  and with a `tls` key MUST verify it as the keys say; unless `encrypt` is
+  `disable`, a server answering that it does not support encryption MUST
+  fail the scrape, saying to enable encryption on the server or write
+  `encrypt: disable`, before the login is sent; and, unless `encrypt` is
+  `strict`, whose answer comes inside TLS, a prelogin answer with an empty
+  `ENCRYPTION` option, which the driver reads without checking, MUST fail
+  the connection with a sentence saying so. `oracle` with `ssl` `true` MUST
+  begin every connection with a TLS handshake: one go-ora would begin
+  without TLS, as after a listener's redirect to an address with
+  `PROTOCOL=TCP`, MUST be closed before anything is written on it, failing
+  the connection with a sentence saying so. `clickhouse` with `secure`
+  `true` MUST make the TLS handshake, with the collector's TLS settings, on
+  the connection the exporter dials before the driver writes to it, on the
+  native protocol as on `http`. A connection MUST be configured from the
+  collector alone: environment variables and files a driver would read
+  (every `PG*` variable pgx reads, and `.pgpass`) MUST change nothing,
+  `PGSERVICE` aside, which pgx reads whatever it is told and which MUST
+  fail the connection saying to unset it, and a driver MUST
+  NOT connect through a proxy: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
+  MUST change nothing for `clickhouse` on `http` or for `snowflake`.
+- **Read-only and one statement.** The statement MUST run in a read-only
+  transaction where the driver offers one — `postgres`, `mysql` and `vertica`
+  through `database/sql`'s read-only transaction, `oracle` after `SET
+  TRANSACTION READ ONLY` — rolled back afterwards, and for `clickhouse` with
+  the setting `readonly=1`. `sqlserver` and `snowflake`, whose drivers
+  refuse a read-only transaction, MUST run it as it is, and the
+  documentation MUST require an account that can only read. `args` MUST be
+  sent as values, never as SQL: bound to the statement's native placeholders
+  at the server by every driver but `clickhouse`, whose driver writes each
+  into the statement quoted as a literal of its type, as `vertica`'s does in
+  a `COPY ... FROM LOCAL` statement, and the documentation MUST say which;
+  `postgres` MUST send every statement with the extended protocol, `mysql`
+  MUST NOT allow several statements in one, and a `vertica` statement holding
+  a `;` followed by anything but blanks and comments, outside quotes, quoted
+  identifiers, comments and dollar quotes, which its driver would run as
+  several, MUST be refused at load. A `{{param_...}}` placeholder in
+  `statement` MUST be refused at load; one in `database` MUST be filled only
+  with letters, digits and `_ - . $`, refused otherwise before anything is
+  sent.
+- **Deadline.** The connection and the statement MUST run within the probe's
+  deadline, which the driver cancels the statement at; a statement still
+  running then MUST fail the scrape saying the deadline came first.
+  `clickhouse` on `http` MUST send the setting
+  `cancel_http_readonly_queries_on_client_close=1` with every request, so
+  that the server stops a statement whose request the driver ended.
+  `vertica`'s every call on a connection MUST return by its context's end,
+  the connection then given up and closed once the driver's call returns,
+  and the driver MUST NOT be given a context that ends, so that it sends no
+  cancel request of its own (over a connection it dials itself, past the
+  target lists and unencrypted); the documentation MUST say that the server
+  then runs the statement to its end. A driver that panics MUST fail the
+  connection, the statement or the keepalive ping it panicked in, never the
+  process, in `database/sql`'s goroutine that opens connections too, and a
+  panic while connecting MUST leave no place at `max_per_target` taken.
+  Every call `database/sql` makes on a connection, its transactions and
+  statements — in its goroutines that close a connection past its lifetime
+  or idle time and roll back a transaction whose context ended, too — MUST
+  turn a panic into an error joined with `driver.ErrBadConn`, so that the
+  connection is closed; the connection that does so MUST be what the
+  driver's is to `database/sql`, running statements, resetting its session
+  and saying whether it is valid exactly when the driver's does, and doing
+  as `database/sql` would without the rest, and the exporter's own use of
+  the driver's connection (`Conn.Raw`) MUST reach the driver's.
+  `postgres` MUST also set `statement_timeout` to the time left, in the
+  transaction, the server ending the statement at it reported as the
+  deadline coming first though the scrape's own deadline is a moment away, and its cancel request MUST go through the exporter's dialer,
+  under the policy, to the address the statement's connection reached, and
+  to no other.
+- **Rows.** Integers and floating-point numbers MUST be numbers; the text of
+  a column of a numeric type, a decimal (Snowflake's `FIXED` and `DECFLOAT`
+  included), the number it writes, or its text
+  when it writes none; a boolean 1 or 0; a date or a timestamp its Unix time
+  in seconds with the fraction; a time of day (`TIME`, `TIMETZ`,
+  ClickHouse's `Time` and `Time64`), whether the driver gives it as a time,
+  as text or as a duration, the seconds since midnight with the fraction, as
+  its clock reads where it was written (a MySQL `TIME`, a duration, MAY be
+  negative or past 24 hours); text and UTF-8 binary data text; binary data
+  that is no UTF-8 MUST fail the scrape naming the column; and `NULL` MUST
+  leave the column out of its row; a column `NULL` in every row MUST still
+  be one the response has, a `csv` rule reading it as a column `NULL` in
+  some rows. A column without a name and a name given to two columns MUST
+  fail the scrape. More than `max_rows` rows, and rows whose values hold more
+  than the response limit — text and binary values by their length, every
+  other value as 8 bytes, each with its column's name's length, a `NULL`
+  nothing — MUST fail the scrape as a limit, the statement
+  ended before its rows are closed so that the driver reads none of the
+  rest. The rows MUST be read by a `csv` transform by column name, one row
+  at a time as a CSV file's with a header, and by `jq`, `yq` and `python` as
+  the list; `decoder.type` other than its default, any other transform and
+  any `response` setting MUST be refused at load, with no warning that the
+  decoder is left to each response. The answer has no status.
+- **Connections.** A collector MUST keep its connections to a target in a
+  pool of its own, one for each target and connection settings — account,
+  credential files, database, options, TLS settings, `connections`, target
+  lists — shared with no other collector. `connections` holds
+  `max_per_target` (`2`, `0` for no limit), `max_idle_per_target` (`1`, `0`
+  for none), `max_targets` (`50`, `0` for no limit), `idle_timeout` (`5m`,
+  `0` keeps), `max_lifetime` (`1h`, `0` for ever) and `keepalive`, its
+  `interval` (`30s`, `0` or at least `1s`) and `check` (`tcp` or `ping`); no
+  count or duration MAY be negative. The limits MUST be of targets, not
+  pools: a target is the server, `host:port`, or the Snowflake account, with
+  the connection settings, so that the pools of the databases and accounts a
+  collector reaches on one server are one target's, and a static target
+  whose `connections` change a setting is a target of its own. The
+  connections open to a target, in use or idle, across its pools, MUST NOT
+  be more than `max_per_target`: a scrape that would make one more MUST
+  first close an idle connection of another of the target's pools, and a
+  scrape that finds `max_per_target` connections in use MUST wait within its
+  deadline, counted as a limit wait, and fail naming the limit when the
+  deadline comes first, counted as a limit failure. A target MUST keep no
+  more pools than `max_per_target`, and no more than 64 without one: a
+  scrape that needs another pool at the limit MUST close the target's pool
+  used longest ago that no scrape uses, and fail, counted as a limit
+  failure, when every one is in use. The connections kept idle MUST be held
+  to `max_idle_per_target` across the target's pools: a connection given
+  back while they keep that many MUST be closed. A scrape of another
+  target at `max_targets` MUST close the pools of the target used longest
+  ago that no scrape uses, and fail, counted as a limit failure, when every
+  target is in use. `check: tcp` MUST set TCP keepalives at the
+  interval on the connections the exporter dials, and any other check or an
+  interval of `0` none, though the driver would switch them on (`mysql`);
+  `check: ping` MUST ping
+  every idle connection of each pool every interval, a failed ping counted,
+  and a ping MUST NOT count as a use to `idle_timeout`: a connection no
+  scrape has had for `idle_timeout` MUST be closed, not pinged. Each ping
+  MUST hold one of the target's places at `max_per_target` while it pings,
+  taken without waiting, the connections pinged no more than the places
+  free, and the pings MUST be skipped for the interval when the scrapes
+  hold every place; they MUST NOT make a connection, and MUST be given the
+  interval to answer in, one that does not answer by then counted as a
+  failed ping. A static target MAY set each key but `max_targets`, which
+  MUST be refused there, by the loader and the schema, replacing the
+  collector's key by key. A reload MUST close the pools of a collector it
+  removes or whose connection settings it changes, and the shutdown every
+  pool: a closed pool MUST no longer be used by a new scrape, while the
+  scrapes using it, running a statement or waiting at `max_per_target`, MUST
+  finish on it, the pool closed when the last is done; their connections
+  MUST be counted as the collector's while it is configured, and not after a
+  later reload removes it. A driver's closing of a connection MUST NOT be
+  waited for under a lock other scrapes or the self-metrics take, nor by a
+  scrape past its deadline. The end of a statement (closing its rows,
+  rolling back its transaction) MUST be bounded by the scrape's deadline,
+  or a grace of 100 ms when the deadline has passed when it begins: when
+  the bound comes first, the scrape MUST answer the rows it read, the
+  connection MUST be closed and never given back to its pool, its network
+  connections closed where the exporter dialed them, and it MUST hold its
+  place at `max_per_target` until it is closed.
+- **Static targets** MAY set `timeout`, `username`, `password_file`,
+  `private_key_file` (either credential file replacing the collector's) and
+  `connections`; `params` fills the placeholders of `args` and `database`. A
+  `{{` in a static target's `username`, `password_file` or
+  `private_key_file` MUST be refused at load, by the loader and the schema,
+  as `sshfile`'s are.
+- A driver's own log (`vertica`'s and `snowflake`'s) MUST go into the
+  exporter's log at its level, with `sql_driver` naming the driver, never to
+  stdout, stderr or a file of the driver's own unless gosnowflake's client
+  configuration file (`sf_client_config.json`) names one. gosnowflake's
+  error for each try at a result's later chunk, which the exporter refuses,
+  MUST be logged at debug, the scrape's failure saying what happened; its
+  other errors MUST stay errors. A server's answer
+  routing a `sqlserver` connection to another host MUST be refused by the
+  exporter's dialer, and the documentation MUST say so.
+- A failed statement MUST be reported in the `sql` stage, naming the server.
+  A debug probe's request section MUST show `QUERY`,
+  `driver://host:port/database` (the service for `oracle`), the account,
+  whether the connection was new or kept, and the number of bound values,
+  and never a credential, a bound value or the statement's text; the
+  outcome MUST name the rows and the columns. The verbose `url` label MUST
+  be that URL, with the database's placeholders as written, and
+  `http_method` MUST be `QUERY`.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -1553,8 +2074,13 @@ this order, without cycles:
 7. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
 
-`internal/testutil` MAY hold helpers shared by the tests of several packages
-and MUST NOT be imported outside tests; nor may the package within it,
+`internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
+servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
+and MUST carry their type's build constraint. `internal/sqltest`, the
+stand-in database of the `sql` tests, MUST NOT be imported outside tests and
+MUST import nothing but the standard library. `internal/testutil` MAY hold
+helpers shared by the tests of several packages and MUST NOT be imported
+outside tests; nor may the package within it,
 `internal/testutil/alloctest`, the tests' measure of allocations (§ 34), which
 MUST NOT import a package of the module, so that the tests of every package,
 `model` included, can use it.
@@ -1708,7 +2234,9 @@ The YAML decoder MUST:
   however long the part is, and say how long it was. The YAML library writes
   into its errors, whole, a key written twice (or the name of the anchor an
   alias key stands for), the Go syntax of a key that is a sequence or a
-  mapping with all it holds (`invalid map key: []interface {}{1, 2, 3}`), a
+  mapping with all it holds (`invalid map key: []interface {}{1, 2, 3}`,
+  which the exporter refuses in words of its own that hold nothing of the
+  key, below), a
   scalar that does not fit its tag (``cannot decode !!str `...` as a
   !!int``), and the name of an anchor that is not known or that holds itself;
   a key of 200,000 numbers is an error of 1.4 MB. Of a key written twice the
@@ -1720,8 +2248,7 @@ The YAML decoder MUST:
   another error holds, the error MUST show the first 256 bytes as the library
   wrote them, what closes the part, the part's length, and then what the
   library says after it (``cannot decode !!str `aaaa...`... (1000000 bytes)
-  as a !!int``, `unknown anchor 'aaaa...'... (1000000 bytes) referenced`,
-  `invalid map key: []interface {}{1, 2, ..., 62, 63... (1488909 bytes)`); a
+  as a !!int``, `unknown anchor 'aaaa...'... (1000000 bytes) referenced`); a
   part of 256 bytes or fewer MUST read as the library wrote it. The words of
   a panic (below) MUST be cut alike, to 256 bytes, the exporter's own still
   ending with what it says of the defect.
@@ -1853,10 +2380,9 @@ The YAML decoder MUST:
     library reads such a key once more for the merge, and fails on what is
     wrong in it (`invalid map key`, `cannot decode ... as a !!int`, `anchor
     ... value contains itself`) or outright. The error MAY be another than
-    the library's: that of the key (`invalid map key`, or among text keys
-    `cannot unmarshal !!seq into string`), of a later value, or of the merge
-    (`map merge requires map or sequence of maps as the value`), whichever
-    is met first.
+    the library's: that of the key (the next rule), of a later value, or of
+    the merge (`map merge requires map or sequence of maps as the value`),
+    whichever is met first.
   - A document is refused for what its aliases expand to (`document
     contains excessive aliasing`) at the share of aliased nodes the library
     refuses it at, counted for a part of the document at a time where the
@@ -1865,10 +2391,27 @@ The YAML decoder MUST:
     A document well under that share MUST NOT be refused for the aliases of
     one part of it: what the library is handed at a time, counted with the
     node made to hold it, MUST stay under what the library refuses alone.
+- Refuse a document the YAML library refuses, or panics on, for a mapping
+  key that is a sequence or a mapping, or an alias of one, in words that say
+  so and where: `yaml: the mapping key at line 3 is a sequence; only scalar
+  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  of a sequence`), naming the first such key of the document in the order it
+  is written. A decoded document's keys are the keys of JSON objects, which
+  such a key cannot be, and the library's own words say nothing of it: one
+  alone is `invalid map key: []interface {}{"a"}`, with no line, two
+  different ones in a mapping are `mapping key "" already defined`, as the
+  library tells keys apart by their text and these have none, one tagged
+  `!!str` or merged among text keys is `cannot unmarshal !!seq into
+  string`, and one in a merged mapping makes the library panic. The failure
+  MUST be one to the log wherever in the document the key is (its line left
+  out). A document with such a key that the library refuses for something
+  else, or decodes, as it does one whose key is in a value a merge leaves
+  out and never reads, MUST be refused, or decoded, as before.
 - Fail the decode, and nothing more, of a document the decoding panics on.
   The YAML library panics on a merge into a mapping that has a key that is
-  no text where a merged mapping has a sequence or a mapping for a key: the
-  error MUST give the library's own words (`the YAML library failed on the
+  no text where a merged mapping has a sequence or a mapping for a key,
+  which MUST be refused for that key (above); any other panic of the
+  library MUST give the library's own words (`the YAML library failed on the
   document: runtime error: hash of unhashable type []interface {}`) and no
   stack. A panic of the exporter's own code MUST NOT be put on the library:
   whose it is MUST be told by the innermost function of the library or of
@@ -4286,7 +4829,12 @@ about, typically table rows, and the value expression and every label
 expression MUST be CSS selectors matched within one item at a time. Within an
 item each MUST match at most one element, the rest of this section applying as
 for jq: a value selector matching nothing is that item's missing metric, and a
-label selector matching nothing leaves the label off. Without `items`, a
+label selector matching nothing leaves the label off. Items MAY be nested in
+one another — `items: div` over nested divs, `li` over nested lists — and a
+selector then matches within an item everything beneath it, the items nested
+in it included. Matching a selector within every item MUST cost what the
+items' subtrees hold, each node matched once, and not the depth of the
+nesting times that. Without `items`, a
 css metric is one series, whose value is the text of the element the
 expression selects; an expression matching more than one element MUST be a
 failure of the rule, handled by its `error_mode`, and the error SHOULD point
@@ -4518,7 +5066,10 @@ The response a collector reads MUST be bounded by `request.max_response_bytes`
 and `limits.max_response_bytes`: the smaller when both are set, the one set
 otherwise, and 10 MiB when neither is. Neither MUST be filled in with the
 default, so that either alone may raise the bound past it; a negative value
-MUST be refused. The bound MUST be held to one byte under the largest 64-bit
+MUST be refused, and so MUST a value from 1 to 1023 bytes, naming the
+collector, the key, the value and the least, 1KiB: a size without a unit is a
+number of bytes, and a limit under a kibibyte is one whose unit was left out
+(`max_response_bytes: 10` for 10 MiB), which fails every scrape. The bound MUST be held to one byte under the largest 64-bit
 number, for every request type, so that the largest value that can be written
 reads the whole answer rather than none of it. An HTTP answer whose `Content-Length` is over the bound MUST
 be refused before its body is read, the error giving that size; one without
@@ -4527,7 +5078,8 @@ a size it does not know. A `HEAD` answer's `Content-Length` MUST NOT be held
 against it. The bound MUST count the answer decompressed: `Accept-Encoding`
 is the exporter's own, so one in a collector's or a static target's
 `request.headers` MUST be refused at load, and one the probe carries MUST NOT
-be forwarded, even listed in `forward_headers`.
+be forwarded; listed in `forward_headers`, it MUST be refused at load
+(§ 42.4).
 
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
@@ -4685,6 +5237,18 @@ each other rule's name that its `expression` matches make it, the name matched
 as the scrape matches it — the pattern unanchored unless it anchors itself,
 against the name the target wrote, before `metrics_prefix` and
 `name_escaping` — and its refusal MUST name the metric whose map it is.
+So MUST a collector whose series carry more labels than
+`limits.max_labels_per_metric` before the target says anything: the labels of
+`transform.labels` and a rule's static labels, each name counted once, as
+`remove_labels` and `rename_labels` leave them, the refusal naming the
+collector, or the rule where its static labels take the count over, the
+count and the limit. Only labels every series has MUST be counted: not a
+value with placeholders, which a probe may fill with nothing, not a static
+label of a name a `value_map` of the collector may map to `""`, and not the
+labels the exporter adds past the validation, such as a static target's. A
+`python` transform's rules make no series, so only its `transform.labels`
+are counted. A collector refused for anything else of this paragraph MUST be
+refused for it as it was.
 
 A scrape that fails validation for a limit of its series MUST say which and
 what to change: the metric, what is over the limit and by how much, the limit
@@ -4940,6 +5504,18 @@ http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
 http_exporter_probes_rejected_exporter_limit_total
 http_exporter_targets_refused_total
+http_exporter_sshfile_connections
+http_exporter_sshfile_connects_total
+http_exporter_sshfile_limit_waits_total
+http_exporter_sshfile_limit_failures_total
+http_exporter_sql_connections
+http_exporter_sql_idle_connections
+http_exporter_sql_targets
+http_exporter_sql_connects_total
+http_exporter_sql_keepalive_failures_total
+http_exporter_sql_limit_waits_total
+http_exporter_sql_limit_failures_total
+http_exporter_sql_rows
 http_exporter_trips_in_flight
 http_exporter_trips_max_concurrent
 
@@ -4968,6 +5544,39 @@ response, and `0` after a fetch that got none. `http_exporter_scrape_grpc_status
 MUST exist only for `grpc` collectors, so an exporter without them has no
 series of it: the status code of the most recent call, `0` for `OK`, and `-1`
 before the first call or after a scrape that made none.
+`http_exporter_sshfile_connections`, a gauge, and
+`http_exporter_sshfile_connects_total`, a counter, MUST exist only for
+`sshfile` collectors, labelled `collector`, with no per-request series: the
+connections the collector's scrapes use that are open now, a connection
+collectors share counted for each, and the connections its scrapes have made
+since the exporter started, every one made again included; a connection
+whose making was cancelled — at the exporter's shutdown, at a reload, at
+`max_open_connections`, or once no scrape waited for one the cache had
+forgotten — or whose collector a reload removed while it was made, MUST NOT
+be counted, and one the cache forgot while a scrape waited for it, which
+that scrape then reads on, MUST be counted. `http_exporter_sshfile_limit_waits_total` and
+`http_exporter_sshfile_limit_failures_total`, counters, MUST exist only for
+`sshfile` collectors, labelled `collector`, with no per-request series: the
+scrapes that waited for room at the collector's `max_open_connections`, and
+those that failed there, `0` for a collector without the limit. The four
+MUST be exported over OTLP as every other self-metric, and the counts MUST
+start at 0 at the exporter's shutdown and be forgotten with a collector a
+reload removes.
+`http_exporter_sql_connections`, `http_exporter_sql_idle_connections` and
+`http_exporter_sql_targets`, gauges, and `http_exporter_sql_connects_total`,
+`http_exporter_sql_keepalive_failures_total`,
+`http_exporter_sql_limit_waits_total` and
+`http_exporter_sql_limit_failures_total`, counters, MUST exist only for `sql`
+collectors, labelled `collector`, with no per-request series: the
+connections the collector's pools have open, those of them idle, the targets
+it has pools open for (each server or account once, whatever databases and
+accounts it reached there), the connections they made, its failed keepalive pings, and its scrapes that
+waited at `max_per_target` and that failed there or at `max_targets`; and
+`http_exporter_sql_rows`, a gauge, the rows its last successful statement
+returned, `0` before one. They MUST be exported over OTLP as every other
+self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
+forgotten with a collector a reload removes. A `sql` collector's refused
+targets count in `http_exporter_targets_refused_total`.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -4999,7 +5608,9 @@ first two; `http_exporter_config_reloads_total` MUST count only reloads after
 startup, with `result` `success` or `failure`, both published from the start.
 A rejected reload MUST set `http_exporter_config_last_reload_successful` to 0
 and leave the timestamp at the last success, and a reload of one file MUST NOT
-change the other's series.
+change the other's series. The watch's try at every tick of a file refused
+because a file it reads could not be read (§ 24.1) MUST count a failure only
+when it is refused otherwise than the last time.
 
 `http_exporter_collector_config_valid` MUST read 1 for every collector of the
 configuration in force: a configuration that fails validation is never loaded,
@@ -5040,13 +5651,16 @@ self-metric set, so they are also exported over OTLP.
 ### 22.0d Build information
 
 The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
-labels are `version`, `revision`, `goversion` and `request_types`, the built
-request types joined with commas. The version MUST be the one set at build time
+labels are `version`, `revision`, `goversion`, `request_types`, the built
+request types joined with commas, and `sql_drivers`, the `sql` type's built
+drivers joined with commas, left out in a build without the type, whose
+value would be empty. The version MUST be the one set at build time
 with `-ldflags "-X main.version=…"` when set, else the module version Go stamps
 into the binary, `(devel)` when there is none. The revision MUST be the git
 commit Go stamps, with `-modified` appended when the checkout had changes, and
 `unknown` when the build was not from git. `--version` MUST print the same
-four values on one line to stdout and exit 0 (§ 30), and the startup log line
+values on one line to stdout, the sql drivers left out as the label is, and
+exit 0 (§ 30), and the startup log line
 MUST carry the version and revision.
 
 Avoid unbounded label values on exporter self-metrics.
@@ -5554,9 +6168,12 @@ non-positive interval with the watch on MUST be rejected as a command-line error
 the watch that was explicitly requested. The exporter SHOULD report whether the
 watch is active in its startup log.
 
-Changes MUST be detected by file modification time and size rather than by
-filesystem event notification: any time other than the one last read is a
-change, an older one included, and the files MUST be stamped before they are
+Changes MUST be detected by file modification time, size and mode rather
+than by filesystem event notification: any time other than the one last read
+is a change, an older one included, and so is a change of a file's
+permissions alone, of the configuration file, a collector file and the
+static target file, which may have made it readable again or unreadable; and
+the files MUST be stamped before they are
 read, at startup and on reload, so an edit made while they are is seen by the
 next tick. Kubernetes republishes a mounted ConfigMap by atomically
 swapping a `..data` symlink, which replaces the inode a file-level event watch
@@ -5566,7 +6183,20 @@ watches the directory and re-arms. Polling is unaffected by this.
 The watch MUST cover the collector files (§ 5.0): a collector file changed, a
 file newly matching a pattern, and a file removed MUST each reload the
 configuration, although the configuration file itself did not change. A reload
-that fails MUST NOT be retried until one of the files changes again. The
+that fails MUST NOT be retried until one of the files changes again, but for
+one refused because a file it reads could not be read: the configuration
+file, a collector file or the static target file missing, a directory, or
+unreadable. Such a file MUST be read again at every tick until it is in
+force or refused for another reason, although nothing its stamps hold
+changed, since a file can become readable through its owner, an ACL or a
+directory's permissions, which no stamp shows; and with it the other of the
+two files when that one waits for it (§ 24.1a). A try at a tick that is
+refused with the text of the last refusal of that file, as the failure log
+recognises a failure (§ 25.1), MUST NOT be logged nor counted in the reload
+self-metrics (§ 22.0b) again; one refused otherwise MUST be logged and
+counted once, as any rejected reload. A file refused for what it says, not
+YAML or not valid, MUST NOT be read at a tick at which none of its files
+changed. The
 collector files watched MUST be those the configuration file lists, even when
 that configuration is refused, so a configuration adding a collector file with
 a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
@@ -5925,7 +6555,9 @@ files; a file watched for it while it is refused (§ 24.1), when there is
 one, the files a configuration names and the files those import each named
 when there are such; and the other of the two files, when the file was
 rejected only because it disagrees with the other as in force, which a
-change to the other MUST then read again. For a target file that waits, a
+change to the other MUST then read again; and, after the changes, that the
+file is read again at every tick while a file it reads cannot be read, when
+it was refused for that (§ 24.1). For a target file that waits, a
 change to the configuration is one to its file, to a collector file or to a
 file a refused configuration is tried again for, and not one to a descriptor
 file of the configuration in force (§ 24.1). Without the watch nothing is read
@@ -6068,6 +6700,10 @@ checked:
   MUST name it so. A whole number written with digits alone MUST
   be read as the YAML decoder reads it. A negative `limits.script_timeout` MUST be
   refused. 0, like a limit left out, keeps its meaning: the default. A
+  `limits.script_timeout` that is set MUST be at least 1ms, under which a
+  script's time measures the pipes to its worker and the machine's load more
+  than the script, and a smaller one MUST be refused naming the collector,
+  the key, the value, the least and the default. A
   `limits.max_output_bytes` that is set MUST be at least the 38 bytes a
   Python script that emits no metric answers in, and a smaller one MUST be
   refused naming
@@ -6078,6 +6714,15 @@ checked:
   mapping of names to values, such as `value_map`, `headers` or `labels`,
   MUST be refused naming the mapping and the line, since the decoder would
   drop the entry; quoted, it is that text.
+- A mapping key that is a sequence or a mapping, or an alias of one,
+  anywhere in the configuration, a collector file or the static target
+  file — a block merged in and an `x-` block nothing uses included — MUST
+  be refused before the file is decoded, each such key at its line, as in
+  `line 3: a mapping key is a sequence; only scalar keys (text, numbers,
+  booleans, null) can be read`, a collector file's error naming the file as
+  its other errors do; two of a kind on one line MUST be said once. A file
+  without such a key MUST load, or be refused, as it was, which a test MUST
+  show against the load without this refusal.
 - A value YAML reads as none — nothing after the colon or the dash, `null`
   or `~`, in any spelling YAML takes for them — MUST be refused wherever a
   file takes a value: at every key the configuration, a collector file and
@@ -6127,7 +6772,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile`. A
+  of graphite, grpc, http, localfile, sql, sshfile`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
@@ -6325,7 +6970,8 @@ differences in how a duration is written. What else a schema cannot
 tell MUST be said in the
 key's description and stay the exporter's to refuse: the least
 `otlp.interval`, 1s, since a duration is a string to a schema and a disabled
-block may hold any; and the range of a size. A key of any other whole number
+block may hold any; the least `limits.script_timeout`, 1ms, a duration too;
+and the range of a size. A key of any other whole number
 takes a number written with a point or an exponent as the whole number it
 equals, to the exporter as to a schema (§ 24.2): the range of the key's
 integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
@@ -6352,12 +6998,27 @@ configuration and of a collector file as far as a schema can tell it: a
 number at the key MUST be 0 or at least 38, with the least taken from the
 constant the loader checks against, so that `1`, `37`, `1e1` and `26.0` are
 refused by both and `0` and `38` taken by both, which the test of the two
-verdicts MUST show; the other four sizes MUST stay described as every size
-is. A size written as text — in quotes, or with a unit, such as `"26"`,
+verdicts MUST show. So MUST the least of `request.max_response_bytes` and
+`limits.max_response_bytes`, 1KiB (§ 20), from the constant the loader
+checks against: `1`, `1e1` and `1023` refused by both, `0` and `1024` taken
+by both. The other two sizes MUST stay described as every size is. A size
+written as text — in quotes, or with a unit, such as `"26"`,
 `20B` or `0.01KiB` — is text of the pattern of a size to a schema, which
 cannot tell how many bytes it comes to: that such a size is under the least
 MUST stay the exporter's to refuse, MUST be said in the key's description
 and in the documentation of the schemas, and the test MUST hold both to it.
+
+The names of `request.headers`, a collector's and a static target's, and of
+`otlp.headers` in a block that is switched on, MUST be held by the schemas to
+what the exporter takes (§ 42.10): an HTTP token, letters, digits and
+``!#$%&'*+-.^_`|~``, that is not `Accept-Encoding` in any case; two names
+that are one header in different case stay the exporter's to refuse, as a
+schema sees each name alone. The names of `request.query` MUST be held to
+text of at least a character with no control character, and an entry of
+`request.forward_headers` to a header name, with blanks around it or not,
+that is none of the headers a probe never forwards (§ 42.4), each taken from
+the list the exporter goes by. The tables of keys MUST show each of them,
+and the schemas as they were, which took any name.
 
 A key written as the empty string MUST be the key left out, to the exporter
 and to the schemas alike, and CONFIGURATION.md MUST say so once, where it
@@ -6390,8 +7051,9 @@ MUST be refused by both written `""`; so MUST an empty entry of
 `request.denied_targets`, `request.redirect_trusted_hosts`,
 `transform.include`, `transform.exclude`,
 `transform.libraries` and `transform.required_libs`, and an empty key of a
-`value_map`, of `request.metadata` and of a static target's `params` and
-`labels`. An entry of `transform.include` or `transform.exclude` of nothing
+`value_map`, of `request.metadata`, `request.headers` and `request.query`,
+of a static target's `params`, `labels` and `request.headers`, and an empty
+entry of `request.forward_headers`. An entry of `transform.include` or `transform.exclude` of nothing
 but blanks MUST be refused by both too (§ 6), by the pattern a label's
 `expression` is held to. A label of a rule of a collector whose
 `transform.type` is `python` MUST NOT have `value` written with a value other
@@ -6729,7 +7391,7 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite` or `grpc` collector MAY set `request.allowed_targets`
+An `http`, `graphite`, `grpc`, `sshfile` or `sql` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -8531,6 +9193,16 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
 The path filter MUST evaluate the correct comparison base for both push and
 pull-request workflows.
 
+CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
+suite and the tests of each single-type selection — beside the rest rather
+than after it. Every job that runs Go checks MUST start with the same setup
+steps (checkout, the changed-path filter, Go, the image's Python with its
+libraries and the test-only modules, the module download) and the same
+environment, and MUST gate its steps on that filter's output rather than with
+a job-level condition, so that a job with nothing to do still succeeds under
+its own name; a test MUST keep those setups identical, and MUST keep the
+matrix of the single-type tests naming every request type of the tree.
+
 CI SHOULD additionally run fuzz smoke tests, image tests, and Kubernetes integration tests in a dedicated pipeline stage when infrastructure is available.
 
 No feature should be considered complete if its relevant tests are absent or disabled.
@@ -9335,9 +10007,9 @@ See § 23 and § 30.
 See § 7.1.
 
 - Every package under `internal/` imports only the packages before it in the
-  layer order, `internal/testutil` and `internal/grpctest` import only
-  `internal/model`, and no non-test file imports either, nor a package
-  within one.
+  layer order, `internal/testutil`, `internal/grpctest` and
+  `internal/sshtest` import only `internal/model`, and no non-test file
+  imports any of them, nor a package within one.
 - Only the shared trip fetches, decodes and transforms, apart from a
   directory's files (§ 5.1), which it decodes and transforms one at a time.
 - A static target's scrape failed by a metric rule with `error_mode: fail`
@@ -12499,18 +13171,20 @@ Tests MUST show:
   for graphite, grpc, http and localfile) the whole suite passes: a test file
   that needs a request type carries
   `!select_request_types || request_type_<name>`, one that needs two the two
-  joined with `&&`, and the comparison of the committed schemas with the
-  generated ones, the check that every request key belongs to a type and the
-  check that every known type is registered carry `!select_request_types`
-  alone; the default build runs every test and subtest it ran before.
+  joined with `&&`, the check that every request key belongs to a type and
+  the check that every known type is registered carry
+  `!select_request_types` alone, and the comparison of the committed
+  configuration and collector file schemas with the generated ones that and
+  `!sql_driver_<name>` for every opt-in sql driver; the default build runs every test and subtest it ran before.
 - A collector without `request.type` is told to add a type the build has:
   `type: http` where the build carries http, and otherwise the first of the
   types it carries, and the message shows no type the build left out.
-- ci.yml has a step that runs `go test -count=1` under the tags of each
-  request type on its own, under the condition of its other Go steps; each of
-  its loops over the request types names every type in the tree, and so does
-  that of `make test-request-types`, which runs the command ci.yml runs and
-  is part of `make ci`.
+- ci.yml has a job of a matrix over the request types, with fail-fast false,
+  whose step runs `go test -count=1` under the tags of its type, given as
+  `$type` from the matrix, under the condition of its other Go steps; the
+  matrix and each of its loops over the request types name every type in
+  the tree, and so does that of `make test-request-types`, which runs the
+  command ci.yml runs and is part of `make ci`.
 - In a build with grpc and without http the exporter's grpc fixture carries
   its grpc collector alone, so the grpc probe, static target, collectors
   page, debug probe and stale result tests run there too; with http the
@@ -12860,8 +13534,8 @@ Tests MUST show:
 - Every command of the module — the exporter and `tools/depupdate` — is among
   what those packages and their imports cover.
 - The module's packages that are not covered are exactly
-  `internal/grpctest`, `internal/testutil`, `internal/testutil/alloctest`
-  and `test/repository`; a package
+  `internal/grpctest`, `internal/sshtest`, `internal/testutil`,
+  `internal/testutil/alloctest` and `test/repository`; a package
   that is neither covered nor on that list, one on the list that a covered
   package imports, and one on the list that is no package any more each fail
   the test.
@@ -14632,8 +15306,8 @@ Tests MUST show:
 - The YAML errors without a line — an unknown anchor, which is another
   failure for another name, an anchor that holds itself, excessive aliasing,
   a merge of no mapping, a value that does not fit its tag, a control
-  character, a map key that is no scalar — are recognised by their text as it
-  is, and are the same error values they were.
+  character — are recognised by their text as it is, and are the same error
+  values they were.
 - Only the YAML library's own forms are read for a line: `line 12: …` and
   the `already defined at line N` a `mapping key` problem ends with. No
   digits, no colon, a blank missing after it, the words in the middle of a
@@ -14643,7 +15317,8 @@ Tests MUST show:
   configurations under `configs`, whole and cut off after and in the middle
   of each of their first sixty lines, and the documents of the tests —
   decode into what they did or are refused in the words they were (the
-  former decoder kept as an oracle); a refusal is recognised otherwise than
+  former decoder kept as an oracle), but for a key that is a sequence, since
+  refused in words of its own; a refusal is recognised otherwise than
   before only when it names a line, and every one that names a line is.
   Under the race detector a file is cut off after every sixth of those lines.
 - Through `/probe`, a YAML target whose document fails on line 3, 3, 7, 7,
@@ -14979,14 +15654,15 @@ Tests MUST show:
   mistake does not fail the document, and a scalar, a sequence with a
   scalar and an alias of a sequence are refused in the library's words.
 - A document the YAML library panics on — `a: 1`, `2: 3` and `<<: {[x]: 1}`,
-  and a merged mapping with a mapping for a key — is refused with `the YAML
-  library failed on the document: runtime error: hash of unhashable type
-  ...` and recognised by that text up to `runtime error` and by the
-  library's function that raised it (`runtime error (decode.go
-  yaml.v3.(*decoder).mapping)`); through `/probe`
-  it is a 502 of the decode stage on each of two scrapes, logged in full
-  once and as a repeat after, with no stack and no panic in the log, where
-  it was a 500 with a stack on every scrape.
+  and a merged mapping with a mapping for a key — is refused for that key
+  (`yaml: the mapping key at line 3 is a sequence; ...`); handed to the
+  library alone, its panic is `the YAML library failed on the document:
+  runtime error: hash of unhashable type ...`, recognised by that text up
+  to `runtime error` and by the library's function that raised it
+  (`runtime error (decode.go yaml.v3.(*decoder).mapping)`); through
+  `/probe` it is a 502 of the decode stage on each of two scrapes, logged
+  in full once and as a repeat after, with no stack and no panic in the log,
+  where it was a 500 with a stack on every scrape.
 - What the problems of a YAML document come to is added up in a stack no
   deeper than the document is nested: 40,000 anchors written in a mapping
   with a key written twice, each a sequence of an alias of the one before,
@@ -15046,7 +15722,8 @@ Tests MUST show:
   each of the ways the items can be either — the library's drawn from
   numbers, texts, null written and not written, tagged values, small
   mappings and lists, a set, an ordered map, aliases, a merge and a key
-  listed as a problem; the walk's from a mapping of 129 keys, an alias of
+  that is a sequence tagged as text, which the library listed as a problem
+  and which is refused for the key; the walk's from a mapping of 129 keys, an alias of
   it and collections that hold it; now and then an item the document is
   refused for (`!!int foo`, an anchor that holds itself) — decoded with a
   mapping large past one, two, four and 128 keys, and sequences of 126 to
@@ -15067,11 +15744,12 @@ Tests MUST show:
   of a list ended by a large mapping, the alias alone in a mapping and in a
   list beside a large mapping (1001 nodes with the node made for the pair
   at 995 to 997 numbers), and the alias as a key of a mapping of 129 keys —
-  of a list, refused as `invalid map key` and not for its aliases at 998
-  numbers, and of a list tagged `!!str`, listed as a problem, among the
-  mapping's keys and in a merged mapping — are each what the library alone
-  makes of the whole document, where a part of exactly 1000 counted nodes
-  was refused for its aliases.
+  of a list, refused for the key (the library's `invalid map key`) and not
+  for its aliases at 998 numbers, and of a list tagged `!!str`, refused for
+  the key too (the library listed it as a problem), among the mapping's keys
+  and in a merged mapping — are each what the library alone makes of the
+  whole document, a key that is a sequence refused in the exporter's words,
+  where a part of exactly 1000 counted nodes was refused for its aliases.
 - The keys of a YAML mapping with a merge are counted once more, as the
   library decodes them once more: after a mapping of 129 keys with a merge
   a list of aliases of a thousand numbers is refused from the 154th alias
@@ -15100,11 +15778,12 @@ Tests MUST show:
   with an error that may be another: `{? !!str {k: {? !!null [a] : x}} : x,
   <<: x}` (the library's `invalid map key`, here `map merge requires map or
   sequence of maps as the value`), `{? !!str [a] : x, <<: x}`, `{? !!str
-  [!!int foo] : x, <<: {b: 1}}` (the library's `cannot decode`, here the
-  key listed as a problem), an anchor in such a key that holds itself, a
+  [!!int foo] : x, <<: {b: 1}}` (the library's `cannot decode`, here
+  refused for the key), an anchor in such a key that holds itself, a
   merged value that does not fit its tag, and four more, whatever counts as
-  a large mapping; any other document decoded in parts is the library's to
-  the letter.
+  a large mapping; one the library refused, or failed on, for such a key is
+  refused for that key in the exporter's words; any other document decoded
+  in parts is the library's to the letter.
 - No document of the differential test, nor of the test of aliases beside a
   large YAML mapping, is handed to the library in more than 10,000 parts:
   the most is 603, and nine levels of nine aliases beside a mapping of 200
@@ -15267,14 +15946,11 @@ Tests MUST show:
 - The repository's schema validator refuses a number above `maximum`, takes
   one at it, and bounds no text by it.
 - A YAML mapping key that is a sequence of 200,000 numbers is refused with
-  `yaml: invalid map key: `, the first 256 bytes of what the library wrote of
-  the key and `... (1488909 bytes)`, under 300 bytes where it was 1.4 MB:
-  beside a key that is no text, beside a mapping of 200 keys, where the walk
-  hands the pair to the library, and for a key that is a mapping of 20,000
-  keys, which the walk refuses itself. It is recognised by the same text
-  ending `... (# bytes)`, so a key of 150,000 numbers that starts the same
-  is the same failure, with its own length in the error, and a key that
-  starts with another number is another.
+  `yaml: the mapping key at line 2 is a sequence; ...`, nothing of the key
+  in it, under 300 bytes where it was 1.4 MB: beside a key that is no text,
+  beside a mapping of 200 keys, and for a key that is a mapping of 20,000
+  keys. A key of 150,000 numbers, and a key that starts with another number,
+  are the same failure.
   Under the race detector the keys are of 10,000 and of 7,500 numbers and a
   mapping of 2,000 keys.
 - A YAML key of 100 kB written three times, in the explicit `? key` form, is
@@ -15355,10 +16031,10 @@ Tests MUST show:
   is no error.
 - Through `/probe`, a YAML document with a key of 200,000 numbers is
   answered 502 with `collector document decode failed: YAML decode: yaml:
-  invalid map key: ...63... (1488909 bytes)` in under 400 bytes, and logs
+  the mapping key at line 2 is a sequence; ...` in under 400 bytes, and logs
   under a kilobyte, one line of the decode stage with that error; the key
-  grown shorter, to 150,000 numbers, is logged as a repeat at debug level
-  with its own length, and a key that starts otherwise as a new failure; a
+  grown shorter, to 150,000 numbers, and a key that starts otherwise are
+  logged as repeats at debug level; a
   debug probe's report names the failure in the same short line. Under the race
   detector the keys are of 20,000 and of 15,000 numbers, the first of 128908
   bytes.
@@ -16946,7 +17622,9 @@ Tests MUST show:
   of more than 128 keys or values; it was called twice for a merged pair.
 - A document with a merge decodes into what the library alone makes of it
   and into what the walk made of it when every merged pair was handed
-  alone, the walk as it was kept beside the tests: the documents written
+  alone, the walk as it was kept beside the tests, a document either
+  refused for a key that is a sequence or a mapping being refused for that
+  key in the exporter's words: the documents written
   for the forms of a merge, 27 written for a run — two keys that decode
   into one, `.nan` keys, a null among text keys, a key that does not fit
   its tag after a value with a problem, problems in the order they are
@@ -16967,8 +17645,8 @@ Tests MUST show:
   what the walk made of it before: merged once, four times, in a list with
   another that shares half its keys, through a mapping that merges it, with
   keys that are numbers into a mapping of text keys and into one of keys of
-  any type, with values whose problems are listed once for the mapping and
-  once for the merge, in order, and in a list that ends with a scalar,
+  any type, with values that hold a key that is a sequence tagged as text,
+  refused for the first such key, and in a list that ends with a scalar,
   which is refused.
 - The aliases of a merged mapping are counted pair by pair as before: small
   mappings that each merge 130 pairs of aliases of ten numbers are decoded
@@ -18731,8 +19409,9 @@ Tests MUST show:
   exception's length, and a `bearer_token_file` whose path is three kilobytes
   fails the `credentials` stage in 2,000 bytes ending `... (3092 bytes)`; both
   are remembered by a text with the mark for the length.
-- A gRPC call a server ends with a status message of ten megabytes (one under
-  the race detector) fails its probe at the `grpc` stage in exactly 2,000
+- A gRPC call a server ends with a status message of a kilobyte under a
+  megabyte, the most an answer's trailers may take (256 kB under the race
+  detector), fails its probe at the `grpc` stage in exactly 2,000
   bytes, `gRPC call failed: FAILED_PRECONDITION: sss...` to its length,
   answered, logged with `grpc_code` and remembered alike; half as long it is a
   repeat, and a message of a few words is answered as it was.
@@ -19841,10 +20520,10 @@ A debug report bounds every line but the body's (§ 42.17):
   files as it did, and differs from what it was in one line alone: the log's
   line of the skipped files, which names the path twice, is shown by its
   first 8,192 bytes and its length.
-- A gRPC status the collector accepts whose message is a megabyte (64 kB
-  under the race detector) is reported with `gRPC status 9`, `Grpc-Status:
-  9` and `Grpc-Message:` by its first 1,024 bytes and its length, where the
-  report had the message in one line.
+- A gRPC status the collector accepts whose message is a kilobyte under a
+  megabyte (64 kB under the race detector) is reported with `gRPC status 9`,
+  `Grpc-Status: 9` and `Grpc-Message:` by its first 1,024 bytes and its
+  length, where the report had the message in one line.
 
 The keys of a script's answer are among what is measured before it is written (§ 16.7):
 
@@ -20846,10 +21525,10 @@ Forwarded header values, the watch interval and readiness after a rejected reloa
 
 The Makefile builds the exporter's binary and `make ci` runs what the CI workflow runs (§ 35):
 
-- Every go command a step of ci.yml's test job runs (beside `go mod
+- Every go command a step of any job of ci.yml runs (beside `go mod
   download`), its loops over the request types and the request-type-tags
   line among them, is run by a target `make ci` reaches, every make target
-  the job runs other than the installing ones is reached by `make ci`, at
+  the jobs run other than the installing ones is reached by `make ci`, at
   least eight go commands are read from ci.yml, and every target of the
   Makefile is `.PHONY`.
 - `make build` runs `go build -tags "$tags" -o bin/$(APP) .` with the tags of
@@ -20989,6 +21668,1108 @@ The documentation's lists of credential words, of the keys a static target may s
 - `otlp.insecure_skip_verify` beside `tls` is refused at load as `unknown key
   "insecure_skip_verify" in otlp`, naming its line, and `otlp.tls` with
   `insecure_skip_verify: true` loads with the check turned off (§ 42.9).
+
+## 34.130 The sshfile request type
+
+Files read over SSH (SFTP) on a kept connection, and builds without the type carrying none of its libraries (§ 5.1, § 22):
+
+- An sshfile collector reads a file over SFTP with a private key and
+  presents it as a localfile read: no status, Content-Type by the extension,
+  Content-Length and Last-Modified.
+- A password, a private key encrypted with a passphrase, and a key the host
+  refuses followed by a password it takes each authenticate, the key tried
+  first.
+- Refused credentials, a wrong user, an encrypted key without its
+  passphrase, a wrong passphrase, a key file that is no key and a missing key
+  file each fail the scrape saying so, naming the files and never a
+  password.
+- A host known_hosts_file does not list, and one presenting another key, are
+  refused with their own messages naming the file and the presented key's
+  SHA-256 fingerprint; an empty file and one with a line that is no
+  known_hosts line are refused saying so; the host's own line is taken.
+- A host offering an ECDSA and an Ed25519 key, with only the Ed25519 one in
+  known_hosts_file, is read: the host key algorithms asked first are the
+  file's; a hashed line is read too.
+- A symbolic link out of root, absolute or relative, and a path through a
+  linked directory out of it are refused as leading outside request.root
+  without the file's content; a link to itself is refused after 40 links; a
+  link inside root is followed; a path parameter or path probe parameter
+  climbing above root is refused.
+- A path placeholder takes the probe's value; a missing file, a file older
+  than max_age and one larger than max_response_bytes (a limit error) each
+  fail saying so.
+- A directory is read as localfile reads one: matching files in name order,
+  hidden ones left out, max_files skipping the rest, a file past
+  max_total_bytes refused alone as a limit error.
+- Twenty scrapes of one collector at once (eight under the race detector),
+  before it has a connection, wait for the one the first makes, and three in
+  a row after them use it: the host took one connection.
+- A connection the host ended is noticed by the next scrape, which connects
+  again; a read whose connection is dropped under it connects again once and
+  reads; a credential file changed on disk gets a new connection at the next
+  scrape.
+- With the host frozen, keepalive_count_max unanswered keepalives close the
+  connection, and the next scrape makes a new one.
+- idle_timeout closes a connection nothing uses; with idle_timeout 0 the
+  connection stays open through keepalive after keepalive.
+- Following a configuration closes a connection only a removed or changed
+  collector used and keeps one another collector still uses.
+- A host that stops answering during a read does not hold the scrape past
+  its deadline, and the connection the read was left on is dropped.
+- denied_targets refuses the host before anything is sent, and an
+  allowed_targets that does not list it refuses the connection; the host
+  takes no connection.
+- Targets: host, host:port, ssh://, bracketed and bare IPv6 are taken, the
+  port defaulting to 22; another scheme, a user, a path, a bad port and a
+  host with a character outside ASCII are refused; none is a missing target.
+- The configuration rules: root, username and known_hosts_file required, a
+  key or a password, a passphrase only with a key, no placeholder in the
+  username or a file key, keepalive_interval and idle_timeout not negative,
+  keepalive_count_max at least 1, localfile's path and directory rules,
+  another type's key refused; the defaults are 30s, 3 and 5m, and 0 switches
+  keepalives and the idle timeout off.
+- A static target's account and credential files replace the collector's,
+  the three files together; a lone passphrase, a placeholder, another
+  type's key and an escaping path are refused.
+- A debug trace records each read as READ of its sftp:// URL with the user
+  and whether the connection was new or reused.
+- Through the exporter: two collectors with one account share one
+  connection, http_exporter_sshfile_connections reads 1 for each and
+  http_exporter_sshfile_connects_total 1 for the one that made it, with
+  their HELP and TYPE and no per-request series; the verbose url label is
+  the read's sftp:// URL with READ.
+- A probe without a target, with a user or another scheme in it, or with
+  another type's parameter is answered 400, one to the cloud metadata
+  address 403, and the host takes no connection.
+- A reload that changes one collector's credentials keeps the connection the
+  other collector uses and the changed one connects anew; one that removes
+  the last collector using a connection closes it.
+- A debug probe shows READ, the sftp:// URL, the user and new then reused,
+  and not the private key.
+- Static targets of a caching collector, one with its own password file,
+  read with each account on its own connection and cache apart.
+- Label values take a probe's parameters as the path does; an unused
+  parameter is refused naming the path; a directory collector refuses the
+  path parameter; a path parameter of .. is refused.
+- A Python transform sees no status, the file's content type and length.
+- A build without sshfile refuses an sshfile collector at load, naming the
+  type and the tag request_type_sshfile.
+- Every single-type build links github.com/pkg/sftp and golang.org/x/crypto/ssh
+  only when it is sshfile, and the gRPC modules only when it is grpc; the
+  default build links both.
+- The examples of docs/SSHFILE.md load and read against an SSH server, and
+  its static targets load against them.
+- The two durations of an sshfile collector get one verdict from the schema
+  and the exporter, left out, written "", written well and written badly.
+- The schema and the exporter agree on an sshfile collector's required
+  keys: root, username and known_hosts_file left out or written "", no key
+  and no password, a lone passphrase, and keepalive_count_max below 1 are
+  refused by both; a password alone, a key with its passphrase and a count
+  of 1 are taken by both.
+- The refusal of an unused probe parameter by an sshfile collector names its
+  request.path and its label values, as localfile's does.
+
+## 34.131 sshfile: host certificates, keyboard-interactive, shared dials, paths, dry-run warnings and max_open_connections
+
+Fixes after the review of the sshfile request type, and the most connections a collector holds (§ 5.1):
+
+- The exporter's shutdown forgets how many connections each sshfile
+  collector made: made reads 0 after it, so a new exporter's
+  http_exporter_sshfile_connects_total starts at 0.
+- A host certified by an authority an @cert-authority line of
+  known_hosts_file trusts is taken, beside its plain key and a stale plain
+  line of that key type: the certificate algorithms are asked for first.
+- A host that no longer offers the key type known_hosts_file holds for it is
+  refused as presenting a key that is not the one the file holds, with that
+  key's fingerprint; for files without @cert-authority lines the host key
+  algorithms asked begin with exactly those asked before (the old function
+  as the oracle, over plain, hashed, wildcard, RSA, repeated and other-host
+  lines) and go on with every algorithm the client supports; a file that
+  knows nothing of the address asks for none.
+- A host that takes passwords only through keyboard-interactive, asking for
+  the account echoed and the password not, is answered with username and
+  password_file; a wrong password fails naming the file, the SSH methods
+  tried (keyboard-interactive) and that the questions must ask for the
+  password alone, never showing the password.
+- With the host frozen in the handshake, a scrape that finds the connection
+  being made for another waits for it: the first scrape's deadline fails it
+  saying the SSH handshake did not finish, the second reads on the same
+  connection once the host answers, and the host took one connection.
+- A connection whose only scrape gave up while it was made is still made,
+  and the next scrape reuses it.
+- A backslash is refused in request.path at load, in a static target's
+  request.path, in the path probe parameter by CheckOverrideParams (400
+  through the exporter, naming the parameter, the host taking no
+  connection) and at the read, and a symbolic link whose target has one is
+  not followed.
+- request.private_key_file, password_file and passphrase_file written with
+  blanks alone are refused at load naming the key, a static target's
+  username and private_key_file too; a collector's blank username and
+  known_hosts_file are refused as required; the schemas agree on each of
+  the nine keys, which they took blank before.
+- An encrypted PKCS#8 key is named as such, with ssh-keygen -p -f and the
+  file.
+- keepalive_interval of 1µs and 999ms is refused at load as under the
+  least, 1s; 0 and 1s are taken.
+- request.root / is taken for sshfile and reads a file under it, its url
+  label sftp://host:port/ followed by the path and a directory's
+  sftp://host:port/, and a path above it is refused; localfile still
+  refuses /. The schema and the exporter agree on root /.
+- An authentication failure names the host once; a read's error is followed
+  by the host.
+- --dry-run reads an sshfile collector's files and a static target's own
+  credential files: a missing key and a known_hosts file without a line are
+  warnings of the config check, a target's empty password one of the
+  static_targets check, each logged, the check passing; a target with the
+  collector's files adds none. FileWarnings names a missing key, a key that
+  is none, an encrypted key without its passphrase, a missing passphrase
+  file, an empty password and a known_hosts file without a line, and gives
+  none for good files.
+- With max_open_connections 1, scrapes of two hosts in turn each close the
+  other host's idle connection (closed for max_open_connections): one open
+  at a time, one made per scrape.
+- With max_open_connections 0 a collector's connections to two hosts stay
+  open and are shared with another collector of the same settings; a
+  collector with a limit shares none, each host taking one connection more.
+- With max_open_connections 1 and its connection held by a read, a scrape of
+  another host waits and fails at its deadline naming
+  request.max_open_connections and 1, and one that waits until the read ends
+  closes that connection and reads on a new one.
+- A reload lowering max_open_connections from 3 to 1 closes nothing at once,
+  and the next connection made brings the collector down to one open.
+- The schema and the exporter agree on max_open_connections: 0 and 2 taken,
+  -1 refused.
+
+## 34.132 sshfile: connections being made under max_open_connections, host certificate fallbacks, login attempts and limit counters
+
+Fixes after the second review of the sshfile request type (§ 5.1, § 22):
+
+- With max_open_connections 1, a connection being made to a host frozen in
+  the handshake, whose scrape gave up, is given up (its dial cancelled,
+  "given up: max_open_connections") by a scrape of a healthy host, which
+  reads within ten seconds rather than waiting the 30 seconds of the dial;
+  limit waits 1, failures 0, and made counts the healthy host's connection
+  alone.
+- A connection being made that a scrape waits for is not given up: a scrape
+  of another host at max_open_connections 1 fails at its deadline saying
+  "connections (1 being made for a scrape waiting for it)", counted as one
+  wait and one failure; the shutdown sets both counts to 0. A connection
+  held by a read is named "1 open and held by a read".
+- A connection being made at the shutdown, or at a reload that removes its
+  collector, with no scrape waiting for it, is given up ("given up:
+  shutdown", "given up: reload"), never made, and the collector has no
+  connects count after it; a connection a scrape waited for through such a
+  reload is made, read on, closed when the read ends, and not counted for
+  the removed collector.
+- A backslash in an sshfile collector's request.root is refused at load,
+  naming the key.
+- Keyboard-interactive questions are answered with the password in three
+  rounds at most, rounds without a question not counted: a host taking it
+  at the third round, after rounds without a question, is read; one asking
+  round after round gets it three times and the scrape fails saying the
+  host asked in more than 3 rounds.
+- A host taking both the password method and keyboard-interactive is given
+  a wrong password once, by the password method (the SSH methods tried:
+  password), and the right one by it, keyboard-interactive never asked; a
+  host taking publickey and keyboard-interactive but not password is tried
+  with the key and then keyboard-interactive.
+- A host presenting a certificate of an authority known_hosts_file does not
+  trust for it, beside a [*]:port @cert-authority line of another authority,
+  is taken by the line of its plain key; with no plain line, or a line of
+  another key, it is refused naming the certificate's authority and saying
+  no @cert-authority line trusts it; with that authority @revoked it is
+  refused naming the authority as @revoked.
+- A host certificate whose authority, or whose own key, known_hosts_file
+  marks @revoked is refused saying @revoked, naming the authority or the key.
+- An @cert-authority line naming every host with a bare * trusts its
+  authority for a host on a port other than 22; a line naming the host
+  without its port does not.
+- For known_hosts files without a bare * @cert-authority line the host key
+  algorithms asked for are exactly those asked before (the old function as
+  the oracle, over plain, RSA, hashed, other-port, @cert-authority, wildcard
+  and @revoked lines), and every plain key and every certificate whose
+  authority is trusted is checked exactly as before; a certificate no line
+  trusts is taken exactly when its plain key's line is and its authority is
+  not revoked. With a bare * line beside the host's own line the algorithms
+  asked for are those asked before, the known type first; with a bare *
+  line alone the certificate algorithms come first.
+- http_exporter_sshfile_limit_waits_total and
+  http_exporter_sshfile_limit_failures_total are counters of sshfile
+  collectors alone, with their help, without per-request series: a probe of
+  a frozen host with max_open_connections 1 and then of another host give
+  the limited collector 1 wait and 0 failures, and a collector without the
+  limit 0 and 0.
+
+## 34.133 sshfile: retired connections being made, what connects_total counts, and host key order beside a bare wildcard authority
+
+Fixes after the third review of the sshfile request type (§ 5.1, § 22):
+
+- With max_open_connections 1, a connection being made to a host frozen in
+  the handshake, whose scrape gave up, replaced at the next scrape because
+  its known_hosts file changed, is given up ("given up: replaced"): the
+  scrape that replaced it fails in the handshake, not at the limit, and a
+  scrape of a healthy host reads within ten seconds; no failure at the
+  limit.
+- A connection being made that a reload leaves to no collector while a
+  scrape waits for it is kept for that scrape: a scrape of another host at
+  max_open_connections 1 fails meanwhile saying "connections (1 being made
+  for a scrape waiting for it)"; when the waiting scrape's deadline comes
+  the connection is given up ("given up: unused"), and the reloaded
+  collector's scrape of a healthy host reads within ten seconds.
+- A connection replaced in the cache while a scrape waits for it, a file of
+  it having changed, is made for that scrape, which reads on it, and is
+  counted in connects_total with the connection that replaced it: made 2.
+- The shutdown gives up both the connection being made that the cache keeps
+  and one it replaced while a scrape waits for it ("given up: shutdown"
+  twice), and the waiting scrape fails rather than reading.
+- A host on a port other than 22 pinned by its plain ECDSA line, beside an
+  unrelated bare * @cert-authority line, that also presents an ed25519
+  certificate of another authority is taken by its line; presenting the
+  certificate alone, it is refused naming the certified key and saying it
+  is not the one the file holds for the host.
+- A host certificate of an authority no line trusts for the host is refused
+  saying no line holds the key it certifies, or, naming that key, that it is
+  not the one the host's line holds, or that the file marks it @revoked.
+- With a bare * @cert-authority line beside the host's own line, the host
+  key algorithms asked for are those asked without the bare * line (the old
+  function as the oracle), the known type first; with a bare * line alone
+  the certificate algorithms come first.
+
+## 34.134 sshfile: directory listings read in batches up to their bound
+
+A directory is listed over an SFTP session of its own, a batch at a time, and no further than the listing's bound (§ 5.1):
+
+- An sshfile directory of 50,000 entries (20,000 under the race detector),
+  read with max_files 1, is listed to its bound of 1000 entries: the host
+  sends at most one batch (128 entries) past it, counted on the host, and a
+  scrape allocates under 12 MiB, host included, where the whole listing
+  cost 170 MB.
+- An sshfile listing in batches gives what pkg/sftp's whole listing gave,
+  over generated directories of 0 to 1100 entries of files of random sizes
+  and times, directories, links to a file, a directory and nothing, and
+  names of spaces, dots, accents and other scripts: the same entries in the
+  same order, . and .. left out, each with the same name, type, mode, size,
+  modification time and attributes; and a directory read through it answers
+  exactly what one through the old listing answered, a listing cut at its
+  bound among them.
+- An sshfile listing refuses, with a sentence saying what was wrong and
+  without a panic, a packet over 256 KiB, an empty packet, a count of
+  entries the packet cannot hold (four billion among them), a name that is
+  empty or holds / or a NUL, a name, long name, attributes or extended
+  attribute cut short, extended attributes the packet cannot hold, an answer
+  of another type or to another request, a packet without an id, a status
+  without its code, entries without their count, a session ended within a
+  packet, a handle cut short, and a server of another version; the entries
+  of the batches before are handed out, and the listing's session is closed.
+- A status in answer to an sshfile listing's opening of the directory or to
+  a request for entries fails it as pkg/sftp's listing failed, its error the
+  same text through the directory read: end of directory and OK end it, no
+  such file and permission denied are those errors, and other codes, an
+  unknown one among them, have pkg/sftp's text.
+- An sshfile directory that is gone between its stat and its opening reads
+  "file ... does not exist", one that may not be listed "file ... cannot be
+  read by the exporter: permission denied", a root that is a file "... is
+  not a directory" and a missing root "request.root ... does not exist",
+  each naming the host once.
+- An sshfile host that stops answering a request for directory entries does
+  not hold the read past the probe's deadline: the scrape returns the
+  deadline, the listing's session is closed at once, and the read releases
+  its connection, which is kept rather than dropped as stalled.
+- An sshfile directory is listed on an SSH session of its own: a host
+  allowing two sessions per connection serves three scrapes in a row on one
+  connection, each listing's session closed before the next, and one
+  allowing one fails the read saying that its MaxSessions must allow one
+  more.
+- The parser of an SFTP NAME packet, fuzzed, never panics, never answers
+  more entries than the packet's count, and answers only names in a
+  directory, never . or .. (FuzzParseSFTPNames).
+
+## 34.135 Load checks of credentials, labels, ports, header names, floors and forwarded headers; OTLP keys and gRPC header bounds; listing sessions
+
+What loaded and then failed every scrape is refused at load (§ 20, § 24.2, § 24.3, § 42.4, § 42.10):
+
+- An inline `bearer_token` holding a line feed, a carriage return or a DEL,
+  and a `basic_auth` username or password holding a line feed or a NUL, are
+  refused at load naming the collector, the key and the character, saying
+  that a line break at the end is usually the Secret's or the variable's and
+  that the `_file` form trims it, and never showing the value; so is a token
+  an environment variable with a trailing newline gave through
+  `--config.expand-env`, and a static target's token and password. A tab,
+  spaces, non-ASCII text and a `bearer_token_file` still load.
+- The check of an `http` collector's credential keys says what it said of
+  every combination of bearer tokens, token files, basic credentials and
+  their files, with every character from 0 to 0x80 in the inline values, but
+  for an inline value with a control character other than tab, which it now
+  refuses.
+- A `grpc` and a `graphite` collector refuse a bearer token with a line feed
+  at load as an `http` one does, a `grpc` static target's too; a `grpc`
+  collector's `forward_headers: [Authorization]` and `[host]` are refused for
+  being never forwarded, before the check of the metadata key, and a
+  reserved key is still refused as reserved.
+- A collector whose `transform.labels` and a rule's static labels together
+  come to more than `limits.max_labels_per_metric` is refused at load naming
+  the rule, the count and the limit, and one whose `transform.labels` alone
+  do naming the collector; a label of both is counted once, and at the limit
+  the collector loads. A label `remove_labels` drops, one `rename_labels`
+  renames onto another, a value written `""`, a value with a placeholder, a
+  static label some `value_map` of its name may map to `""`, an expression
+  label and the default limit of 20 do not take the count over. A `python`
+  collector's two `transform.labels` over 1 are refused, and its rule's
+  label to cut is not counted.
+- The check of the metric families says of every collector with zero to four
+  `transform.labels`, zero to three static labels, a limit from 0 to 6 and a
+  help text within or past its limit what it said with the label limit off,
+  but for a collector whose fixed labels are over the limit and which it
+  passed, which it refuses naming the count.
+- A static `http` target whose URL's port is 99999, 0, 65536, 100000 or a
+  number of twenty digits is refused at load naming the port and never the
+  URL, whose credentials are not shown; a port that is no number is still
+  refused as no absolute URL; 1, 65535, 080, an IPv6 host with a port, no
+  port and an empty port load. A `graphite` static target's port 99999 is
+  refused the same way, and a `grpc` target's 99999 and 0 as before.
+- The check of a static `http` target says what it said of every URL made of
+  four schemes, five hosts, with credentials or none, and fourteen ports, but
+  for a URL with an allowed scheme and a port of 0 or past 65535, which it
+  now refuses for the port.
+- `request.max_response_bytes` of 1, `1023B` and `0.5KiB`, and
+  `limits.max_response_bytes` of 10 and `1kB`, are refused at load naming the
+  collector, the key, the bytes and the least, 1KiB; `1KiB`, 1024 and 0 load.
+  `limits.script_timeout` of 1ns, 999µs and 0.5ms is refused naming the
+  collector, the key, the duration, the least, 1ms, and the default; 1ms,
+  1000µs and 0 load, and a negative one is refused as negative.
+- The check of the least limits refuses a response limit, of either key,
+  from 1 to 1023 bytes, and a script timeout from 1ns to 1ms less a
+  nanosecond, and nothing else: not -1, 0, 1024, 1MiB or the largest size,
+  nor -1s, 0, 1ms, 1s or the largest duration.
+- A `forward_headers` entry `""`, `"  "`, `"X Tenant"` and `"X:Tenant"` is
+  refused at load as no header name; `Authorization`, `accept-encoding`,
+  `Host`, `" connection "`, `TE`, `Content-Length`, `Transfer-Encoding`,
+  `Trailer`, `Upgrade`, `Proxy-Authorization` and `proxy-tenant` are refused
+  as never forwarded, each saying why; `X-Tenant`, `" X-Tenant "`,
+  `x-proxy-tenant`, `Accept-Language` and `Hosts` load. A `graphite`
+  collector's `Host` is refused the same way.
+- A `forward_headers` entry is refused exactly when the forwarding as it was,
+  with its own list of the headers never forwarded, forwarded nothing of it
+  or it is no header name: over every such header, in its own case, lower
+  case, upper case and with blanks around it, beside names that are
+  forwarded, and the list has the eleven headers and every `Proxy-` one.
+- A `request.query` name `""` is refused at load as a parameter without a
+  name, and `"region\n"`, `"a\tb"` and `"a\x7f"` naming the control
+  character; `region`, `"a b"`, `"a&b=c"`, `" "` and `"ünïcode"` load, and
+  `"{{param}}"` is still refused for its placeholder. A `graphite`
+  collector's empty query name is refused the same way.
+- The schemas refuse what the loader refuses of a name of `request.headers`,
+  a collector's and a static target's (`"X Bad"`, `"X:Bad"`,
+  `accept-encoding`, `""`), of `request.query` (`"region\n"`, `""`) and of an
+  entry of `request.forward_headers` (`X:Tenant`, `proxy-connection`, `""`),
+  each of which the schemas as they were took, and take `X-Tenant`,
+  `"a b"`, `" X-Tenant "` and `X-Proxy-Tenant`, in the tables of keys with
+  `true` and `1` too. The names of `otlp.headers` are refused by both in a
+  block switched on (`"X Bad"`, `"X:Bad"`, `""`, `accept-encoding`,
+  `"X-Tenant{{"`, and in the table of the switched-off block `{"bad name":
+  x}` and `{Accept-Encoding: br}`) and taken by both in one switched off.
+- Both response limits, written as a number, are refused by the schemas and
+  the loader from 1 to 1023 however YAML writes the number (`1e1`, `1.023e3`,
+  `+1023`), taken by both at 0, 1024, `1KiB` and past it, and under the least
+  as text (`'10'`, `10B`, `1kB`, `0.5KiB`, `1023 B`) refused by the loader
+  alone; the size forms that were tried at `limits.max_response_bytes` are
+  tried at `otlp.batch_max_bytes` in a block switched off, which has no
+  least, with the verdicts they had. A `limits.script_timeout` under 1ms is
+  the loader's alone to refuse, and its description says so.
+
+OTLP series keys past 256 bytes are kept as their digests, and gRPC answers' headers are held to 1 MiB (§ 42.1, § 42.1a, § 5.1):
+
+- A `grpc` answer whose headers are past 1 MiB, the bound an `http` answer's
+  headers have, from a server that sends them whatever the client
+  advertises, fails the call as `INTERNAL`, counted as a limit, in the words
+  `the answer's headers or trailers are larger than 1048576 bytes, the most
+  the exporter reads of a response's headers, ...`, and is called once with
+  `INTERNAL` among `retry.codes`; headers just under the bound are taken
+  whole. Taken before, up to grpc-go's own 16 MiB.
+- A grpc-go server answering with a header of 2 MiB keeps to the bound the
+  exporter advertises, and the call fails rather than take it; the
+  reflection question's answer past the bound is the same limit, its error
+  saying it was the question's, and another `INTERNAL` status is none.
+- Runs of OTLP exports of probes with `otlp.probe_attributes`, whose targets
+  are of every length from a few bytes to past 256 and of 8 KiB, beside
+  static targets' resources with long attributes, exports failing and points
+  waiting again, are sent byte for byte as they were with every key of the
+  queue and the start times remembered whole; the runs have keys remembered
+  as themselves and by their digests, in the queue and among the start
+  times, and keys of exactly a digest's length.
+- With `otlp.probe_attributes`, a start time keeps about 200 bytes for a
+  target of 8 KiB, as for a short one (it kept 8.4 kB), and a point waiting
+  keeps its target once and nothing of the request line it was part of: 0.6
+  kB for a short target of a line of 16 kB (19 kB before), 8.7 kB for one of
+  8 KiB (16.9 kB before).
+- A series already seen has its start time found with no allocation (one
+  before); a key up to 256 bytes is made in one allocation, a longer one in
+  two, under the race detector too; a point's key in the queue is one
+  allocation, two for a long one.
+- An OTLP key, now written where its caller has room, is the bytes it was,
+  against the key as it was made as an oracle: over 20,000 generated
+  resources and series (2,000 under the race detector), those joined alike
+  among them, after a resource's part as a start time's key has it, and of
+  every length to past the room, with NULs and more pairs than are put in
+  order in place.
+
+A directory listing's SSH session is closed by both sides before the scrape goes on (§ 5.1):
+
+- With a host that waits 200 ms after an SFTP session's client side ended
+  before it frees the session and closes its side, and allows the
+  connection's SFTP session and one more, three scrapes of a directory in a
+  row each list it: each listing waits for the host to close its session
+  before the scrape goes on; without the wait the second scrape's listing is
+  refused a session.
+
+## 34.136 css items over nested elements, the exporter's credential compared as digests, workflow permissions and releases gated on CI
+
+The css transform's items cost what their subtrees hold, and the exporter's Basic Auth credential is compared as fixed-length digests (§ 42.5):
+
+- A `css` rule with `items` over chains of nested `div.i` items, 2,000 items
+  in all, each holding a `span.v`, allocates no more with chains 500 deep
+  than with chains 250 deep (it allocated 16.6 MB against 8.6 MB when each
+  item's subtree was searched on its own).
+- Over the HTML fixtures, the scrapethissite.com countries example, nested
+  `div.i` chains and 300 generated documents (nested and sibling items, text
+  nodes `:contains` matches directly under an item, values and labels
+  matching none, one or several elements, `:nth-child`, `:has`, static,
+  required and invalid labels), a `css` rule with `items` gives under
+  `error_mode` fail, log and ignore the series, the failure and the logged
+  failures that searching each item on its own gave.
+- The exporter's Basic Auth compares the presented username and password
+  with the configured ones as SHA-256 digests: whatever the lengths of the
+  presented and configured values (0 to 4,096 bytes) and whichever is wrong,
+  the comparison is two constant-time compares, both always made, each of
+  two 32-byte slices.
+- With `web.basic_auth` written in the configuration, only the configured
+  username with the configured password is let in; a wrong username, a wrong
+  password, both, either empty, a prefix or an extension of either, a
+  username or password of a megabyte, no credential and a Bearer
+  `Authorization` are refused `401` with a Basic challenge, and a configured
+  password of a megabyte is let in when presented and refused one byte
+  shorter.
+
+Every workflow grants least privilege, and a release publishes only a commit CI passed on (§ 42.12):
+
+- Every workflow under `.github/workflows` sets `permissions` at its top and
+  grants no write there; each job's write grants equal the list the test
+  holds (release: contents, packages; release-chart: contents, id-token,
+  packages; update-docker-deps' update: contents, pull-requests; none for
+  ci.yml and govulncheck.yml), and the test fails for a workflow or job the
+  list does not name, and for a listed one that is gone.
+- Each release workflow's first job, `preflight`, validates the tag in its
+  first step, checks out the commit, and runs `tools/ci-passed.py` on
+  `git rev-parse HEAD` with the job's token, under `contents: read` and
+  `actions: read`; every other job of the workflow needs it.
+- `tools/ci-passed.py`, run against a stand-in of the Actions API, asks for
+  the ci.yml runs of the commit's pushes with the token, and passes when the
+  newest finished run concluded success, also while the tag's own run goes
+  on and when a run started again after a failure passed; fails at once,
+  saying CI has not passed on the commit and to run CI or wait, then push the
+  tag again, when every run has finished and the newest failed or was
+  cancelled, also after an earlier one passed; waits through queued and
+  running runs to a success, and past a failure while another run goes on;
+  counts no run a pull request started; fails when no run appears or a run is
+  still going when the wait runs out; retries a server error; and fails at
+  once, naming `actions: read`, when the API refuses the request.
+
+## 34.137 The sql request type
+
+One read-only statement on a database server, rows read by column, on pooled connections, with the drivers a build carries (§ 5.1, § 22):
+
+- A sql collector's statement's rows reach the transforms as JSON values:
+  integers and floats as numbers, a numeric column's text as the number it
+  writes, a boolean as 1 or 0, a time as its Unix seconds with the fraction,
+  text and UTF-8 bytes as text, a driver's own value by its text, and NULL as
+  the column left out of its row; the answer's body is the rows as JSON and
+  it has no status.
+- A sql result with an unnamed column, a column name given twice, binary data
+  that is no UTF-8 or a value of a Go type the exporter does not read fails
+  the scrape, naming the column and its type.
+- request.max_rows lets that many rows through and fails one more as a
+  limit; request.max_response_bytes bounds the rows' values, text by its
+  length and anything else as 8 bytes, each with its column's name, failing
+  past it as a limit.
+- A statement still running at the scrape's deadline is cancelled, and the
+  scrape fails saying the deadline came first.
+- postgres and mysql run the statement in a transaction begun read-only
+  through database/sql, rolled back; postgres sets SET LOCAL
+  statement_timeout to the scrape's time left in milliseconds first;
+  sqlserver runs it with no transaction.
+- args are bound as values in order, their placeholders filled from the
+  probe's parameters, a value with quotes and ; passed as it is; request.
+  database's placeholders are filled, and a value with characters other than
+  letters, digits and _ - . $ is refused before anything is sent; an unused
+  parameter is refused naming request.database, args and label values.
+- A sql connection is made with the collector's account, its password read
+  from its file at the connection, the canonical host, the driver's default
+  port and the database; a static target's username and password_file
+  replace the collector's; a password replaced on disk is what the next
+  connection sends.
+- A sql pool takes max_per_target as its limit on open connections, a static
+  target's connections over the collector's key by key; a later scrape reuses
+  the idle connection; the collector's open, made, idle, targets and rows
+  counts follow.
+- At max_per_target a scrape waits, counted as a wait, fails at its deadline
+  naming the limit, counted as a failure, and goes on when a connection is
+  freed in time.
+- At max_targets a scrape of another target closes the pool used longest
+  ago, and fails, counted, when every target is in use.
+- Following a configuration closes the sql pools of a collector removed or
+  with changed settings, keeps the others and a static target's, forgets the
+  counts of a removed collector; closing every connection closes the rest.
+- With keepalive check ping an idle connection is pinged each interval, and a
+  failed ping is counted.
+- A debug probe's request section shows QUERY driver://host:port/database,
+  Sql-Driver, Sql-User, Sql-Database, Sql-Connection new then reused and
+  Sql-Args with the count of values, never a bound value or the password; the
+  outcome names the rows and columns.
+- A sql collector's url label is driver://host:port/database with its
+  placeholders as written, its method QUERY and its stage sql; a target is
+  shown as written when it is a server and withheld otherwise.
+- A sql target is host, host:port or a bracketed IPv6 address with the
+  driver's default port (5432, 3306, 1433); a scheme, a user, a path, a port
+  that is no port and an empty target are refused.
+- The sql dialer connects an address the policy allows, refuses a denied
+  one, and refuses a connection to a host the request did not check.
+- A sql collector's request is refused at load without a driver, with an
+  unknown driver, without a statement or username, with a blank password
+  file, a private key for a driver other than snowflake, passphrase_file,
+  service_name for a driver other than oracle, a blank database, an option
+  the driver does not take or a value it does not, a tls key beside an option
+  that uses no TLS, half a client certificate, a negative max_rows, count or
+  duration, a keepalive interval under 1s, an unknown check, or retry; a
+  driver is matched without regard to case and blanks; a static target may
+  not set max_targets, passphrase_file or a blank username.
+- A sql driver the build left out is refused naming the built drivers and
+  SQL_DRIVERS; every build with sql has mysql, postgres and sqlserver; the
+  known drivers are the tree's sqldriver_<name>.go files.
+- A sql connection's TLS is the driver option's, or verified TLS with a tls
+  key and none without; verify checks server_name or the host, and a mode
+  without verification skips the check.
+- The postgres configuration ignores the PG* variables, makes no fallback,
+  gives the dialer the host, names the application, and takes the spec's
+  TLS; the mysql configuration parses times in UTC, allows no multiple
+  statements, interpolation, local files or cleartext passwords; sqlserver's
+  encrypt is the option, or true with TLS and false without.
+- Each default sql driver dials through the exporter's dialer, so a refused
+  address is the policy's refusal.
+- With their tags, oracle's URL, port 1521, service_name and server_name
+  rules; clickhouse's ports by protocol and secure, readonly=1, compression
+  and TLS; snowflake's account target and host, key-pair and password
+  authentication, encrypted keys refused, options and transport; and
+  vertica's URL, TLS registration, port 5433, policy before connecting and
+  a connection given up at the deadline.
+- A sql collector's probe reads its rows with a csv transform one series a
+  row and with jq through items; its parameter is bound; its label values
+  take the same parameter; a python transform gets the rows as dicts.
+- A sql collector has http_exporter_sql_connections, idle_connections,
+  targets, connects_total, keepalive_failures_total, limit_waits_total,
+  limit_failures_total and rows, with no per-request series, and verbose
+  series labelled postgres://host:port/app and QUERY.
+- A sql probe without a target, with a user, a scheme or an unused
+  parameter is answered 400, and one to the metadata address 403, with no
+  connection made.
+- A reload that changes a sql collector's database closes its pool and keeps
+  the other collector's.
+- A sql collector's decoder.type, response settings and a transform other
+  than csv, jq, yq or python are refused at load; csv, jq and yq load with no
+  undecided-decoder warning; a build without sql refuses a sql collector
+  naming request_type_sql.
+- The schemas and the loader agree on a sql collector's driver, statement,
+  database, service_name and connections durations and check, a collector's
+  and a static target's, left out, written "", well and badly, and on what
+  it requires and its counts.
+- No build without sql links a database driver; builds with sql link the
+  three defaults and no opt-in driver; each opt-in driver is linked by its
+  SQL_DRIVERS build alone; CI and the Makefile build and test every opt-in
+  driver; tools/request-type-tags.sh maps SQL_DRIVERS and refuses a default
+  driver, an unknown one and drivers without sql; the Dockerfile passes
+  SQL_DRIVERS.
+- docs/SQL.md's collector, static targets and connections examples load and
+  probe as written.
+- --version, the startup log and http_exporter_build_info's sql_drivers name
+  the built drivers.
+- The live tests run against PostgreSQL, MySQL and SQL Server when their
+  variables name them, and are skipped otherwise.
+
+## 34.138 Fixes from the review of the sql request type
+
+The drivers' TLS and encryption, one statement, keepalives and cancel requests; Snowflake's hosts, numbers and start-up; rows, pools, targets and placeholders (§ 5.1, § 22):
+
+- With the clickhouse tag, the native protocol with secure true makes the
+  TLS handshake before the login: a trusted server completes it, an
+  untrusted one is refused unless insecure_skip_verify, and a server
+  speaking no TLS receives a ClientHello, never the account or password.
+- sqlserver's login-only encryption (encrypt false or left out) does not
+  verify the certificate without tls keys, and verifies it as the keys say
+  with them; encrypt true and strict verify it.
+- A sqlserver server answering that it does not support encryption is
+  refused before it receives the login, saying to enable encryption or write
+  encrypt: disable; with encrypt disable the login is sent; a server
+  answering it encrypts gets the TLS handshake; the prelogin guard hands on
+  every answer it does not refuse byte for byte, in one packet or several,
+  malformed or not, reading ENCRYPTION as the driver does.
+- With the vertica tag, a statement the driver would split into several
+  (a ; followed by more than blanks and comments, outside quotes, quoted
+  identifiers, comments and dollar quotes) is refused at load, and each case
+  is split, or not, by the driver itself as expected.
+- With the vertica tag, the driver's log reaches the exporter's logger at
+  its level, with sql_driver vertica, not stdout.
+- A mysql connection keeps the dialer's TCP keepalives, off without check
+  tcp and at the interval with it, though the driver switches them on, and
+  still offers its file descriptor.
+- A postgres statement whose context ends sends the server a cancel request
+  naming its process, through the exporter's dialer under a policy, for a
+  target named by a host; a cancel request whose connection would reach
+  another address is not sent.
+- The snowflake driver's platform detection is off: the variable that turns
+  it off is set once the driver is registered, a login to a stand-in
+  account says "disabled" for its platforms, and no AWS endpoint (pointed at
+  a local server, with AWS credentials in the environment) has been asked
+  anything by then; nothing but the account's host is dialed.
+- A Snowflake NUMBER (FIXED, as its driver names it, given as text) and a
+  DECFLOAT read from a stand-in account are numbers to the transforms, a
+  whole one an integer, one with a scale the number its digits write, a
+  NUMBER(38) past int64 a big integer; text stays text.
+- sqlNumericType holds FIXED and DECFLOAT numeric in every written form
+  (case, precision, Nullable, LowCardinality, UNSIGNED), and every other type
+  name, generated over every driver's names, numeric or not as before.
+- A Snowflake result with a chunk at a cloud storage URL fails at once,
+  before the scrape's deadline, with "reading the rows: the statement's
+  result came from Snowflake in more than one chunk, ...; return fewer rows
+  or columns ..."; the storage host is never dialed; a result in one chunk
+  is read; another failure reading the rows is left as it is.
+- tools/request-type-tags.sh gives minicore_disabled after
+  sql_driver_snowflake, once, with or without request types; ci.yml's lint
+  of the opt-in drivers' build names the tags the script gives; a build of
+  the snowflake driver without minicore_disabled fails a test of its own.
+- A sql column NULL in every row is in the response: a csv label read from
+  it is left off every series, as one NULL in some rows is left off theirs, a
+  value read from it is an empty cell in each row, and a column the statement
+  did not return is still not in the response, which lists the NULL column;
+  a probe of such a collector answers its series with the label left off.
+- A sql statement over max_rows is ended before its rows are closed: of a
+  database that reads the rest of a result when it is closed, only the rows
+  the exporter read are read, and the scrape fails naming max_rows; a
+  statement read to its end reads every row.
+- A reload that closes a sql pool while one scrape runs a statement on it and
+  another waits at its max_per_target lets both finish on it; the pool is
+  closed when the last is done, its connections are counted open and made
+  meanwhile, and a scrape after the reload makes a pool of the new settings.
+- With keepalive check ping and an idle_timeout, a connection no scrape has
+  had for idle_timeout is closed by the keepalive, though pings came in the
+  meantime, not before, and counts no keepalive failure.
+- A sql target ending in a colon with no port after it, a host's or an IPv6
+  address's, is refused when a static target loads and on a probe's scrape,
+  with no connection made; an IPv6 address keeps its brackets without a
+  port; every other target is read as before (a differential table).
+- A static sql target's username, password_file and private_key_file with a
+  placeholder are refused when the file loads, naming the key; the schemas
+  refuse {{ in a static target's username and credential files, for sql and
+  sshfile, as the loader does.
+- A sql time of day is its seconds since midnight, as a time.Time of the year
+  1 or 0, as text (with a zone, negative or past 24 hours) and as a
+  time.Duration; a date and a timestamp stay Unix times, and text of a TIME
+  column that is no time stays text; every other value is read as before (a
+  differential table).
+- A placeholder in a sql collector's username is refused naming a sql
+  collector's database and args among the places a probe's parameters fill;
+  placeholders there load.
+- A build without the sql request type prints --version without a sql
+  drivers clause, and has no sql drivers.
+
+## 34.139 Second round of fixes from the review of the sql request type
+
+Keepalive pings within the target's places, limits counted by target, column names in the response limit, the driver's case and the static targets' schema; Snowflake's refused connection and log, ClickHouse without a proxy (§ 5.1, § 22):
+
+- A sql keepalive ping that hangs holds one of the target's places at
+  max_per_target: with max_per_target 1 a scrape waits at the limit, counted,
+  and fails there at its deadline, the pool making no second connection; the
+  ping fails at the keepalive interval, counted as a keepalive failure, and a
+  waiting scrape then goes on, on the one connection.
+- While the scrapes hold every place at max_per_target, a sql keepalive ping
+  is skipped and none is sent; a ping whose pool has no idle connection left
+  by the time it takes one is skipped, makes no connection and is no failure.
+- The sql pools of the databases a collector reaches on one server are one
+  target: three databases count once in http_exporter_sql_targets and in
+  max_targets, a second server at max_targets 2 closes nothing, and a third
+  closes every pool of the server used longest ago.
+- max_per_target bounds the connections to one server across its databases:
+  while two scrapes of one database hold both places, another database's
+  waits and fails at the limit; a scrape that would make a connection while
+  another database's pool keeps two idle closes one first, two connections
+  open.
+- A static target whose connections change a setting is a sql target of its
+  own, with its own places, counted once more in http_exporter_sql_targets;
+  one that sets only its own username shares the probes' target and places.
+- A column's name counts toward a sql collector's max_response_bytes once in
+  each row the column has a value in, a NULL nothing: ten numbers of a
+  column named with 128 characters go over 1KiB, and over 40 generated
+  results each is taken at exactly its values' sizes and names' lengths, its
+  rows as read without a limit, and fails as a limit one byte under them.
+- The schemas take request.driver in any case and with blanks around it, as
+  the exporter matches it (MySQL, " SQLServer\t"), and refuse what names no
+  driver (DB2, " mysql x"); in a build with oracle the schema requires
+  service_name of ORACLE and " Oracle\t" as of oracle, as the exporter does.
+- The static target file's schema refuses request.connections.max_targets
+  whatever its value, as the exporter does; left out, both take the file.
+- A snowflake connection to the account that the target policy refuses (the
+  dialer connecting to a local listener whose address
+  request.denied_targets holds) fails at once with the policy's refusal, a
+  TargetRefusedError, before a 30-second deadline the driver's retries would
+  otherwise run to; once connected, a statement whose request needs a new
+  connection to the account that the policy refuses fails the scrape at once
+  with the refusal, not the driver's "failed to POST. HTTP: 403"
+  (TestASnowflakeConnectionThePolicyRefusesFailsAtOnceWithTheRefusal).
+- gosnowflake's log goes to the exporter's logger: an error the driver logs
+  is one JSON line at ERROR with sql_driver snowflake and the message as the
+  driver's formatter leaves it, its password masked; the driver's levels map
+  to warn, error (error, fatal, panic), info and debug (debug, trace), quoted
+  values are unquoted, and a line that is not the formatter's is logged
+  whole at info; several lines in one write are each a line
+  (TestTheSnowflakeDriversLogGoesToTheExportersLogger).
+- clickhouse on the http protocol with HTTP_PROXY naming a local listener:
+  the target's stand-in receives the driver's first request and the proxy
+  receives nothing; the driver's transport, given with a proxy, comes back
+  without one, and the native protocol is given no transport function
+  (TestClickHouseOverHTTPUsesNoProxy).
+- The snowflake transport answers as before everything but a refused
+  connection to the account: the account's answer as it came, another
+  failure to connect to it as the same error (which the driver retries as
+  it did), a request to another host 403 without a connection; only the
+  policy's refusal becomes a 403, kept where the request's context says
+  (TestTheSnowflakeTransportChangesOnlyARefusedConnection).
+
+## 34.140 Reloads retried after a read error, YAML keys that are no scalar, Basic usernames with a colon
+
+A reload refused because a file could not be read, the stamps' file modes, a YAML mapping key that is a sequence or a mapping, and a colon in a Basic credential's username (§ 6, § 24, § 42):
+
+- For each of the configuration file, a collector file and the static target
+  file, a new version written with permissions that let nobody read it (a
+  read refused as to a user without privileges, so the test holds as root
+  too) is a reload rejected, logged once with `open ...: permission denied`
+  and counted once, its `retried_when` ending `changes, and at every tick
+  while a file it reads cannot be read`; the three ticks that follow read
+  the file again and log and count nothing; and its permissions put back,
+  its modification time restored, put the new version in force at the next
+  tick, after which a tick logs nothing.
+- For each of the three files, a reload asked for by SIGHUP while the file
+  cannot be read for what no stamp holds (as for a directory's permissions,
+  an owner or an ACL) is tried at every tick, read each time, logging and
+  counting nothing, and is in force, logged with trigger `watch`, at the
+  tick after it can be read, nothing about it having changed; the tick after
+  that reads nothing.
+- A try at a tick refused for another reason than the last refusal — a
+  second collector file unreadable too — is logged and counted once, the try
+  after it is quiet, and both files readable put the configuration with
+  both in force.
+- For each of the three files, one rejected for what it says (not YAML) is
+  not read at the three ticks that follow, which log nothing and count
+  nothing, and its line's `retried_when` names no try at every tick.
+- A static target file rejected only because the configuration in force has
+  not its collector, with the configuration that has it unreadable, is read
+  with the configuration at every tick, quietly; both go in force at the
+  tick after the configuration can be read. So the other way: a
+  configuration rejected only because the target file in force uses a
+  collector it removes is read at every tick with the target file that no
+  longer uses it while that one is unreadable, and both go in force when it
+  can be read.
+- A change of the permissions alone of the configuration file, a collector
+  file or the static target file in force, its modification time kept, is
+  reloaded at the next tick, and the tick after it logs nothing.
+- Over generated sequences of edits with a new time, edits keeping time and
+  size, chmods, deletes and recreates of collector files listed by name and
+  by a pattern, the collector files' stamp tells a change exactly when it
+  did before it held the mode, or the mode of a file it lists changed.
+- A YAML mapping key that is a sequence or a mapping, or an alias of one, is
+  refused as `yaml: the mapping key at line N is a sequence; only scalar
+  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  of a sequence`), naming the first such key of the document: two different
+  ones, which were `mapping key "" already defined`, one alone and the same
+  one twice, which were `invalid map key: ...` with no line, one in a
+  merged mapping, which made the library panic, one tagged `!!str`, one
+  nested in a sequence or a mapping, one beside a large mapping and one
+  beside keys written twice in a large mapping; a document nested too deep
+  is refused for its depth first.
+- The failure of such a key is one to the log wherever the key is and
+  whatever it holds; a key that is a mapping, and an alias of a sequence,
+  are other failures.
+- Every other YAML document decodes, and is refused, exactly as it did, the
+  former decoder kept as an oracle, over the documents of the YAML tests and
+  1,000 generated ones (300 under the race detector) of scalars of every
+  tag, aliases, anchors, merges, keys written twice, large mappings and keys
+  that are sequences and mappings; every document the former decoder
+  refused for such a key is refused for it, and one with such a key that it
+  decoded, the key in a value a merge leaves out, or refused for something
+  else, is decoded, or refused, as it was. The differential tests of the
+  YAML decoder (the library alone, the walk as it was, the uncut errors,
+  the lines left out) hold, with the former outcome of such a document
+  mapped to the new refusal.
+- A key of 200,000 numbers is refused in under 300 bytes with nothing of
+  the key; through `/probe` it is a 502 of the decode stage, and the key
+  grown shorter and one that starts otherwise are repeats at debug level.
+- A `basic_auth` username holding a colon is refused at load, a collector's
+  and a static target's, naming the key and not the value (`request.
+  basic_auth.username holds a colon (":"), which ends the username of a
+  Basic credential (RFC 7617) ...`); a password with a colon and a username
+  with other symbols load. The check of an http collector's credentials says
+  what it said of every other set of keys, over every character from 0 to
+  0x80 in the inline values.
+- A username read from a `basic_auth_file` holding a colon fails the
+  request, a collector's and a static target's, naming the file and not
+  what it holds, and nothing is sent; a password file with a colon is sent
+  as it is.
+- The exporter's own `web.basic_auth` refuses a username with a colon when
+  the configuration loads, written and in `username_file`; a username file
+  rotated to hold one answers every protected request 500; a password with
+  a colon is taken.
+- The schemas refuse a colon in `collectors[].request.basic_auth.username`,
+  `targets[].request.basic_auth.username` and, once the block is enabled,
+  `web.basic_auth.username`, as the loader does, and took it before; the
+  empty username beside a password is the key left out to both; switched
+  off, the exporter's block is unchecked by both.
+
+## 34.141 Fixes from the review of sshfile and sql, round 67
+
+sshfile listing sessions a host keeps open, listings given up while the host opens one, empty batches; sql pools bounded per target, idle connections per target, a statement's end within the deadline, every idle connection pinged, reloads that close outside the lock; drivers that panic, SQL Server's prelogin, Oracle redirects, Vertica deadlines, ClickHouse over http, PG* variables, UDP and own-dial lookups, verification keys beside unverified modes (§ 5.1, § 22):
+
+- An sshfile host that never closes its side of a listing's session after
+  the end of its input costs a connection's scrapes the 2 s wait once: the
+  first listing closes the session itself after it, the connection
+  remembers the host before that scrape answers, and the listings of the
+  scrapes after it on the same connection do not wait for the host.
+- An sshfile listing on a connection whose host keeps listing sessions open
+  closes its session without waiting for the host and its conversation ends; a
+  session the host then refuses at MaxSessions fails the read saying the host
+  did not close an earlier listing's session on the connection within 2s of
+  the end of its input.
+- An sshfile host that sends without end after the end of a listing, or after
+  a packet past the 256 KiB bound, has at most 512 KiB of it read: the
+  listing's wait ends on what it read, its conversation ends, and the host is
+  not taken for one that keeps sessions open.
+- An sshfile listing closed while the host has not answered the opening of its
+  session returns before the host answers, its ReadDir answering that the
+  listing was abandoned, and closes the session when the host opens it late.
+- An sshfile read abandoned at the probe's deadline while a listing waits for
+  the host to close its session ends that wait, Close returning before the
+  host closes anything, the session closed and the host not remembered as
+  keeping sessions open.
+- An sshfile listing's Close and first ReadDir run at once without a data
+  race (go test -race).
+- An sshfile host answering requests for directory entries with . and ..
+  alone, or no entry, is asked 16 times in a row and no more: the listing
+  fails saying so and the directory is still closed; 15 in a row before an
+  entry, or between entries, are asked past and every entry listed.
+- A sql target keeps no more pools than its max_per_target: probes of
+  databases a, b, a, c at max_per_target 2 close b's pool, used longest ago,
+  for c's; at max_per_target 1 a probe of another database while the only
+  pool is in use fails at once naming max_per_target and the pools, counted
+  as a limit failure.
+- A sql target without a max_per_target keeps no more than 64 pools: a
+  probe of a 65th database closes the pool used longest ago.
+- A reload that closes a sql pool a scrape uses closes its idle connections
+  apart: while a driver's Close of one hangs, the reload returns and another
+  collector's read of the pools answers.
+- A sql scrape that closes another database's idle connection to make room
+  at max_per_target does so apart, and while that Close hangs the scrape
+  ends at its deadline, saying the deadline came first.
+- A sql statement whose rollback waits on a server that never answers, as
+  mysql's waits with no context, does not hold the scrape: the scrape
+  answers the row it read at its deadline, the connection's network
+  connection is closed under the driver, the connection is closed and never
+  reused, and at max_per_target 1 the next scrape makes a new connection
+  only once the old one is closed.
+- A sql pool a reload closed while scrapes used it is no longer counted when
+  a later reload removes its collector: no connection count is kept for the
+  removed collector and no pool stays draining.
+- With keepalive check ping every idle connection of a sql pool is pinged:
+  of two idle connections both are, not only the one given back last.
+- A sql keepalive whose pings are skipped, every place at max_per_target
+  taken, still forgets the connections no scrape has had for idle_timeout.
+- max_idle_per_target holds across a sql target's databases: a server probed
+  with two databases keeps one connection idle at max_idle_per_target 1 and
+  two at 2.
+- A driver that panics while connecting fails the connection with a sentence
+  naming the driver: in the scrape's goroutine, the connection counted open
+  counted closed again, and in database/sql's goroutine that opens
+  connections for a waiting scrape, which is given the error, the process
+  going on.
+- A keepalive ping whose driver panics is a failed ping, its place at
+  max_per_target given back, the process going on.
+- A sqlserver prelogin answer with an empty ENCRYPTION option fails the
+  connection with a sentence saying so, with encrypt left out, false, true
+  and disable, the driver never reaching it; the guard refuses the option
+  only when it is the last one given and its offset is within the answer,
+  and lets an answer that the server cannot encrypt through for true and
+  disable.
+- The prelogin guard's reading of the ENCRYPTION option is what it was for
+  every generated answer but one whose kept option is empty (the old
+  function the oracle).
+- The sql dialer refuses udp, udp4, unix and ip networks with a sentence
+  saying it makes TCP connections alone, under a policy or none, and still
+  connects tcp and tcp4.
+- No PG* variable pgx reads changes the postgres configuration, those pgx
+  would refuse (PGPORT notaport, PGCONNECT_TIMEOUT soon) and
+  PGREQUIREAUTH, PGCHANNELBINDING, PGMIN/MAXPROTOCOLVERSION and PGPASSFILE
+  included; PGSERVICE fails the connection saying to unset it; with no
+  variable set the configuration is what it was (the old function the
+  oracle); every field of pgx's configuration is one the test has looked
+  at, a field a later pgx adds failing it.
+- A driver that dials by itself has a host whose addresses could not be
+  looked up fail, saying why, while a proxied host keeps the proxy's rule
+  and an address needs no lookup; the policy's check is what it was for
+  every policy, host, lookup and resolve (the old function the oracle).
+- tls.ca_file or tls.server_name beside postgres sslmode require or mysql tls
+  skip-verify is refused at load, naming verify-full or true; beside the
+  verifying value or no option they are accepted, and cert_file with
+  key_file beside the unverified value is accepted; the options check is
+  what it was for every other driver, value and tls setting (the old
+  function the oracle).
+- With the oracle tag, an ssl connection that a TLS listener redirects to
+  the target's own host with PROTOCOL=TCP fails saying the driver began a
+  connection without TLS, the address redirected to receiving nothing; the
+  check lets a TLS handshake record through as a first write and refuses
+  anything else, writing nothing.
+- With the vertica tag, a statement whose server does not answer returns at
+  the deadline saying the connection is given up, the driver never given a
+  context that can end; database/sql's close of it returns at once and the
+  driver's connection is closed when the call returns.
+- With the vertica tag, a connection whose driver panicked in a call fails
+  the call, is no longer valid, and refuses every call after with
+  driver.ErrBadConn.
+- With the vertica tag, a target whose addresses could not be looked up
+  fails before any connection, with no target list named.
+- With the vertica tag, tls.ca_file or tls.server_name beside tlsmode server
+  is refused, naming server-strict.
+- With the clickhouse tag, every http request carries
+  cancel_http_readonly_queries_on_client_close=1 beside readonly=1; the
+  native protocol is not given it.
+- A keepalive ping whose driver panics is a failed ping, the connection
+  discarded and unlocked, and the next ping of the pool is answered.
+
+## 34.142 Guarded driver connections, Vertica TLS rotation, Oracle accounts, Snowflake chunk logs, listing sessions a host ends, config keys that are no scalar, schema comparisons by build
+
+Driver panics in database/sql's own goroutines, the TLS files of each Vertica connection, accounts reaching go-ora as written, the level of Snowflake's chunk errors; the connection kept when the host ends only a listing's session; a configuration mapping key that is a sequence or a mapping; the committed schemas compared in the default build (§ 5.1, § 6, § 22):
+
+- With the vertica tag, against a stand-in that answers the driver's TLS
+  request and records the name each handshake asks for: each connection's
+  handshake takes the configuration made for it, though the one before had
+  another under the same digest of its files, and the driver's registry of
+  TLS configurations (read through go:linkname) grows by at most one over 50
+  connections with 50 configurations made one at a time, and by at most
+  eight with eight made at once, each taking its own
+  (TestAVerticaConnectionTakesItsOwnTLSConfigurationAndTheRegistryStaysBounded).
+- With the oracle tag, an account or password holding ':', '@', '/', '%',
+  '?', '#', blanks or non-ASCII letters reaches go-ora as written, as
+  goora.ParseConfig reads the URL; for 2,000 generated accounts without ':',
+  passwords and services, with and without TLS, and for services holding
+  '/', '?', '#', '%2F' and blanks, go-ora reads the very configuration it
+  read from goora.BuildUrl's URL
+  (TestAnyOracleAccountAndPasswordReachGoOraAsWritten).
+- With the snowflake tag, a result in two chunks logs no ERROR line: the six
+  tries at the refused chunk are DEBUG lines; an error line with the same
+  words and another failure, or other words, stays ERROR, as does a fatal one
+  (TestTheSnowflakeDriversChunkErrorsAreLoggedAtDebug); every other line of
+  the driver's log, at each level and in each form, is read as before, the
+  old function the oracle (TestOnlyTheSnowflakeChunkErrorChangedLevel).
+- A connection the pool's connector hands to database/sql calls the driver
+  exactly as the driver's own connection would be called, in the same order
+  with the same arguments, giving the same results and errors, for fakes
+  with the capabilities of each driver's connection (mysql, snowflake,
+  postgres and clickhouse, sqlserver, oracle, vertica), one with nothing but
+  database/sql's requirements and one without contexts: queries and execs
+  with no, positional, named, driver-checked and unconvertible arguments,
+  prepared statements, pings, Conn.Raw, transactions with each option,
+  commit, rollback, a reset on reuse, and a transaction whose context ended
+  (TestAGuardedConnectionIsWhatTheDriversIsToDatabaseSQL).
+- The guarded connection runs statements, resets its session and says
+  whether it is valid exactly when the driver's connection does, for pgx's
+  and go-mssqldb's connection types, go-ora's and verticaConn with their
+  tags, and every fake, and Conn.Raw's function reaches the driver's
+  connection (TestAGuardedConnectionRunsResetsAndValidatesAsTheDriversDoes,
+  TestTheGuardedOracleConnectionIsWhatGoOrasIs,
+  TestTheGuardedVerticaConnectionIsWhatItIs).
+- A driver that panics closing a connection database/sql's cleaner closes
+  past its lifetime no longer ends the test binary, and the connection is
+  counted closed
+  (TestADriverThatPanicsClosingAnExpiredConnectionDoesNotEndTheProcess); nor
+  does one that panics rolling back a transaction whose context was
+  cancelled, which database/sql rolls back in its own goroutine
+  (TestADriverThatPanicsRollingBackACancelledTransactionDoesNotEndTheProcess).
+- Every call of a guarded connection, its transaction and statement whose
+  driver panics (prepare, query, ping, reset, commit, rollback, close, a
+  statement's close, query, exec, argument check and column converter) fails
+  with a sentence naming the driver, joined with driver.ErrBadConn; asked
+  whether it is valid it is not, and its count of placeholders is -1
+  (TestEveryCallOfAGuardedConnectionWhoseDriverPanicsFails).
+- A host whose SFTP server ends a listing's session, at its start or in the
+  middle of the listing, while the SSH connection stays up, fails the
+  directory read saying its SFTP server ended the listing's session, and the
+  connection is kept: no new connection is made at that scrape or the next,
+  and none is closed. Before, the end of the session was taken for the
+  connection lost, and the connection was dropped and made again.
+- A listing whose session ends because the connection ended under it still
+  fails as on a lost connection, and a directory read is then made again on
+  a new connection and lists the directory.
+- A session that ends within a packet of an answer, the connection staying
+  up, fails the listing saying the host's SFTP server ended the session,
+  rather than that the connection was lost.
+- A mapping key that is a sequence or a mapping, or an alias of one, is
+  refused at its line as `line N: a mapping key is a sequence; only scalar
+  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  of a sequence`, `an alias of a mapping`) in the configuration, in a
+  collector file (`collector file <path>: line N: ...`) and in the static
+  target file, with and without the expansion of the environment: alone, two
+  of one mapping (which were `mapping key "" already defined`), one in a
+  header or label mapping (which was `expected a single value, not a
+  list`), in a block merged into a mapping or a collector, and in an `x-`
+  block nothing uses; two of a kind on one line are said once, one of each
+  kind both.
+- Every document the repository ships (examples, configs, testdata and the
+  fenced configuration and target blocks of the documentation) and generated
+  documents whose keys come near such a key — a key after `?`, quoted text
+  like `'[k]'`, null, `~`, numbers, booleans, `''`, an alias of text, merges
+  — load as the configuration, as a collector file or as the static target
+  file, with or without the expansion in turn, into the same configuration
+  or to the same error word for word as the load without the refusal.
+- `test/repository/schema_fullbuild_test.go`, the comparison of the
+  committed configuration and collector file schemas with the generated
+  ones, is built without `select_request_types` and without the
+  `sql_driver_<name>` tag of every opt-in sql driver of the tree, which a
+  test in the default build holds it to; `go test ./test/repository/` passes
+  in the build with every opt-in driver.
+
+## 34.143 A postgres statement timeout is the scrape's deadline
+
+- A postgres statement the server ends at its statement_timeout (SQLSTATE
+  57014, "statement timeout") fails saying the scrape's deadline came first
+  and is a deadline, though the scrape's context has not ended yet; one a
+  cancel request ended, with the same SQLSTATE, is not, nor is another
+  driver's failure.
+
+## 34.144 CI runs once for a pull request
+
+- ci.yml runs on a push to main, on a push of every tag and on a pull
+  request, and on no other push, so a pull request's commit is not run
+  twice and a release tag's commit still gets the push run the release
+  workflows wait for.
+
+## 34.145 CI's slowest runs in parallel jobs
+
+The race run and each request type's run in jobs of their own beside the test job, with one setup (§ 42.12):
+
+- ci.yml runs the race suite in a job of its own (`race`) and each request
+  type's tests in a job of a matrix (`request-types`), beside the `test` job;
+  every job of ci.yml other than `test` starts with `test`'s setup steps, the
+  helm setup alone left out, equal to them in their order, has `test`'s env
+  and machine, runs each of its own steps under the condition of the Go
+  steps, and no job of ci.yml has a job-level `if`: a copy of a setup step
+  that differs, a missing environment or a job-level `if` fails the test.
+- The race suite's step is looked for in every job of ci.yml, and the go
+  commands `make ci` must run are read from every job, so moving a step to
+  another job keeps both checks.
 
 # 35. Documentation requirements
 
@@ -21370,7 +23151,11 @@ resource attributes MUST be preserved:
   series not exported for an hour MUST be forgotten and start again. The
   series remembered MUST be at most twice `otlp.max_pending_points` (its
   default when unset); past that, the series exported least recently MUST be
-  forgotten first, and start again when it comes back. A gauge MUST NOT carry
+  forgotten first, and start again when it comes back. What is remembered of
+  a series MUST NOT grow with its labels past 256 bytes of its resource,
+  name, type and labels: a series that takes more MUST be remembered by a
+  digest of them, SHA-256 or one as hard to make two series share, and a
+  series MUST NOT have the start time of another. A gauge MUST NOT carry
   one. A cumulative point of one of the exporter's own series MUST instead
   start at the series' creation time (§ 22.1b), which the exporter knows, and
   need not be remembered.
@@ -21519,7 +23304,12 @@ those the older first, a point keeping its age through every failed export
 that queues it again — down to nine tenths of the limit, so that dropping is
 not repeated on every point; they MUST be counted (§ 22.0c) and logged as a
 warning. Replacing the value of a series already waiting MUST NOT count as a
-new point.
+new point. A point waiting MUST keep, besides its labels, no more than 256
+bytes to know its series by, a digest of a longer series as a start time is
+kept by (§ 42.1), and its resource's points MUST be exported in the order
+of their series' keys still. With `otlp.probe_attributes`, the points of one
+probe MUST share one copy of its target attribute, and MUST NOT keep any
+more of the probe's request than that copy.
 
 ## 42.2 CSV transformation
 
@@ -21625,7 +23415,12 @@ collector-scoped:
    headers, including `Host`, `Connection`, `Content-Length`, `Proxy-*`,
    `Transfer-Encoding`, `Trailer`, `Upgrade`, and `TE`, and MUST NOT forward
    `Accept-Encoding` (§ 20). `Authorization` MUST be controlled only by
-   `request.forward_authorization`, not by the generic header allowlist.
+   `request.forward_authorization`, not by the generic header allowlist. A
+   `request.forward_headers` entry that names one of these headers, in any
+   case and with blanks around it or not, or that is not a header name, MUST
+   be refused at load, saying why it would never be forwarded, of an `http`,
+   `graphite` and `grpc` collector alike; the forwarding and the check MUST
+   go by one list of these headers.
 5. Monitor header parameters MUST be documented as non-secret. Basic and
    bearer credentials MUST be supplied through Kubernetes Secret references,
    not URL parameters.
@@ -21664,12 +23459,22 @@ The username MAY instead be read from `username_file` and the password from
 the configuration; exactly one of `username` and `username_file`, and one of
 `password` and `password_file`, MUST be set. A file's content MUST be trimmed
 of surrounding whitespace. A file that is missing, unreadable or empty when
-the configuration loads MUST reject it. A file MUST be read again when its
+the configuration loads MUST reject it. A username, written or read from
+`username_file`, that holds a colon MUST reject the configuration when it
+loads, naming the key, and MUST make every protected request fail with
+`500`, logged, when a rotated file comes to hold one: a client's Basic
+credential ends the username at the first colon (RFC 7617), so no client
+could present it. A password MAY hold one. A file MUST be read again when its
 size or modification time changes, so a rotated Secret takes effect without a
 restart or reload; one that can no longer be read MUST make every protected
 request fail with `500`, logged, rather than admit it. The username and
 password MUST both be compared in constant time whatever the first
-comparison found.
+comparison found, and the time taken MUST NOT depend on the length of either
+the presented or the configured value: each MUST be compared as a digest of
+fixed length, such as its SHA-256, with the digest of the configured value,
+which MUST be made when the configuration loads or a credential file is read
+again rather than for every request. Any other credential the exporter
+checks on its own endpoints MUST be compared the same way.
 
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
@@ -21723,7 +23528,14 @@ request:
 ```
 
 The exporter MUST trim the mounted username and password files and reject
-missing or empty credentials.
+missing or empty credentials. A username, of a collector's or a static
+target's `basic_auth` or read from its `basic_auth_file`, MUST NOT hold a
+colon, which ends the username in the Basic credential (RFC 7617), so that
+the target would read a shorter username and a password starting with the
+rest: one written in the configuration or the target file MUST be refused
+at load, naming the key and not the value, and one read from a file MUST
+fail the request before anything is sent, naming the file and not what it
+holds. A password MAY hold one. The schemas MUST refuse a written one too.
 
 Exporter credentials and target credentials MUST remain independent. The
 incoming monitor's Basic Auth may authenticate the exporter, while the
@@ -21787,14 +23599,24 @@ name. A `Host` in `request.headers`, or in a static target's, MUST be the
 host the request is sent with, as Go sends only the request's own host and
 ignores a `Host` header. A literal header value holding a control character
 other than tab MUST be refused at load, collector and static target alike,
-since it could never be sent.
+since it could never be sent. So MUST an inline `bearer_token`, sent as the
+`Authorization` header or the `authorization` metadata, and an inline
+`basic_auth` `username` or `password`, which RFC 7617 does not let hold one,
+of a collector and a static target of every type that takes them, naming
+the key and the character and never the value, and saying that a line break
+at the end is usually one the Secret or the variable ended with and that the
+key's `_file` form trims it. A credential file is read at the request and
+trimmed (§ 42.6).
 
 A `request.path` of an `http` or `graphite` collector MUST NOT hold `?` or `#`:
 it is joined onto the target as a path, so they would be sent escaped. It
 MUST be refused at load naming `request.query`, and so must a static target's
 `request.path`; a `path` probe parameter holding either MUST be answered `400`.
 A `localfile` path names a file and MAY hold both. A static `http` target
-whose scheme `allowed_schemes` does not allow MUST be refused at load.
+whose scheme `allowed_schemes` does not allow MUST be refused at load, and so
+MUST a static `http` or `graphite` target whose URL's port is 0 or past
+65535, naming the port and not the URL, which may carry credentials, as a
+`grpc` or `sshfile` target's port out of that range is.
 
 Joining `request.path` onto a target MUST keep the target's own escapes, so a
 `%2F` inside a segment is sent as written rather than decoded into a new
@@ -22141,14 +23963,43 @@ runs both.
 The chart release workflow is specified in
 [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.12.
 
-Both release workflows MUST use `GITHUB_TOKEN` with `contents: write` and
-`packages: write` permissions and MUST run their respective validation checks
-before publishing artifacts.
+Every workflow MUST set `permissions` at its top, granting no write there, so
+no job runs with the repository's default token, which may write to
+everything; a job that has to write MUST grant itself only the scopes it
+needs. CI and the vulnerability check MUST NOT write at all. The exporter
+release's publishing job MAY write `contents` (the GitHub Release) and
+`packages` (the image); the chart release's MAY write `contents`, `packages`
+(the chart and its Artifact Hub metadata) and `id-token` (cosign's keyless
+signature); the Dockerfile update job MAY write `contents` and
+`pull-requests` (the branch and the pull request it opens). A test MUST hold
+the write grants to that list, failing for a workflow without top-level
+permissions, for a write granted at the top, and for a job's write grant that
+is not on the list.
+
+Both release workflows MUST run their respective validation checks before
+publishing artifacts, and MUST publish nothing unless CI has passed on the
+commit the tag names. CI has passed on a commit when the newest finished
+`ci.yml` run that a push of that commit started concluded `success`, however
+many of its steps its changed paths skipped; a run a pull request started
+does not count, since it tested the pull request merged into its base. A first
+job, which every publishing job needs, MUST validate the tag and then check
+this with `tools/ci-passed.py`, reading the Actions API with a token limited
+to `contents: read` and `actions: read`. A commit whose CI runs are queued or
+running, or that has none yet — a tag is often pushed right after its
+commit, and the tag push starts a CI run of its own — MUST be waited for, up
+to an hour; when every run has finished and the newest did not succeed, when
+the wait runs out, and when the API refuses the request, the release MUST
+fail, saying that CI has not passed on the commit and to run CI or wait for
+it, then push the tag again or re-run the release.
 
 The repository's tests MUST cover the release tag contract: that each release
 workflow triggers on its whole namespace, that the format it enforces accepts
 well-formed tags and rejects malformed ones, and that the version committed in
-`Chart.yaml` would produce a tag the chart release accepts. They MUST also
+`Chart.yaml` would produce a tag the chart release accepts. They MUST run
+`tools/ci-passed.py` against a stand-in of the API, for a run that passed, one
+that failed, runs that finish while it waits, no run, and a wait that runs
+out, and MUST fail when a publishing job of a release workflow does not need
+the job that runs it. They MUST also
 fail when a workflow runs the test suite without first setting up the image's
 Python and libraries, or runs `make ci` without installing golangci-lint and
 gopls; when the exporter release publishes its archives without the checksums
@@ -23114,9 +24965,9 @@ release line (`v4.3`) unless the version is set at link time as helm's own
 release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
 target MUST pass that flag with the pinned version.
 
-`make ci` MUST run every go command the CI workflow's test job runs, beside
-the `go mod download` that fills its module cache, and reach every make
-target the job runs other than the installing ones, so that a clean local
+`make ci` MUST run every go command the CI workflow's jobs run, beside
+the `go mod download` that fills their module cache, and reach every make
+target the jobs run other than the installing ones, so that a clean local
 `make ci` means a clean CI run; every target of the Makefile MUST be
 `.PHONY`, since none makes a file of its name. A test MUST check both.
 

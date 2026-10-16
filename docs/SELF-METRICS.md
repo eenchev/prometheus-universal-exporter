@@ -33,7 +33,16 @@ configured:
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
 | `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
-| `http_exporter_targets_refused_total` | counter | `http`, `graphite` and `grpc` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
+| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile` and `sql` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
+| `http_exporter_sshfile_connections` | gauge | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes use that are open now. A connection collectors with the same host and settings share counts for each of them. |
+| `http_exporter_sshfile_connects_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes made — the first to each host, and each made again after one broke, was closed idle, by keepalives or at the collector's `max_open_connections`, or had a credential or known_hosts file change. A counter that keeps rising while scrapes succeed is a connection that does not last. |
+| `http_exporter_sshfile_limit_waits_total`, `http_exporter_sshfile_limit_failures_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only, `0` for one without `max_open_connections`: the scrapes that waited for room at the collector's `max_open_connections`, and those that failed there, every connection it may open held by a read or being made for a scrape waiting for it when their deadline came. Failures rising mean a limit too low for the hosts read, or reads too slow for the scrape's timeout. |
+| `http_exporter_sql_connections`, `http_exporter_sql_idle_connections` | gauge | [`sql`](SQL.md#connections) collectors only: the database connections the collector's pools have open now, in use or idle, and those of them idle, across its targets. |
+| `http_exporter_sql_targets` | gauge | [`sql`](SQL.md#connections) collectors only: the targets the collector has connections open to, which `connections.max_targets` bounds: each server or Snowflake account once, whatever databases and accounts it reached there, and a static target whose `connections` give it settings of its own once more. |
+| `http_exporter_sql_connects_total` | counter | [`sql`](SQL.md#connections) collectors only: the connections the collector's pools made — the first to each target, and each made again after one broke, was closed idle or at `max_lifetime`, or its pool was closed. A counter that keeps rising while scrapes succeed is a connection that does not last. |
+| `http_exporter_sql_keepalive_failures_total` | counter | [`sql`](SQL.md#connections) collectors only, `0` with `keepalive.check: tcp`: the pings of an idle connection that failed. |
+| `http_exporter_sql_limit_waits_total`, `http_exporter_sql_limit_failures_total` | counter | [`sql`](SQL.md#connections) collectors only: the scrapes that waited for a connection at `connections.max_per_target`, and those that failed there, or at `max_targets` with every target in use. |
+| `http_exporter_sql_rows` | gauge | [`sql`](SQL.md#the-rows) collectors only: the rows the collector's last successful statement returned, whichever target it ran on; `0` before one has. |
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. A rejected reload keeps the previous collectors at `1`; it shows in `http_exporter_config_last_reload_successful`. |
 | `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
 | `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
@@ -67,7 +76,7 @@ help and value in both.
 ## Build information
 
 ```text
-http_exporter_build_info{goversion="go1.25.1",request_types="graphite,grpc,http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.25.1",request_types="graphite,grpc,http,localfile,sql,sshfile",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
 ```
 
 As every Prometheus exporter does, one series with value `1` carries the
@@ -75,9 +84,10 @@ build as labels: the version, the git revision (`-modified` when built from a
 changed checkout; for a build without git, such as the image's, the one
 `-ldflags "-X main.revision=<commit>"` sets, which the image's `REVISION`
 build argument passes and the release workflow sets to the tag's commit;
-`unknown` otherwise), the Go version and the
-[request types](CONFIGURATION.md#request-types) built in. `--version` prints the
-same. The version is the one a release build sets with
+`unknown` otherwise), the Go version, the
+[request types](CONFIGURATION.md#request-types) built in, and the `sql` type's
+[database drivers](SQL.md#building-with-more-drivers), a label left out
+in a build without the type. `--version` prints the same. The version is the one a release build sets with
 `-ldflags "-X main.version=1.4.0"`, otherwise the module version Go stamps,
 `(devel)` for a local build. Join it onto other series to see which build
 produced them:
@@ -122,7 +132,11 @@ it, whatever triggered them: the watch, `SIGHUP` or
 a [descriptor file](CONFIGURATION.md#descriptor-files) of a grpc collector
 that changes is a reload too, although no configuration file did: one that
 no longer has the collector's method, or no longer takes its message, turns
-the series to `0` at the next tick. Alert on a change that did not take:
+the series to `0` at the next tick. A file rejected because it could not be
+read is tried at every tick until it can be
+([Watching the configuration](CONFIGURATION.md#watching-the-configuration));
+a try that fails as the last one did is not counted again. Alert on a change
+that did not take:
 
 ```promql
 http_exporter_config_last_reload_successful == 0
@@ -310,6 +324,15 @@ query string is dropped, and because one series per tenant would be unbounded.
 A [`localfile`](LOCALFILE.md#errors-and-self-metrics) collector's reads carry
 the file's `file://` URL, placeholders kept the same way, and
 `http_method="READ"`.
+
+An [`sshfile`](SSHFILE.md#errors-and-self-metrics) collector's reads carry
+`sftp://host:port/` and the file's path on the host, placeholders kept the
+same way, and `http_method="READ"`.
+
+A [`sql`](SQL.md#errors-and-self-metrics) collector's statements carry
+`driver://host:port/` and the database, placeholders kept the same way, and
+`http_method="QUERY"`; the statement and the bound values are left out, as a
+query string is.
 
 A [`grpc`](GRPC.md#self-metrics) collector's calls carry
 `grpc://host:port/package.Service/Method`, `grpcs://` over TLS, and

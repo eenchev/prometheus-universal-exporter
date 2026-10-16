@@ -179,6 +179,23 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].transform.required_libs[]", document: pythonCollector, at: "      # transform\n", setting: "      required_libs: [%s]\n", valid: "PyYAML", invalid: "requests", absent: true},
 		{key: "collectors[].metrics[].value_map{}", document: jqCollector, at: metric, setting: "        value_map: {%s: 1}\n", valid: "up", invalid: `" up"`, absent: true, emptyWas: taken, invalidWas: taken},
 		{key: "collectors[].metrics[].labels[].value_map{}", document: jqCollector, at: label, setting: "            value_map: {%s: other}\n", valid: `"1"`, invalid: `"1 "`, absent: true, emptyWas: taken, invalidWas: taken},
+		// Names of headers and of query parameters, and entries of
+		// forward_headers: both refuse one that is empty, a header name
+		// that is no HTTP token, a query name with a control character,
+		// and a header a probe never forwards, each of which the schemas
+		// took. The headers' names are the target file's too.
+		{key: "collectors[].request.headers{}", document: jqCollector, at: request, setting: "      headers: {%s: v}\n", valid: "X-Tenant", invalid: `"X Bad"`, absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "collectors[].request.headers{}", of: "Accept-Encoding", document: jqCollector, at: request, setting: "      headers: {%s: v}\n", valid: "X-Tenant", invalid: "accept-encoding", absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "collectors[].request.query{}", document: jqCollector, at: request, setting: "      query: {%s: v}\n", valid: `"a b"`, invalid: `"region\n"`, absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "collectors[].request.forward_headers[]", document: jqCollector, at: request, setting: "      forward_headers: [%s]\n", valid: `" X-Tenant "`, invalid: "X:Tenant", absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "collectors[].request.forward_headers[]", of: "never forwarded", document: jqCollector, at: request, setting: "      forward_headers: [%s]\n", valid: "X-Proxy-Tenant", invalid: "proxy-connection", absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "targets[].request.headers{}", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      headers: {%s: v}\n", valid: "X-Tenant", invalid: `"X:Bad"`, absent: true, emptyWas: taken, invalidWas: taken},
+		// The username of a Basic credential: both refuse one with a colon,
+		// which ends the username in the credential, and which both took.
+		// Left out and written "", it is the empty username beside the
+		// password.
+		{key: "collectors[].request.basic_auth.username", document: strings.Replace(jqCollector, request, "      basic_auth:\n        password: p\n        # auth\n", 1), at: "        # auth\n", setting: "        username: %s\n", valid: "metrics", invalid: `"metrics:reader"`, absent: true, empty: true, invalidWas: taken},
+		{key: "targets[].request.basic_auth.username", file: inTargetFile, document: strings.Replace(oneTarget, target, "    request:\n      basic_auth:\n        password: p\n        # auth\n", 1), at: "        # auth\n", setting: "        username: %s\n", valid: "metrics", invalid: `":"`, absent: true, empty: true, invalidWas: taken},
 		// Sizes: "" is no size, to both, and a number of bytes is one
 		// however YAML writes the whole number. An output limit has a least
 		// besides, which both hold a number to, so its 1 is refused by both

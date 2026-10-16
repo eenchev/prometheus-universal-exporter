@@ -22,14 +22,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// A gRPC call that a server ends with a status message of megabytes fails
-// its probe at the grpc stage in 2,000 bytes: the answer to the scraper and
+// A gRPC call that a server ends with a status message of nearly a
+// megabyte, just under the 1 MiB an answer's trailers may take, fails its
+// probe at the grpc stage in 2,000 bytes: the answer to the scraper and
 // the log line's error start as the failure did, with the status code and
 // the message, and end with the failure's length, and the failure log
 // remembers it by 2,000 bytes with the mark for the length. They were the
-// message whole, ten megabytes each. With a message half as long the same
-// failure is a repeat to the log, and a message of ordinary length is
-// answered as it was.
+// message whole. With a message half as long the same failure is a repeat
+// to the log, and a message of ordinary length is answered as it was.
 func TestAGRPCStatusMessageOfMegabytesFailsTheProbeWithinTheBound(t *testing.T) {
 	var said atomic.Pointer[string]
 	upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: func(context.Context, string, string) (string, error) {
@@ -68,7 +68,7 @@ func TestAGRPCStatusMessageOfMegabytesFailsTheProbeWithinTheBound(t *testing.T) 
 		}
 		return text, lines[0]
 	}
-	size := alloctest.UnlessRaced(10<<20, 1<<20)
+	size := alloctest.UnlessRaced(1<<20-1<<10, 1<<18)
 	const starts = "gRPC call failed: FAILED_PRECONDITION: sss"
 	text, line := probe(strings.Repeat("s", size))
 	if mark := fmt.Sprintf("sss... (%d bytes)", size+len("gRPC call failed: FAILED_PRECONDITION: ")); len(text) != model.MaxFailureBytes || !strings.HasPrefix(text, starts) || !strings.HasSuffix(text, mark) || line["repeat"] != nil {

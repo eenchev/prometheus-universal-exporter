@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"net/http"
@@ -186,6 +187,21 @@ func (s *Server) writeBounded(next http.Handler) http.Handler {
 	})
 }
 
+// credentialsMatch reports whether a presented username and password are
+// the exporter's own, comparing their SHA-256 digests with want's through
+// compare, subtle.ConstantTimeCompare but in a test. Digests are all of one
+// length, so the comparison takes the same time whatever the length of what
+// was presented and of the credential, which comparing the credentials
+// themselves gave away; and both are compared whatever the first found, so
+// the time taken does not say which one was wrong.
+func credentialsMatch(compare func(x, y []byte) int, username, password string, want config.WebAuthDigest) bool {
+	presentedUser := sha256.Sum256([]byte(username))
+	presentedPassword := sha256.Sum256([]byte(password))
+	userOK := compare(presentedUser[:], want.Username[:])
+	passwordOK := compare(presentedPassword[:], want.Password[:])
+	return userOK&passwordOK == 1
+}
+
 func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := s.manager.Get().Web.BasicAuth
@@ -193,18 +209,14 @@ func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		wantUser, wantPassword, err := config.WebAuthCredentials(auth)
+		want, err := config.WebAuthDigests(auth)
 		if err != nil {
 			s.logger.Error("the exporter's Basic Auth credential cannot be read; refusing the request", "path", r.URL.Path, "error", err)
 			http.Error(w, "the exporter's credential cannot be read", http.StatusInternalServerError)
 			return
 		}
 		username, password, ok := r.BasicAuth()
-		// Both comparisons run whatever the first found, so the time taken
-		// does not say which one failed.
-		userOK := subtle.ConstantTimeCompare([]byte(username), []byte(wantUser))
-		passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(wantPassword))
-		if !ok || userOK&passwordOK != 1 {
+		if matched := credentialsMatch(subtle.ConstantTimeCompare, username, password, want); !ok || !matched {
 			w.Header().Set("WWW-Authenticate", `Basic realm="prometheus-universal-exporter"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return

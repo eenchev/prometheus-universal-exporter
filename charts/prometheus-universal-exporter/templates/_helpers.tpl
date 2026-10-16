@@ -60,7 +60,11 @@
        and every extraVolumeMounts entry, has to be a path of its own. Paths
        are compared cleaned, so a trailing slash does not hide a collision. */ -}}
 {{- $taken := dict "/etc/prometheus-universal-exporter" "the configuration directory" -}}
-{{- range $name := list "targetAuth" "webAuth" -}}
+{{- $static := and $.Values.staticTargets $.Values.staticTargets.enabled -}}
+{{- if $static -}}
+{{- $_ := set $taken "/etc/prometheus-universal-exporter-static-targets" "the static target directory" -}}
+{{- end -}}
+{{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
 {{- if and $auth $auth.enabled -}}
 {{- $path := $auth.mountPath | toString | clean -}}
@@ -81,19 +85,23 @@
 {{- end -}}
 {{- $_ := set $extra $path true -}}
 {{- end -}}
-{{- /* The configuration directory and the credential directories are
-       ConfigMap and Secret volumes, which the kubelet mounts read-only. A
-       mount below one of them, a subPath file mount among them, needs its
-       mount point created inside that volume, which fails, so the container
-       is never started (CreateContainerError), with nothing said where the
-       values were written; and so does the configuration directory below
-       an enabled credential directory. The runtime mounts a parent before
-       what is below it, whichever is written first. */ -}}
+{{- /* The configuration directory, the static target directory and the
+       credential directories are ConfigMap, Secret and projected volumes,
+       which the kubelet mounts read-only. A mount below one of them, a
+       subPath file mount among them, needs its mount point created inside
+       that volume, which fails, so the container is never started
+       (CreateContainerError), with nothing said where the values were
+       written; and so does the configuration or static target directory
+       below an enabled credential directory. The runtime mounts a
+       parent before what is below it, whichever is written first. */ -}}
 {{- $readOnly := list (dict "path" "/etc/prometheus-universal-exporter" "what" "the configuration directory /etc/prometheus-universal-exporter" "kind" "ConfigMap" "hint" "; to add a file to it, add the file to config.data instead") -}}
-{{- range $name := list "targetAuth" "webAuth" -}}
+{{- if $static -}}
+{{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-static-targets" "what" "the static target directory /etc/prometheus-universal-exporter-static-targets" "kind" "ConfigMap" "hint" "") -}}
+{{- end -}}
+{{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
 {{- if and $auth $auth.enabled -}}
-{{- $readOnly = append $readOnly (dict "path" ($auth.mountPath | toString | clean) "what" (printf "%s.mountPath %q" $name (toString $auth.mountPath)) "kind" "Secret" "hint" "" "name" $name) -}}
+{{- $readOnly = append $readOnly (dict "path" ($auth.mountPath | toString | clean) "what" (printf "%s.mountPath %q" $name (toString $auth.mountPath)) "kind" (ternary "projected" "Secret" (eq $name "sshAuth")) "hint" "" "name" $name) -}}
 {{- end -}}
 {{- end -}}
 {{- range $inner := $readOnly -}}
@@ -102,7 +110,7 @@
 {{- if $inner.name -}}
 {{- fail (printf "%s is inside %s, a read-only %s volume in which the mount point cannot be created, so the container would never start; choose a path outside %s" $inner.what $outer.what $outer.kind $outer.path) -}}
 {{- end -}}
-{{- fail (printf "%s holds the configuration directory /etc/prometheus-universal-exporter, which cannot be mounted inside that read-only Secret volume, so the container would never start; choose a path that is not above /etc/prometheus-universal-exporter" $outer.what) -}}
+{{- fail (printf "%s holds %s, which cannot be mounted inside that read-only %s volume, so the container would never start; choose a path that is not above %s" $outer.what $inner.what $outer.kind $inner.path) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -114,6 +122,78 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end }}
+{{- /* sshAuth mounts what an sshfile collector reads: a Secret's private
+       key, its passphrase and a password, and the known_hosts lines. Each
+       mistake below would otherwise render a pod Kubernetes refuses, as it
+       does a projected Secret source without a name, or one whose every SSH
+       scrape fails, with no credential or no known host to check the
+       server by. The checks are the values schema's, so both refuse alike;
+       this one stands where the schema is skipped. A known_hosts entry is
+       told by its shape alone, a line that is not a comment with a host, a
+       key type and a key (sshKnownHostsEntry below); whether the key is one
+       is the exporter's to say. */ -}}
+{{- define "prometheus-universal-exporter.validateSSHAuth" -}}
+{{- $ssh := .Values.sshAuth -}}
+{{- if and $ssh $ssh.enabled -}}
+{{- if not $ssh.secretName -}}
+{{- fail "sshAuth.secretName is required when sshAuth.enabled is true: name the Secret holding the SSH private key or password" -}}
+{{- end -}}
+{{- if not (or $ssh.privateKeyKey $ssh.passwordKey) -}}
+{{- fail "sshAuth.enabled is true but neither sshAuth.privateKeyKey nor sshAuth.passwordKey names a key of the Secret; set one of them, or both" -}}
+{{- end -}}
+{{- if and $ssh.passphraseKey (not $ssh.privateKeyKey) -}}
+{{- fail "sshAuth.passphraseKey is set without sshAuth.privateKeyKey, but a passphrase only decrypts a private key; set sshAuth.privateKeyKey or leave sshAuth.passphraseKey empty" -}}
+{{- end -}}
+{{- if and $ssh.knownHosts $ssh.knownHostsSecretKey -}}
+{{- fail "sshAuth.knownHosts and sshAuth.knownHostsSecretKey are both set, but the mounted known_hosts file comes from one of them only; put every line in one of them and leave the other empty" -}}
+{{- end -}}
+{{- if not (or $ssh.knownHosts $ssh.knownHostsSecretKey) -}}
+{{- fail "sshAuth.enabled is true but no known hosts are given, and the exporter refuses an SSH server it cannot verify; set sshAuth.knownHosts to the lines `ssh-keyscan <host>` prints, or sshAuth.knownHostsSecretKey to the Secret's key holding them" -}}
+{{- end -}}
+{{- if and $ssh.knownHosts (not (regexMatch (include "prometheus-universal-exporter.sshKnownHostsEntry" .) (toString $ssh.knownHosts))) -}}
+{{- fail "sshAuth.knownHosts holds no known_hosts entry: no line that is not a comment has a host, a key type and a key; set it to the lines `ssh-keyscan <host>` prints" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- /* sqlAuth mounts what an sql collector reads: a Secret's database
+       password, a Snowflake private key, and the TLS CA bundle and client
+       certificate and key. Each mistake below would otherwise render a pod
+       Kubernetes refuses, as it does a Secret volume without a name, or one
+       whose every SQL scrape fails, with nothing mounted or a file a
+       collector cannot use alone: a client certificate without its key or a
+       key without its certificate. There is no passphrase: the exporter
+       reads only an unencrypted Snowflake key. The checks are the values schema's, so both refuse
+       alike; this one stands where the schema is skipped. */ -}}
+{{- define "prometheus-universal-exporter.validateSQLAuth" -}}
+{{- $sql := .Values.sqlAuth -}}
+{{- if and $sql (hasKey $sql "passphraseKey") -}}
+{{- fail "sqlAuth.passphraseKey is not a key of sqlAuth: the exporter reads only an unencrypted private key (an encrypted one cannot be decrypted), so remove its passphrase (openssl pkcs8 -topk8 -nocrypt, see the SQL documentation) and leave sqlAuth.passphraseKey out" -}}
+{{- end -}}
+{{- if and $sql $sql.enabled -}}
+{{- if not $sql.secretName -}}
+{{- fail "sqlAuth.secretName is required when sqlAuth.enabled is true: name the Secret holding the database credentials" -}}
+{{- end -}}
+{{- if not (or $sql.passwordKey $sql.privateKeyKey $sql.caKey $sql.certKey $sql.keyKey) -}}
+{{- fail "sqlAuth.enabled is true but no key of the Secret is named; set at least one of sqlAuth.passwordKey, sqlAuth.privateKeyKey, sqlAuth.caKey, sqlAuth.certKey and sqlAuth.keyKey" -}}
+{{- end -}}
+{{- if and $sql.certKey (not $sql.keyKey) -}}
+{{- fail "sqlAuth.certKey is set without sqlAuth.keyKey, but a client certificate is presented with its private key; set sqlAuth.keyKey or leave sqlAuth.certKey empty" -}}
+{{- end -}}
+{{- if and $sql.keyKey (not $sql.certKey) -}}
+{{- fail "sqlAuth.keyKey is set without sqlAuth.certKey, but a client key is presented with its certificate; set sqlAuth.certKey or leave sqlAuth.keyKey empty" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- /* A known_hosts entry somewhere in a text, the values schema's pattern
+       for sshAuth.knownHosts: at the start of a line, after blanks, a field
+       that does not begin a comment, then two more fields. */ -}}
+{{- define "prometheus-universal-exporter.sshKnownHostsEntry" -}}
+(^|\n)[ \t]*[^#\s]\S*[ \t]+\S+[ \t]+\S
+{{- end }}
+{{- /* The ConfigMap the inline known_hosts lines are rendered into. */ -}}
+{{- define "prometheus-universal-exporter.sshKnownHostsName" -}}
+{{- printf "%s-ssh-known-hosts" (include "prometheus-universal-exporter.fullname" .) -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
@@ -399,6 +479,31 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "prometheus-universal-exporter.staticTargetsFile" -}}
 {{- default "static-targets.yaml" .Values.staticTargets.fileName -}}
 {{- end }}
+{{- /* The static target document is a ConfigMap of its own, mounted in a
+       directory of its own: in the configuration directory a collector_files
+       pattern such as *.yaml would match it, and the exporter would read it
+       as a collector file and refuse to start. validateMounts names this
+       directory too. */ -}}
+{{- define "prometheus-universal-exporter.staticTargetsDir" -}}
+/etc/prometheus-universal-exporter-static-targets
+{{- end }}
+{{- define "prometheus-universal-exporter.staticTargetsName" -}}
+{{- printf "%s-static-targets" (include "prometheus-universal-exporter.fullname" .) -}}
+{{- end }}
+{{- /* A key of config.data is a file of the configuration ConfigMap, which
+       Kubernetes refuses unless the key is one: letters, digits, -, _ and
+       ., at most 253 characters, not . or .. — so a key such as
+       collectors/payments.yaml fails only when the release is applied. The
+       values schema says the same; this stands where it is skipped. A
+       ConfigMap volume is one flat directory, so there is no subdirectory to
+       name. */ -}}
+{{- define "prometheus-universal-exporter.validateConfigData" -}}
+{{- range $key, $_ := .Values.config.data -}}
+{{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $key)) (gt (len $key) 253) (eq $key ".") (eq $key "..") -}}
+{{- fail (printf "config.data key %q is not a ConfigMap key, which Kubernetes refuses: a key holds only letters, digits, -, _ and ., at most 253 characters, and is not . or ..; the configuration directory is flat, with no subdirectories, so name the file without a / (such as collectors-payments.yaml, listed under collector_files as it is), or mount a directory of collector files through extraVolumes and extraVolumeMounts and list them under collector_files by absolute path" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.staticTargetsPath" -}}
 {{- $path := default "/static-targets" .Values.staticTargets.path -}}
 {{- if eq $path .Values.selfMetrics.path -}}
@@ -408,26 +513,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateTargets" -}}
 {{- if .Values.staticTargets.enabled -}}
-{{- /* The file is a key of the configuration ConfigMap, so its name must be
-       a ConfigMap key, and not one config.data already uses, which it would
-       collide with or silently replace. */ -}}
+{{- /* The file is the one key of the static target ConfigMap, so its name
+       must be a ConfigMap key. That ConfigMap is the chart's whether or not
+       config.enabled is, so the document is always required. */ -}}
 {{- $fileName := include "prometheus-universal-exporter.staticTargetsFile" . -}}
 {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $fileName)) (eq $fileName ".") (eq $fileName "..") -}}
 {{- fail (printf "staticTargets.fileName %q must be a ConfigMap key: letters, digits, -, _ and ., with no /" $fileName) -}}
 {{- end -}}
-{{- if and .Values.config.enabled (hasKey (.Values.config.data | default dict) $fileName) -}}
-{{- fail (printf "staticTargets.fileName %q is also a key of config.data; the static target file needs a name of its own in the ConfigMap" $fileName) -}}
-{{- end -}}
 {{- $data := trim (.Values.staticTargets.data | default "") -}}
-{{- if .Values.config.enabled -}}
 {{- if not $data -}}
 {{- fail "staticTargets.enabled requires staticTargets.data to hold the static target document" -}}
-{{- end -}}
-{{- else if $data -}}
-{{- /* Without config.enabled the chart renders no ConfigMap, so the data
-       would be dropped without a word, and the exporter would read whatever
-       the ConfigMap supplied instead has under the file name. */ -}}
-{{- fail (printf "staticTargets.data is rendered into the chart's ConfigMap, which config.enabled: false leaves out; put the static target file into your ConfigMap %s under the key %s, and leave staticTargets.data empty" (include "prometheus-universal-exporter.fullname" .) $fileName) -}}
 {{- end -}}
 {{- /* The monitor may read only some targets. A name the document does not
        have would make every scrape of the endpoint fail with 400, so

@@ -15,15 +15,16 @@ import (
 )
 
 // The configuration directory is a ConfigMap volume and the credential
-// directories Secret volumes, which the kubelet mounts read-only. The chart
-// refused a mount at one of their paths but not below one: an
-// extraVolumeMounts entry such as /etc/prometheus-universal-exporter/collectors,
-// a subPath file mount among the configuration files, or a credential's
-// mountPath inside the configuration directory or inside the other
-// credential's rendered, and the pod never started, since its mount point
-// cannot be created inside a read-only volume (CreateContainerError). The
-// tests below hold the chart to refusing each while rendering, naming the
-// value and where to mount instead, and to rendering all it rendered before.
+// directories Secret volumes, and sshAuth's a projected one, which the
+// kubelet mounts read-only. The chart refused a mount at one of their paths
+// but not below one: an extraVolumeMounts entry such as
+// /etc/prometheus-universal-exporter/collectors, a subPath file mount among
+// the configuration files, or a credential's mountPath inside the
+// configuration directory or inside another credential's rendered, and the
+// pod never started, since its mount point cannot be created inside a
+// read-only volume (CreateContainerError). The tests below hold the chart to
+// refusing each while rendering, naming the value and where to mount
+// instead, and to rendering all it rendered before.
 
 // configurationDirectory is where the chart mounts its ConfigMap.
 const configurationDirectory = "/etc/prometheus-universal-exporter"
@@ -82,6 +83,26 @@ func TestChartRefusesAMountInsideAReadOnlyVolume(t *testing.T) {
 			values:  "webAuth: {enabled: true, secretName: s}\nextraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/web-auth/ca.crt, subPath: ca.crt}]\n",
 			message: `extraVolumeMounts uses mountPath "/var/run/prometheus-universal-exporter/web-auth/ca.crt", which is inside webAuth.mountPath "/var/run/prometheus-universal-exporter/web-auth", a read-only Secret volume in which the mount point cannot be created, so the container would never start; mount it outside /var/run/prometheus-universal-exporter/web-auth`,
 		},
+		"sshAuth.mountPath in the configuration directory": {
+			values: "sshAuth: {enabled: true, secretName: s, passwordKey: pw, knownHostsSecretKey: kh, mountPath: /etc/prometheus-universal-exporter/ssh}\n",
+			schema: "sshAuth.mountPath", message: `sshAuth.mountPath "/etc/prometheus-universal-exporter/ssh" is inside the configuration directory /etc/prometheus-universal-exporter, a read-only ConfigMap volume`,
+		},
+		"sshAuth.mountPath in webAuth's": {
+			values:  "webAuth: {enabled: true, secretName: s, mountPath: /secrets}\nsshAuth: {enabled: true, secretName: s, passwordKey: pw, knownHostsSecretKey: kh, mountPath: /secrets/ssh}\n",
+			message: `sshAuth.mountPath "/secrets/ssh" is inside webAuth.mountPath "/secrets", a read-only Secret volume`,
+		},
+		"targetAuth.mountPath in sshAuth's": {
+			values:  "targetAuth: {enabled: true, secretName: s, mountPath: /secrets/target}\nsshAuth: {enabled: true, secretName: s, passwordKey: pw, knownHostsSecretKey: kh, mountPath: /secrets}\n",
+			message: `targetAuth.mountPath "/secrets/target" is inside sshAuth.mountPath "/secrets", a read-only projected volume in which the mount point cannot be created, so the container would never start; choose a path outside /secrets`,
+		},
+		"the configuration directory in sshAuth's": {
+			values:  "sshAuth: {enabled: true, secretName: s, passwordKey: pw, knownHostsSecretKey: kh, mountPath: /etc/}\n",
+			message: `sshAuth.mountPath "/etc/" holds the configuration directory /etc/prometheus-universal-exporter, which cannot be mounted inside that read-only projected volume, so the container would never start`,
+		},
+		"an extraVolumeMounts entry in sshAuth's": {
+			values:  sshValues + "extraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/ssh/config, subPath: config}]\n",
+			message: `extraVolumeMounts uses mountPath "/var/run/prometheus-universal-exporter/ssh/config", which is inside sshAuth.mountPath "/var/run/prometheus-universal-exporter/ssh", a read-only projected volume in which the mount point cannot be created, so the container would never start; mount it outside /var/run/prometheus-universal-exporter/ssh`,
+		},
 		"an extraVolumeMounts entry in targetAuth's": {
 			values:  "targetAuth: {enabled: true, secretName: s}\nextraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/target-auth/x}]\n",
 			message: `which is inside targetAuth.mountPath "/var/run/prometheus-universal-exporter/target-auth"`,
@@ -122,6 +143,8 @@ func TestChartRendersAMountBesideTheReadOnlyVolumes(t *testing.T) {
 		"the credentials beside each other":      "webAuth: {enabled: true, secretName: s, mountPath: /secrets/web/}\ntargetAuth: {enabled: true, secretName: s, mountPath: /secrets/webs}\nextraVolumes: [{name: x, emptyDir: {}}]\nextraVolumeMounts: [{name: x, mountPath: /secrets}]\n",
 		"credentials that are not enabled":       "webAuth: {enabled: false, mountPath: /etc/prometheus-universal-exporter/web}\ntargetAuth: {enabled: false, mountPath: /etc/prometheus-universal-exporter/target}\nextraVolumeMounts: [{name: x, mountPath: /etc/prometheus-universal-exporter-web/x}]\n",
 		"below a credential that is not enabled": "webAuth: {enabled: false}\nextraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/web-auth/x}]\n",
+		"sshAuth beside the others":              sshValues + "webAuth: {enabled: true, secretName: s}\ntargetAuth: {enabled: true, secretName: s}\nextraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/ssh-extra}]\n",
+		"sshAuth not enabled":                    "sshAuth: {enabled: false, mountPath: /etc/prometheus-universal-exporter/ssh}\nextraVolumeMounts: [{name: x, mountPath: /var/run/prometheus-universal-exporter/ssh/x}]\n",
 	} {
 		for _, skip := range []bool{false, true} {
 			args := []string{"-f", valuesFile(t, values)}
@@ -327,7 +350,7 @@ func insideConfigurationDirectory(t *testing.T) *regexp.Regexp {
 	if pattern == "" {
 		t.Fatal("the values schema refuses no extraVolumeMounts mountPath by a pattern")
 	}
-	for _, name := range []string{"webAuth", "targetAuth"} {
+	for _, name := range []string{"webAuth", "targetAuth", "sshAuth", "sqlAuth"} {
 		then, _ := schemaAt(t, name)["then"].(map[string]any)
 		got := fmt.Sprint(then["properties"].(map[string]any)["mountPath"].(map[string]any)["not"].(map[string]any)["pattern"])
 		if got != pattern {
@@ -373,10 +396,18 @@ func TestTheSchemaRefusesAMountPathInsideTheConfigurationDirectoryAsTheTemplates
 			t.Errorf("the schema refuses %q, which is not below the configuration directory", p)
 		}
 	}
-	for _, name := range []string{"webAuth", "targetAuth"} {
+	for _, name := range []string{"webAuth", "targetAuth", "sshAuth", "sqlAuth"} {
 		schema := schemaAt(t, name)
 		for _, enabled := range []bool{true, false} {
 			value := map[string]any{"enabled": enabled, "mountPath": configurationDirectory + "/auth"}
+			if name == "sshAuth" {
+				// What the block needs besides, so that the path alone is
+				// what the schema refuses.
+				value["secretName"], value["passwordKey"], value["knownHostsSecretKey"] = "s", "pw", "kh"
+			}
+			if name == "sqlAuth" {
+				value["secretName"], value["passwordKey"] = "s", "pw"
+			}
 			if errs := validateAgainstSchema(schema, value); (len(errs) != 0) != enabled {
 				t.Errorf("%s %v: the repository's validator says %v, want refused %v", name, value, errs, enabled)
 			}

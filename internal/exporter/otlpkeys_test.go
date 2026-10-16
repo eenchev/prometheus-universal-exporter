@@ -391,10 +391,12 @@ func TestOTLPKeysAreInTheOrderTheOldKeysHad(t *testing.T) {
 var keySink string
 
 // A key is made in one allocation, and a series' start time is found with
-// no other: fewer than the old keys cost, which grew as they were written
+// none: fewer than the old keys cost, which grew as they were written
 // beside the names in order, and were joined to their resource's. A subject
-// of more pairs than a key puts in order in place costs two more, and still
-// fewer.
+// of more pairs than a key puts in order in place costs two more, and a key
+// longer than the room it is made in one more, and still fewer. A point's
+// key in the queue is one allocation, of the key or of its digest
+// (otlpKeyOf), and two for a long one.
 func TestAnOTLPKeyIsMadeInOneAllocation(t *testing.T) {
 	labelled := model.Metric{Name: "item_requests_total", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{"id": "item-1024", "region": "eu-west-1", "kind": "disk"}}
 	plain := model.Metric{Name: "item_requests_total", Type: model.CounterMetricType, Value: 1}
@@ -416,11 +418,14 @@ func TestAnOTLPKeyIsMadeInOneAllocation(t *testing.T) {
 		{"a series with labels", func() { keySink = otlpMetricKey(labelled) }, func() { keySink = oldOTLPSeriesKey(labelled) }, 1},
 		{"a series without labels", func() { keySink = otlpMetricKey(plain) }, func() { keySink = oldOTLPSeriesKey(plain) }, 1},
 		{"a series with NULs in its labels", func() { keySink = otlpMetricKey(nul) }, func() { keySink = oldOTLPSeriesKey(nul) }, 1},
-		{"a series with long labels, one with NULs", func() { keySink = otlpMetricKey(long) }, func() { keySink = oldOTLPSeriesKey(long) }, 1},
+		{"a series with long labels, one with NULs", func() { keySink = otlpMetricKey(long) }, func() { keySink = oldOTLPSeriesKey(long) }, 2},
 		{"a series with twelve labels", func() { keySink = otlpMetricKey(many) }, func() { keySink = oldOTLPSeriesKey(many) }, 3},
 		{"a resource", func() { keySink = identity.key() }, func() { keySink = oldOTLPResourceKey(identity) }, 1},
-		{"the start time of a series with labels", func() { keySink = start(labelled, "1") }, func() { keySink = oldOTLPStartKey(oldResource, labelled) }, 1},
-		{"the start time of a series without labels", func() { keySink = start(plain, "1") }, func() { keySink = oldOTLPStartKey(oldResource, plain) }, 1},
+		{"the start time of a series with labels", func() { keySink = start(labelled, "1") }, func() { keySink = oldOTLPStartKey(oldResource, labelled) }, 0},
+		{"the start time of a series without labels", func() { keySink = start(plain, "1") }, func() { keySink = oldOTLPStartKey(oldResource, plain) }, 0},
+		{"the start time of a series with long labels", func() { keySink = start(long, "1") }, func() { keySink = oldOTLPStartKey(oldResource, long) }, 1},
+		{"a series with labels waiting", func() { keySink = otlpPendingKey(&labelled) }, func() { keySink = oldOTLPSeriesKey(labelled) }, 1},
+		{"a series with long labels waiting", func() { keySink = otlpPendingKey(&long) }, func() { keySink = oldOTLPSeriesKey(long) }, 2},
 	} {
 		now := alloctest.AllocsAtMost(200, c.most, c.now)
 		old, _ := alloctest.Allocations(200, c.old)
@@ -428,21 +433,26 @@ func TestAnOTLPKeyIsMadeInOneAllocation(t *testing.T) {
 			t.Errorf("%s: %v allocations, want at most %v and fewer than the old key's %v", c.name, now, c.most, old)
 		}
 	}
-	// The one allocation is of the key's size, whatever that is: keys of
-	// every size over a few hundred bytes, their parts' lengths written
-	// with one byte and with two and their NULs with two, never grow past
-	// what was allocated for them, which a size one byte short would at
-	// the sizes the allocator gives.
+	// A key past the room it is made in is grown once, to its size,
+	// whatever that is: keys of every size from under the room to a few
+	// hundred bytes past it, their parts' lengths written with one byte
+	// and with two and their NULs with two, take one allocation in the
+	// room and two past it, the growth and the key, never more, which a
+	// size one byte short would take at the sizes the allocator gives.
 	var sized []model.Metric
+	want := 0.0
 	for n := range 300 {
 		sized = append(sized, model.Metric{Name: strings.Repeat("m", 100+n), Type: model.CounterMetricType, Labels: map[string]string{"a": strings.Repeat("\x00", n)}})
+		if want++; len(otlpMetricKey(sized[n])) > otlpKeyRoom {
+			want++
+		}
 	}
-	if got := alloctest.AllocsAtMost(20, float64(len(sized)), func() {
+	if got := alloctest.AllocsAtMost(20, want, func() {
 		for i := range sized {
 			keySink = otlpMetricKey(sized[i])
 		}
-	}); got != float64(len(sized)) {
-		t.Errorf("%d keys of every size take %v allocations, want one each", len(sized), got)
+	}); got != want || want < 1.5*float64(len(sized)) {
+		t.Errorf("%d keys of every size take %v allocations, want %v", len(sized), got, want)
 	}
 }
 
@@ -568,7 +578,9 @@ func (k *otlpKeyModel) export(t *testing.T, drained []*otlpModelResource) []byte
 			continue
 		}
 		key := k.resource(resource.identity)
-		start := func(m model.Metric, at string) string { return k.starts.start(k.start(key, m), cumulativeCount(m), at) }
+		start := func(m model.Metric, at string) string {
+			return k.starts.start([]byte(k.start(key, m)), cumulativeCount(m), at)
+		}
 		metrics := resource.metrics
 		if k.oneWriter {
 			// Every cumulative series drained is one the start times

@@ -380,7 +380,10 @@ func yamlWrittenMerges() []string {
 // what it was written for is met in runs of one pair, of two and of four.
 //
 // Compared are the values with their types, and the errors' texts, what
-// they are recognised by and whether they are a list of problems. Against
+// they are recognised by and whether they are a list of problems, a
+// document the walk as it was, or the library, refused or failed on for a
+// key that is a sequence or a mapping being refused for that key in words of
+// its own (yamlNotScalarKey). Against
 // the walk as it was every document is the same. Against the library it is
 // the same but where it was not before: where a mapping with a merge has a
 // key that is a sequence or a mapping, of its own or of a merged mapping,
@@ -405,7 +408,9 @@ func TestAYAMLDocumentWithAMergeIsWhatTheLibraryAndTheWalkBeforeMakeOfIt(t *test
 		if root == nil {
 			continue
 		}
-		library := yamlByTheLibraryAlone(root)
+		// A key that is a sequence or a mapping, which the library refused or
+		// failed on, has since been refused in words of its own.
+		library := yamlByTheLibraryAlone(root).keyRefusalNow(root)
 		keys := yamlKeyNodes(root, map[*yaml.Node]bool{})
 		bounds := []int{yamlLargeMapping, []int{1, 2, 4}[i%3]}
 		if i < written {
@@ -425,7 +430,9 @@ func TestAYAMLDocumentWithAMergeIsWhatTheLibraryAndTheWalkBeforeMakeOfIt(t *test
 			if hands.longest > max(large, 1) {
 				t.Fatalf("%q, large past %d keys: the library is handed %d keys together", document, large, hands.longest)
 			}
-			if before := yamlWithTheWalkBefore(root, large); !got.same(before) {
+			// A key that is a sequence or a mapping has since been refused in
+			// words of its own.
+			if before := yamlWithTheWalkBefore(root, large).keyRefusalNow(root); !got.same(before) {
 				t.Fatalf("%q, large past %d keys, is\n%.1000s\nand as the walk decoded it before\n%.1000s", document, large, got.text(), before.text())
 			}
 			counted["runs of merged pairs handed together"] += hands.together - hands.turned
@@ -443,6 +450,8 @@ func TestAYAMLDocumentWithAMergeIsWhatTheLibraryAndTheWalkBeforeMakeOfIt(t *test
 				}
 			case got.same(library) && onlyProblems(got.err):
 				counted["refused for its problems"]++
+			case got.same(library) && strings.HasPrefix(got.err.Error(), "yaml: the mapping key at line "):
+				counted["refused for a key that is a sequence or a mapping"]++
 			case got.same(library) && got.err.Error() == errYAMLMergesMap.Error():
 				counted["refused for what it merges"]++
 			case got.same(library):
@@ -461,10 +470,10 @@ func TestAYAMLDocumentWithAMergeIsWhatTheLibraryAndTheWalkBeforeMakeOfIt(t *test
 	}{
 		{"decoded", 160, 50},
 		{"decoded, with a mapping of keys that are no text", 34, 10},
-		{"refused for its problems", 42, 8},
+		{"refused for a key that is a sequence or a mapping", 60, 8},
 		{"refused for what it merges", 36, 5},
 		{"refused otherwise", 44, 16},
-		{"refused with another error than the library's, or where it fails outright", 7, 6},
+		{"refused with another error than the library's, or where it fails outright", 3, 3},
 		{"runs of merged pairs handed together", 24000, 500},
 		{"runs of merged pairs handed one at a time", 88, 7},
 	} {
@@ -601,8 +610,9 @@ func TestTheAliasesOfAMergedYAMLMappingAreRefusedWhereTheyWere(t *testing.T) {
 // 5,000 keys that are numbers, some of them one number written twice, a null
 // and a `.nan` among them, merged into a mapping of keys that are no text
 // and into one of text keys; values with a problem at both ends of a merged
-// mapping, which are listed in their order, once for the mapping and once
-// for the merge; and a list of what is merged that ends with a scalar,
+// mapping, a key that is a sequence tagged as text, which the walk listed in
+// their order, once for the mapping and once for the merge, and which is
+// refused for the first such key (yamlNotScalarKey); and a list of what is merged that ends with a scalar,
 // which is refused after the mappings before it were merged. The merged
 // mappings have the keys they are to have.
 //
@@ -640,7 +650,7 @@ func TestAMergeOfAVeryLargeYAMLMappingIsWhatTheWalkMadeOfItBefore(t *testing.T) 
 			t.Errorf("%s: the document is decoded the way %d", document.name, way)
 			continue
 		}
-		got, before := yamlWith(root, yamlLargeMapping, nil), yamlWithTheWalkBefore(root, yamlLargeMapping)
+		got, before := yamlWith(root, yamlLargeMapping, nil), yamlWithTheWalkBefore(root, yamlLargeMapping).keyRefusalNow(root)
 		if !got.same(before) {
 			t.Errorf("%s: the document is\n%.600s\nand as the walk decoded it before\n%.600s", document.name, got.text(), before.text())
 			continue
@@ -678,8 +688,8 @@ func TestAMergeOfAVeryLargeYAMLMappingIsWhatTheWalkMadeOfItBefore(t *testing.T) 
 				t.Errorf("%s: the mappings that merge %d numbers have %d and %d keys", document.name, keys, entries("any"), entries("text"))
 			}
 		case "values with a problem":
-			if got.err == nil || strings.Count(got.err.Error(), "into string") != 4 || !strings.Contains(got.err.Error(), fmt.Sprintf("line 2: cannot unmarshal !!str `` into string\n  line %d: ", keys+3)) {
-				t.Errorf("%s: the document is refused with %.600v, want the two problems listed twice", document.name, got.err)
+			if want := "yaml: the mapping key at line 2 is a sequence" + yamlNotScalarKeyWords; got.err == nil || got.err.Error() != want {
+				t.Errorf("%s: the document is refused with %.600v, want %q", document.name, got.err, want)
 			}
 		case "a scalar after a mapping":
 			if got.err == nil || got.err.Error() != errYAMLMergesMap.Error() {

@@ -145,11 +145,11 @@ func TestLocalFileRefusesWhatIsNotARegularFileUnderRoot(t *testing.T) {
 
 func TestLocalFileSizeLimit(t *testing.T) {
 	root := t.TempDir()
-	testutil.WriteIn(t, root, "big.prom", promFile+strings.Repeat("# padding\n", 100))
+	testutil.WriteIn(t, root, "big.prom", promFile+strings.Repeat("# padding\n", 200))
 	c := fileCollector("files", root, "big.prom")
-	c.Request.MaxResponseBytes = 64
+	c.Request.MaxResponseBytes = 1024
 	server := fileServer(t, c)
-	probeFile(t, server, "collector=files").must(t, http.StatusBadGateway, "response size exceeds limit 64")
+	probeFile(t, server, "collector=files").must(t, http.StatusBadGateway, "response size exceeds limit 1024")
 	if !strings.Contains(selfMetrics(t, server), `http_exporter_series_limit_exceeded_total{collector="files"} 1`) {
 		t.Fatal("the size limit was not counted as a limit error")
 	}

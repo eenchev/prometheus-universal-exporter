@@ -208,7 +208,9 @@ func TestAYAMLDocumentFarFromTheDepthBoundIsDecodedAsItWas(t *testing.T) {
 			t.Fatalf("%q is nested %d deep, and was decoded by the library in calls %d deep", document, depth, calls)
 		}
 		for _, large := range []int{yamlLargeMapping, 2} {
-			got, before := yamlWith(root, large, nil), yamlValueAsItWas(yamlReading{large: large}, root)
+			// A key that is a sequence or a mapping has since been refused in
+			// words of its own.
+			got, before := yamlWith(root, large, nil), yamlValueAsItWas(yamlReading{large: large}, root).keyRefusalNow(root)
 			if isYAMLTooDeep(got.err) || before.err != nil && before.err.Error() == yamlTooDeepAsItWas {
 				t.Fatalf("%q, large past %d keys, is refused for its depth: %s, and before %s", document, large, got.text(), before.text())
 			}

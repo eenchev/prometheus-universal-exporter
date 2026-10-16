@@ -1,0 +1,27 @@
+{{- if .Values.staticTargets.enabled }}
+{{- /* The static target document, which the Deployment mounts in a
+       directory of its own rather than in the configuration directory, where
+       a collector_files pattern such as *.yaml would read it as a collector
+       file. Rendered whether or not config.enabled is; its content is part
+       of the pods' checksum/config, so a change rolls them. */}}
+{{- $content := .Values.staticTargets.data | default "" | toString }}
+{{- $fileName := include "prometheus-universal-exporter.staticTargetsFile" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prometheus-universal-exporter.staticTargetsName" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+{{- /* Written as the configuration ConfigMap writes a file: see textFile. */}}
+{{- if eq (include "prometheus-universal-exporter.textFile" $content) "true" }}
+data:
+  {{ $fileName | quote }}: |2{{ if not (hasSuffix "\n" $content) }}-{{ end }}
+{{ $content | trimSuffix "\n" | indent 4 }}
+{{- else }}
+binaryData:
+  {{ $fileName | quote }}: {{ $content | b64enc | quote }}
+{{- end }}
+{{- end }}

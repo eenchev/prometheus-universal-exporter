@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
@@ -132,6 +133,23 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_probes_rejected_exporter_limit_total", model.CounterMetricType, "Probes of this collector answered 503, and static target scrapes that found no slot in time, because the exporter already had --probe.max-concurrent trips to targets in progress.", func(v statsValues) float64 { return float64(v.rejectedByExporter) }},
 	{"http_exporter_targets_refused_total", model.CounterMetricType, "Probes and static target scrapes whose target, or a redirect's, this collector's request.allowed_targets or denied_targets refused; a probe is answered 403.", func(v statsValues) float64 { return float64(v.refused) }},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
+	// The connections an sshfile collector keeps belong to the collector,
+	// shared by its requests and those of other collectors with the same
+	// settings, so they have no per-request value.
+	{"http_exporter_sshfile_connections", model.GaugeMetricType, "SSH connections this sshfile collector's scrapes use that are open now; a connection collectors with the same host and settings share is counted for each of them.", nil},
+	{"http_exporter_sshfile_connects_total", model.CounterMetricType, "SSH connections this sshfile collector's scrapes made: the first to a host, and each made again after one broke, was closed idle or by keepalives, or had a file change.", nil},
+	{"http_exporter_sshfile_limit_waits_total", model.CounterMetricType, "Scrapes of this sshfile collector that waited for room at its request.max_open_connections before they had a connection; 0 without the limit.", nil},
+	{"http_exporter_sshfile_limit_failures_total", model.CounterMetricType, "Scrapes of this sshfile collector that failed at its request.max_open_connections: every connection it may open was held by a read or being made when their deadline came.", nil},
+	// The pools of connections a sql collector keeps are the collector's,
+	// one to a target, so they have no per-request value either.
+	{"http_exporter_sql_connections", model.GaugeMetricType, "Database connections this sql collector's pools have open now, in use or idle, across its targets.", nil},
+	{"http_exporter_sql_idle_connections", model.GaugeMetricType, "Database connections this sql collector's pools keep idle now, across its targets.", nil},
+	{"http_exporter_sql_targets", model.GaugeMetricType, "Targets this sql collector has connections open to now, a server or Snowflake account, with the connection settings it reached it with, whatever databases and accounts it reached there; request.connections.max_targets bounds them.", nil},
+	{"http_exporter_sql_connects_total", model.CounterMetricType, "Database connections this sql collector's pools made: the first to a target, and each made again after one broke, was closed idle or at its max_lifetime, or its pool was closed.", nil},
+	{"http_exporter_sql_keepalive_failures_total", model.CounterMetricType, "Pings of an idle connection of this sql collector's pools, with request.connections.keepalive.check ping, that failed; 0 with check tcp.", nil},
+	{"http_exporter_sql_limit_waits_total", model.CounterMetricType, "Scrapes of this sql collector that waited for a connection at request.connections.max_per_target before they had one.", nil},
+	{"http_exporter_sql_limit_failures_total", model.CounterMetricType, "Scrapes of this sql collector that failed at request.connections.max_per_target, no connection having been free before their deadline, or at max_targets, every target being in use.", nil},
+	{"http_exporter_sql_rows", model.GaugeMetricType, "Rows the last statement of this sql collector that succeeded returned, whichever target it ran on; 0 before one has.", nil},
 }
 
 // requestTypeFamilies are the families only the collectors of some request
@@ -141,7 +159,19 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 var requestTypeFamilies = map[string][]string{
 	"http_exporter_scrape_grpc_status_code": {"grpc"},
 	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total": {"http", "graphite", "grpc"},
+	"http_exporter_targets_refused_total":        {"http", "graphite", "grpc", "sshfile", "sql"},
+	"http_exporter_sshfile_connections":          {"sshfile"},
+	"http_exporter_sshfile_connects_total":       {"sshfile"},
+	"http_exporter_sshfile_limit_waits_total":    {"sshfile"},
+	"http_exporter_sshfile_limit_failures_total": {"sshfile"},
+	"http_exporter_sql_connections":              {"sql"},
+	"http_exporter_sql_idle_connections":         {"sql"},
+	"http_exporter_sql_targets":                  {"sql"},
+	"http_exporter_sql_connects_total":           {"sql"},
+	"http_exporter_sql_keepalive_failures_total": {"sql"},
+	"http_exporter_sql_limit_waits_total":        {"sql"},
+	"http_exporter_sql_limit_failures_total":     {"sql"},
+	"http_exporter_sql_rows":                     {"sql"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -170,7 +200,7 @@ func newServerStats(created time.Time) *serverStats {
 // exporterMetricHelp describes the exporter-wide families, which carry no
 // collector's counters.
 var exporterMetricHelp = map[string]string{
-	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version and built request types as labels.",
+	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version, built request types and built sql drivers as labels.",
 	"http_exporter_collector_config_valid":                     "1 for every collector of the configuration in force; a rejected reload shows in http_exporter_config_last_reload_successful, not here.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
@@ -289,14 +319,61 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	cacheEntries := s.cache.Stats(time.Now())
 	requests, requestFamilies := s.verboseRequests()
 	// The families that belong to a collector rather than to a request.
-	collectorOnly := map[string]func(string) float64{
-		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
-		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
-	}
 	requestTypes := map[string]string{}
 	collectors := s.manager.Get().Collectors
 	for i := range collectors {
 		requestTypes[collectors[i].Name] = collectors[i].Request.Type
+	}
+	collectorOnly := map[string]func(string) float64{
+		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
+		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
+		"http_exporter_sshfile_connections": func(name string) float64 {
+			open, _ := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(open)
+		},
+		"http_exporter_sshfile_connects_total": func(name string) float64 {
+			_, made := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(made)
+		},
+		"http_exporter_sshfile_limit_waits_total": func(name string) float64 {
+			waited, _ := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(waited)
+		},
+		"http_exporter_sshfile_limit_failures_total": func(name string) float64 {
+			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(failed)
+		},
+		"http_exporter_sql_connections": func(name string) float64 {
+			open, _ := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(open)
+		},
+		"http_exporter_sql_idle_connections": func(name string) float64 {
+			return float64(fetch.CollectorPools(requestTypes[name], name).Idle)
+		},
+		"http_exporter_sql_targets": func(name string) float64 {
+			return float64(fetch.CollectorPools(requestTypes[name], name).Targets)
+		},
+		"http_exporter_sql_connects_total": func(name string) float64 {
+			_, made := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(made)
+		},
+		"http_exporter_sql_keepalive_failures_total": func(name string) float64 {
+			return float64(fetch.CollectorPools(requestTypes[name], name).KeepaliveFailures)
+		},
+		"http_exporter_sql_limit_waits_total": func(name string) float64 {
+			waited, _ := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(waited)
+		},
+		"http_exporter_sql_limit_failures_total": func(name string) float64 {
+			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(failed)
+		},
+		"http_exporter_sql_rows": func(name string) float64 {
+			if rows := fetch.CollectorPools(requestTypes[name], name).Rows; rows != nil {
+				return float64(*rows)
+			}
+			return 0
+		},
 	}
 	var out []model.Metric
 	for _, d := range selfMetricDescriptors {

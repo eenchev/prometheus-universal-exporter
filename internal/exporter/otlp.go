@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -1396,7 +1397,10 @@ func (s *Server) queueProbeOTLP(set model.MetricSet, c *model.Collector, target 
 	if cfg.ProbeAttributes {
 		attributes := map[string]string{probeCollectorAttribute: c.Name}
 		if target != "" {
-			attributes[probeTargetAttribute] = target
+			// The target is the probe's query's, and may be a part of the
+			// request's line, which a point waiting would keep whole: the
+			// probe's points share a copy of the target alone.
+			attributes[probeTargetAttribute] = strings.Clone(target)
 		}
 		set = withTargetLabels(set, attributes)
 	}
@@ -1429,7 +1433,7 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 		default:
 			point.Timestamp = &queued
 		}
-		s.putPendingLocked(batch, otlpMetricKey(point), pendingMetric{metric: point, seq: s.otlpSeq})
+		s.putPendingLocked(batch, otlpPendingKey(&point), pendingMetric{metric: point, seq: s.otlpSeq})
 	}
 	s.capPendingLocked(cfg.MaxPendingPoints)
 }
@@ -1499,7 +1503,7 @@ func (s *Server) drainOTLP() []otlpResourceSet {
 		batch := s.otlpPending[key]
 		set := model.MetricSet{Metrics: make([]model.Metric, 0, len(batch.metrics))}
 		seqs := make([]int64, 0, len(batch.metrics))
-		for _, metricKey := range model.SortedKeys(batch.metrics) {
+		for _, metricKey := range otlpPendingOrder(batch.metrics) {
 			set.Metrics = append(set.Metrics, batch.metrics[metricKey].metric)
 			seqs = append(seqs, batch.metrics[metricKey].seq)
 		}
@@ -1678,7 +1682,7 @@ func (s *Server) requeueOTLP(resources []otlpResourceSet) {
 	for _, resource := range resources {
 		batch := s.pendingBatchLocked(resource.Identity)
 		for i, metric := range resource.Set.Metrics {
-			key := otlpMetricKey(metric)
+			key := otlpPendingKey(&metric)
 			if _, newer := batch.metrics[key]; !newer {
 				s.putPendingLocked(batch, key, pendingMetric{metric: metric, seq: resource.seqs[i]})
 			}
@@ -1707,6 +1711,80 @@ func otlpMetricKey(metric model.Metric) string {
 // times are kept, the key of the series' resource (otlpStartTimes).
 func otlpSeriesKey(before string, metric *model.Metric) string {
 	return otlpKey(before, metric.Labels, metric.Name, string(metric.Type))
+}
+
+// A key is remembered — where a point waits for the export (otlpBatch), and
+// where a series' start time is kept (otlpStartTimes) — by itself when it is
+// at most otlpKeyLongest bytes long, as nearly every one is, and otherwise by
+// its SHA-256 digest. A series' labels are the target's, and with
+// otlp.probe_attributes its target attribute is what the probe's caller
+// wrote, up to 8 KiB: remembered as themselves, every point waiting, up to
+// otlp.max_pending_points of them, held a copy of its target, and so did
+// twice as many start times, for an hour, about 1.5 GiB of them at 8 KiB.
+// A digest is as long whatever its key is. The keys of up to
+// otlpKeyLongest bytes, a series' with a few labels and a target of a
+// hundred bytes, are not made digests because a digest costs: of a key of
+// 100 bytes about half a microsecond, which would make a point a fifth
+// slower where it waits and a quarter slower where its start time is found
+// (BenchmarkOTLPPoints).
+//
+// A key of exactly the digest's length is remembered by its digest too, so
+// a key remembered as itself is never as long as a digest is: no key is
+// remembered as what another's digest is, and a digest is told by its
+// length (otlpKeyDigested).
+const otlpKeyLongest = 256
+
+// otlpKeyOf is what key is remembered by: key itself, or its digest,
+// written in digest.
+func otlpKeyOf(key []byte, digest *[sha256.Size]byte) []byte {
+	if len(key) <= otlpKeyLongest && len(key) != sha256.Size {
+		return key
+	}
+	*digest = sha256.Sum256(key)
+	return digest[:]
+}
+
+// otlpKeyDigested says whether a key remembered is a digest.
+func otlpKeyDigested(remembered string) bool {
+	return len(remembered) == sha256.Size
+}
+
+// otlpPendingKey is what a point waits under in its resource's queue: its
+// series key (otlpMetricKey) as it is remembered (otlpKeyOf).
+func otlpPendingKey(metric *model.Metric) string {
+	var room [otlpKeyRoom]byte
+	var digest [sha256.Size]byte
+	return string(otlpKeyOf(appendOTLPKey(room[:0], "", metric.Labels, metric.Name, string(metric.Type)), &digest))
+}
+
+// otlpPendingOrder is the keys of a resource's points waiting, in the order
+// of their series keys, as the points are exported. A key remembered by its
+// digest is made again for it, for the moment the order is found, so the
+// order is the one the keys themselves had.
+func otlpPendingOrder(pending map[string]pendingMetric) []string {
+	keys := make([]string, 0, len(pending))
+	var long map[string]string
+	for key, m := range pending {
+		keys = append(keys, key)
+		if otlpKeyDigested(key) {
+			if long == nil {
+				long = map[string]string{}
+			}
+			long[key] = otlpMetricKey(m.metric)
+		}
+	}
+	if long == nil {
+		sort.Strings(keys)
+		return keys
+	}
+	series := func(key string) string {
+		if made, digested := long[key]; digested {
+			return made
+		}
+		return key
+	}
+	slices.SortFunc(keys, func(a, b string) int { return strings.Compare(series(a), series(b)) })
+	return keys
 }
 
 // What a key of the export has after each NUL of its join, and what ends
@@ -1756,11 +1834,23 @@ const (
 // with a NUL and 0x01. Only subjects whose parts are joined to the same
 // bytes, which had one key, are in the order of the lengths.
 //
-// It is made in the one allocation that holds it, where the old key took
-// one for the names in order and several as it grew: the parts are put in
-// the order they are joined in, in place, for all but a subject of more
-// pairs than any is likely to have.
+// A key up to otlpKeyRoom bytes is made in the one allocation that holds
+// it, where the old key took one for the names in order and several as it
+// grew: the parts are put in the order they are joined in, in place, for all
+// but a subject of more pairs than any is likely to have, and written where
+// the caller has room (appendOTLPKey). A longer one takes one more.
 func otlpKey(before string, pairs map[string]string, head ...string) string {
+	var room [otlpKeyRoom]byte
+	return string(appendOTLPKey(room[:0], before, pairs, head...))
+}
+
+// otlpKeyRoom is the room a key is written in where it is made (otlpKey,
+// otlpKeyOf): as much as a key is remembered by as itself, otlpKeyLongest.
+const otlpKeyRoom = otlpKeyLongest
+
+// appendOTLPKey appends the key otlpKey makes to dst, growing it once at
+// most.
+func appendOTLPKey(dst []byte, before string, pairs map[string]string, head ...string) []byte {
 	// The head, and then each pair's name and value. A subject has few
 	// pairs, so each is moved down to its place among those before it.
 	var few [2 + 2*8]string
@@ -1784,32 +1874,36 @@ func otlpKey(before string, pairs map[string]string, head ...string) string {
 			size++
 		}
 	}
-	var b strings.Builder
-	b.Grow(size + nuls)
-	b.WriteString(before)
+	// Grown by hand, where slices.Grow would take two allocations under the
+	// race detector.
+	b := dst
+	if cap(b)-len(b) < size+nuls {
+		b = make([]byte, len(dst), len(dst)+size+nuls)
+		copy(b, dst)
+	}
+	b = append(b, before...)
 	for i, part := range parts {
 		switch {
 		case i == 0:
 		case i >= len(head) && (i-len(head))%2 == 1:
-			b.WriteByte('=')
+			b = append(b, '=')
 		default:
-			b.WriteString(otlpKeyNUL)
+			b = append(b, otlpKeyNUL...)
 		}
 		// Hardly any subject has a NUL in a part, and then none is looked
 		// for again.
 		if nuls > 0 {
 			for nul := strings.IndexByte(part, 0); nul >= 0; nul = strings.IndexByte(part, 0) {
-				b.WriteString(part[:nul])
-				b.WriteString(otlpKeyNUL)
+				b = append(b, part[:nul]...)
+				b = append(b, otlpKeyNUL...)
 				part = part[nul+1:]
 			}
 		}
-		b.WriteString(part)
+		b = append(b, part...)
 	}
-	b.WriteString(otlpKeyEnd)
-	var length [binary.MaxVarintLen64]byte
+	b = append(b, otlpKeyEnd...)
 	for _, part := range parts {
-		b.Write(binary.AppendUvarint(length[:0], uint64(len(part))))
+		b = binary.AppendUvarint(b, uint64(len(part)))
 	}
-	return b.String()
+	return b
 }

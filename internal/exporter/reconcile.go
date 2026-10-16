@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
@@ -351,6 +352,13 @@ func (s *Server) reconcile() *followedConfig {
 			if report != nil {
 				report()
 			}
+			// The request types that keep connections across scrapes close
+			// those no collector in force uses any more.
+			var collectors []model.Collector
+			if followed.config != nil {
+				collectors = followed.config.Collectors
+			}
+			fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
 			return followed
 		}
 		previous, cfg, targets = followed, inForce, file

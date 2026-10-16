@@ -17,6 +17,8 @@ var unusedRefusals = map[string]string{
 	RequestTypeGraphite:  `probe parameters param_tenat are not used by collector "places": no placeholder in its request.targets, its request.path ("/p/{{param_path:x}}"), its header or query values or its label values names them`,
 	RequestTypeGRPC:      `probe parameters param_tenat are not used by collector "places": no placeholder in its request.message, its metadata values or its label values names them`,
 	RequestTypeLocalFile: `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeSSHFile:   `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeSQL:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.database, its args or its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -29,6 +31,8 @@ var placeWords = []struct{ field, word string }{
 	{"request.message", "request.message"},
 	{"request.metadata.", "metadata values"},
 	{"request.targets[", "request.targets"},
+	{"request.database", "request.database"},
+	{"request.args[", "args"},
 	{"transform.labels.", "label values"},
 }
 
@@ -36,10 +40,11 @@ var placeWords = []struct{ field, word string }{
 // uses names every place a placeholder of such a collector is filled in,
 // and no place its type does not have: a graphite collector's expressions,
 // and no body; a grpc collector's message and metadata values; a localfile
-// collector's path and nothing else of the request. The collector has a
-// placeholder in each request key its type takes of those that are filled,
-// so a type that starts filling another place fails here until the refusal
-// names it.
+// or sshfile collector's path and nothing else of the request; a sql
+// collector's database and args. The
+// collector has a placeholder in each request key its type takes of those
+// that are filled, so a type that starts filling another place fails here
+// until the refusal names it.
 func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.T) {
 	types := BuiltRequestTypes()
 	if len(types) == 0 {
@@ -75,6 +80,12 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		}
 		if slices.Contains(fields, "targets") {
 			c.Request.Targets = []string{"app.{{param_target:x}}.cpu"}
+		}
+		if slices.Contains(fields, "database") {
+			c.Request.Database = "{{param_database:x}}"
+		}
+		if slices.Contains(fields, "args") {
+			c.Request.Args = []string{"{{param_arg:x}}"}
 		}
 		if err := readLabels(&c); err != nil {
 			t.Fatal(err)

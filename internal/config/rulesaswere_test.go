@@ -191,7 +191,7 @@ func checkPlaceholdersAreFilledBeforeRulePlaces(x *model.Collector) error {
 	filled := fetch.TemplatedFields(x)
 	var errs []error
 	refuse := func(where string) {
-		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
+		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, a sql collector's database and args, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
 	}
 	collector := reflect.ValueOf(x).Elem()
 	for i := 0; i < collector.NumField(); i++ {

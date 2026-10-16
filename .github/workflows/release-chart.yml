@@ -11,14 +11,20 @@ on:
       - 'chart/**'
       - 'chart*'
 
+# Read-only unless a job says otherwise; each job grants itself what it needs
+# beyond reading, and a test holds the grants to a list.
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
 
 jobs:
-  release-chart:
+  # Nothing is published unless CI has passed on the commit the tag names
+  # (tools/ci-passed.py says what counts), so a tag pushed on a commit CI
+  # failed, or never ran on, releases nothing.
+  preflight:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Validate the release tag
         env:
@@ -31,6 +37,28 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/checkout@v7
+
+      # The tag push starts a CI run of its own, and a tag is often pushed
+      # right after its commit, so CI is waited for rather than required to
+      # have finished already.
+      - name: Wait for CI to pass on the tagged commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/ci-passed.py --repository "$GITHUB_REPOSITORY" --sha "$(git rev-parse HEAD)"
+
+  release-chart:
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      # The GitHub Release.
+      contents: write
+      # The chart and its Artifact Hub metadata on GHCR, and reading the
+      # image the chart deploys.
+      packages: write
+      # cosign's keyless signature, from the workflow's OIDC identity.
+      id-token: write
+    steps:
       - uses: actions/checkout@v7
 
       # The helm the Makefile pins (HELM_VERSION); a test keeps them equal.

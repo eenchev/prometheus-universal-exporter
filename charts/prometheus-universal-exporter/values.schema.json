@@ -195,7 +195,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean", "description": "Render the static target document and pass it with --static-targets-file."},
-        "fileName": {"type": "string", "description": "The static target file's key in the configuration ConfigMap.", "pattern": "^[-._a-zA-Z0-9]+$", "not": {"enum": [".", ".."]}},
+        "fileName": {"type": "string", "description": "The static target file's name, its key in the static target ConfigMap.", "pattern": "^[-._a-zA-Z0-9]+$", "not": {"enum": [".", ".."]}},
         "path": {
           "type": "string",
           "description": "Rendered as --web.static-targets-path: where the static targets' latest results are served. A path of plain segments that no other endpoint uses, and not selfMetrics.path.",
@@ -233,7 +233,12 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "data": {"type": "object", "additionalProperties": {"type": "string"}}
+        "data": {
+          "type": "object",
+          "description": "The files of the configuration directory, by name. A name is a ConfigMap key: letters, digits, -, _ and ., at most 253 characters, not . or ..; the directory is flat, so a name holds no /.",
+          "propertyNames": {"pattern": "^[-._a-zA-Z0-9]+$", "maxLength": 253, "not": {"enum": [".", ".."]}},
+          "additionalProperties": {"type": "string"}
+        }
       }
     },
 
@@ -449,6 +454,64 @@
       },
       "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
       "then": {"properties": {"mountPath": {"not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}}}
+    },
+
+    "sshAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mount a Secret's SSH private key, passphrase and password, and known_hosts lines from the values or the Secret, as files of one directory for an sshfile collector's private_key_file, passphrase_file, password_file and known_hosts_file. The rules below hold while it is enabled, as the templates' own check holds them.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "secretName": {"type": "string"},
+        "privateKeyKey": {"type": "string", "description": "The Secret's key mounted as private_key."},
+        "passphraseKey": {"type": "string", "description": "The Secret's key mounted as passphrase; only beside privateKeyKey."},
+        "passwordKey": {"type": "string", "description": "The Secret's key mounted as password."},
+        "knownHosts": {"type": "string", "description": "known_hosts lines, rendered into a ConfigMap of the chart and mounted as known_hosts. Not beside knownHostsSecretKey."},
+        "knownHostsSecretKey": {"type": "string", "description": "The Secret's key mounted as known_hosts. Not beside knownHosts."},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      },
+      "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+      "then": {
+        "properties": {
+          "mountPath": {"not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}},
+          "secretName": {"minLength": 1, "description": "Required while enabled."},
+          "knownHosts": {"anyOf": [{"const": ""}, {"description": "At least one known_hosts entry: a line that is not a comment, with a host, a key type and a key. The templates' sshKnownHostsEntry pattern.", "pattern": "(^|\\n)[ \\t]*[^#\\s]\\S*[ \\t]+\\S+[ \\t]+\\S"}]}
+        },
+        "allOf": [
+          {"description": "privateKeyKey or passwordKey, or both: a credential.", "anyOf": [{"properties": {"privateKeyKey": {"minLength": 1}}, "required": ["privateKeyKey"]}, {"properties": {"passwordKey": {"minLength": 1}}, "required": ["passwordKey"]}]},
+          {"description": "passphraseKey only beside privateKeyKey.", "if": {"properties": {"passphraseKey": {"minLength": 1}}, "required": ["passphraseKey"]}, "then": {"properties": {"privateKeyKey": {"minLength": 1}}, "required": ["privateKeyKey"]}},
+          {"description": "Known hosts from knownHosts or knownHostsSecretKey.", "anyOf": [{"properties": {"knownHosts": {"minLength": 1}}, "required": ["knownHosts"]}, {"properties": {"knownHostsSecretKey": {"minLength": 1}}, "required": ["knownHostsSecretKey"]}]},
+          {"description": "Not from both knownHosts and knownHostsSecretKey.", "not": {"allOf": [{"properties": {"knownHosts": {"minLength": 1}}, "required": ["knownHosts"]}, {"properties": {"knownHostsSecretKey": {"minLength": 1}}, "required": ["knownHostsSecretKey"]}]}}
+        ]
+      }
+    },
+
+    "sqlAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mount a Secret's database password, Snowflake private key, and TLS CA bundle and client certificate and key, as files of one directory for an sql collector's password_file, private_key_file and tls.ca_file, tls.cert_file and tls.key_file. The rules below hold while it is enabled, as the templates' own check holds them.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "secretName": {"type": "string"},
+        "passwordKey": {"type": "string", "description": "The Secret's key mounted as password."},
+        "privateKeyKey": {"type": "string", "description": "The Secret's key mounted as private_key, for Snowflake key-pair authentication; an unencrypted key."},
+        "caKey": {"type": "string", "description": "The Secret's key mounted as ca.crt."},
+        "certKey": {"type": "string", "description": "The Secret's key mounted as client.crt; only beside keyKey."},
+        "keyKey": {"type": "string", "description": "The Secret's key mounted as client.key; only beside certKey."},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      },
+      "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+      "then": {
+        "properties": {
+          "mountPath": {"not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}},
+          "secretName": {"minLength": 1, "description": "Required while enabled."}
+        },
+        "allOf": [
+          {"description": "At least one key of the Secret.", "anyOf": [{"properties": {"passwordKey": {"minLength": 1}}, "required": ["passwordKey"]}, {"properties": {"privateKeyKey": {"minLength": 1}}, "required": ["privateKeyKey"]}, {"properties": {"caKey": {"minLength": 1}}, "required": ["caKey"]}, {"properties": {"certKey": {"minLength": 1}}, "required": ["certKey"]}, {"properties": {"keyKey": {"minLength": 1}}, "required": ["keyKey"]}]},
+          {"description": "certKey only beside keyKey.", "if": {"properties": {"certKey": {"minLength": 1}}, "required": ["certKey"]}, "then": {"properties": {"keyKey": {"minLength": 1}}, "required": ["keyKey"]}},
+          {"description": "keyKey only beside certKey.", "if": {"properties": {"keyKey": {"minLength": 1}}, "required": ["keyKey"]}, "then": {"properties": {"certKey": {"minLength": 1}}, "required": ["certKey"]}}
+        ]
+      }
     }
   },
 

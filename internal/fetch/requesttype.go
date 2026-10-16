@@ -19,7 +19,8 @@ import (
 // Every collector declares how it reaches its data with request.type: http
 // asks a URL, localfile reads a file from the exporter's own filesystem,
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
-// method. The
+// method, sshfile reads a file from another host over SFTP, sql runs a
+// statement on a database. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -43,13 +44,15 @@ const (
 	RequestTypeLocalFile = "localfile"
 	RequestTypeGraphite  = "graphite"
 	RequestTypeGRPC      = "grpc"
+	RequestTypeSSHFile   = "sshfile"
+	RequestTypeSQL       = "sql"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -94,6 +97,16 @@ type RequestType struct {
 	// block, where CheckOverride sees only its keys. Unset, any value of an
 	// accepted key is accepted.
 	CheckTargetRequest func(c *model.Collector, t *model.StaticTarget) error
+	// CheckPath checks the value of the path probe parameter, which is
+	// refused with what it returns, before anything is sent. Unset, the
+	// value is checked when the request is made.
+	CheckPath func(what, path string) error
+	// CheckFiles reads the files a collector's request names, or a static
+	// target's, when t is set, as a request would read them, and says what
+	// a request would find wrong with them, for --dry-run. It is the check
+	// of files read at a request, which the configuration's loading does not
+	// read. Unset, nothing is read.
+	CheckFiles func(c *model.Collector, t *model.StaticTarget) []string
 	// URLPath says the type's path is a URL path, joined onto the target,
 	// which can hold no query or fragment; localfile's is a file's.
 	URLPath bool
@@ -106,6 +119,98 @@ type RequestType struct {
 	// and gives a mark of that reading (ReadFiles). Unset, checking a
 	// request reads no file but those it names.
 	ReadFiles func(c *model.Collector) (paths []string, read string)
+	// Follow is told the collectors and static targets in force whenever
+	// the per-collector state follows a configuration (FollowConfiguration),
+	// so a type that keeps connections across scrapes closes those nothing
+	// in force uses any more. Unset, the type keeps none.
+	Follow func(collectors []model.Collector, targets []model.StaticTarget)
+	// CloseConnections closes every connection the type keeps, at shutdown.
+	// Unset, it keeps none.
+	CloseConnections func()
+	// Connections reports, of a collector, the connections the type keeps
+	// open for it now and how many it has made, for the type's own
+	// self-metrics. Unset, the type keeps none.
+	Connections func(collector string) (open int, made uint64)
+	// ConnectionLimit reports, of a collector with a limit on its
+	// connections, how many of its scrapes waited for room at the limit and
+	// how many failed there. Unset, the type has no such limit.
+	ConnectionLimit func(collector string) (waited, failed uint64)
+	// ConnectionPools reports, of a collector, what the type's pools of
+	// connections hold now (PoolStats). Unset, the type keeps no pools.
+	ConnectionPools func(collector string) PoolStats
+}
+
+// PoolStats is what a collector's pools of connections hold: the
+// connections idle in them, how many targets they are open to, how
+// many keepalive checks of a connection failed, and the rows the last
+// statement returned, Rows being set only once one has (a sql collector's,
+// requesttype_sql.go).
+type PoolStats struct {
+	Idle              int
+	Targets           int
+	KeepaliveFailures uint64
+	Rows              *int
+}
+
+// CollectorPools reports what the pools of a collector of requestType hold
+// (RequestType.ConnectionPools); nothing for a type that keeps none.
+func CollectorPools(requestType, collector string) PoolStats {
+	if rt := RequestTypes[requestType]; rt != nil && rt.ConnectionPools != nil {
+		return rt.ConnectionPools(collector)
+	}
+	return PoolStats{}
+}
+
+// FileWarnings reads the files the request of c names, or of the static
+// target t when it is set, as a request would, and says what a request
+// would find wrong with them (RequestType.CheckFiles); none for a type that
+// reads no file at a request.
+func FileWarnings(c *model.Collector, t *model.StaticTarget) []string {
+	if rt := requestTypeOf(c); rt != nil && rt.CheckFiles != nil {
+		return rt.CheckFiles(c, t)
+	}
+	return nil
+}
+
+// FollowConfiguration tells every built type that keeps connections across
+// scrapes which collectors and static targets are in force now
+// (RequestType.Follow).
+func FollowConfiguration(collectors []model.Collector, targets []model.StaticTarget) {
+	for _, name := range BuiltRequestTypes() {
+		if rt := RequestTypes[name]; rt.Follow != nil {
+			rt.Follow(collectors, targets)
+		}
+	}
+}
+
+// CloseConnections closes every connection a built type keeps across
+// scrapes, for the exporter's shutdown.
+func CloseConnections() {
+	for _, name := range BuiltRequestTypes() {
+		if rt := RequestTypes[name]; rt.CloseConnections != nil {
+			rt.CloseConnections()
+		}
+	}
+}
+
+// CollectorConnections reports the connections a collector of requestType
+// has open now and how many it has made (RequestType.Connections); zero for
+// a type that keeps none.
+func CollectorConnections(requestType, collector string) (open int, made uint64) {
+	if rt := RequestTypes[requestType]; rt != nil && rt.Connections != nil {
+		return rt.Connections(collector)
+	}
+	return 0, 0
+}
+
+// CollectorConnectionLimit reports how many scrapes of a collector of
+// requestType waited for room at its limit on connections, and how many
+// failed there (RequestType.ConnectionLimit); zero for a type without one.
+func CollectorConnectionLimit(requestType, collector string) (waited, failed uint64) {
+	if rt := RequestTypes[requestType]; rt != nil && rt.ConnectionLimit != nil {
+		return rt.ConnectionLimit(collector)
+	}
+	return 0, 0
 }
 
 // ReadFiles returns the paths that checking a collector's request looked at
@@ -280,6 +385,11 @@ func CheckOverrideParams(c *model.Collector, values url.Values) error {
 				return fmt.Errorf("probe parameter path %w", err)
 			}
 		}
+		if key == "path" && rt.CheckPath != nil {
+			if err := rt.CheckPath("probe parameter path", values.Get(key)); err != nil {
+				return err
+			}
+		}
 	}
 	if len(rejected) == 0 {
 		return nil
@@ -333,6 +443,9 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 		if err := checkHeaderValue(t.Request.Headers[name]); err != nil {
 			return fmt.Errorf("target %q request.headers %s %w", t.Name, name, err)
 		}
+	}
+	if err := checkInlineCredentials(t.Request.BearerToken, t.Request.BasicAuth); err != nil {
+		return fmt.Errorf("target %q %w", t.Name, err)
 	}
 	if rt.CheckTargetRequest != nil {
 		if err := rt.CheckTargetRequest(c, t); err != nil {

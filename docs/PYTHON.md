@@ -300,7 +300,10 @@ start once and then serves scrape after scrape.
   A changed script, after a reload, gets new workers.
 - **Timeouts.** `limits.script_timeout` (100 ms by default) bounds running the
   script: its clock starts when the worker has read the response and is about
-  to run the script. It does not count starting the interpreter, nor handing
+  to run the script. It is at least 1 ms when it is set: under that, the time
+  is the pipes to the worker and the machine's load more than the script, and
+  even one that does nothing would time out by chance, so a smaller one fails
+  to load. It does not count starting the interpreter, nor handing
   the worker the response, which takes longer the larger the response is — a
   one-line script reading a 10 MiB body does not time out for the body's size.
   A script that overruns fails the scrape with a timeout error,

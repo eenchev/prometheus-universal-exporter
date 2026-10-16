@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -15,8 +16,10 @@ import (
 // validation every scrape's metrics go through (model.MetricSet.Validate),
 // whatever the target answers: two rules giving one metric name different
 // types; a rule named as a series of another rule's histogram or summary; a
-// description longer than limits.max_help_length; and a static label value
-// longer than limits.max_label_value_length that nothing cuts or maps first.
+// description longer than limits.max_help_length; a static label value
+// longer than limits.max_label_value_length that nothing cuts or maps first;
+// and more fixed labels than limits.max_labels_per_metric
+// (checkFixedLabelCount).
 // Each would otherwise load, and then fail every scrape with an error that
 // names the series rather than the setting to change.
 //
@@ -53,7 +56,7 @@ func checkMetricFamilies(x *model.Collector) error {
 		}
 	}
 	if x.Transform.Type == "python" {
-		return nil
+		return checkFixedLabelCount(x)
 	}
 	types := map[string]model.MetricType{}
 	for i, rule := range x.Metrics {
@@ -109,7 +112,91 @@ func checkMetricFamilies(x *model.Collector) error {
 			}
 		}
 	}
+	// The count of the labels comes last, so a collector refused for
+	// anything above is refused for it as it was.
+	return checkFixedLabelCount(x)
+}
+
+// checkFixedLabelCount refuses a collector whose series carry more labels
+// than limits.max_labels_per_metric before the target has said anything:
+// the labels every series gets, those of transform.labels, and those every
+// series of a rule gets, the rule's static labels, counted once each and as
+// remove_labels and rename_labels leave them (transform.applyCollectorLabels).
+// The count is of the labels that are certain, so a refused collector is
+// one whose every series would fail validation: a value with a placeholder,
+// which a probe may fill with nothing, and a static label some value_map of
+// its name may map to "", which leaves it off, are not counted. The labels
+// the exporter adds past the validation, such as a static target's, are not
+// held to the limit and not counted either. A python transform's rules make
+// no series, so only transform.labels are counted for it.
+func checkFixedLabelCount(x *model.Collector) error {
+	limit := x.Limits.MaxLabelsPerMetric
+	if limit <= 0 {
+		return nil
+	}
+	collectorWide := map[string]bool{}
+	for name, value := range x.Transform.Labels {
+		if _, templated := fetch.CollectorLabelDefaults(x, name, value); value != "" && !templated {
+			collectorWide[name] = true
+		}
+	}
+	if n := len(fixedLabelsAsExported(x, collectorWide)); n > limit {
+		return fmt.Errorf("collector %q gives every series %d labels with transform.labels, more than limits.max_labels_per_metric %d, so every series would fail validation; drop labels it does not need or raise the limit", x.Name, n, limit)
+	}
+	if x.Transform.Type == "python" {
+		return nil
+	}
+	for i := range x.Metrics {
+		rule := &x.Metrics[i]
+		names := maps.Clone(collectorWide)
+		for j, label := range rule.Labels {
+			if !label.Static() || label.Value == "" || labelHasValueMap(x, label.Name) {
+				continue
+			}
+			if _, templated := fetch.RuleLabelDefaults(x, i, j, label.Value); !templated {
+				names[label.Name] = true
+			}
+		}
+		if n := len(fixedLabelsAsExported(x, names)); n > limit {
+			return fmt.Errorf("%s gives each of its series %d labels, its static labels and transform.labels, more than limits.max_labels_per_metric %d, so every series would fail validation; drop labels it does not need or raise the limit", transform.RuleWhere(x, i), n, limit)
+		}
+	}
 	return nil
+}
+
+// fixedLabelsAsExported is the set of label names as transform.remove_labels
+// and transform.rename_labels leave it: the removed taken off, then each
+// renamed one under its new name.
+func fixedLabelsAsExported(x *model.Collector, names map[string]bool) map[string]bool {
+	out := maps.Clone(names)
+	for _, name := range x.Transform.RemoveLabels {
+		delete(out, name)
+	}
+	renamed := map[string]bool{}
+	for from, to := range x.Transform.RenameLabels {
+		if out[from] {
+			renamed[to] = true
+		}
+	}
+	for from := range x.Transform.RenameLabels {
+		delete(out, from)
+	}
+	maps.Copy(out, renamed)
+	return out
+}
+
+// labelHasValueMap says whether a label of the name has a value_map in some
+// rule of the collector, which may map a static value to "" and so leave the
+// label off.
+func labelHasValueMap(x *model.Collector, name string) bool {
+	for i := range x.Metrics {
+		for _, label := range x.Metrics[i].Labels {
+			if label.Name == name && len(label.ValueMap) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkTemplatedLabelLength refuses the static value of the label name of

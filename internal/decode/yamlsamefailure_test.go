@@ -107,7 +107,6 @@ func TestYAMLFailuresWithoutALineAreRecognisedByTheirText(t *testing.T) {
 		"a: !!int foo\n":         "yaml: cannot decode !!str `foo` as a !!int",
 		"a: !!binary '***'\n":    "yaml: !!binary value contains invalid base64 data",
 		"a: \x01\n":              "yaml: control characters are not allowed",
-		"? [a, b]\n: 1\n":        `yaml: invalid map key: []interface {}{"a", "b"}`,
 	} {
 		_, err := decodeYAML([]byte(body))
 		if err == nil || err.Error() != want || model.SameFailureText(err) != want {
@@ -235,6 +234,9 @@ func TestYAMLDecodesAndIsRefusedAsBeforeItsLinesWereLeftOut(t *testing.T) {
 	decoded, refused, moved := 0, 0, 0
 	for _, document := range documents {
 		want, wantErr := decodeYAMLBeforeLinesWereLeftOut([]byte(document))
+		// But for a key that is a sequence or a mapping, which has since been
+		// refused in words of its own.
+		wantErr = yamlKeyRefusalNow([]byte(document), wantErr)
 		got, err := decodeYAML([]byte(document))
 		if (err == nil) != (wantErr == nil) || err != nil && err.Error() != wantErr.Error() || !reflect.DeepEqual(got, want) {
 			t.Fatalf("%q decodes into %v, %v; it was %v, %v", document, got, err, want, wantErr)

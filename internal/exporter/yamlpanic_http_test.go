@@ -16,8 +16,9 @@ import (
 
 // A document the YAML library panics on fails the probe at its decode stage,
 // as any document that cannot be decoded does: a 502 that names the stage
-// and gives the library's words, one line in the log and no stack. It was
-// an internal error, answered 500, with the stack logged on every scrape.
+// and what is wrong with the document, its key that is a sequence, one line
+// in the log and no stack. It was an internal error, answered 500, with the
+// stack logged on every scrape, and then the library's words for its panic.
 func TestAYAMLDocumentTheLibraryPanicsOnFailsTheDecodeStage(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -32,7 +33,7 @@ func TestAYAMLDocumentTheLibraryPanicsOnFailsTheDecodeStage(t *testing.T) {
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
 	logs := &bytes.Buffer{}
 	server.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	const want = "YAML decode: the YAML library failed on the document: runtime error: hash of unhashable type"
+	const want = "YAML decode: yaml: the mapping key at line 3 is a sequence; only scalar keys (text, numbers, booleans, null) can be read"
 	for scrape := range 2 {
 		answer := probeOnce(t, server, probePath("document", target.URL, ""), nil)
 		if answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), want) {

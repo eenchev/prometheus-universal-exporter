@@ -20,7 +20,7 @@ metadata:
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
-    kind: Deployment
+    kind: {{ include "prometheus-universal-exporter.workloadKind" . }}
     name: {{ include "prometheus-universal-exporter.fullname" . }}
   minReplicas: {{ $minReplicas }}
   maxReplicas: {{ $maxReplicas }}

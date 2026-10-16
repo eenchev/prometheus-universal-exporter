@@ -1,0 +1,49 @@
+{{- /* A Prometheus Operator ScrapeConfig per probe job: Prometheus fetches
+       the job's targets from the allocator, each with __address__ set to the
+       exporter pod the allocator chose and __metrics_path__, the __param_
+       labels and instance already set, so no relabeling is needed. */ -}}
+{{- if include "prometheus-universal-exporter.scrapeConfigs" . }}
+{{- $root := . }}
+{{- $scrape := .Values.allocator.scrapeConfig }}
+{{- range $job := .Values.allocator.probeJobs }}
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" $root }}-{{ $job.name }}
+  {{ with $root.Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list $root $scrape.labels) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $root) | nindent 4 }}
+spec:
+  httpSDConfigs:
+    - url: {{ printf "%s/v1/sd/%s" (include "prometheus-universal-exporter.allocatorURL" $root) $job.name | quote }}
+      {{- with $scrape.refreshInterval }}
+      refreshInterval: {{ . }}
+      {{- end }}
+      {{- with $root.Values.allocator.tokenSecret.name }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ . | quote }}
+          key: {{ $root.Values.allocator.tokenSecret.key | default "token" | quote }}
+      {{- end }}
+  {{- with $scrape.interval }}
+  scrapeInterval: {{ . }}
+  {{- end }}
+  {{- with $scrape.scrapeTimeout }}
+  scrapeTimeout: {{ . }}
+  {{- end }}
+  {{- if and $root.Values.webAuth $root.Values.webAuth.enabled }}
+  {{- /* The exporter's own Basic Auth protects /probe. */}}
+  basicAuth:
+    username:
+      name: {{ $root.Values.webAuth.secretName | quote }}
+      key: {{ $root.Values.webAuth.usernameKey | quote }}
+    password:
+      name: {{ $root.Values.webAuth.secretName | quote }}
+      key: {{ $root.Values.webAuth.passwordKey | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

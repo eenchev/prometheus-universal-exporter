@@ -90,7 +90,7 @@ func schemaAt(t *testing.T, path string) map[string]any {
 // zero before another digit, here compared with the number each string is.
 func TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates(t *testing.T) {
 	templates := map[string]string{}
-	for _, name := range []string{"_helpers.tpl", "deployment.yaml", "service.yaml", "ingress.yaml", "horizontalpodautoscaler.yaml", "poddisruptionbudget.yaml"} {
+	for _, name := range []string{"_helpers.tpl", "deployment.yaml", "service.yaml", "ingress.yaml", "horizontalpodautoscaler.yaml", "poddisruptionbudget.yaml", "allocator-deployment.yaml"} {
 		templates[name] = readChartFile(t, "templates/"+name)
 	}
 	const whole = `include "prometheus-universal-exporter.wholeNumber" `
@@ -106,6 +106,7 @@ func TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates(t *testing.
 		{"autoscaling.targetMemoryUtilizationPercentage", "horizontalpodautoscaler.yaml", whole + `(list "autoscaling.targetMemoryUtilizationPercentage" . 1 2147483647)`, 1},
 		{"podDisruptionBudget.minAvailable", "poddisruptionbudget.yaml", `include "prometheus-universal-exporter.budgetCount" (list "podDisruptionBudget.minAvailable" $pdb.minAvailable)`, 0},
 		{"podDisruptionBudget.maxUnavailable", "poddisruptionbudget.yaml", `include "prometheus-universal-exporter.budgetCount" (list "podDisruptionBudget.maxUnavailable" $pdb.maxUnavailable)`, 0},
+		{"allocator.replicas", "allocator-deployment.yaml", whole + `(list "allocator.replicas" $allocator.replicas 1 2147483647)`, 1},
 		{"server.probeMaxConcurrent", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.probeMaxConcurrent" .Values.server.probeMaxConcurrent)`, 0},
 		{"server.pythonMaxWorkers", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)`, 0},
 	} {

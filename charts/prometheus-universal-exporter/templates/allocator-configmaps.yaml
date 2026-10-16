@@ -1,0 +1,46 @@
+{{- /* The allocator's two target files, each a ConfigMap of its own mounted
+       into the allocator only, outside the configuration directory, so no
+       collector_files pattern there matches them. The configuration itself
+       is the exporter's ConfigMap (configmap.yaml), which in allocator mode
+       the allocator mounts instead of the exporter pods. */ -}}
+{{- if and .Values.allocator .Values.allocator.enabled }}
+{{- $content := .Values.allocator.staticTargets.data | default "" | toString }}
+{{- if trim $content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}-static-targets
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+{{- /* Written as the configuration ConfigMap writes a file: see textFile. */}}
+{{- if eq (include "prometheus-universal-exporter.textFile" $content) "true" }}
+data:
+  static-targets.yaml: |2{{ if not (hasSuffix "\n" $content) }}-{{ end }}
+{{ $content | trimSuffix "\n" | indent 4 }}
+{{- else }}
+binaryData:
+  static-targets.yaml: {{ $content | b64enc | quote }}
+{{- end }}
+{{- end }}
+{{- with .Values.allocator.probeJobs }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" $ }}-probe-targets
+  {{ with $.Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list $) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $) | nindent 4 }}
+{{- /* The probe jobs as they are given, under probe_jobs. toYaml writes
+       text a block scalar holds unchanged. */}}
+data:
+  probe-targets.yaml: |
+{{ dict "probe_jobs" . | toYaml | indent 4 }}
+{{- end }}
+{{- end }}

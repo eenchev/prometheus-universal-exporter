@@ -1,8 +1,10 @@
 {{- /* The monitor that scrapes the static targets endpoint: the latest result of
        every static target, which the exporter scrapes on the document's own
-       intervals. A ServiceMonitor for type service, a PodMonitor for type pod. */ -}}
+       intervals. A ServiceMonitor for type service, a PodMonitor for type pod.
+       With the allocator it reads each pod's share: both kinds scrape every
+       pod behind their selector. */ -}}
 {{- $monitor := .Values.staticTargets.monitor }}
-{{- if and .Values.staticTargets.enabled $monitor.enabled }}
+{{- if include "prometheus-universal-exporter.staticTargetsMonitor" . }}
 {{- if not (has $monitor.type (list "service" "pod")) }}
 {{- fail (printf "staticTargets.monitor.type %q must be service or pod" (toString $monitor.type)) }}
 {{- end }}

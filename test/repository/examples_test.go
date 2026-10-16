@@ -24,7 +24,7 @@ func TestChartSuppliesCollectorFilesAsConfigMapKeys(t *testing.T) {
 		t.Fatal("the ConfigMap template must render every key of config.data")
 	}
 	deployment := readChartFile(t, "templates/deployment.yaml")
-	const configVolume = "      volumes:\n        - name: config\n"
+	const configVolume = "\n        - name: config\n"
 	_, volume, found := strings.Cut(deployment, configVolume)
 	if !found {
 		t.Fatal("the deployment has no configuration volume")

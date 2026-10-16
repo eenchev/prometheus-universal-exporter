@@ -557,7 +557,9 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
 | `goMemLimit.enabled` / `goMemLimit.ratio` | `--runtime.memory-limit-ratio` | on / `0.8` |
-| `config` | `--config.file` | the chart's ConfigMap |
+| `config` | `--config.file`, without the allocator | the chart's ConfigMap |
+| `allocator.enabled` | `--allocator.url`, `--allocator.cache-dir`, `--allocator.member`, `--allocator.advertise`; see [Target allocator](#target-allocator) | off |
+| `allocator.tokenSecret` | `--allocator.token-file`, with `allocator.enabled` | unset |
 
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. Its host may be empty, as in `:8080`, a wildcard such as `0.0.0.0:8080` or `[::]:8080`, or a pod address; a loopback host — `127.x.x.x`, `localhost` or `[::1]` — fails rendering, since neither the kubelet's probes nor the Service reach it. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
 
@@ -967,7 +969,8 @@ is contacted three times per interval, each replica serves results of its own
 through the one Service, and a target with `export_via_otlp` is exported over
 OTLP three times, as duplicate series.
 To spread many static targets, split them over releases, each with a document
-of its own.
+of its own, or let the [target allocator](#target-allocator) split them over
+the replicas.
 
 ```yaml
 staticTargets:
@@ -1008,6 +1011,105 @@ the self-metrics monitor does.
 A target with `export_via_otlp` needs `otlp.enabled: true` in the exporter
 configuration. When the chart manages the configuration, rendering fails if a
 target sets it while OTLP export is off, rather than the pod failing to start.
+
+## Target allocator
+
+With several exporter replicas, the target allocator spreads the work over
+them: it hands each pod its share of the static targets, and publishes the
+probe targets to Prometheus already pointed at one pod, so each target is
+scraped by one replica and a pod's pools and cache serve the same targets
+every time. It is `pue-allocator`, a binary in the exporter's image.
+
+```yaml
+replicaCount: 4
+allocator:
+  enabled: true
+  staticTargets:
+    data: |
+      interval: 1m
+      targets:
+        - name: legacy_eu
+          collector: legacy_text
+          target: http://legacy.eu.example:8080
+  probeJobs:
+    - name: websites
+      collector: html_status
+      params:
+        timeout: 10s
+      targets:
+        - https://shop.example
+        - https://docs.example
+```
+
+`allocator.enabled` renders:
+
+* the allocator, a Deployment `<fullname>-allocator` of `allocator.replicas`
+  pods (2), with a headless Service of the same name on port 9116, a
+  PodDisruptionBudget (`allocator.pdb.enabled`) and a NetworkPolicy
+  (`allocator.networkPolicy.enabled`). The allocator mounts the configuration
+  — `config.data`, or your ConfigMap with `config.enabled: false` — and two
+  ConfigMaps of its own, `<fullname>-allocator-static-targets` from
+  `allocator.staticTargets.data` and `<fullname>-allocator-probe-targets` from
+  `allocator.probeJobs`. A change to any of them rolls the allocator, not the
+  exporter;
+* the exporter pods in allocator mode: no configuration or static target
+  file, `--allocator.url` pointing at the allocator's Service, the pod's name
+  as its member name and the pod's IP and port as the address Prometheus
+  probes it at, and a cache directory, an `emptyDir`, where the pod keeps the
+  last configuration and share it was given, so a restart while the
+  allocator is away resumes from it. The credential Secrets (`targetAuth`,
+  `webAuth`, `sshAuth`, `sqlAuth`) and `extraVolumes` stay mounted as before:
+  the configuration names their files by path. The pods are not ready, and
+  answer `/probe` with `503`, until they have a configuration;
+* a Prometheus Operator `ScrapeConfig` per probe job (`allocator.scrapeConfig`),
+  which reads the job's targets from the allocator's `/v1/sd/<job>` every
+  `refreshInterval` (30s) and probes each target at the pod the allocator
+  chose. It needs the ScrapeConfig CRD, and your Prometheus's
+  `scrapeConfigSelector` must select it, by `allocator.scrapeConfig.labels`
+  for example. No relabeling is needed: the allocator's answer sets the
+  address, the path, the parameters and `instance`;
+* the static targets monitor (`staticTargets.monitor`), when the allocator has
+  static targets, reading every pod's share.
+
+| Value | Default | Purpose |
+| --- | --- | --- |
+| `allocator.enabled` | `false` | Deploy the allocator and run the exporter in allocator mode. |
+| `allocator.replicas` | `2` | Allocator pods, from 1. They keep no state and need no leader. |
+| `allocator.image` | the exporter's | `repository`, `tag`, `pullPolicy`; each empty field takes `image`'s. |
+| `allocator.resources` | 50m/64Mi, 500m/256Mi | The allocator's requests and limits. |
+| `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. |
+| `allocator.logLevel` | `info` | `debug`, `info`, `warn` or `error`. |
+| `allocator.tokenSecret.name` / `key` | `""` / `token` | A Secret holding a shared bearer token: the allocator requires it, the exporter pods send it and the ScrapeConfigs present it. |
+| `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
+| `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, and optionally `params`, `labels` and `shard_key: address`. |
+| `allocator.cache.persistent` | `false` | Run the exporter as a StatefulSet with a claim per pod for the cache instead of an `emptyDir`; needs `enabled`. |
+| `allocator.cache.size` / `storageClassName` | `16Mi` / `""` | The claim's size and StorageClass, empty for the cluster's default. |
+| `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
+| `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
+| `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
+| `allocator.scrapeConfig.enabled` | `true` | Render a ScrapeConfig per probe job. |
+| `allocator.scrapeConfig.refreshInterval` / `interval` / `scrapeTimeout` | `30s` / `""` / `""` | How often Prometheus reads the targets, and the probes' interval and timeout; empty leaves Prometheus's defaults. A `scrapeTimeout` longer than `interval` fails rendering. |
+| `allocator.scrapeConfig.labels` | `{}` | Added to each ScrapeConfig. |
+
+With `allocator.cache.persistent: true` the exporter is a StatefulSet named as
+the Deployment was, whose pods start and stop in parallel, with a headless
+Service `<fullname>-headless` beside the exporter's Service; a replaced pod then
+also starts from its last configuration. The claims outlive the release, as a
+StatefulSet's do; delete them by hand after uninstalling. `strategy` applies to
+the Deployment only. Autoscaling scales the StatefulSet.
+
+The chart refuses, while rendering: `allocator.enabled` beside
+`staticTargets.enabled` (move the document to `allocator.staticTargets.data`);
+`allocator.enabled` beside an enabled `monitors` entry, since probe targets
+then come from `allocator.probeJobs` (move its targets to a probe job);
+`staticTargets.monitor.targets` beside the allocator, since each pod holds only
+its share; `allocator.cache.persistent` without `allocator.enabled`; a probe
+job whose collector the configuration does not define; and an `env` entry
+named `POD_NAME` or `POD_IP`, which the chart sets.
+
+`--allocator.advertise` is `$(POD_IP):<port>`, which suits a cluster whose
+pods have IPv4 addresses. With `networkPolicy.egress` rules, the exporter's
+NetworkPolicy also lets its pods reach the allocator.
 
 ## Using the chart as a dependency
 
@@ -1057,6 +1159,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `cache`, `networkPolicy`, `pdb`, `scrapeConfig`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |

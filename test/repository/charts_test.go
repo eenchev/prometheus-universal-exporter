@@ -394,14 +394,15 @@ func TestTheChartWarnsAboutReplicatedStaticTargets(t *testing.T) {
 	}
 }
 
-// The HorizontalPodAutoscaler is optional, scales the Deployment, and then
-// owns its replica count.
+// The HorizontalPodAutoscaler is optional, scales the exporter's workload,
+// the Deployment or, with a persistent allocator cache, the StatefulSet, and
+// then owns its replica count.
 func TestTheHorizontalPodAutoscaler(t *testing.T) {
 	hpa := readChartFile(t, "templates/horizontalpodautoscaler.yaml")
 	for _, want := range []string{
 		"{{- if .Values.autoscaling.enabled }}",
 		"apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler",
-		"kind: Deployment\n    name: {{ include \"prometheus-universal-exporter.fullname\" . }}",
+		"kind: {{ include \"prometheus-universal-exporter.workloadKind\" . }}\n    name: {{ include \"prometheus-universal-exporter.fullname\" . }}",
 		"is below autoscaling.minReplicas",
 		"needs something to scale on",
 	} {

@@ -218,7 +218,8 @@ extraVolumeMounts: []
 # then reads through whichever pod the Service picks, and a target with
 # export_via_otlp is exported over OTLP once per replica, as duplicate series. Probes, which Prometheus sends, scale with
 # replicas; static targets do not. To spread static targets, split them over
-# several releases, each with a document of its own.
+# several releases, each with a document of its own, or use the allocator
+# below.
 staticTargets:
   enabled: false
   # File name of the static target document: its key in a ConfigMap of its
@@ -652,3 +653,116 @@ sqlAuth:
   certKey: ""
   keyKey: ""
   mountPath: /var/run/prometheus-universal-exporter/sql
+
+# The target allocator: a Deployment of pue-allocator, from the exporter's
+# image, that serves the exporter configuration (config.data above, or the
+# ConfigMap supplied with config.enabled: false) to every exporter pod, hands
+# each pod its share of the static targets below, and publishes the probe
+# jobs below to Prometheus through HTTP service discovery, each probe already
+# pointed at one pod. Enabled, the exporter pods run in allocator mode: they
+# mount no configuration or static target file, only their credential
+# Secrets, and keep the last configuration they were given in a cache
+# directory, so a pod restarting while the allocator is away starts from it.
+# See "Target allocator" in the chart README.
+#
+# Not with staticTargets.enabled (the allocator owns the static targets) nor
+# with enabled monitors entries (probe targets come from probeJobs, scraped
+# through the ScrapeConfig below); both fail rendering.
+allocator:
+  enabled: false
+  # Allocator replicas. They keep no state and need no leader: every exporter
+  # pod heartbeats to each of them, so two give availability.
+  replicas: 2
+  # Empty fields take the exporter's image values above: the allocator binary
+  # is in the same image.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # How long a changed member list has to hold before targets move
+  # (--settle), so a pod restarting quickly keeps its share. A Go duration of
+  # zero or more; empty leaves the flag out and the allocator's default, 15s,
+  # in force.
+  settle: 15s
+  # Log level of the allocator: debug, info, warn or error.
+  logLevel: info
+  # An optional shared bearer token, from a Secret in the release's namespace:
+  # the allocator then refuses a request without it, the exporter pods send it,
+  # and the ScrapeConfig below presents it to fetch the probe targets. A forged
+  # heartbeat could otherwise pull targets to a pod of its own. Empty name: no
+  # token.
+  tokenSecret:
+    name: ""
+    key: token
+  # The static target document the allocator splits over the exporter pods,
+  # in the format of staticTargets.data; a target may add shard_key. Empty:
+  # no static targets. Each pod serves its share at staticTargets.path, which
+  # the static targets monitor (staticTargets.monitor, here without
+  # staticTargets.enabled) scrapes on every pod.
+  staticTargets:
+    data: ""
+  # The probe jobs, rendered as the allocator's probe targets file
+  # (probe_jobs). Each entry: name, a DNS-1123 label, which also names its
+  # ScrapeConfig <fullname>-<name>; collector, one the configuration defines;
+  # targets; and optionally params, labels and shard_key: address, as the
+  # allocator's file takes them.
+  #
+  #   probeJobs:
+  #     - name: websites
+  #       collector: html_status
+  #       params:
+  #         timeout: 10s
+  #       labels:
+  #         team: web
+  #       targets:
+  #         - https://shop.example
+  #         - https://docs.example
+  probeJobs: []
+  # Where each exporter pod keeps the last configuration and share it was
+  # given. An emptyDir by default, which survives a container restart but
+  # not the pod. persistent: true runs the exporter as a StatefulSet with a
+  # PersistentVolumeClaim of size per pod instead, so a replaced pod also
+  # starts from its last configuration; the claims outlive the release.
+  # persistent needs enabled.
+  cache:
+    persistent: false
+    size: 16Mi
+    # Empty uses the cluster's default StorageClass.
+    storageClassName: ""
+  # A NetworkPolicy for the allocator: ingress on its port only from this
+  # release's exporter pods and from the peers in prometheus, the Prometheus
+  # pods that fetch the probe targets. The default peer is a pod labelled
+  # app.kubernetes.io/name: prometheus, as the Prometheus Operator labels
+  # them, in any namespace; replace it with your Prometheus's own labels and
+  # namespace, or add the Prometheus Agent's (app.kubernetes.io/name:
+  # prometheus-agent).
+  networkPolicy:
+    enabled: true
+    prometheus:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: prometheus
+  # A PodDisruptionBudget of maxUnavailable: 1 for the allocator.
+  pdb:
+    enabled: true
+  # A Prometheus Operator ScrapeConfig per probe job, which fetches the job's
+  # targets from the allocator (http_sd_configs) every refreshInterval and
+  # probes each on the exporter pod the allocator chose. It needs the
+  # Prometheus Operator's ScrapeConfig CRD (monitoring.coreos.com/v1alpha1).
+  # interval and scrapeTimeout are Prometheus durations; empty leaves them
+  # out, so Prometheus's defaults apply. labels are added to each
+  # ScrapeConfig, for a Prometheus scrapeConfigSelector.
+  scrapeConfig:
+    enabled: true
+    refreshInterval: 30s
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}

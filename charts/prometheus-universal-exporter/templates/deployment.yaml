@@ -5,8 +5,14 @@
 {{- include "prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe) }}
 {{- include "prometheus-universal-exporter.validateSSHAuth" . }}
 {{- include "prometheus-universal-exporter.validateSQLAuth" . }}
+{{- include "prometheus-universal-exporter.validateAllocator" . }}
+{{- /* With the allocator and a persistent cache the exporter is a
+       StatefulSet, so each pod keeps a claim of its own across
+       replacements; otherwise a Deployment. */}}
+{{- $kind := include "prometheus-universal-exporter.workloadKind" . }}
+{{- $allocator := and .Values.allocator .Values.allocator.enabled }}
 apiVersion: apps/v1
-kind: Deployment
+kind: {{ $kind }}
 metadata:
   name: {{ include "prometheus-universal-exporter.fullname" . }}
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
@@ -20,6 +26,13 @@ spec:
          count here would be put back on every upgrade. */}}
   replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "replicaCount" .Values.replicaCount 0 2147483647) }}
   {{- end }}
+  {{- if eq $kind "StatefulSet" }}
+  {{- /* A StatefulSet has no strategy of a Deployment's: it replaces its
+         pods one at a time. Its pods start and stop in parallel, as a
+         Deployment's do, since none waits for another. */}}
+  serviceName: {{ include "prometheus-universal-exporter.headlessName" . }}
+  podManagementPolicy: Parallel
+  {{- else }}
   {{- /* rollingUpdate belongs to the RollingUpdate strategy alone: Kubernetes
          refuses a Deployment that carries it with Recreate, and the default
          values carry it, so it is left out for any other type. */}}
@@ -31,6 +44,7 @@ spec:
     {{- include "prometheus-universal-exporter.rollingUpdateCheck" $strategy.rollingUpdate }}
     rollingUpdate: {{- toYaml $strategy.rollingUpdate | nindent 6 }}
     {{- end }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
@@ -55,8 +69,14 @@ spec:
                Without those their templates render nothing but white space,
                which is trimmed, so the checksum is the configuration's
                alone. */}}
+        {{- /* In allocator mode the configuration reaches the pods from
+               the allocator, without a restart, so it is left out. */}}
         {{- $podAnnotations := deepCopy (.Values.podAnnotations | default dict) -}}
+        {{- if $allocator -}}
+        {{- $_ := set $podAnnotations "checksum/config" (include (print $.Template.BasePath "/sshknownhosts.yaml") . | trim | sha256sum) -}}
+        {{- else -}}
         {{- $_ := set $podAnnotations "checksum/config" (print (include (print $.Template.BasePath "/configmap.yaml") .) (include (print $.Template.BasePath "/statictargetsconfigmap.yaml") . | trim) (include (print $.Template.BasePath "/sshknownhosts.yaml") . | trim) | sha256sum) -}}
+        {{- end -}}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
@@ -102,11 +122,27 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           args:
+            {{- if $allocator }}
+            {{- /* Allocator mode: the configuration and this pod's share of
+                   the static targets come from the allocator, and no
+                   configuration file is named. The pod is a member by its
+                   name and is probed at its own address. */}}
+            - {{ printf "--allocator.url=%s" (include "prometheus-universal-exporter.allocatorURL" .) | quote }}
+            - {{ printf "--allocator.cache-dir=%s" (include "prometheus-universal-exporter.allocatorCacheDir" .) | quote }}
+            - "--allocator.member=$(POD_NAME)"
+            - {{ printf "--allocator.advertise=$(POD_IP):%d" (include "prometheus-universal-exporter.containerPort" . | int) | quote }}
+            {{- if .Values.allocator.tokenSecret.name }}
+            - {{ printf "--allocator.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
+            {{- end }}
+            {{- else }}
             - --config.file=/etc/prometheus-universal-exporter/config.yaml
+            {{- end }}
             - {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}
             - {{ printf "--web.self-metrics-path=%s" .Values.selfMetrics.path | quote }}
             - {{ printf "--python.path=%s" (include "prometheus-universal-exporter.pythonPath" .) | quote }}
-            {{- if .Values.server.watchConfig }}
+            {{- /* In allocator mode a new bundle reloads the configuration
+                   itself. */}}
+            {{- if and .Values.server.watchConfig (not $allocator) }}
             - --config.watch
             - {{ printf "--config.watch-interval=%s" (include "prometheus-universal-exporter.watchConfigInterval" .) | quote }}
             {{- end }}
@@ -155,11 +191,21 @@ spec:
           {{- /* GOGC from goGC.percent comes first, and is the only GOGC:
                  the helper refuses an env entry of that name beside it. */}}
           {{- $goGC := include "prometheus-universal-exporter.goGC" . }}
-          {{- if or $goGC .Values.env }}
+          {{- if or $goGC .Values.env $allocator }}
           env:
             {{- with $goGC }}
             - name: GOGC
               value: {{ . | quote }}
+            {{- end }}
+            {{- if $allocator }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
@@ -184,9 +230,19 @@ spec:
             {{- end }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if $allocator }}
+            - name: allocator-cache
+              mountPath: {{ include "prometheus-universal-exporter.allocatorCacheDir" . }}
+            {{- if .Values.allocator.tokenSecret.name }}
+            - name: allocator-token
+              mountPath: {{ include "prometheus-universal-exporter.allocatorTokenDir" . }}
+              readOnly: true
+            {{- end }}
+            {{- else }}
             - name: config
               mountPath: /etc/prometheus-universal-exporter
               readOnly: true
+            {{- end }}
             {{- if .Values.staticTargets.enabled }}
             - name: static-targets
               mountPath: {{ include "prometheus-universal-exporter.staticTargetsDir" . }}
@@ -217,9 +273,25 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
+        {{- if $allocator }}
+        {{- if ne $kind "StatefulSet" }}
+        - name: allocator-cache
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.allocator.tokenSecret.name }}
+        - name: allocator-token
+          secret:
+            secretName: {{ . | quote }}
+            defaultMode: 256
+            items:
+              - key: {{ $.Values.allocator.tokenSecret.key | default "token" | quote }}
+                path: token
+        {{- end }}
+        {{- else }}
         - name: config
           configMap:
             name: {{ include "prometheus-universal-exporter.fullname" . }}
+        {{- end }}
         {{- if .Values.staticTargets.enabled }}
         - name: static-targets
           configMap:
@@ -305,3 +377,18 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+  {{- if eq $kind "StatefulSet" }}
+  {{- with .Values.allocator.cache }}
+  volumeClaimTemplates:
+    - metadata:
+        name: allocator-cache
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .size | default "16Mi" | quote }}
+  {{- end }}
+  {{- end }}

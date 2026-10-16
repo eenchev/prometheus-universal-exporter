@@ -88,7 +88,8 @@ Not every listed template must be rendered by default, but the chart structure M
 
 ### 33.1 Deployment
 
-The chart MUST deploy the exporter as a Kubernetes `Deployment`.
+The chart MUST deploy the exporter as a Kubernetes `Deployment`, or, with
+the target allocator's persistent cache, as a `StatefulSet` (§ 33.10c).
 
 The chart MUST expose the exporter's process settings as values rather than
 hardcoding them in the Pod template. At minimum `server.listenAddress` MUST set
@@ -531,7 +532,9 @@ values schema:
 | `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file=/etc/prometheus-universal-exporter-static-targets/<fileName>`, rendered only when enabled (§ 33.2) |
 | `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
 | `goMemLimit.enabled`, `goMemLimit.ratio` | `--runtime.memory-limit-ratio`, rendered only when enabled (§ 33.1) |
-| `config` | `--config.file`, always the chart's mount path of `config.yaml` (§ 33.2) |
+| `config` | `--config.file`, the chart's mount path of `config.yaml` (§ 33.2), rendered unless `allocator.enabled` |
+| `allocator.enabled` | `--allocator.url`, `--allocator.cache-dir`, `--allocator.member`, `--allocator.advertise`, rendered only when enabled (§ 33.10c) |
+| `allocator.tokenSecret.name`, `allocator.tokenSecret.key` | `--allocator.token-file`, rendered only with `allocator.enabled` and a name (§ 33.10c) |
 
 An invalid value MUST fail rendering and be refused by the values schema.
 
@@ -645,7 +648,9 @@ other than the values file:
   file rather than about the mount that hid it. The reserved set MUST follow the
   values, so a path is reserved only while the chart actually mounts it: the
   configuration directory always, the static target directory while
-  `staticTargets.enabled` is on, and `targetAuth.mountPath`,
+  `staticTargets.enabled` is on, the allocator cache directory while
+  `allocator.enabled` is on and the allocator token directory while a token
+  is set (§ 33.10c), and `targetAuth.mountPath`,
   `webAuth.mountPath`, `sshAuth.mountPath` and `sqlAuth.mountPath` while
   each is enabled.
 
@@ -726,7 +731,9 @@ The schema MUST:
   the render-time check accepts (§ 33.1), the keys of `config.data` and
   `staticTargets.fileName` as ConfigMap keys (§ 33.2), a mount path inside the
   configuration directory (§ 33.10a), the rules of an enabled `sshAuth`
-  and of an enabled `sqlAuth` (§ 42.6), and the `--` prefix on an `extraArgs` entry; and
+  and of an enabled `sqlAuth` (§ 42.6), the target allocator's refused
+  combinations, probe job names and `settle` (§ 33.10c), and the `--` prefix
+  on an `extraArgs` entry; and
 - stay open where the chart passes a raw Kubernetes shape straight through —
   `resources`, `affinity`, the security contexts, `tolerations`, `env`,
   `envFrom`, `extraVolumes`, relabelings, network policy rules — beyond the
@@ -737,6 +744,92 @@ The schema MUST:
 A value the schema rejects MUST fail rendering with the schema's own message.
 The schema MUST NOT be used as a reason to change the values API: a value that
 is optional today stays optional.
+
+### 33.10c Target allocator
+
+`allocator.enabled`, off by default, MUST deploy the target allocator beside
+the exporter and switch the exporter pods to allocator mode. The allocator
+MUST run as a `Deployment` of `allocator.replicas` pods, 2 by default, a whole
+number from 1 to 2147483647, from the exporter's image unless `allocator.image`
+names another, running `/bin/pue-allocator`, the binary beside the exporter's
+in the image, with `--web.listen-address=:9116`, `--config.file` naming the
+configuration's `config.yaml`, `--static-targets-file` while
+`allocator.staticTargets.data` is not empty, its probe targets file while
+`allocator.probeJobs` is not empty, its token file with a token, `--log.level`
+from `allocator.logLevel` and `--settle` from `allocator.settle` unless it is
+empty. Its pods and objects MUST carry
+`app.kubernetes.io/name: <name>-allocator`, so no selector of the exporter's —
+its Service, its monitors, its disruption budget and NetworkPolicy — selects
+them. The chart MUST render a headless Service `<fullname>-allocator` with
+the port `http`, 9116, over the allocator's pods, so the exporter pods reach
+every allocator at its name; a `PodDisruptionBudget` of `maxUnavailable: 1`
+while `allocator.pdb.enabled`, the default; and a NetworkPolicy while
+`allocator.networkPolicy.enabled`, the default, admitting ingress to the
+allocator's `http` port only from the release's exporter pods and from the
+peers of `allocator.networkPolicy.prometheus`, which defaults to pods labelled
+`app.kubernetes.io/name: prometheus` in any namespace, as the Prometheus
+Operator labels Prometheus.
+
+The configuration the allocator serves MUST be `config.data`, or the
+ConfigMap supplied with `config.enabled: false`, mounted into the allocator at
+the configuration directory; `allocator.staticTargets.data` and
+`allocator.probeJobs`, the latter rendered under `probe_jobs` as given, MUST be
+ConfigMaps of their own, mounted into the allocator only, outside the
+configuration directory. The allocator's pods MUST roll when any of the three
+changes.
+
+In allocator mode the exporter pods MUST NOT be given `--config.file`,
+`--static-targets-file` or `--config.watch`, and MUST NOT mount the
+configuration or a static target ConfigMap; they MUST be given
+`--allocator.url` naming the allocator's Service in the release's namespace on
+port 9116, `--allocator.cache-dir=/var/cache/prometheus-universal-exporter`,
+`--allocator.member` set to the pod's name and `--allocator.advertise` to the
+pod's IP and the container port, both from the downward API through the
+environment variables `POD_NAME` and `POD_IP`, and, with
+`allocator.tokenSecret.name`, `--allocator.token-file` naming the Secret's key
+mounted read-only with mode 0400. An `env` entry of either name MUST fail
+rendering. The credential Secrets (`targetAuth`, `webAuth`, `sshAuth`,
+`sqlAuth`) and `extraVolumes` MUST stay mounted as without the allocator. The
+cache directory MUST be an `emptyDir`, or, with `allocator.cache.persistent`,
+a claim of `allocator.cache.size`, 16Mi by default, of
+`allocator.cache.storageClassName` when set, from the `volumeClaimTemplates` of
+a `StatefulSet` that then runs the exporter instead of the `Deployment`: named
+as it, with `podManagementPolicy: Parallel`, no `strategy`, and `serviceName`
+a headless Service `<fullname>-headless` over the exporter's pods that carries
+no `app.kubernetes.io/name`, so the monitors do not scrape every pod twice
+through it. The exporter's Service MUST stay, and the HorizontalPodAutoscaler
+MUST scale whichever of the two runs. The exporter pods' checksum annotation
+MUST leave the configuration out in allocator mode, since a change reaches
+them from the allocator without a restart. With `networkPolicy.egress` rules,
+the exporter's NetworkPolicy MUST also admit egress to the allocator's pods on
+port 9116.
+
+Each `allocator.probeJobs` entry, while `allocator.scrapeConfig.enabled`, the
+default, MUST render a Prometheus Operator `ScrapeConfig`
+(`monitoring.coreos.com/v1alpha1`) named `<fullname>-<name>` whose one
+`httpSDConfigs` entry reads `http://<fullname>-allocator.<namespace>.svc:9116/v1/sd/<name>`
+every `allocator.scrapeConfig.refreshInterval`, 30s by default, presenting the
+token as `Bearer` credentials when one is set, with `scrapeInterval` and
+`scrapeTimeout` from `allocator.scrapeConfig` when set and its `labels`, and
+the `webAuth` Secret's Basic Auth while `webAuth.enabled`. It MUST NOT set
+relabelings, a metrics path or parameters: the allocator's answer sets
+`__address__`, `__metrics_path__`, the `__param_` labels and `instance`. A
+probe job's `name` MUST be a DNS-1123 label, unique among the entries, and
+its `collector` MUST be given and, when the chart holds the configuration,
+one it defines, as a monitor's must (§ 33.5).
+
+With static targets at the allocator, the static targets monitor
+(`staticTargets.monitor`) MUST be rendered without `staticTargets.enabled` and
+read every exporter pod's share; `staticTargets.monitor.targets` MUST then fail
+rendering, since a pod holds only its share.
+
+These MUST fail rendering with a sentence saying what to change, and be
+refused by the values schema where it can express them:
+`allocator.enabled` beside `staticTargets.enabled`, since the allocator owns
+the static targets; `allocator.enabled` beside an enabled `monitors` entry,
+since probe targets then come from `allocator.probeJobs` through the
+ScrapeConfigs; `allocator.cache.persistent` without `allocator.enabled`; and
+an `extraArgs` entry naming an `--allocator.*` flag the chart renders.
 
 ### 33.11 Helm validation
 
@@ -876,6 +969,9 @@ The Helm chart README MUST document:
 - A reference listing every top-level value, its type and its default
 - The features the chart deploys, described only where the exporter
   implements them
+- The target allocator: what `allocator.enabled` renders, the exporter in
+  allocator mode, the ScrapeConfigs of the probe jobs, the persistent cache,
+  and the combinations the chart refuses (§ 33.10c)
 
 ---
 

@@ -4466,8 +4466,9 @@ which is why the Helm chart rejects it in `extraArgs`.
 
 ## Configuration from the target allocator
 
-With `--allocator.url`, the exporter takes its configuration from the target
-allocator (`pue-allocator`) rather than from files of its own: allocator mode.
+With `--allocator.url`, the exporter takes its configuration from the
+[target allocator](ALLOCATOR.md) (`pue-allocator`) rather than from files of
+its own: allocator mode.
 The allocator holds the configuration, its collector files and the static
 targets, splits the static targets among the exporters that heartbeat to it,
 and serves each its bundle: the configuration with its collector files, and
@@ -4478,7 +4479,7 @@ its share of the static targets. The exporter writes the bundle into
 
 ```sh
 prometheus-universal-exporter \
-  --allocator.url=http://pue-allocator:8080 \
+  --allocator.url=http://pue-allocator:9116 \
   --allocator.cache-dir=/var/cache/pue
 ```
 
@@ -4509,7 +4510,9 @@ reloads it, with `"trigger":"allocator"` in the log. A bundle that does not
 load is refused: the one in force stays, the refusal is logged and reported in
 the next heartbeat, and it is not asked for again until the allocator has
 another. A request that fails is tried again after a wait that doubles from
-one second to 30. On `SIGTERM` or `SIGINT` the exporter tells the allocator at
+one second to 30; an allocator that has just started answers `503` until its
+member list has formed, which is no failure: the exporter keeps what it has
+and asks again when the allocator's `Retry-After` says. On `SIGTERM` or `SIGINT` the exporter tells the allocator at
 once that it is shutting down, before [`--web.shutdown-delay`](#shutting-down),
 so its share of the targets moves to the others.
 

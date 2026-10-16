@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,10 @@ const (
 	EventRefused = "refused"
 	// EventUnchanged is a bundle request answered without a new bundle.
 	EventUnchanged = "unchanged"
+	// EventNotSettled is a bundle request the allocator answered 503 with
+	// Retry-After, as it does until its member list has formed; it is
+	// asked again after Retry-After, and is no failure.
+	EventNotSettled = "not_settled"
 	// EventError is a bundle that could not be fetched or written; it is
 	// tried again after a backoff.
 	EventError = "error"
@@ -224,7 +229,7 @@ func New(o Options) (*Client, error) {
 func ParseURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, fmt.Errorf("--allocator.url %q must be the allocator's http:// URL, such as http://pue-allocator:8080", raw)
+		return nil, fmt.Errorf("--allocator.url %q must be the allocator's http:// URL, such as http://pue-allocator:9116", raw)
 	}
 	return u, nil
 }
@@ -435,6 +440,16 @@ func (c *Client) heartbeatTo(ctx context.Context, addr string, body []byte) (str
 	return reply.Generation, nil
 }
 
+// retryAfter is a Retry-After header of seconds as a duration, 0 when it is
+// none or not a number of seconds.
+func retryAfter(header string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(min(seconds, 3600)) * time.Second
+}
+
 // firstLine is the first line of an error answer's body, for a log line.
 func firstLine(b []byte) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
@@ -454,7 +469,7 @@ func (c *Client) bundleLoop(ctx context.Context) {
 	backoff := time.Duration(0)
 	for ctx.Err() == nil {
 		asked := time.Now()
-		unchanged, ok := c.syncOnce(ctx)
+		unchanged, ok, retryAfter := c.syncOnce(ctx)
 		if ctx.Err() != nil {
 			return
 		}
@@ -466,6 +481,8 @@ func (c *Client) bundleLoop(ctx context.Context) {
 		}
 		var wait time.Duration
 		switch {
+		case retryAfter > 0:
+			backoff, wait = 0, min(max(retryAfter, c.o.MinBackoff), c.o.MaxBackoff)
 		case !ok:
 			backoff = min(max(backoff*2, c.o.MinBackoff), c.o.MaxBackoff)
 			wait = backoff
@@ -489,16 +506,22 @@ func (c *Client) bundleLoop(ctx context.Context) {
 
 // syncOnce makes one bundle request and acts on its answer. ok is false
 // when the bundle could not be fetched or written, and unchanged says the
-// answer brought no new bundle.
-func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool) {
+// answer brought no new bundle. retryAfter is set when the allocator has no
+// member list yet: it is the allocator's Retry-After, and no failure.
+func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter time.Duration) {
 	b, err := c.fetch(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, false
-		}
+	var notSettled *notSettledError
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return false, false, 0
+	case errors.As(err, &notSettled):
+		c.recovered(StageFetch)
+		c.event(Event{Kind: EventNotSettled, Err: err})
+		return true, true, notSettled.after
+	case err != nil:
 		c.failed(StageFetch, err)
 		c.event(Event{Kind: EventError, Err: err})
-		return false, false
+		return false, false, 0
 	}
 	c.recovered(StageFetch)
 	c.mu.Lock()
@@ -507,13 +530,13 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool) {
 	c.mu.Unlock()
 	if same {
 		c.event(Event{Kind: EventUnchanged})
-		return true, true
+		return true, true, 0
 	}
 	refusal, err := c.apply(b)
 	if err != nil {
 		c.failed(StageWrite, err)
 		c.event(Event{Kind: EventError, Generation: b.Generation, Err: err})
-		return false, false
+		return false, false, 0
 	}
 	c.recovered(StageWrite)
 	c.mu.Lock()
@@ -534,7 +557,20 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool) {
 	}
 	// The allocator hears of it now rather than at the next interval.
 	signal(c.beat)
-	return false, true
+	return false, true, 0
+}
+
+// notSettledError is the allocator's 503 answer with Retry-After: it has
+// no member list yet, so it cannot tell this replica's share, and says when
+// to ask again. A copy of the allocator that has just started answers so
+// for its settle time, while the replica keeps the bundle it has.
+type notSettledError struct {
+	after time.Duration
+	text  string
+}
+
+func (e *notSettledError) Error() string {
+	return "the allocator has no member list yet: " + e.text
 }
 
 // fetch asks the allocator for this replica's bundle, naming the last
@@ -553,7 +589,8 @@ func (c *Client) fetch(ctx context.Context) (*allocapi.Bundle, error) {
 		return nil, err
 	}
 	if seen != "" {
-		req.Header.Set("If-None-Match", seen)
+		// An entity tag is quoted (RFC 9110); the allocator's ETag is.
+		req.Header.Set("If-None-Match", `"`+seen+`"`)
 	}
 	if err := c.authorize(req); err != nil {
 		return nil, err
@@ -570,6 +607,8 @@ func (c *Client) fetch(ctx context.Context) (*allocapi.Bundle, error) {
 	switch {
 	case resp.StatusCode == http.StatusNotModified:
 		return nil, nil
+	case resp.StatusCode == http.StatusServiceUnavailable && retryAfter(resp.Header.Get("Retry-After")) > 0:
+		return nil, &notSettledError{after: retryAfter(resp.Header.Get("Retry-After")), text: firstLine(raw)}
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("bundle request: the allocator answered %s: %s", resp.Status, firstLine(raw))
 	case len(raw) > maxBundleBytes:

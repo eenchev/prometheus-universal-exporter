@@ -2073,7 +2073,7 @@ this order, without cycles:
 6. `transform`: transforms, metric rules and the Python worker pool.
 7. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-8. `allocclient`: the exporter's client of the target allocator.
+8. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
 9. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
 10. `allocator`: the target allocator (§ 42.14d).
@@ -22821,6 +22821,214 @@ The dependency upgrades of xpath 1.3.9, htmlquery 1.3.7, xmlquery 1.5.2 and x/ne
   one failure to the log over `ab` and `abcde` whatever the bounds, the
   stack at debug level only, and through `/probe` under `log` and `ignore`.
 
+## 34.147 The target allocator
+
+The target allocator (§ 42.14d):
+
+- The first member list of the target allocator forms once its members have
+  held for the settle time and no sooner than a heartbeat interval after the
+  start; a joining member takes effect after the settle time, a silent one
+  leaves after the member TTL and the settle time, one shutting down leaves
+  the live members at once, and one back within the settle time keeps its
+  place with no member list change counted.
+- A heartbeat without a member or a host:port advertise is refused (400 over
+  HTTP); the heartbeat answer is the member's bundle generation, "" before the
+  member list has formed; a shutting-down heartbeat of an unknown member adds
+  nothing.
+- A bundle is config.yaml and every collector file at its path relative to the
+  configuration's directory, as written, plus static-targets.yaml with the
+  member's share, which the exporter's own loaders take from a directory the
+  bundle is written into; the share keeps the file's interval and
+  concurrency, writes a default name out, and carries no alias, merge key or
+  x- key. A member with an empty share, a member not in the list, and every
+  member without a static target file get no static-targets.yaml.
+- The same input files and members give the same bundle generations on two
+  allocators, and a reload of unchanged files changes nothing.
+- The allocator refuses an absolute collector_files entry, one leaving the
+  configuration's directory, a pattern matching static-targets.yaml, a
+  collector file that would be config.yaml in the bundle, a configuration or
+  static target the exporter's loader refuses, and every malformed probe
+  targets file: empty, another top-level key, no jobs, a bad, missing or
+  repeated job name, an unknown collector, no or repeated targets, a target
+  the collector's type refuses, an unknown shard_key, a parameter the
+  allocator sets, that makes no label name or that the probe refuses, the
+  instance or a __ label, an unknown key; x- anchors are taken.
+- Refused input files leave the last good ones in force, the refusal logged
+  and counted once however often it is read; fixed files are put in force and
+  counted; the watch puts an added or removed collector file in force.
+- Every static target is in exactly one member's share, the shares about even;
+  a joining member takes only what it now owns, about 1/(N+1), while each old
+  owner keeps the moved targets for one of their intervals (30s or 1m) and
+  then gives them up; a leaving member's targets move and no others, without
+  draining; targets of one shard_key share a member.
+- GET /v1/bundle answers 503 with Retry-After before the member list forms,
+  then the bundle with its generation as a quoted ETag, 304 to If-None-Match
+  naming it (quoted, weak, bare or first of a list), 400 without member or
+  with a wait that is no duration; a long poll is answered with the new
+  bundle as soon as it changes, and 304 when its wait (capped at 60s) runs out
+  or at the shutdown, when /ready answers 503.
+- GET /v1/sd/<job> answers 503 before the member list forms, 404 for an
+  unknown job, and one group per target at its member's advertise with
+  __metrics_path__=/probe, __param_collector, __param_target, __param_<param>,
+  instance, the job's labels without "" ones, and
+  __meta_pue_allocator_member; a probe goes only to members reporting a
+  bundle with its collector, to any when none does, and to a live member
+  outside the list when none of it is live; shard_key: address keeps one
+  host:port (default ports filled in, case ignored) on one member.
+- With --web.token-file every endpoint but /healthz and /ready answers 401
+  with WWW-Authenticate without the bearer token, and serves with it.
+- /metrics exposes pue_allocator_members, targets{kind}, assigned{kind,member}
+  matching the allocation, generation_info, reloads_total{result} and
+  member_changes_total.
+- pue-allocator exits 2 on a malformed command line (unknown flag, stray
+  argument, negative --settle or --config.watch-interval, bad --log.level or
+  listen address), 1 on refused inputs or an empty or unreadable token file,
+  each with one JSON line; --version and -h answer on stdout.
+- allocapi.Owner is the member of the highest Score whatever the order, Score
+  is SHA-256 of member, NUL, key, an added member takes only what it wins,
+  about 1/(N+1); Generation depends on the files alone, length-prefixed; Seal
+  sets it; CheckFiles refuses a bundle without config.yaml and every path
+  that is not a clean relative path inside it.
+- make build builds bin/pue-allocator beside the exporter with the same tags,
+  the Dockerfile builds it and copies it to /bin/pue-allocator, and
+  docs/ALLOCATOR.md says where it lands; docs may name the allocator's flags.
+
+Allocator mode (§ 42.14e):
+
+- The first bundle from the allocator is written into the cache directory,
+  files 0600 in 0700 directories, reloaded with the trigger `allocator`, and
+  the heartbeat after it carries its generation; the first heartbeat carries
+  the member and the advertised address and no generation, and the first
+  bundle request `member=<member>&wait=30s` without `If-None-Match`.
+- A new generation replaces the files of the old: a file it no longer has is
+  gone from the cache directory, the old generation's directory is removed,
+  and the next bundle request names the new generation in `If-None-Match`.
+- A bundle the check refuses keeps the files in force, its directory is
+  removed, the refusal is counted and reported in the next heartbeat with the
+  generation and the error, the next bundle request names the refused
+  generation, and a later bundle that loads clears the refusal.
+- A bundle the reload refuses after the check let it through is swapped back:
+  the previous generation's files and directory are in place again and the
+  refusal is reported.
+- A bundle with a parent or absolute path, a top-level name beginning with
+  `..`, no `config.yaml`, or a generation that is not its files' digest is
+  refused with nothing written.
+- At every change the swap makes to the cache directory, the files read
+  through its links and through `..data` are all of one generation, and
+  `config.yaml` can always be read.
+- A heartbeat goes to every address the allocator URL's host resolves to, at
+  the URL's port, with the URL's host as `Host`; the bundle request goes to
+  the URL as it is; an IP host is heartbeated alone, without a lookup.
+- With `--allocator.token-file` every request carries `Authorization: Bearer
+  <token>`, read again for each, so a rotated token is sent from the next
+  request; without it no request carries an `Authorization` header.
+- `ShuttingDown` sends a heartbeat with `shutting_down` before it returns, and
+  every later heartbeat carries it too.
+- An allocator that answers bundle requests without a change at once is asked
+  again no sooner than the least backoff each time.
+- A failing bundle request and a cache directory that cannot be written are
+  counted under `stage` `fetch` and `write` and tried again; a heartbeat
+  nobody hears counts under `heartbeat`.
+- A client made with the generation found in the cache directory reports it
+  in its first heartbeat and names it in its first bundle request.
+- `--allocator.url` must be a plain `http://` URL with a host and nothing
+  after its path.
+- An awaiting manager holds an empty configuration with no reload status and
+  stays awaiting through a refused reload, including one that puts only an
+  absent static target file in force; the first reload that puts a
+  configuration in force ends it; a manager made with a configuration never
+  awaits.
+- With `AllowAbsentTargets` a removed static target file reloads as no
+  targets, and the file back reloads its targets; without it the reload is
+  refused as before, and loading a present, absent, empty, target-less or
+  invalid file gives what the old `loadTargets` gave.
+- `CheckReplacement` refuses a configuration without collectors, targets
+  naming a collector the configuration lacks (naming the target file) and a
+  target file without targets, passes a good pair and an absent target file,
+  and changes nothing in force and no reload status.
+- `ReloadReplacing` runs the replacement under the reload lock and reloads
+  what it put in place; a refused reload runs the restore and reloads the old
+  pair; a failed replacement reloads nothing.
+- An exporter awaiting its configuration answers `/ready` 503 `not ready: no
+  configuration yet: waiting for the allocator`, `/probe` 503 with the
+  sentence naming the allocator's URL, the static targets endpoint with no
+  targets, and serves `/self-metrics` and `/health`; once a reload puts a
+  configuration in force `/ready` is 200 and the probe is answered.
+- An exporter made with a configuration answers `/ready` 200 and does not
+  answer probes 503 for awaiting one, whatever awaiting reason it was given.
+- The allocator self-metrics carry the generation in force, the last sync
+  time, the sync errors by stage in order and the refused bundles, each with
+  its description; without a generation there is no `generation_info` and
+  the timestamp is 0; outside allocator mode there are none.
+- `--allocator.url` with `--config.file` (even at its default value, given
+  explicitly) or `--static-targets-file`, at a start and with `--dry-run`, an
+  `--allocator.` flag without `--allocator.url`, `--allocator.url` without
+  `--allocator.cache-dir`, an https URL and an `--allocator.advertise` that
+  is not host:port exit 2 naming the problem.
+- `--dry-run` in allocator mode checks `<cache-dir>/config.yaml`: it fails
+  with no bundle there and passes one that loads.
+- The default `--allocator.advertise` is the listen host when it is one
+  non-loopback address, else the first non-loopback, non-link-local address,
+  IPv4 before IPv6, with the listen port; with none, or when the addresses
+  cannot be listed, an error asks for the flag.
+- In a child process with an empty cache directory the exporter is unready,
+  `/probe` answers 503 naming the allocator, `/self-metrics` is served; the
+  first bundle makes it ready, probes are answered, `config.yaml` is in the
+  cache directory and the self-metrics name the generation; `SIGTERM` sends a
+  `shutting_down` heartbeat with the generation during the held shutdown
+  delay, and the exporter exits 0.
+- A child whose cache directory holds a bundle that loads is ready at once
+  and answers probes with the allocator unreachable; one whose cached bundle
+  does not load is unready and logs why.
+
+The two together, and the configuration checked without the files it names (§ 42.14d):
+
+- `config.WithoutNamedFiles` loads a configuration naming a missing
+  `protoset_file`, missing `proto_files`, missing `otlp.tls` files and
+  missing `web.basic_auth` files, which the plain load refuses naming the
+  file; it fills in the defaults, marks the collectors as not checked
+  against their descriptor files, takes a static target's `message` for a
+  `protoset` collector unchecked and still refuses a health service
+  target's message that does not fit it; it still refuses `protoset`
+  without its file, `proto_files` with `protoset`, a certificate without
+  its key, a password and a password file together, a health service
+  message that does not fit and a method the service lacks. The plain load
+  marks no collector.
+- The allocator takes a configuration whose grpc collector names a missing
+  descriptor set and bearer token file, with missing `otlp.tls` and
+  `web.basic_auth` files, a static target with a message for that collector
+  and a probe job of it, which the exporter's own loader refuses for the
+  missing file; a `protoset_file` with `descriptors: reflection` is still
+  refused.
+- The allocator refuses a collector file whose path begins with `..`, an
+  entry whose directory begins with `..`, and entries of a directory and
+  more whose directory begins with a pattern character or a dot and one
+  (`*/*.yaml`, `.?*/a.yaml`), which on a replica would match the cache
+  directory's own names.
+- An exporter whose allocator answers bundle requests `503` with
+  `Retry-After` counts no sync error, asks again no sooner than
+  `Retry-After` bounded by the most backoff, and puts the bundle in force
+  once the allocator serves it; a `503` without `Retry-After` is counted
+  under `fetch` as before. Its `If-None-Match` is the generation quoted.
+- End to end in one process, the allocator's HTTP API on a clock the test
+  moves and replicas that are exporter servers in allocator mode with real
+  allocator clients: three replicas are unready until the member list
+  forms, then ready, their static targets together the file's, each on one
+  replica; every probe target of the SD answer is at the replica the group
+  names, which answers the probe, and another replica answers it too. A
+  fourth replica is ready at once with the configuration alone and no
+  targets; once the list takes it it holds exactly the targets it owns
+  while each old owner still holds all it held, and after their interval
+  the old owners give the moved targets up, each target again on one
+  replica. A replica shutting down leaves: after the settle time its
+  targets are the others', who lost none of theirs and took none but its,
+  and no SD group points at it. A collector added in a new collector file
+  with a probe job of it reaches every replica; while two replicas are held
+  before putting the bundle in force, every probe of the new job goes to
+  the one that has it, and answers, and once all have it each probe goes to
+  its owner and is answered. It takes about 0.2s, 0.5s under the race
+  detector.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -24648,11 +24856,22 @@ target's `target` is for the collector), and MAY have `params` (probe
 parameters, checked as a probe checks them; `target`, `collector`, `debug`
 and a name that makes no label name MUST be refused), `labels` (a label name,
 not `instance` nor starting with `__`; `""` leaves the label out) and
-`shard_key` (`target` or `address`; anything else MUST be refused). A
+`shard_key` (`target` or `address`; anything else MUST be refused). The
+allocator MUST NOT open the files the configuration names
+(`config.WithoutNamedFiles`): the `otlp.tls` files, the `web.basic_auth`
+files and a grpc collector's `protoset_file` and `proto_files`, with what
+they import, are checked by the replicas, which mount them; every other check
+of the loader MUST be made, and a grpc collector whose descriptors come from
+files, and the `message` of a static target using it, MUST then not be
+checked against them. A
 `collector_files` entry that is absolute or leaves the configuration's
 directory MUST be refused, and so MUST a collector file whose path relative
 to that directory is `config.yaml` or `static-targets.yaml` and an entry that
-matches `static-targets.yaml`. The allocator MUST NOT expand `${NAME}`
+matches `static-targets.yaml`; so MUST a collector file whose path relative to
+that directory begins with `..`, and an entry of more than one path element
+whose first element begins with `..`, with `*`, `?`, `[` or `\`, or with a dot
+and one of those, which on a replica could match the cache directory's own
+names. The allocator MUST NOT expand `${NAME}`
 references. Invalid inputs at the start MUST exit 1. The files MUST be read
 again every `--config.watch-interval` (`0` reads them once); a change MUST be
 put in force only when all are accepted, the last good inputs staying in
@@ -24750,13 +24969,17 @@ exporter MUST send one at once, bounded by 2 seconds, before
 MUST carry `Authorization: Bearer <token>`, the file read again for each.
 
 The exporter MUST ask for its bundle with `GET
-/v1/bundle?member=<member>&wait=30s`, with `If-None-Match: <generation>`
-naming the last generation it fetched (put in force or refused), and MUST
-take a `304`, or a bundle of that generation or of the one in force, as no
-change. A failed request or write MUST be tried again after a wait doubling
-from 1 second to 30, and an answer without a change that came within 1
-second MUST wait 1 second before the next request, so the exporter never
-asks as fast as the allocator answers.
+/v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`
+naming the last generation it fetched (put in force or refused), quoted as an
+entity tag, and MUST take a `304`, or a bundle of that generation or of the
+one in force, as no change. A `503` with a `Retry-After` of seconds, the
+allocator's answer while it has no member list, MUST NOT be counted or logged
+as a failure: the next request MUST follow after `Retry-After`, at least 1
+second and at most 30, or sooner when a heartbeat reply names a generation
+other than the last fetched. A failed request or write MUST be tried again
+after a wait doubling from 1 second to 30, and an answer without a change
+that came within 1 second MUST wait 1 second before the next request, so the
+exporter never asks as fast as the allocator answers.
 
 A new bundle MUST be refused, before anything is written, when
 `allocapi.CheckFiles` refuses it, when its generation is not

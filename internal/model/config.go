@@ -141,6 +141,13 @@ type Collector struct {
 	// collector's do. It is no key of the configuration: it is made of
 	// transform.labels and the rules' labels, which are.
 	LabelParams *LabelParams `yaml:"-"`
+	// DescriptorFilesUnread says the configuration was loaded without
+	// opening the files it names (config.WithoutNamedFiles), as the target
+	// allocator loads it: a grpc collector's protoset_file and proto_files
+	// are then not read, so its method and messages, and those of the
+	// static targets that use it, are not checked against them. It is no
+	// key of the configuration.
+	DescriptorFilesUnread bool `yaml:"-"`
 }
 
 // RequestConfig is a collector's request block: how the target is reached.

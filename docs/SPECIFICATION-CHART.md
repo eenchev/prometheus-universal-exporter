@@ -754,8 +754,9 @@ number from 1 to 2147483647, from the exporter's image unless `allocator.image`
 names another, running `/bin/pue-allocator`, the binary beside the exporter's
 in the image, with `--web.listen-address=:9116`, `--config.file` naming the
 configuration's `config.yaml`, `--static-targets-file` while
-`allocator.staticTargets.data` is not empty, its probe targets file while
-`allocator.probeJobs` is not empty, its token file with a token, `--log.level`
+`allocator.staticTargets.data` is not empty, `--probe-targets-file` while
+`allocator.probeJobs` is not empty, `--web.token-file` naming the token's
+mounted file with `allocator.tokenSecret.name`, `--log.level`
 from `allocator.logLevel` and `--settle` from `allocator.settle` unless it is
 empty. Its pods and objects MUST carry
 `app.kubernetes.io/name: <name>-allocator`, so no selector of the exporter's —
@@ -1620,6 +1621,57 @@ are skipped and the text checks of the templates still run:
    the Snowflake example one holding `private_key` alone, and all
    of them together the further Secret's volume of mode 0400 beside it and
    a NetworkPolicy allowing egress to port 5432.
+
+45. The target allocator (§ 33.10c):
+
+   - The chart with `allocator.enabled` renders the allocator's Deployment of
+     `allocator.replicas` pods running `/bin/pue-allocator` from the exporter's
+     image with `--web.listen-address=:9116`, `--config.file`,
+     `--static-targets-file`, `--probe-targets-file`, `--log.level` and
+     `--settle`, mounting the configuration ConfigMap and its own static target
+     and probe target ConfigMaps (the probe jobs under `probe_jobs` as given); a
+     headless Service on port `http`, 9116; a PodDisruptionBudget of
+     `maxUnavailable: 1`; and a NetworkPolicy admitting the exporter's pods and,
+     by default, the Prometheus Operator's Prometheus pods.
+   - The exporter pods in allocator mode get `--allocator.url` naming the
+     allocator's Service, `--allocator.cache-dir`, `--allocator.member=$(POD_NAME)`
+     and `--allocator.advertise=$(POD_IP):<port>` from the downward API, a cache
+     `emptyDir`, and neither `--config.file`, `--static-targets-file` nor the
+     configuration ConfigMap; the credential Secrets stay mounted.
+   - No selector of the exporter's (its Service, the self-metrics and static
+     targets monitors) selects the allocator's pods, and the allocator's Service
+     is not selected by the self-metrics monitor.
+   - Each probe job renders a ScrapeConfig whose `httpSDConfigs` URL is the
+     job's `/v1/sd/<job>` on the allocator's Service, refreshed every 30s, with
+     the interval, timeout and labels given and no relabelings, metrics path or
+     parameters; with `allocator.tokenSecret` it presents the token as Bearer
+     credentials, the exporter gets `--allocator.token-file` and the allocator
+     `--web.token-file`; with `webAuth.enabled` it presents the exporter's Basic
+     Auth. No probe job, or `scrapeConfig.enabled: false`, renders none.
+   - `allocator.cache.persistent` runs the exporter as a StatefulSet with
+     `serviceName` a headless Service that carries no `app.kubernetes.io/name`,
+     `podManagementPolicy: Parallel`, no strategy and a `volumeClaimTemplates`
+     claim of 16Mi of the StorageClass given; the HorizontalPodAutoscaler then
+     scales the StatefulSet.
+   - In allocator mode a configuration change rolls the allocator's pods and not
+     the exporter's; a static target change rolls the allocator's; without the
+     allocator a configuration change still rolls the exporter's pods.
+   - With static targets at the allocator the static targets monitor is
+     rendered, and with `networkPolicy.egress` rules the exporter's NetworkPolicy
+     admits egress to the allocator's pods on port 9116.
+   - The chart refuses, with the values schema and with the schema skipped, the
+     allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
+     `allocator.cache.persistent` without the allocator, a probe job of an
+     unknown or no collector, a probe job name that is no DNS-1123 label or is
+     used twice, `allocator.replicas` 0, a `settle` that is no duration, an
+     unknown log level, an `env` entry `POD_IP`, an `--allocator.*` flag in
+     `extraArgs`, `staticTargets.monitor.targets` beside the allocator, a mount
+     over the cache or token directory, and a ScrapeConfig timeout longer than
+     its interval.
+   - The chart's renders without the allocator are unchanged: `make helm-test`
+     and the CI chart steps also render allocator mode and the persistent cache
+     and reject the allocator beside static targets, a persistent cache without
+     the allocator and a probe monitor beside the allocator.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

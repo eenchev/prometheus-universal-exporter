@@ -79,7 +79,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	if err != nil {
 		return nil, err
 	}
-	conf, err := config.Load(p.Config)
+	conf, err := config.Load(p.Config, config.WithoutNamedFiles())
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +219,9 @@ func takeSnapshot(p Paths) (*snapshot, error) {
 			if name == allocapi.ConfigFile || name == allocapi.StaticTargetsFile {
 				return nil, fmt.Errorf("collector file %s would be %s in the bundle, which is the bundle's own file of that name; rename the collector file", match, name)
 			}
+			if top, _, _ := strings.Cut(name, "/"); strings.HasPrefix(top, "..") {
+				return nil, fmt.Errorf("collector file %s would be %s in the bundle, but on the replicas the names beginning with \"..\" are the cache directory's own, and a bundle naming one is refused; rename it", match, name)
+			}
 			body, err := os.ReadFile(match) // #nosec G304 -- a collector file the configuration lists
 			if err != nil {
 				return nil, fmt.Errorf("reading collector file: %w", err)
@@ -247,8 +250,11 @@ func takeSnapshot(p Paths) (*snapshot, error) {
 
 // checkCollectorEntries refuses a collector_files entry the bundle cannot
 // carry: an absolute path, one that leaves the configuration's directory,
-// and a pattern that would match the bundle's static target file on the
-// replicas, where the bundle's files lie side by side.
+// a pattern that would match the bundle's static target file on the
+// replicas, where the bundle's files lie side by side, and an entry of a
+// directory and more whose directory could be one of the names beginning
+// with ".." that the replica's cache directory keeps for itself, where
+// ..data/config.yaml, say, would be read as a collector file.
 func checkCollectorEntries(entries []string) error {
 	for _, entry := range entries {
 		if strings.TrimSpace(entry) == "" {
@@ -265,8 +271,25 @@ func checkCollectorEntries(entries []string) error {
 		if matched, err := path.Match(clean, allocapi.StaticTargetsFile); err == nil && matched {
 			return fmt.Errorf("collector_files entry %q would also match %s, the replica's share of the static targets, which lies beside the configuration in the bundle; narrow the entry, for example to a directory of collector files", entry, allocapi.StaticTargetsFile)
 		}
+		if top, rest, nested := strings.Cut(clean, "/"); nested && rest != "" && mayMatchDotDot(top) {
+			return fmt.Errorf("collector_files entry %q begins with %q, which on the replicas could also match the cache directory's own names beginning with \"..\"; begin the entry with a directory's name, such as collectors/*.yaml", entry, top)
+		}
 	}
 	return nil
+}
+
+// mayMatchDotDot reports whether the path element elem, a name or a
+// pattern, could match a name beginning with "..": it begins with "..", or
+// with a pattern character, or with a dot and one.
+func mayMatchDotDot(elem string) bool {
+	const special = "*?[\\"
+	switch {
+	case strings.HasPrefix(elem, ".."), elem != "" && strings.ContainsRune(special, rune(elem[0])):
+		return true
+	case len(elem) > 1 && elem[0] == '.' && strings.ContainsRune(special, rune(elem[1])):
+		return true
+	}
+	return false
 }
 
 // staticDocument is the static target file as written, to be split into

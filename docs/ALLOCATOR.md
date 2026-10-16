@@ -83,13 +83,25 @@ own checks:
   (`*.yaml` beside the configuration would): on the replica the share of the
   static targets lies beside the configuration. Keep collector files in a
   directory of their own, such as `collectors/*.yaml`.
+- Names beginning with `..` are the replica's cache directory's own
+  (`..data`, `..gen-<generation>`): a collector file whose path begins with
+  one is refused, and so is an entry of a directory and more whose directory
+  could match one — it begins with `..`, with a pattern character, or with a
+  dot and one, as `*/x.yaml` does — since on the replica it would match
+  `..data/config.yaml` too. Begin such an entry with a directory's name.
 - Files the configuration names by path — a grpc collector's descriptor
   files, `otlp.tls` files, `web.basic_auth` files, credential files — travel
   as paths, never as content. They must be mounted on every replica at the
-  same path, as without the allocator; and the ones the loader opens when it
-  checks a configuration (descriptor files, `otlp.tls` files and
-  `web.basic_auth` files) must be mounted on the allocator too, or it refuses
-  the configuration as an exporter would.
+  same path, as without the allocator, and need not be mounted on the
+  allocator: it checks the configuration without opening them. The checks
+  that read them are the replicas' when they load the bundle — a missing or
+  unreadable file, a descriptor set without the collector's method, a
+  message that does not fit it — and a replica that refuses a bundle for
+  one keeps its last good bundle and reports the refusal in its heartbeats,
+  which the allocator logs. So a grpc collector with `descriptors: protoset`
+  or `proto` is checked by the allocator for everything but its method and
+  messages, and so is a static target's `message` for it; the built-in
+  health service is checked in full.
 - The allocator expands no `${NAME}` reference: it checks the files as
   written and serves them so, and a replica started with
   `--config.expand-env` expands them from its own environment. A reference
@@ -256,8 +268,13 @@ The answer carries the generation as its `ETag`, quoted. A request whose
 the bundle is still that one. With `wait=<duration>`, such a request waits,
 for at most `60s` however long it asks, until the bundle changes and is then
 answered at once with the new one, or with `304` when the wait runs out or
-the allocator shuts down. Until the member list has formed every bundle
-request is answered `503`, with `Retry-After`.
+the allocator shuts down. Until the member list has formed a bundle request
+is answered `503`, with `Retry-After`: at once without a wait, and with one
+when the wait runs out, unless the list forms first and the bundle is the
+answer. A replica
+takes the `503` as no failure: it keeps its bundle and asks again after
+`Retry-After`. Its `If-None-Match` is the generation, quoted, as the `ETag`
+is; a bare one is taken too.
 
 ### Service discovery
 
@@ -308,11 +325,20 @@ scrape_configs:
 ## On Kubernetes
 
 The Helm chart deploys the allocator with `allocator.enabled`, beside the
-exporter, and switches the replicas to allocator mode; see the
-[chart README](../charts/prometheus-universal-exporter/README.md). Run two
-allocators behind a headless Service: they need no leader, since each hears
-every heartbeat, a replica heartbeating to every address the Service's name
-resolves to.
+exporter, and switches the replicas to allocator mode; see
+[Target allocator](../charts/prometheus-universal-exporter/README.md#target-allocator)
+in the chart README. It runs `allocator.replicas` allocators, two by default,
+from the exporter's image, behind a headless Service on port 9116: they need
+no leader, since each hears every heartbeat, a replica heartbeating to every
+address the Service's name resolves to. The configuration (`config.data`)
+and `allocator.staticTargets.data` and `allocator.probeJobs`, the static
+targets and the probe jobs, are mounted into the allocator only; a change to
+them rolls the allocator, and reaches the replicas as a new bundle without a
+restart. The replicas get `--allocator.url`, their pod's name as the member
+and their pod's IP as the address to advertise, keep their bundle in an
+`emptyDir`, or a claim per pod with `allocator.cache.persistent`, and keep the
+credential Secrets mounted, which the allocator does not need. Each probe job
+becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
 
 ## Without Kubernetes
 

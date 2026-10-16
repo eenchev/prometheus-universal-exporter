@@ -1018,7 +1018,9 @@ With several exporter replicas, the target allocator spreads the work over
 them: it hands each pod its share of the static targets, and publishes the
 probe targets to Prometheus already pointed at one pod, so each target is
 scraped by one replica and a pod's pools and cache serve the same targets
-every time. It is `pue-allocator`, a binary in the exporter's image.
+every time. It is `pue-allocator`, a binary in the exporter's image; see
+[Target allocator](../../docs/ALLOCATOR.md) for how it allocates, its input
+files and its API.
 
 ```yaml
 replicaCount: 4

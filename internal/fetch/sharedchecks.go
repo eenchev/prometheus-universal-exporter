@@ -49,11 +49,22 @@ func CheckHeaderValue(value string) error {
 // unlike a collector's, which are read at the first request to a target,
 // these are needed from the start, by a request the exporter makes on its own.
 func CheckClientTLS(t model.TLSConfig) error {
-	if (t.CertFile == "") != (t.KeyFile == "") {
-		return errors.New("sets only one of cert_file and key_file; a client certificate needs both")
+	if err := CheckClientTLSKeys(t); err != nil {
+		return err
 	}
 	if _, err := tlsConfig(t); err != nil {
 		return fmt.Errorf("cannot be used: %w", err)
+	}
+	return nil
+}
+
+// CheckClientTLSKeys is CheckClientTLS without reading the files: it
+// refuses only a client certificate without its key, or a key without its
+// certificate. The target allocator checks a configuration with it, since
+// the files are mounted on the replicas and not on the allocator.
+func CheckClientTLSKeys(t model.TLSConfig) error {
+	if (t.CertFile == "") != (t.KeyFile == "") {
+		return errors.New("sets only one of cert_file and key_file; a client certificate needs both")
 	}
 	return nil
 }

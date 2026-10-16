@@ -30,8 +30,10 @@ type fakeAllocator struct {
 	bundle allocapi.Bundle
 	// changed is closed and replaced when the bundle changes.
 	changed chan struct{}
-	// failBundle, when set, is the status bundle requests are answered.
+	// failBundle, when set, is the status bundle requests are answered,
+	// with retryAfter as Retry-After when it is set.
 	failBundle int
+	retryAfter string
 	// noWait answers a request naming the generation held 304 at once.
 	noWait bool
 	// heartbeats and bundleRequests are what the allocator was sent.
@@ -78,14 +80,17 @@ func (a *fakeAllocator) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		for {
 			a.mu.Lock()
-			b, changed, fail, noWait := a.bundle, a.changed, a.failBundle, a.noWait
+			b, changed, fail, noWait, retryAfter := a.bundle, a.changed, a.failBundle, a.noWait, a.retryAfter
 			a.mu.Unlock()
 			switch {
 			case fail != 0:
+				if retryAfter != "" {
+					w.Header().Set("Retry-After", retryAfter)
+				}
 				http.Error(w, "the allocator is not ready", fail)
 				return
 			case b.Generation == "":
-			case r.Header.Get("If-None-Match") != b.Generation:
+			case r.Header.Get("If-None-Match") != `"`+b.Generation+`"`:
 				_ = json.NewEncoder(w).Encode(b)
 				return
 			case noWait:
@@ -162,14 +167,14 @@ func (a *fakeAllocator) nextBundleRequest(t *testing.T) *http.Request {
 }
 
 // bundleRequestNaming waits for a bundle request whose If-None-Match names
-// generation.
+// generation, quoted, as an entity tag is.
 func (a *fakeAllocator) bundleRequestNaming(t *testing.T, generation string) {
 	t.Helper()
 	deadline := time.After(30 * time.Second)
 	for {
 		select {
 		case r := <-a.bundleRequests:
-			if r.Header.Get("If-None-Match") == generation {
+			if r.Header.Get("If-None-Match") == `"`+generation+`"` {
 				return
 			}
 		case <-deadline:
@@ -406,10 +411,10 @@ func TestANewGenerationReplacesTheFilesOfTheOld(t *testing.T) {
 	}
 	for {
 		r := a.nextBundleRequest(t)
-		if r.Header.Get("If-None-Match") == second {
+		if r.Header.Get("If-None-Match") == `"`+second+`"` {
 			break
 		}
-		if got := r.Header.Get("If-None-Match"); got != "" && got != first {
+		if got := r.Header.Get("If-None-Match"); got != "" && got != `"`+first+`"` {
 			t.Fatalf("a bundle request named %q", got)
 		}
 	}
@@ -794,6 +799,38 @@ func TestFailuresAreCountedByStageAndTriedAgain(t *testing.T) {
 	down.heartbeat(context.Background())
 	if st := down.Status(); st.SyncErrors[StageHeartbeat] != 1 {
 		t.Errorf("status after a heartbeat nobody heard: %+v", st)
+	}
+}
+
+// An allocator whose member list has not formed answers 503 with
+// Retry-After, which is no failure: nothing is counted, and the next request
+// waits Retry-After, bounded by the most backoff, here 40ms of the
+// allocator's 1s. Once the allocator serves the bundle, it is put in force.
+func TestAnAllocatorWithoutAMemberListIsAskedAgainAfterRetryAfter(t *testing.T) {
+	a := newFakeAllocator(t)
+	a.failBundle, a.retryAfter = http.StatusServiceUnavailable, "1"
+	const most = 40 * time.Millisecond
+	c := startClient(t, a, func(o *Options) { o.MaxBackoff = most })
+	var last time.Time
+	for i := range 3 {
+		if e := c.waitFor(t, EventNotSettled); e.Err == nil || !strings.Contains(e.Err.Error(), "the allocator is not ready") {
+			t.Errorf("event %+v", e)
+		}
+		now := time.Now()
+		if gap := now.Sub(last); i > 0 && gap < most {
+			t.Errorf("asked again after %s, want Retry-After bounded by %s", gap, most)
+		}
+		last = now
+	}
+	if st := c.Status(); st.SyncErrors[StageFetch] != 0 {
+		t.Errorf("an allocator without a member list was counted as a failure: %+v", st)
+	}
+	a.mu.Lock()
+	a.failBundle = 0
+	a.mu.Unlock()
+	generation := a.serveFiles(map[string]string{"config.yaml": "c\n"})
+	if e := c.waitFor(t, EventInstalled); e.Generation != generation {
+		t.Errorf("installed %q, want %q", e.Generation, generation)
 	}
 }
 

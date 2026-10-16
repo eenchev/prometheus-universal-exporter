@@ -53,7 +53,7 @@ func newAllocatorStandIn(t *testing.T) *allocatorStandIn {
 				a.mu.Lock()
 				b, changed := a.bundle, a.changed
 				a.mu.Unlock()
-				if b.Generation != "" && r.Header.Get("If-None-Match") != b.Generation {
+				if b.Generation != "" && r.Header.Get("If-None-Match") != `"`+b.Generation+`"` {
 					_ = json.NewEncoder(w).Encode(b)
 					return
 				}

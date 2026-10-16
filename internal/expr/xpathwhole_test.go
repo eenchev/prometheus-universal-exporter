@@ -11,6 +11,7 @@ import (
 
 	"github.com/antchfx/xmlquery"
 	"github.com/antchfx/xpath"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The engine's parser stops at the end of the expression it reads and
@@ -221,8 +222,8 @@ func checkXPathWholeBefore(expression string, namespaces map[string]string) erro
 
 // sameRefusal says the check refuses, or lets through, as it did before:
 // with the same words, but where what would be ignored is a predicate after
-// one the engine read or after parentheses, which is refused at the same
-// byte, and shown the same, with words of its own.
+// parentheses within a path, which is refused at the same byte, and shown
+// the same, with words of its own.
 func sameRefusal(before, now error) bool {
 	if before == nil || now == nil {
 		return before == nil && now == nil
@@ -232,7 +233,7 @@ func sameRefusal(before, now error) bool {
 	}
 	what, _, _ := strings.Cut(before.Error(), ", is no part of the expression before it")
 	why, found := strings.CutPrefix(now.Error(), what+", would be ignored: the XPath engine reads ")
-	return found && strings.Contains(what, ` on, "[`) && (strings.HasPrefix(why, "only one predicate after ") || strings.HasPrefix(why, "no predicate after "))
+	return found && strings.Contains(what, ` on, "[`) && strings.HasPrefix(why, "no predicate after ")
 }
 
 // handWrittenXPath are expressions as rules have them, read whole and not,
@@ -271,51 +272,61 @@ func TestTheCheckAnswersOtherExpressionsAsItDid(t *testing.T) {
 }
 
 // A second predicate after an expression in parentheses, a function call or
-// a literal is one the engine does not read: `(//a)[@x][1]` would select
-// what `(//a)[@x]` selects. It is refused, as before, and the refusal now
-// says what it is and shows the form the engine reads, made of the
-// expression itself where one more pair of parentheses is all it takes;
-// that form compiles. A predicate after parentheses within a path, which
-// the engine reads none of, is told as that. A bracket that follows
-// anything else is told as it was.
-func TestAPredicateTheEngineWouldIgnoreIsRefusedWithTheFormThatWorks(t *testing.T) {
+// a literal is one the engine reads and evaluates (antchfx/xpath from
+// v1.3.9; before, `(//a)[@x][1]` selected what `(//a)[@x]` selects, and the
+// check refused it): such an expression compiles, with or without
+// namespaces, and evaluates to what the same expression with its first
+// predicate in parentheses of its own evaluates to, which the engine read
+// right before too. A predicate after parentheses within a path, which the
+// engine still reads none of, is refused and told as that. A bracket that
+// follows anything else is told as it was.
+func TestAPredicateAfterParenthesesWithinAPathIsRefusedAndAChainedOneIsRead(t *testing.T) {
 	const (
-		second   = `, would be ignored: the XPath engine reads only one predicate after an expression in parentheses, a function call or a literal; for a second one, put the expression and its first predicate in parentheses of their own, as `
 		sequence = `, would be ignored: the XPath engine reads no predicate after parentheses within a path; write the predicate inside them, after the step it is for, as in "//a/(b[1])"`
 		other    = `, is no part of the expression before it, which is all the XPath engine would read; join the two with an operator, or take it out`
 	)
 	for expression, want := range map[string]string{
-		"(//a)[@x][1]":         `what stands from byte 10 on, "[1]"` + second + `"((//a)[@x])[1]"`,
-		"(//a)[1][@x]":         `what stands from byte 9 on, "[@x]"` + second + `"((//a)[1])[@x]"`,
-		"'x'[1][2]":            `what stands from byte 7 on, "[2]"` + second + `"('x'[1])[2]"`,
-		"count(//a)[1][2]":     `what stands from byte 14 on, "[2]"` + second + `"(count(//a)[1])[2]"`,
-		"(//a) [1] [2]":        `what stands from byte 11 on, "[2]"` + second + `"((//a) [1])[2]"`,
-		"(//a)[1]\n[2] | //b":  `what stands from byte 10 on, "[2] | //b"` + second + `"((//a)[1])[2] | //b"`,
-		"(//a)[1][2]/b":        `what stands from byte 9 on, "[2]/b"` + second + `"((//a)[1])[2]/b"`,
-		"(//é)[1][2]":          `what stands from byte 10 on, "[2]"` + second + `"((//é)[1])[2]"`,
-		"(//a)[1][2][3]":       `what stands from byte 9 on, "[2][3]"` + second + `in "((//a)[@x])[1]"`,
-		"(//a)[1][2] 'x'":      `what stands from byte 9 on, "[2] 'x'"` + second + `in "((//a)[@x])[1]"`,
-		"'x'[1][.":             `what stands from byte 7 on, "[."` + second + `in "((//a)[@x])[1]"`,
 		"//a/(b)[1]":           `what stands from byte 8 on, "[1]"` + sequence,
 		"//a/(b, c)[1][2] | d": `what stands from byte 11 on, "[1][2] | d"` + sequence,
+		"(//a)[1][2] 'x'":      `what stands from byte 13 on, "'x'"` + other,
 		"/[1]":                 `what stands from byte 2 on, "[1]"` + other,
 		"/ [":                  `what stands from byte 3 on, "["` + other,
+		"'x'[1][.":             `'x'[1][. has an invalid token`,
 	} {
 		for _, namespaces := range []map[string]string{nil, {"p": "urn:p"}} {
 			if _, err := CompileXPath(expression, namespaces); err == nil || err.Error() != want {
 				t.Errorf("%s: the error %v, want %q", expression, err, want)
 			}
 		}
-		if _, form, shown := strings.Cut(want, ", as \""); shown {
-			if _, err := CompileXPath(strings.TrimSuffix(form, `"`), nil); err != nil {
-				t.Errorf("%s: the form the refusal shows, %s, is refused: %v", expression, form, err)
+	}
+	root, err := xmlquery.Parse(strings.NewReader(`<r><a x="1">A</a><a>B</a><a x="3">C<b>c</b></a><a x="4">D</a></r>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chained, nested := range map[string]string{
+		"(//a)[@x][1]":          "((//a)[@x])[1]",
+		"(//a)[@x][2]":          "((//a)[@x])[2]",
+		"(//a)[1][@x]":          "((//a)[1])[@x]",
+		"(//a)[2][@x]":          "((//a)[2])[@x]",
+		"(//a) [@x] [last()]":   "((//a) [@x])[last()]",
+		"(//a)[@x][2][. = 'C']": "(((//a)[@x])[2])[. = 'C']",
+		"(//a)[@x][2]/b":        "((//a)[@x])[2]/b",
+		"(//a)[1]\n[2] | //b":   "((//a)[1])[2] | //b",
+		"count((//a)[@x][2])":   "count(((//a)[@x])[2])",
+		"'x'[1][2]":             "('x'[1])[2]",
+		"count(//a)[1][2]":      "(count(//a)[1])[2]",
+	} {
+		for _, namespaces := range []map[string]string{nil, {"p": "urn:p"}} {
+			if _, err := CompileXPath(chained, namespaces); err != nil {
+				t.Errorf("%s: %v", chained, err)
 			}
 		}
-	}
-	for _, form := range []string{"((//a)[@x])[1]", "//a/(b[1])", "(((//a)[1])[2])[3]", "(//a)[1]/b[1][2]"} {
-		if _, err := CompileXPath(form, nil); err != nil {
-			t.Errorf("%s: %v", form, err)
+		if got, want := evaluated(chained, root), evaluated(nested, root); got != want || strings.HasPrefix(got, "panic") {
+			t.Errorf("%s evaluates to %s, and %s to %s", chained, got, nested, want)
 		}
+	}
+	if got := evaluated("(//a)[@x][2]", root); got != `nodes ["a=Cc"]` {
+		t.Errorf("(//a)[@x][2] evaluates to %s, want the third a", got)
 	}
 }
 
@@ -450,5 +461,87 @@ func TestTheSearchForTheRefusedPlaceIsBounded(t *testing.T) {
 	}
 	if _, err := CompileXPath(long, nil); err != nil {
 		t.Errorf("%d bytes read whole: %.200v", len(long), err)
+	}
+}
+
+// checkXPathWholeAtV138 is checkXPathWhole as it was while the engine
+// (antchfx/xpath up to v1.3.8) ignored a second predicate after an
+// expression in parentheses, a function call or a literal, and the check
+// refused it with words of its own: what the check now is held against.
+func checkXPathWholeAtV138(expression string, namespaces map[string]string) error {
+	if at, found := xpathClosesNothing(expression); found {
+		return fmt.Errorf("the %q at byte %d closes nothing", expression[at:at+1], at+1)
+	}
+	whole, tooDeep := xpathReadWhole(expression, namespaces)
+	if tooDeep {
+		return errors.New("it is nested too deeply: parentheses, predicates and function arguments may stand 198 deep within one another; write it less deep")
+	}
+	if whole {
+		return nil
+	}
+	end, found := xpathReadStart(expression, func(start string) bool {
+		_, err := compileXPath("("+start+")", namespaces)
+		return err == nil
+	})
+	if !found {
+		return errors.New("the XPath engine would read only the start of it and ignore the rest; write one expression")
+	}
+	read := strings.TrimRightFunc(expression[:end], unicode.IsSpace)
+	rest := strings.TrimLeftFunc(expression[len(read):], unicode.IsSpace)
+	at := len(expression) - len(rest) + 1
+	why := ""
+	switch {
+	case !strings.HasPrefix(rest, "["):
+	case strings.HasSuffix(read, ")"):
+		why = `the XPath engine reads no predicate after parentheses within a path; write the predicate inside them, after the step it is for, as in "//a/(b[1])"`
+	case strings.HasSuffix(read, "]"):
+		as, works := "as in", "((//a)[@x])[1]"
+		if example := "(" + read + ")" + rest; len(example) <= 200 {
+			if _, err := compileXPath("("+example+")", namespaces); err == nil {
+				as, works = "as", example
+			}
+		}
+		why = fmt.Sprintf("the XPath engine reads only one predicate after an expression in parentheses, a function call or a literal; for a second one, put the expression and its first predicate in parentheses of their own, %s %q", as, works)
+	}
+	if why != "" {
+		return fmt.Errorf("what stands from byte %d on, %q, would be ignored: %s", at, rest, why)
+	}
+	return fmt.Errorf("what stands from byte %d on, %q, is no part of the expression before it, which is all the XPath engine would read; join the two with an operator, or take it out", at, rest)
+}
+
+// With the engine that reads every predicate, the check without its refusal
+// of a second predicate says, to the letter, what it said with it: of the
+// hand-written expressions, of those the refusal was about, of 199 levels
+// deep with something after them, and of expressions strung together at
+// random from pieces heavy in brackets, with and without namespaces. The
+// refusal could no longer be reached.
+func TestTheCheckWithoutTheSecondPredicateRefusalAnswersAsItDid(t *testing.T) {
+	expressions := append([]string{
+		"(//a)[@x][1]", "(//a)[1][@x]", "'x'[1][2]", "count(//a)[1][2]", "(//a) [1] [2]", "(//a)[1]\n[2] | //b", "(//a)[1][2][3]", "(//a)[1][2] 'x'",
+		"'x'[1][.", "//a/(b)[1]", "//a/(b, c)[1][2] | d", "/[1]", "/ [", strings.Repeat("(", 199) + "//a" + strings.Repeat(")", 199) + " 'x'",
+	}, handWrittenXPath...)
+	pieces := []string{"(", ")", "[", "]", "[1]", "[@x]", "(//a)", "'x'", "count(", "a", "/", "//", " ", "|", ",", "1", "@x", "."}
+	random := rand.New(rand.NewPCG(71, 20261016))
+	for range alloctest.UnlessRaced(6000, 1500) {
+		var text strings.Builder
+		for range 1 + random.IntN(8) {
+			text.WriteString(pieces[random.IntN(len(pieces))])
+		}
+		expressions = append(expressions, text.String())
+	}
+	compiled := 0
+	for _, expression := range expressions {
+		if _, err := xpath.Compile(expression); err != nil {
+			continue
+		}
+		compiled++
+		for _, namespaces := range []map[string]string{nil, {"p": "urn:p"}} {
+			if before, now := checkXPathWholeAtV138(expression, namespaces), checkXPathWhole(expression, namespaces); fmt.Sprint(before) != fmt.Sprint(now) {
+				t.Errorf("%q: the check says %v, and said %v", expression, now, before)
+			}
+		}
+	}
+	if compiled < 500 {
+		t.Errorf("%d expressions compiled: too few to show anything", compiled)
 	}
 }

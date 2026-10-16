@@ -510,12 +510,12 @@ The expression and label values are interpreted by the selected transform:
   so `sum(//a))` would be `sum(//a)` and `//a 'x'` would be `//a`: such an
   expression is refused, with the place — `XPath "sum(//a))": the ")" at byte
   9 closes nothing`, or `what stands from byte 5 on, "'x'", is no part of the
-  expression before it`. A second predicate after an expression in
-  parentheses, a function call or a literal is refused the same way, since
-  the engine reads one predicate there and no more — `(//a)[@x][1]` would be
-  `(//a)[@x]` — and the refusal shows the form the engine reads, the
-  expression and its first predicate in parentheses of their own:
-  `((//a)[@x])[1]`. An expression longer than a few hundred bytes may be
+  expression before it`. A predicate after parentheses within a path, as in
+  `//a/(b)[1]`, is refused the same way, since the engine reads none there:
+  write it inside them, after the step it is for, as `//a/(b[1])`.
+  Predicates may follow one another after an expression in parentheses, a
+  function call or a literal: `(//a)[@x][1]` is the first `a` of those with
+  an `x`. An expression longer than a few hundred bytes may be
   refused without the place. Also refused are an expression with a NUL
   character in it, which the engine takes for its end, and one whose
   parentheses, predicates and function arguments stand more than 198 deep
@@ -2205,15 +2205,15 @@ The XPath engine accepts some expressions at startup that it then cannot
 evaluate, once a response holds what they stumble over:
 `//a[contains(@x, 5)]` as soon as an `a` has an `x` — the second argument
 must be a string, `'5'` — `sum(string(//v))` over text that is no number,
-`substring(//v, '1')`, `replace(//v, '(', '')`, `//a = true()`. That is the
-failure of the rule whose expression or label it is, by its `error_mode`
-like any other: the rule gives no series for that response, those of the
-nodes before the one the engine failed at included, the other rules give
-theirs, and the failure is counted and logged for the rule as every failure
-is: as one failure of the rule, the engine's, whatever nodes of the rule
-failed before the engine did — their failures are not counted beside it,
-in `http_exporter_rule_failures_total` or as missing values, and it is the
-engine's failure that is logged. The error names the metric, the
+`substring(//v, '1')`, `replace(//v, '(', '')`, `substring(//v, 0 div 0)`.
+That is the failure of the rule whose expression or label it is, by its
+`error_mode` like any other: the rule gives no series for that response,
+those of the nodes before the one the engine failed at included, the other
+rules give theirs, and the failure is counted and logged for the rule as
+every failure is: as one failure of the rule, the engine's, whatever nodes
+of the rule failed before the engine did — their failures are not counted
+beside it, in `http_exporter_rule_failures_total` or as missing values, and
+it is the engine's failure that is logged. The error names the metric, the
 expression — a label's, with the label's name — and what the engine said:
 
 ```text
@@ -2222,17 +2222,18 @@ metric "job_up" label "kind": XPath "substring(../@kind, '1')" cannot be evaluat
 ```
 
 What follows `failed on it:` are the engine's own words. Where they start
-with `runtime error:`, as for `//a = true()`, the fault is in the engine or
-in the exporter and not in an argument: write the expression another way,
-as `count(//a) > 0`. What follows `runtime error:` may change with the
-response — `substring(//v, 2, 10)` over a text shorter than that fails with
-`slice bounds out of range [:3] with length 2`, and with other numbers over
-another text — so the log takes such a failure for the same one whatever
-follows, and holds back its repeats. With `--log.level=debug` the stack of
-a runtime error is logged, in a line `the XPath engine failed with a runtime
-error` with the collector and the metric, under every `error_mode`, `ignore`
-included, as it is in a debug probe's report, which shows the lines of
-every level; it is in no error text and in no line of another level.
+with `runtime error:`, as for `substring(//v, 0 div 0)`, a position that is
+no number, the fault is in the engine or in the exporter and not in an
+argument: write the expression another way. What follows `runtime error:`
+may change with the response — `substring(//v, 0 div 0)` over a text of two
+characters fails with `slice bounds out of range [9223372036854775807:2]`,
+and with another length over another text — so the log takes such a failure
+for the same one whatever follows, and holds back its repeats. With
+`--log.level=debug` the stack of a runtime error is logged, in a line
+`the XPath engine failed with a runtime error` with the collector and the
+metric, under every `error_mode`, `ignore` included, as it is in a debug
+probe's report, which shows the lines of every level; it is in no error text
+and in no line of another level.
 
 ### When a stage of the probe fails
 

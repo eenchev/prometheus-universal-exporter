@@ -25,7 +25,7 @@ import (
 // whose every move but three is its own. MoveToRoot goes to the top of the
 // tree the node is in, Copy gives another of the same kind, and MoveTo takes
 // the other's place whole, which the library's refuses for a navigator with
-// another root. Nothing else in the engine (antchfx/xpath v1.3.8) asks a
+// another root. Nothing else in the engine (antchfx/xpath v1.3.9) asks a
 // navigator for its root: an absolute path is its one caller of MoveToRoot,
 // and the order of nodes is told by walking to the top through MoveToParent.
 //

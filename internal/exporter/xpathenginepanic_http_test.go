@@ -5,7 +5,9 @@ package exporter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -283,6 +285,19 @@ func TestAnEngineFailureAfterNodesThatFailedIsTheOneLoggedAndCounted(t *testing.
 	}
 }
 
+// substringNaNFailure is the runtime error the XPath engine fails with on
+// substring() with the position NaN and no length, over a text of n
+// characters: antchfx/xpath v1.3.9 slices the text's characters from the
+// position less one with no check of NaN (func.go:529), and which number NaN
+// converts to is the platform's, so the bounds are asked of the same slicing
+// here (as in internal/transform's tests).
+func substringNaNFailure(n int) (said string) {
+	defer func() { said = fmt.Sprint(recover()) }()
+	characters, start := make([]rune, n), math.NaN()
+	_ = characters[int(start)-1:]
+	return ""
+}
+
 // A runtime error the engine fails with on a rule under ignore leaves no
 // line in the log at the level the exporter runs at, and no stack anywhere a
 // scraper or the log's reader sees; a debug probe's report, which has the
@@ -304,7 +319,7 @@ func TestARuntimeErrorOfTheEngineThroughAProbe(t *testing.T) {
 		c.Transform = model.TransformConfig{Type: "xpath"}
 		c.Metrics = []model.MetricRule{
 			{Name: "cells", Type: model.GaugeMetricType, Expression: "count(//a)"},
-			{Name: "cut", Type: model.GaugeMetricType, Expression: "substring(//a, 2, 10)", ErrorMode: mode},
+			{Name: "cut", Type: model.GaugeMetricType, Expression: "substring(//a, 0 div 0)", ErrorMode: mode},
 		}
 		collectors = append(collectors, c)
 	}
@@ -327,7 +342,7 @@ func TestARuntimeErrorOfTheEngineThroughAProbe(t *testing.T) {
 	}
 	server.SetProbeDebug(true)
 	report := probe("cut_ignore", "&debug=true")
-	if !strings.Contains(report, "the XPath engine failed with a runtime error") || !strings.Contains(report, "goroutine ") || !strings.Contains(report, "slice bounds out of range [:4] with length 3") {
+	if !strings.Contains(report, "the XPath engine failed with a runtime error") || !strings.Contains(report, "goroutine ") || !strings.Contains(report, substringNaNFailure(3)) {
 		t.Errorf("the debug probe's report has no line with the stack:\n%s", report)
 	}
 	var logged []string
@@ -341,7 +356,7 @@ func TestARuntimeErrorOfTheEngineThroughAProbe(t *testing.T) {
 			logged = append(logged, failure)
 		}
 	}
-	if want := `metric "cut" XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error: slice bounds out of range [:3] with length 2`; len(logged) != 1 || logged[0] != want {
+	if want := `metric "cut" XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: ` + substringNaNFailure(2); len(logged) != 1 || logged[0] != want {
 		t.Errorf("the failures logged are %q, want %q once", logged, want)
 	}
 }

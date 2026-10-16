@@ -16,10 +16,10 @@ import (
 // it then panics on when it evaluates them, by what the response holds:
 // `sum('abc')` and `sum(string(//a))` over text that is no number,
 // `//a[contains(@x, 5)]` once an `a` has an `x`, `substring(//a, '1')`,
-// `replace(//a, '(', '')`, `//a = true()`. Nothing recovered: the panic left
-// the transform, and with it the probe, which answered 500 or closed the
-// connection, lost the series of every other rule, and asked neither the
-// rule's error_mode nor on_transform_error.
+// `replace(//a, '(', '')`, `substring(//a, 0 div 0)`. Nothing recovered: the
+// panic left the transform, and with it the probe, which answered 500 or
+// closed the connection, lost the series of every other rule, and asked
+// neither the rule's error_mode nor on_transform_error.
 //
 // Such a panic is the failure of the rule that was being evaluated, like
 // any other failure of it: of its expression, of a label of it, or of the
@@ -45,10 +45,10 @@ import (
 // makes a failure of the rule of a panic while it is evaluated.
 //
 // Every panic is recovered, a runtime error of the exporter's own code
-// among them — the engine panics with those too, a nil dereference in
-// `//a = true()`, a slice out of range in `substring('abc', 0 div 0)`, and
-// the two cannot be told apart from here — and says so in its message,
-// which for a runtime error starts with "runtime error:".
+// among them — the engine panics with those too, a slice out of range in
+// `substring('abc', 0 div 0)`, and the two cannot be told apart from here —
+// and says so in its message, which for a runtime error starts with
+// "runtime error:".
 func evaluateXPathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, nodes xpathNodes[N], rule model.MetricRule, c *model.Collector, namespaces map[string]string, program *expr.XPathProgram) (err error) {
 	made := len(out.Metrics)
 	// How each label is read is decided here, once for the rule, and not
@@ -89,10 +89,10 @@ func evaluateXPathRule[N comparable](ctx context.Context, out *model.MetricSet, 
 // own words, without a stack.
 //
 // What a runtime error says after "runtime error:" moves with the response
-// — `slice bounds out of range [:3] with length 2` for `substring(//a, 2,
-// 10)` over text of two characters, and another length at the next — so the
-// failure is recognised by its text up to there (model.SameFailureAs), and
-// is one failure to the log however the numbers change. What the engine
+// — `slice bounds out of range [9223372036854775807:2]` for `substring(//a,
+// 0 div 0)` over text of two characters, and another length at the next — so
+// the failure is recognised by its text up to there (model.SameFailureAs),
+// and is one failure to the log however the numbers change. What the engine
 // raised itself, a string or an error of its own, is recognised by all of
 // its text.
 func xpathEngineFailure(kind string, rule model.MetricRule, plan []xpathLabel, failed any) error {

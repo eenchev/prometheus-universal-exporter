@@ -24,6 +24,21 @@ const maxHeartbeatBytes = 64 << 10
 // /healthz and /ready answers 401 to a request whose Authorization header is
 // not "Bearer <token>".
 func (a *Allocator) Handler(token string) http.Handler {
+	if token == "" {
+		return a.handler(nil)
+	}
+	return a.handler(func() (string, error) { return token, nil })
+}
+
+// HandlerReading is Handler with the token of f, read again when the file
+// changes (TokenFile).
+func (a *Allocator) HandlerReading(f *TokenFile) http.Handler {
+	return a.handler(f.Token)
+}
+
+// handler is Handler with token giving the token for each request, nil for
+// none.
+func (a *Allocator) handler(token func() (string, error)) http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("POST "+allocapi.HeartbeatPath, a.serveHeartbeat)
 	api.HandleFunc("GET "+allocapi.BundlePath, a.serveBundle)
@@ -44,15 +59,16 @@ func (a *Allocator) Handler(token string) http.Handler {
 	return mux
 }
 
-// authorized refuses a request without the token, when there is one. The
-// token is compared in constant time.
-func authorized(token string, next http.Handler) http.Handler {
-	if token == "" {
+// authorized refuses a request without the token, when there is one, and
+// every request while the token cannot be had. The token is compared in
+// constant time.
+func authorized(token func() (string, error), next http.Handler) http.Handler {
+	if token == nil {
 		return next
 	}
-	want := []byte("Bearer " + token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+		current, err := token()
+		if err != nil || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+current)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="pue-allocator"`)
 			http.Error(w, "this endpoint needs the allocator's bearer token in the Authorization header", http.StatusUnauthorized)
 			return

@@ -23028,6 +23028,12 @@ The two together, and the configuration checked without the files it names (§ 4
   the one that has it, and answers, and once all have it each probe goes to
   its owner and is answered. It takes about 0.2s, 0.5s under the race
   detector.
+- The allocator's token file is read again when it changes: a rotated
+  token, of another length or of the same length with a later time, is
+  required from the next request and the old one refused; a file emptied or
+  removed refuses every request, logged once for each reason however many
+  requests come, and a token written back is required again, logged once as
+  usable again; a token file empty or missing at the start is refused.
 
 # 35. Documentation requirements
 
@@ -24928,8 +24934,13 @@ among the live members of the member list (all live members if none is),
 narrowed to those whose heartbeat reports a bundle generation whose
 configuration has the job's collector when any does. With
 `--web.token-file`, every endpoint but `/healthz` and `/ready` MUST answer
-`401` to a request without `Authorization: Bearer <token>`; an empty token
-file MUST stop the start. The allocator MUST serve plain HTTP only.
+`401` to a request without `Authorization: Bearer <token>`; an empty or
+unreadable token file MUST stop the start. The file MUST be read again when
+its modification time or size changes, so a rotated token is required from
+the next request; a file that is empty or cannot be read after a change MUST
+refuse every such request with `401` until it holds a token, the failure
+logged once while it stays the same. The allocator MUST serve plain HTTP
+only.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,

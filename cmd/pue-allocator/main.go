@@ -86,15 +86,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
-	token := ""
+	var token *allocator.TokenFile
 	if *tokenFile != "" {
-		raw, err := os.ReadFile(*tokenFile)
-		if err != nil {
-			logger.Error("the token file cannot be read; exiting", "file", *tokenFile, "error", err)
-			return 1
-		}
-		if token = strings.TrimSpace(string(raw)); token == "" {
-			logger.Error("the token file is empty; write the token in it, or leave --web.token-file out", "file", *tokenFile)
+		if token, err = allocator.NewTokenFile(*tokenFile, logger); err != nil {
+			logger.Error(err.Error()+"; exiting", "file", *tokenFile)
 			return 1
 		}
 	}
@@ -117,8 +112,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Info("starting allocator", append([]any{"version", exporter.BuildVersion().Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "token", token != ""}, inputs.LogAttrs()...)...)
-	server := exporter.NewHTTPServer(*listenAddress, alloc.Handler(token))
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "token", token != nil}, inputs.LogAttrs()...)...)
+	handler := alloc.Handler("")
+	if token != nil {
+		handler = alloc.HandlerReading(token)
+	}
+	server := exporter.NewHTTPServer(*listenAddress, handler)
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.ListenAndServe() }()
 	select {

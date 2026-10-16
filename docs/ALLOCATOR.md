@@ -42,7 +42,7 @@ pue-allocator \
 | `--config.file` | `/etc/prometheus-universal-exporter/config.yaml` | The configuration the replicas are served, with the collector files it lists. |
 | `--static-targets-file` | none | The static target file, split among the replicas. |
 | `--probe-targets-file` | none | The probe targets file, served to Prometheus at `/v1/sd/<job>`. |
-| `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry. |
+| `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. |
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
@@ -222,7 +222,11 @@ draws no `unknown collector` answers while the new bundle spreads.
 
 Plain HTTP with JSON. With `--web.token-file`, every endpoint but `/healthz`
 and `/ready` answers `401` to a request without `Authorization: Bearer
-<token>`.
+<token>`. The file is read again when its modification time or size
+changes, so a rotated token is the one required from the next request. A
+file that is empty or missing at the start stops the allocator; one that
+becomes empty or unreadable later refuses every request with `401` until it
+holds a token again, logged once.
 
 | Endpoint | Caller | Answer |
 | --- | --- | --- |

@@ -33,6 +33,9 @@ func (s *Server) notReadyReasons() []string {
 		return []string{"the exporter is shutting down"}
 	}
 	var reasons []string
+	if s.manager.Awaiting() {
+		reasons = append(reasons, awaitingReadyReason)
+	}
 	cfg := s.manager.Get().OTLP
 	if failing := s.otlp.failing(cfg.Endpoint); cfg.Enabled && cfg.Endpoint != "" && cfg.UnreadyAfterFailures > 0 && failing >= cfg.UnreadyAfterFailures {
 		reasons = append(reasons, fmt.Sprintf("the last %d OTLP exports failed", failing))

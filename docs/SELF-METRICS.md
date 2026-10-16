@@ -161,6 +161,27 @@ happens to OTLP:
 rate(http_exporter_otlp_exports_total{result="failure"}[15m]) > 0
 ```
 
+## Target allocator
+
+An exporter in [allocator mode](CONFIGURATION.md#configuration-from-the-target-allocator)
+says how it keeps up with the allocator; one outside it has none of these:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_allocator_generation_info{generation}` | gauge | `1`, with the generation of the bundle in force; absent before the first. |
+| `http_exporter_allocator_last_sync_timestamp_seconds` | gauge | Unix time the exporter last heard from the allocator which bundle is its own, unchanged or new; `0` before the first. |
+| `http_exporter_allocator_sync_errors_total{stage}` | counter | Failed exchanges with the allocator, by `stage`: `heartbeat` (one per copy of the allocator that did not take it), `fetch` (the bundle request) or `write` (into the cache directory), each from zero. |
+| `http_exporter_allocator_bundle_refused_total` | counter | Bundles the exporter would not load; the bundle in force stays. |
+
+The reloads of the bundle's files are counted in the
+[configuration reload](#configuration-reloads) series too; an exporter that
+started without a bundle has none of those until the first is in force.
+
+```promql
+increase(http_exporter_allocator_bundle_refused_total[15m]) > 0
+time() - http_exporter_allocator_last_sync_timestamp_seconds > 120
+```
+
 ## Shared probes
 
 `http_exporter_probes_coalesced_total{collector="..."}` counts the probes that

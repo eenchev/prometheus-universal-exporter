@@ -128,7 +128,7 @@ pattern needs. See the
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](docs/SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.enable-probe-debug`, `?debug=<name>` [reports one scrape](docs/STATIC-TARGETS.md#debugging-a-static-target). |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
-| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it) or the exporter is shutting down, not after a rejected reload; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
+| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it), the exporter is shutting down, or in allocator mode before the first bundle, not after a rejected reload; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
 `/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
 
@@ -160,6 +160,11 @@ pattern needs. See the
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
 | `--web.enable-probe-debug` | off | Enable `/probe?...&debug=true`, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, the logs and what the probe would have answered, and `/static-targets?debug=<name>`, the same for one static target's scrape. The report shows what the target answered. See [Debugging a probe](docs/CONFIGURATION.md#debugging-a-probe). |
 | `--version` | off | Print the version, git revision, Go version, request types and sql drivers of the build (no sql drivers of a build without the `sql` type), and exit. The same is in the `http_exporter_build_info` self-metric. |
+| `--allocator.url` | none | Take the configuration and this exporter's share of the static targets from the target allocator at this `http://` URL. Cannot be given with `--config.file` or `--static-targets-file`. See [Configuration from the target allocator](docs/CONFIGURATION.md#configuration-from-the-target-allocator). |
+| `--allocator.cache-dir` | none | Directory the bundle from the allocator is kept in and loaded from, and a restart resumes from; required with `--allocator.url`. |
+| `--allocator.member` | the host name | This exporter's name in the allocator's member list. |
+| `--allocator.advertise` | first address, listen port | `host:port` Prometheus is sent to for this exporter's probes: the listen address's host, or else the host's first address that is not a loopback one, with the listen port. |
+| `--allocator.token-file` | none | File holding the bearer token sent to the allocator, read again for every request. |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 A flag takes its value as `--name=value`. An argument that is not a flag is refused with exit status `2`, at a start and with `--dry-run` alike, naming the argument: after `--config.watch true`, every flag that follows `true` would otherwise be left unread without a word.

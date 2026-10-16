@@ -2064,18 +2064,19 @@ rest MUST live under
 `internal/`, in packages layered so that each imports only packages before it in
 this order, without cycles:
 
-1. `model`: the shared data types.
-2. `allocapi`: what the target allocator and a replica say to each other
-   (§ 42.14d).
+1. `allocapi`: what the target allocator and an exporter in allocator mode
+   say to each other (§ 42.14d).
+2. `model`: the shared data types.
 3. `expr`: expression compilation and its caches.
 4. `fetch`: request types, probe parameters and transports.
 5. `decode`: response decoding and charset conversion.
 6. `transform`: transforms, metric rules and the Python worker pool.
 7. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-8. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+8. `allocclient`: the exporter's client of the target allocator.
+9. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-9. `allocator`: the target allocator (§ 42.14d).
+10. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.
@@ -6090,7 +6091,8 @@ Recommended behavior:
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
   through; from a `SIGTERM` or `SIGINT` on, while the exporter shuts down
-  (§ 30); `200` otherwise. `otlp.unready_after_failures` MUST default to 0,
+  (§ 30); in allocator mode, until a bundle is in force (§ 42.14e); `200`
+  otherwise. `otlp.unready_after_failures` MUST default to 0,
   which never makes the exporter unready over OTLP: an exporter whose exports
   fail still answers probes, and a Kubernetes pod that is not ready stops
   receiving them. The failures MUST be counted per endpoint, so a reload that
@@ -24717,6 +24719,93 @@ file MUST stop the start. The allocator MUST serve plain HTTP only.
 `pue_allocator_member_changes_total`. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
+
+### 42.14e Allocator mode
+
+With `--allocator.url`, the exporter MUST take its configuration, collector
+files and static targets from the target allocator rather than from files of
+its own (allocator mode), as the bundle of files the allocator serves it
+(`internal/allocapi`). `--allocator.url` MUST be an `http://` URL with a
+host and no user, query or fragment. `--allocator.cache-dir` MUST be given
+with it. `--allocator.url` together with `--config.file` or
+`--static-targets-file` given explicitly, and an `--allocator.` flag without
+`--allocator.url`, MUST be command-line errors (exit status `2`) naming the
+flags, at a start and with `--dry-run` alike. `--allocator.member` MUST
+default to the host name, and `--allocator.advertise` to the
+`--web.listen-address` host when it is one address that is neither loopback
+nor unspecified, else to the host's first address that is neither loopback
+nor link-local, IPv4 before IPv6, with the listen port; an
+`--allocator.advertise` that is not `host:port` MUST be refused.
+
+The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
+at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
+put in force or refused, to every address the URL's host resolves to, each at
+the URL's port with the URL's host as its `Host` header, or to the host alone
+when it is an IP address. A heartbeat MUST carry the member, the advertised
+address, the generation in force (empty before the first), the last refused
+generation with its error until a later bundle is put in force, and
+`shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
+exporter MUST send one at once, bounded by 2 seconds, before
+`--web.shutdown-delay` begins. With `--allocator.token-file`, every request
+MUST carry `Authorization: Bearer <token>`, the file read again for each.
+
+The exporter MUST ask for its bundle with `GET
+/v1/bundle?member=<member>&wait=30s`, with `If-None-Match: <generation>`
+naming the last generation it fetched (put in force or refused), and MUST
+take a `304`, or a bundle of that generation or of the one in force, as no
+change. A failed request or write MUST be tried again after a wait doubling
+from 1 second to 30, and an answer without a change that came within 1
+second MUST wait 1 second before the next request, so the exporter never
+asks as fast as the allocator answers.
+
+A new bundle MUST be refused, before anything is written, when
+`allocapi.CheckFiles` refuses it, when its generation is not
+`allocapi.Generation` of its files, or when a top-level name begins with
+`..`. Otherwise it MUST be written into a new directory of the cache
+directory, files `0600` and directories `0700`, and checked there as a
+reload would check it, the configuration and the static target file
+together; a bundle that fails MUST be refused, its directory removed and the
+files in force kept. A bundle that passes MUST be put in place by replacing
+one symbolic link, `..data`, through which the cache directory's top-level
+names link, under the configuration manager's reload lock and followed by a
+reload of both files with the trigger `allocator` under the same lock, so no
+reader opening a file through the cache directory finds files of two
+generations, and no reload reads them half replaced. When that reload is
+refused nonetheless, the previous files MUST be put back and reloaded, and
+the bundle refused. The other generations' directories MUST be removed once
+a bundle is in force. A refused bundle MUST NOT be fetched again until the
+allocator serves another generation.
+
+The manager MUST read `<cache-dir>/config.yaml` and
+`<cache-dir>/static-targets.yaml` with the loader of file mode, so the
+`--config.expand-env`, `--static-targets.expand-env` and `--config.watch`
+flags apply; an absent static target file MUST be a file without targets. At
+startup, a bundle in the cache directory that loads MUST be put in force at
+once, ready, whether or not the allocator answers. Without one, or with one
+that does not load (logged as a warning), the exporter MUST serve its
+endpoints with an empty configuration: `/ready` MUST answer `503` with `not
+ready: no configuration yet: waiting for the allocator`, `/probe` MUST answer
+`503` with `no configuration yet: waiting for the allocator at <url>`, the
+static targets endpoint MUST have no targets, the self-metrics MUST be
+served, and no reload status (§ 22.0b) MUST be reported until a
+configuration is in force. Only a reload that puts a configuration in force
+MUST end that state. `--dry-run` with `--allocator.url` MUST check the
+bundle in the cache directory, and fail when there is none.
+
+The exporter in allocator mode MUST expose, from its start:
+
+```text
+http_exporter_allocator_generation_info{generation}     gauge
+http_exporter_allocator_last_sync_timestamp_seconds     gauge
+http_exporter_allocator_sync_errors_total{stage}        counter
+http_exporter_allocator_bundle_refused_total            counter
+```
+
+`generation_info` MUST be 1 for the generation in force, absent before the
+first; the timestamp MUST be the last answer to a bundle request, 0 before
+one; `stage` MUST be `heartbeat` (one per address a heartbeat failed for),
+`fetch` or `write`, each from zero. An exporter outside allocator mode MUST
+have none of them.
 
 ## 42.15 Redirect following and HTTP/2 negotiation
 

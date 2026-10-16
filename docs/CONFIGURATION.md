@@ -4222,6 +4222,9 @@ when the exporter should be sent probes, and `503` when it should not, with one
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.
+- In [allocator mode](#configuration-from-the-target-allocator), no bundle
+  from the allocator is in force yet: `not ready: no configuration yet:
+  waiting for the allocator`. Ready once the first is.
 
 Neither endpoint needs credentials, so the reasons never include an error's
 text; the log and the [self-metrics](SELF-METRICS.md) have the details.
@@ -4460,6 +4463,66 @@ docker run --rm -v "$PWD:/config:ro" \
 In Kubernetes, run it as a Job or an init container rather than as the exporter
 itself: a pod started with `--dry-run` validates and exits instead of serving,
 which is why the Helm chart rejects it in `extraArgs`.
+
+## Configuration from the target allocator
+
+With `--allocator.url`, the exporter takes its configuration from the target
+allocator (`pue-allocator`) rather than from files of its own: allocator mode.
+The allocator holds the configuration, its collector files and the static
+targets, splits the static targets among the exporters that heartbeat to it,
+and serves each its bundle: the configuration with its collector files, and
+its share of the static targets. The exporter writes the bundle into
+`--allocator.cache-dir` and loads it there as it loads mounted files, so
+`--config.expand-env`, `--static-targets.expand-env`, `--config.watch` and
+`SIGHUP` work as without the allocator, on the files in the cache directory.
+
+```sh
+prometheus-universal-exporter \
+  --allocator.url=http://pue-allocator:8080 \
+  --allocator.cache-dir=/var/cache/pue
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--allocator.url` | none | The allocator's `http://` URL. It turns allocator mode on. |
+| `--allocator.cache-dir` | none, required | The directory the bundle is written into and loaded from. A restart starts with the bundle there. |
+| `--allocator.member` | the host name | This exporter's name among the allocator's members: in Kubernetes the pod's name, which the host name is. |
+| `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. |
+| `--allocator.token-file` | none | A file holding a bearer token sent with every request to the allocator, read again for each, so a rotated Secret takes effect at once. |
+
+`--config.file` and `--static-targets-file` cannot be given with
+`--allocator.url`, nor the other `--allocator.` flags without it: the start is
+refused with exit status `2`, naming both flags. Files a configuration names,
+such as CA files, descriptor sets, `known_hosts` and credential files, are not
+in the bundle: they are mounted on the exporter as without the allocator, at
+the paths the configuration names.
+
+The exporter heartbeats to the allocator every 10 seconds, to every address
+the URL's host name resolves to, so two copies of the allocator behind a
+headless Service both hear it; each heartbeat says which bundle generation it
+has in force, and whether it refused the last one. It asks for its bundle with
+a request the allocator holds for up to 30 seconds until the bundle changes.
+A new bundle is written beside the one in force, checked as a reload would
+check it, and put in place by replacing one symbolic link, so nothing reading
+the directory finds part of one bundle and part of another; the exporter then
+reloads it, with `"trigger":"allocator"` in the log. A bundle that does not
+load is refused: the one in force stays, the refusal is logged and reported in
+the next heartbeat, and it is not asked for again until the allocator has
+another. A request that fails is tried again after a wait that doubles from
+one second to 30. On `SIGTERM` or `SIGINT` the exporter tells the allocator at
+once that it is shutting down, before [`--web.shutdown-delay`](#shutting-down),
+so its share of the targets moves to the others.
+
+An exporter whose cache directory holds a bundle that loads starts with it at
+once, ready, whether or not the allocator answers. One without, or whose
+bundle does not load, serves its endpoints while it waits for the first:
+`/ready` answers `503` (`not ready: no configuration yet: waiting for the
+allocator`), `/probe` answers `503` with `no configuration yet: waiting for
+the allocator at <url>`, the static targets endpoint has no targets and the
+self-metrics are served. The first bundle makes it ready. The
+[self-metrics](SELF-METRICS.md#target-allocator) say how it keeps up with the
+allocator. `--dry-run` with `--allocator.url` checks the bundle in the cache
+directory, the one a restart would start with, and fails when there is none.
 
 ## Related pages
 

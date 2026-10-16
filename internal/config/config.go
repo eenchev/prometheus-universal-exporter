@@ -1202,6 +1202,15 @@ type Manager struct {
 	// prepared are given what every reload is about to put in force
 	// (OnPrepare), under reloadMu.
 	prepared []func(*model.Config, *model.StaticTargetFile)
+	// awaiting says nothing has been put in force yet: the manager of an
+	// exporter in allocator mode that started without a bundle
+	// (NewAwaitingManager) holds an empty configuration until its first
+	// reload puts one in force (allocatormode.go).
+	awaiting atomic.Bool
+	// absentTargets says a static target file that does not exist is one
+	// without targets rather than a file that cannot be read
+	// (AllowAbsentTargets).
+	absentTargets bool
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -1791,6 +1800,9 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	// Reading the file on its own opens no other: one refused here is read
 	// again when it changes, and for nothing else.
 	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
+	if m.absentTargets && targetsAbsent(m.targetPath) {
+		return &model.StaticTargetFile{}, nil
+	}
 	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
 	if err == nil {
 		err = ValidateStaticTargets(f)
@@ -1821,6 +1833,7 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	}
 	m.current.Store(&pair)
 	if c != nil {
+		m.awaiting.Store(false)
 		m.installedConfig(trigger, c)
 	}
 	if f != nil {

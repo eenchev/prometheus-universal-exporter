@@ -23137,6 +23137,13 @@ of everything else. It MUST NOT carry reference material — decoder and transfo
 detail, caching, transport settings, authentication models, operator manifests —
 because a README that answers every question stops answering the first one.
 
+What the exporter is MUST cover every source it reads, not the first one it
+learned: the README's tagline and the sources paragraph after it MUST each name
+every request type in the tree, and a test MUST find each
+`internal/fetch/requesttype_<name>.go` named in both, failing for a request
+type the test has no README name for, so a new type cannot ship while the
+README still describes the exporter without it.
+
 Each subject above MUST live in a dedicated page under `docs/`, and the README's
 index MUST link every one of them. The Helm chart's own README remains the
 reference for chart values, per [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md)

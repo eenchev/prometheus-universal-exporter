@@ -340,8 +340,10 @@ targets and the probe jobs, are mounted into the allocator only; a change to
 them rolls the allocator, and reaches the replicas as a new bundle without a
 restart. The replicas get `--allocator.url`, their pod's name as the member
 and their pod's IP as the address to advertise, keep their bundle in an
-`emptyDir`, or a claim per pod with `allocator.cache.persistent`, and keep the
-credential Secrets mounted, which the allocator does not need. Each probe job
+`emptyDir`, and keep the credential Secrets mounted, which the allocator does
+not need. The `emptyDir` survives a container restart but not the pod's
+replacement: a new pod starts with no bundle, not ready, and waits for the
+allocator. Each probe job
 becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
 
 ## Without Kubernetes

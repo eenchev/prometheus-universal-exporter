@@ -6,13 +6,9 @@
 {{- include "prometheus-universal-exporter.validateSSHAuth" . }}
 {{- include "prometheus-universal-exporter.validateSQLAuth" . }}
 {{- include "prometheus-universal-exporter.validateAllocator" . }}
-{{- /* With the allocator and a persistent cache the exporter is a
-       StatefulSet, so each pod keeps a claim of its own across
-       replacements; otherwise a Deployment. */}}
-{{- $kind := include "prometheus-universal-exporter.workloadKind" . }}
 {{- $allocator := and .Values.allocator .Values.allocator.enabled }}
 apiVersion: apps/v1
-kind: {{ $kind }}
+kind: Deployment
 metadata:
   name: {{ include "prometheus-universal-exporter.fullname" . }}
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
@@ -26,13 +22,6 @@ spec:
          count here would be put back on every upgrade. */}}
   replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "replicaCount" .Values.replicaCount 0 2147483647) }}
   {{- end }}
-  {{- if eq $kind "StatefulSet" }}
-  {{- /* A StatefulSet has no strategy of a Deployment's: it replaces its
-         pods one at a time. Its pods start and stop in parallel, as a
-         Deployment's do, since none waits for another. */}}
-  serviceName: {{ include "prometheus-universal-exporter.headlessName" . }}
-  podManagementPolicy: Parallel
-  {{- else }}
   {{- /* rollingUpdate belongs to the RollingUpdate strategy alone: Kubernetes
          refuses a Deployment that carries it with Recreate, and the default
          values carry it, so it is left out for any other type. */}}
@@ -44,7 +33,6 @@ spec:
     {{- include "prometheus-universal-exporter.rollingUpdateCheck" $strategy.rollingUpdate }}
     rollingUpdate: {{- toYaml $strategy.rollingUpdate | nindent 6 }}
     {{- end }}
-  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
@@ -274,10 +262,8 @@ spec:
             {{- end }}
       volumes:
         {{- if $allocator }}
-        {{- if ne $kind "StatefulSet" }}
         - name: allocator-cache
           emptyDir: {}
-        {{- end }}
         {{- with .Values.allocator.tokenSecret.name }}
         - name: allocator-token
           secret:
@@ -377,18 +363,3 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-  {{- if eq $kind "StatefulSet" }}
-  {{- with .Values.allocator.cache }}
-  volumeClaimTemplates:
-    - metadata:
-        name: allocator-cache
-      spec:
-        accessModes: [ReadWriteOnce]
-        {{- with .storageClassName }}
-        storageClassName: {{ . | quote }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .size | default "16Mi" | quote }}
-  {{- end }}
-  {{- end }}

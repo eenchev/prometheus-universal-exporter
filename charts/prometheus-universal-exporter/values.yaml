@@ -725,17 +725,6 @@ allocator:
   #         - https://shop.example
   #         - https://docs.example
   probeJobs: []
-  # Where each exporter pod keeps the last configuration and share it was
-  # given. An emptyDir by default, which survives a container restart but
-  # not the pod. persistent: true runs the exporter as a StatefulSet with a
-  # PersistentVolumeClaim of size per pod instead, so a replaced pod also
-  # starts from its last configuration; the claims outlive the release.
-  # persistent needs enabled.
-  cache:
-    persistent: false
-    size: 16Mi
-    # Empty uses the cluster's default StorageClass.
-    storageClassName: ""
   # A NetworkPolicy for the allocator: ingress on its port only from this
   # release's exporter pods and from the peers in prometheus, the Prometheus
   # pods that fetch the probe targets. The default peer is a pod labelled

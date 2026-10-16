@@ -517,7 +517,7 @@
     "allocator": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The target allocator: a Deployment of pue-allocator serving config.data, its static targets and its probe jobs, with the exporter pods in allocator mode. Not with staticTargets.enabled nor with an enabled monitors entry; allocator.cache.persistent only with enabled.",
+      "description": "The target allocator: a Deployment of pue-allocator serving config.data, its static targets and its probe jobs, with the exporter pods in allocator mode. Not with staticTargets.enabled nor with an enabled monitors entry.",
       "properties": {
         "enabled": {"type": "boolean"},
         "replicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
@@ -568,15 +568,6 @@
             }
           }
         },
-        "cache": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "persistent": {"type": "boolean", "description": "Run the exporter as a StatefulSet with a PersistentVolumeClaim per pod for its cache, instead of an emptyDir."},
-            "size": {"type": ["string", "number"], "minLength": 1, "description": "The claim's size, a Kubernetes quantity."},
-            "storageClassName": {"type": "string"}
-          }
-        },
         "networkPolicy": {
           "type": "object",
           "additionalProperties": false,
@@ -617,11 +608,6 @@
       "description": "With the allocator, probe targets come from allocator.probeJobs: an enabled monitors entry is refused beside allocator.enabled.",
       "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
       "then": {"properties": {"monitors": {"items": {"properties": {"enabled": {"const": false}}}}}}
-    },
-    {
-      "description": "allocator.cache.persistent keeps what the allocator served, so it needs allocator.enabled.",
-      "if": {"properties": {"allocator": {"properties": {"cache": {"properties": {"persistent": {"const": true}}, "required": ["persistent"]}}, "required": ["cache"]}}, "required": ["allocator"]},
-      "then": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}}
     }
   ],
 

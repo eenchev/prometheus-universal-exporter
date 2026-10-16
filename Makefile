@@ -339,9 +339,8 @@ helm-test: helm-version
 	echo "$$out" | grep -q 'namespaceSelector:'; \
 	echo "$$out" | grep -q '^    - a$$'
 	@# The target allocator: its Deployment and the exporter in allocator
-	@# mode, with the ScrapeConfig of a probe job; a persistent cache runs the
-	@# exporter as a StatefulSet; and what the allocator cannot run with is
-	@# rejected.
+	@# mode, with the ScrapeConfig of a probe job; and what the allocator
+	@# cannot run with is rejected.
 	@set -eu; \
 	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'allocator.probeJobs=[{"name":"websites","collector":"example","targets":["https://shop.example"]}]')"; \
 	echo "$$out" | grep -q 'command: \["/bin/pue-allocator"\]'; \
@@ -351,16 +350,9 @@ helm-test: helm-version
 		echo "the exporter in allocator mode was given --config.file" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set allocator.cache.persistent=true)"; \
-	echo "$$out" | grep -q 'kind: StatefulSet'; \
-	echo "$$out" | grep -q 'storage: "16Mi"'; \
 	echo "$$out" | python3 tools/check-manifests.py; \
 	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml >/dev/null 2>&1; then \
 		echo "helm template accepted the allocator beside staticTargets.enabled" >&2; \
-		exit 1; \
-	fi; \
-	if helm template test charts/prometheus-universal-exporter --set allocator.cache.persistent=true >/dev/null 2>&1; then \
-		echo "helm template accepted allocator.cache.persistent without the allocator" >&2; \
 		exit 1; \
 	fi; \
 	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]' >/dev/null 2>&1; then \

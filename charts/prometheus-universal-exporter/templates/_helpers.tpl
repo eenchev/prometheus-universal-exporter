@@ -926,19 +926,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "prometheus-universal-exporter.allocatorTokenDir" -}}
 /var/run/prometheus-universal-exporter/allocator-token
 {{- end }}
-{{- /* The exporter runs as a StatefulSet when its cache is persistent, so
-       each pod keeps a claim of its own; a Deployment otherwise. */ -}}
-{{- define "prometheus-universal-exporter.workloadKind" -}}
-{{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.cache.persistent -}}
-StatefulSet
-{{- else -}}
-Deployment
-{{- end -}}
-{{- end }}
-{{- /* The headless Service a StatefulSet names as its serviceName. */ -}}
-{{- define "prometheus-universal-exporter.headlessName" -}}
-{{- printf "%s-headless" (include "prometheus-universal-exporter.fullname" . | trunc 54 | trimSuffix "-") -}}
-{{- end }}
 {{- /* Whether the allocator serves static targets: the static targets
        monitor then reads every exporter pod's share. */ -}}
 {{- define "prometheus-universal-exporter.allocatorStaticTargets" -}}
@@ -960,14 +947,9 @@ true
 {{- end -}}
 {{- end }}
 {{- /* The allocator's settings, and what the exporter cannot do beside it.
-       The values schema refuses the same; this stands where it is skipped.
-       allocator.cache.persistent is checked whether or not the allocator is
-       enabled: it would otherwise say nothing. */ -}}
+       The values schema refuses the same; this stands where it is skipped. */ -}}
 {{- define "prometheus-universal-exporter.validateAllocator" -}}
 {{- $allocator := .Values.allocator | default dict -}}
-{{- if and ($allocator.cache | default dict).persistent (not $allocator.enabled) -}}
-{{- fail "allocator.cache.persistent is true but allocator.enabled is false; the cache keeps what the allocator served, so enable the allocator or leave allocator.cache.persistent false" -}}
-{{- end -}}
 {{- if $allocator.enabled -}}
 {{- if .Values.staticTargets.enabled -}}
 {{- fail "allocator.enabled and staticTargets.enabled are both true, but with the allocator the exporter pods read no static target file: the allocator splits the static targets over them; move staticTargets.data to allocator.staticTargets.data and set staticTargets.enabled to false" -}}

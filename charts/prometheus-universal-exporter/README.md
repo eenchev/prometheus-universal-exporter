@@ -1058,8 +1058,10 @@ allocator:
   file, `--allocator.url` pointing at the allocator's Service, the pod's name
   as its member name and the pod's IP and port as the address Prometheus
   probes it at, and a cache directory, an `emptyDir`, where the pod keeps the
-  last configuration and share it was given, so a restart while the
-  allocator is away resumes from it. The credential Secrets (`targetAuth`,
+  last configuration and share it was given. The `emptyDir` survives a
+  container restart, so a restart while the allocator is away resumes from
+  it, but not the pod's replacement: a new pod starts empty and waits for the
+  allocator. The credential Secrets (`targetAuth`,
   `webAuth`, `sshAuth`, `sqlAuth`) and `extraVolumes` stay mounted as before:
   the configuration names their files by path. The pods are not ready, and
   answer `/probe` with `503`, until they have a configuration;
@@ -1084,8 +1086,6 @@ allocator:
 | `allocator.tokenSecret.name` / `key` | `""` / `token` | A Secret holding a shared bearer token: the allocator requires it, the exporter pods send it and the ScrapeConfigs present it. |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, and optionally `params`, `labels` and `shard_key: address`. |
-| `allocator.cache.persistent` | `false` | Run the exporter as a StatefulSet with a claim per pod for the cache instead of an `emptyDir`; needs `enabled`. |
-| `allocator.cache.size` / `storageClassName` | `16Mi` / `""` | The claim's size and StorageClass, empty for the cluster's default. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
@@ -1093,19 +1093,12 @@ allocator:
 | `allocator.scrapeConfig.refreshInterval` / `interval` / `scrapeTimeout` | `30s` / `""` / `""` | How often Prometheus reads the targets, and the probes' interval and timeout; empty leaves Prometheus's defaults. A `scrapeTimeout` longer than `interval` fails rendering. |
 | `allocator.scrapeConfig.labels` | `{}` | Added to each ScrapeConfig. |
 
-With `allocator.cache.persistent: true` the exporter is a StatefulSet named as
-the Deployment was, whose pods start and stop in parallel, with a headless
-Service `<fullname>-headless` beside the exporter's Service; a replaced pod then
-also starts from its last configuration. The claims outlive the release, as a
-StatefulSet's do; delete them by hand after uninstalling. `strategy` applies to
-the Deployment only. Autoscaling scales the StatefulSet.
-
 The chart refuses, while rendering: `allocator.enabled` beside
 `staticTargets.enabled` (move the document to `allocator.staticTargets.data`);
 `allocator.enabled` beside an enabled `monitors` entry, since probe targets
 then come from `allocator.probeJobs` (move its targets to a probe job);
 `staticTargets.monitor.targets` beside the allocator, since each pod holds only
-its share; `allocator.cache.persistent` without `allocator.enabled`; a probe
+its share; a probe
 job whose collector the configuration does not define; and an `env` entry
 named `POD_NAME` or `POD_IP`, which the chart sets.
 

@@ -9,8 +9,7 @@ import (
 )
 
 // The chart's target allocator: allocator.enabled deploys pue-allocator beside
-// the exporter and switches the exporter pods to allocator mode, and
-// allocator.cache.persistent runs the exporter as a StatefulSet. The tests
+// the exporter and switches the exporter pods to allocator mode. The tests
 // render the chart with helm and read the manifests as Kubernetes and the
 // Prometheus Operator would, parsed rather than searched for text.
 
@@ -332,48 +331,25 @@ func TestChartRendersAScrapeConfigPerProbeJob(t *testing.T) {
 	}
 }
 
-// With allocator.cache.persistent the exporter is a StatefulSet whose pods
-// each claim allocator.cache.size for the cache, named by a headless Service
-// that the monitors, which select the exporter's Service by its labels, do
-// not select; the HorizontalPodAutoscaler scales the StatefulSet.
-func TestChartRunsTheExporterAsAStatefulSetWithAPersistentCache(t *testing.T) {
+// In allocator mode the exporter is always a Deployment, scaled by the
+// HorizontalPodAutoscaler, with no Service of its own beside its one Service,
+// and the values schema refuses an allocator.cache key: the cache is the
+// emptyDir alone.
+func TestChartRunsTheExporterAsADeploymentInAllocatorMode(t *testing.T) {
 	helm := requireHelm(t)
-	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set", "allocator.cache.persistent=true", "--set", "allocator.cache.storageClassName=fast", "--set", "autoscaling.enabled=true", "--api-versions", "monitoring.coreos.com/v1/ServiceMonitor")
-	if _, found := docs["Deployment/test-prometheus-universal-exporter"]; found {
-		t.Error("the exporter is still a Deployment")
-	}
-	set := manifest(t, docs, "StatefulSet/test-prometheus-universal-exporter")
-	if text(path(set, "spec", "serviceName")) != "test-prometheus-universal-exporter-headless" || text(path(set, "spec", "podManagementPolicy")) != "Parallel" {
-		t.Error("the StatefulSet does not name the headless Service or does not start its pods in parallel")
-	}
-	if path(set, "spec", "strategy") != nil {
-		t.Error("the StatefulSet carries a Deployment's strategy, which Kubernetes refuses")
-	}
-	claim := path(set, "spec", "volumeClaimTemplates", "0")
-	if text(path(claim, "metadata", "name")) != "allocator-cache" || text(path(claim, "spec", "resources", "requests", "storage")) != "16Mi" || text(path(claim, "spec", "storageClassName")) != "fast" {
-		t.Error("the StatefulSet does not claim 16Mi of the class given for the cache")
-	}
-	if named(path(set, "spec", "template", "spec", "volumes"), "allocator-cache") != nil {
-		t.Error("the StatefulSet also has a cache volume of its own beside the claim")
-	}
-	if text(path(manifest(t, docs, "HorizontalPodAutoscaler/test-prometheus-universal-exporter"), "spec", "scaleTargetRef", "kind")) != "StatefulSet" {
-		t.Error("the HorizontalPodAutoscaler does not scale the StatefulSet")
-	}
-	headless := manifest(t, docs, "Service/test-prometheus-universal-exporter-headless")
-	if text(path(headless, "spec", "clusterIP")) != "None" || !selects(matchLabels(path(headless, "spec", "selector")), matchLabels(path(set, "spec", "template", "metadata", "labels"))) {
-		t.Error("the headless Service is not headless over the exporter's pods")
-	}
-	if selects(matchLabels(path(manifest(t, docs, "ServiceMonitor/test-prometheus-universal-exporter-self"), "spec", "selector", "matchLabels")), matchLabels(path(headless, "metadata", "labels"))) {
-		t.Error("the self-metrics monitor selects the headless Service too, so it would scrape every pod twice")
-	}
-	manifest(t, docs, "Service/test-prometheus-universal-exporter")
-
-	// The emptyDir and the Deployment are what the default gives.
-	docs = manifests(t, helm, "--set", "allocator.enabled=true")
-	if _, found := docs["Service/test-prometheus-universal-exporter-headless"]; found {
-		t.Error("the headless Service is rendered without a persistent cache")
-	}
+	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set", "autoscaling.enabled=true")
 	manifest(t, docs, "Deployment/test-prometheus-universal-exporter")
+	if text(path(manifest(t, docs, "HorizontalPodAutoscaler/test-prometheus-universal-exporter"), "spec", "scaleTargetRef", "kind")) != "Deployment" {
+		t.Error("the HorizontalPodAutoscaler does not scale the Deployment")
+	}
+	for name := range docs {
+		if strings.HasPrefix(name, "StatefulSet/") || (strings.HasPrefix(name, "Service/") && name != "Service/test-prometheus-universal-exporter" && name != "Service/test-prometheus-universal-exporter-allocator") {
+			t.Errorf("allocator mode renders %s", name)
+		}
+	}
+	if out, ok := helmTemplate(t, helm, chartDir, "--set", "allocator.enabled=true", "--set", "allocator.cache.persistent=true"); ok || !strings.Contains(out, "cache") {
+		t.Errorf("the values schema accepted allocator.cache, or refused it without naming it (%v):\n%s", ok, out)
+	}
 }
 
 // In allocator mode the exporter pods' checksum leaves the configuration
@@ -450,8 +426,6 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 	}{
 		"the allocator beside static targets": {[]string{"--set", "allocator.enabled=true", "--set", "staticTargets.enabled=true", "--set", "staticTargets.data=targets: []"},
 			"staticTargets.enabled", "allocator.enabled and staticTargets.enabled are both true"},
-		"a persistent cache without the allocator": {[]string{"--set", "allocator.cache.persistent=true"},
-			"allocator.enabled", "allocator.cache.persistent is true but allocator.enabled is false"},
 		"a probe monitor beside the allocator": {[]string{"--set", "allocator.enabled=true", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example"}]`},
 			"monitors.0.enabled", "monitors entry apps is enabled beside allocator.enabled"},
 		"a probe job of an unknown collector": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"nope"}]`},

@@ -88,8 +88,8 @@ Not every listed template must be rendered by default, but the chart structure M
 
 ### 33.1 Deployment
 
-The chart MUST deploy the exporter as a Kubernetes `Deployment`, or, with
-the target allocator's persistent cache, as a `StatefulSet` (§ 33.10c).
+The chart MUST deploy the exporter as a Kubernetes `Deployment`, with the
+target allocator too (§ 33.10c).
 
 The chart MUST expose the exporter's process settings as values rather than
 hardcoding them in the Pod template. At minimum `server.listenAddress` MUST set
@@ -791,15 +791,11 @@ environment variables `POD_NAME` and `POD_IP`, and, with
 mounted read-only with mode 0400. An `env` entry of either name MUST fail
 rendering. The credential Secrets (`targetAuth`, `webAuth`, `sshAuth`,
 `sqlAuth`) and `extraVolumes` MUST stay mounted as without the allocator. The
-cache directory MUST be an `emptyDir`, or, with `allocator.cache.persistent`,
-a claim of `allocator.cache.size`, 16Mi by default, of
-`allocator.cache.storageClassName` when set, from the `volumeClaimTemplates` of
-a `StatefulSet` that then runs the exporter instead of the `Deployment`: named
-as it, with `podManagementPolicy: Parallel`, no `strategy`, and `serviceName`
-a headless Service `<fullname>-headless` over the exporter's pods that carries
-no `app.kubernetes.io/name`, so the monitors do not scrape every pod twice
-through it. The exporter's Service MUST stay, and the HorizontalPodAutoscaler
-MUST scale whichever of the two runs. The exporter pods' checksum annotation
+cache directory MUST be an `emptyDir`: it survives a container restart but not
+the pod's replacement, and a new pod waits for the allocator. The exporter
+MUST stay a `Deployment` behind its Service, scaled by the
+HorizontalPodAutoscaler as without the allocator, and the chart MUST NOT
+render a second Service over its pods. The exporter pods' checksum annotation
 MUST leave the configuration out in allocator mode, since a change reaches
 them from the allocator without a restart. With `networkPolicy.egress` rules,
 the exporter's NetworkPolicy MUST also admit egress to the allocator's pods on
@@ -829,8 +825,7 @@ refused by the values schema where it can express them:
 `allocator.enabled` beside `staticTargets.enabled`, since the allocator owns
 the static targets; `allocator.enabled` beside an enabled `monitors` entry,
 since probe targets then come from `allocator.probeJobs` through the
-ScrapeConfigs; `allocator.cache.persistent` without `allocator.enabled`; and
-an `extraArgs` entry naming an `--allocator.*` flag the chart renders.
+ScrapeConfigs; and an `extraArgs` entry naming an `--allocator.*` flag the chart renders.
 
 ### 33.11 Helm validation
 
@@ -971,8 +966,8 @@ The Helm chart README MUST document:
 - The features the chart deploys, described only where the exporter
   implements them
 - The target allocator: what `allocator.enabled` renders, the exporter in
-  allocator mode, the ScrapeConfigs of the probe jobs, the persistent cache,
-  and the combinations the chart refuses (§ 33.10c)
+  allocator mode and its `emptyDir` cache, the ScrapeConfigs of the probe
+  jobs, and the combinations the chart refuses (§ 33.10c)
 
 ---
 
@@ -1648,11 +1643,10 @@ are skipped and the text checks of the templates still run:
      credentials, the exporter gets `--allocator.token-file` and the allocator
      `--web.token-file`; with `webAuth.enabled` it presents the exporter's Basic
      Auth. No probe job, or `scrapeConfig.enabled: false`, renders none.
-   - `allocator.cache.persistent` runs the exporter as a StatefulSet with
-     `serviceName` a headless Service that carries no `app.kubernetes.io/name`,
-     `podManagementPolicy: Parallel`, no strategy and a `volumeClaimTemplates`
-     claim of 16Mi of the StorageClass given; the HorizontalPodAutoscaler then
-     scales the StatefulSet.
+   - In allocator mode the exporter is a Deployment, which the
+     HorizontalPodAutoscaler scales, with no StatefulSet and no Service beside
+     the exporter's and the allocator's; the values schema refuses an
+     `allocator.cache` key.
    - In allocator mode a configuration change rolls the allocator's pods and not
      the exporter's; a static target change rolls the allocator's; without the
      allocator a configuration change still rolls the exporter's pods.
@@ -1661,17 +1655,15 @@ are skipped and the text checks of the templates still run:
      admits egress to the allocator's pods on port 9116.
    - The chart refuses, with the values schema and with the schema skipped, the
      allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
-     `allocator.cache.persistent` without the allocator, a probe job of an
-     unknown or no collector, a probe job name that is no DNS-1123 label or is
-     used twice, `allocator.replicas` 0, a `settle` that is no duration, an
-     unknown log level, an `env` entry `POD_IP`, an `--allocator.*` flag in
-     `extraArgs`, `staticTargets.monitor.targets` beside the allocator, a mount
-     over the cache or token directory, and a ScrapeConfig timeout longer than
-     its interval.
+     a probe job of an unknown or no collector, a probe job name that is no
+     DNS-1123 label or is used twice, `allocator.replicas` 0, a `settle` that
+     is no duration, an unknown log level, an `env` entry `POD_IP`, an
+     `--allocator.*` flag in `extraArgs`, `staticTargets.monitor.targets`
+     beside the allocator, a mount over the cache or token directory, and a
+     ScrapeConfig timeout longer than its interval.
    - The chart's renders without the allocator are unchanged: `make helm-test`
-     and the CI chart steps also render allocator mode and the persistent cache
-     and reject the allocator beside static targets, a persistent cache without
-     the allocator and a probe monitor beside the allocator.
+     and the CI chart steps also render allocator mode and reject the allocator
+     beside static targets and a probe monitor beside the allocator.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

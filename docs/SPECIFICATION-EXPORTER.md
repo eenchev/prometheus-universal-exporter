@@ -686,8 +686,9 @@ type.
   which `make ci` includes, does; a test MUST keep these lists naming every
   opt-in driver of the tree.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
-  `go test` once under each selection's tags, which `make test-request-types`
-  runs locally and `make ci` includes. A test that needs a request type —
+  `go test` once under each selection's tags, over the exporter's packages
+  when they are to run (§ 34.33), which `make test-request-types` runs over
+  every package locally and `make ci` includes. A test that needs a request type —
   its configuration names the type, it stands in for a target of the type,
   or it asserts what only a build with the type does — MUST say so with a
   build constraint on its file, `!select_request_types || request_type_<name>`,
@@ -8055,7 +8056,8 @@ It MUST also be repeatable: every test MUST pass when the suite runs more than
 once in one process and in a random order, and `make test` and CI MUST run it
 with the race detector, twice, shuffled and with a limit for each package of at
 least twenty minutes (`go test -race -count=2 -shuffle=on -timeout 20m`), by
-one command that is the same in both.
+one command that is the same in both, `make test` over every package and CI
+over each side's packages when that side's tests are to run (§ 34.33).
 A test MUST NOT depend on state another test, or an earlier run of itself, left
 behind. Process-wide state a test reads counts from MUST be replaceable per
 test: the Python worker pool MUST be reached through one replaceable reference,
@@ -8178,7 +8180,7 @@ staticcheck ./...
 
 or an equivalent configured toolchain.
 
-CI MUST run the complete test suite on every change and MUST fail on test, build, vet, lint, or required Helm validation failures.
+CI MUST run, on every change, every test the change can affect — the repository's own checks and the tests of each side, the exporter's and the target allocator's, whose packages or the files their tests read changed (§ 34.33) — and MUST fail on test, build, vet, lint, or required Helm validation failures.
 
 ## 34.3 HTTP fetcher tests
 
@@ -9191,11 +9193,28 @@ reads of operator-supplied file paths, fall in this category.
 
 CI SHOULD use changed-path detection to avoid running unrelated suites:
 
-- Go tests, race tests, vet, formatting, and build run when anything the
-  repository tests read changes (§ 42.12): Go source and module files, the
-  workflows, the chart, `configs`, `examples`, `testdata`, the docs and
-  READMEs, the Dockerfile, `.dockerignore`, the Makefile, `tools`, the lint
-  configuration and `test/python`.
+- The repository's own tests (`test/repository`), vet, formatting, lint and
+  build run when anything the repository tests read changes (§ 42.12): Go
+  source and module files, the workflows, the chart, `configs`, `examples`,
+  `testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
+  Makefile, `tools`, the lint configuration and `test/python`.
+- The tests of the packages are split in two sides: the target allocator's,
+  `cmd/pue-allocator` and `internal/allocator`, and the exporter's, every
+  other package of the module but `test/repository`. CI MUST run a side's
+  tests, plain, under the race detector and, for the exporter, under each
+  single-type selection, when a file that side's tests need changed: a file
+  of a package of the module its packages and their tests are built from
+  (`go list -deps -test`), whatever its build tags, with its embedded and
+  `testdata` files, a path outside its packages' directories their tests
+  open, or what CI runs them with (the module files, the workflow, the
+  scripts listing the packages and the tags, and for the exporter the
+  Python the Dockerfile names and `test/python`). The package lists MUST be
+  computed, not written out, so a new package lands on a side by itself, and
+  every package of the module MUST be tested by exactly one side or be
+  `test/repository`. A test MUST keep each side's path filter matching every
+  file the side needs and no entry matching none of them, and every file a
+  side's filter matches MUST be matched by the filter the setup steps run
+  under. `make ci` MUST still run every test of every side.
 - Helm lint and template scenarios run when chart files, or the `configs` and
   `testdata/chart` files they render, change.
 - A change to none of these MAY complete without running either suite.
@@ -9208,7 +9227,7 @@ suite and the tests of each single-type selection — beside the rest rather
 than after it. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
-environment, and MUST gate its steps on that filter's output rather than with
+environment, and MUST gate its steps on that filter's outputs rather than with
 a job-level condition, so that a job with nothing to do still succeeds under
 its own name; a test MUST keep those setups identical, and MUST keep the
 matrix of the single-type tests naming every request type of the tree.
@@ -13191,10 +13210,11 @@ Tests MUST show:
   types it carries, and the message shows no type the build left out.
 - ci.yml has a job of a matrix over the request types, with fail-fast false,
   whose step runs `go test -count=1` under the tags of its type, given as
-  `$type` from the matrix, under the condition of its other Go steps; the
+  `$type` from the matrix, over the exporter's packages a build with those
+  tags compiles, under the condition of the exporter's filter output; the
   matrix and each of its loops over the request types name every type in
   the tree, and so does that of `make test-request-types`, which runs the
-  command ci.yml runs and is part of `make ci`.
+  command ci.yml runs over every package and is part of `make ci`.
 - In a build with grpc and without http the exporter's grpc fixture carries
   its grpc collector alone, so the grpc probe, static target, collectors
   page, debug probe and stale result tests run there too; with http the
@@ -17344,11 +17364,14 @@ Tests MUST show:
 
 ## 34.101 The race suite's limit and the size of a test's input under the race detector
 
-- `ci.yml` runs the race detector in one step, whose command is
-  `go test -race -count=2 -shuffle=on -timeout <limit> ./...` with a limit
-  of at least twenty minutes, under the condition of its other Go steps, and
-  the `test` target of the Makefile runs that very command: a Makefile
-  without the limit, or with another, fails the test, naming both commands.
+- `ci.yml` runs the race detector in one step for each side, the
+  exporter's and the allocator's, whose command is
+  `go test -race -count=2 -shuffle=on -timeout <limit> $packages` with a
+  limit of at least twenty minutes, the side's packages listed by
+  `tools/ci-packages.sh` before it, under the condition of the side's
+  filter output, and the `test` target of the Makefile runs that very
+  command over `./...`: a Makefile without the limit, or with another, fails
+  the test, naming both commands.
 - `alloctest.UnlessRaced(plain, raced)` gives the plain size in a build
   without the race detector and the other in one with it, for a count and
   for a text alike.
@@ -21537,7 +21560,8 @@ The Makefile builds the exporter's binary and `make ci` runs what the CI workflo
 
 - Every go command a step of any job of ci.yml runs (beside `go mod
   download`), its loops over the request types and the request-type-tags
-  line among them, is run by a target `make ci` reaches, every make target
+  line among them, is run by a target `make ci` reaches, over `./...` where
+  ci.yml names a side's packages or `./test/repository/`, every make target
   the jobs run other than the installing ones is reached by `make ci`, at
   least eight go commands are read from ci.yml, and every target of the
   Makefile is `.PHONY`.
@@ -22774,8 +22798,9 @@ The race run and each request type's run in jobs of their own beside the test jo
   type's tests in a job of a matrix (`request-types`), beside the `test` job;
   every job of ci.yml other than `test` starts with `test`'s setup steps, the
   helm setup alone left out, equal to them in their order, has `test`'s env
-  and machine, runs each of its own steps under the condition of the Go
-  steps, and no job of ci.yml has a job-level `if`: a copy of a setup step
+  and machine, runs each of its own steps under the condition of the go,
+  exporter or allocator filter output, and no job of ci.yml has a job-level
+  `if`: a copy of a setup step
   that differs, a missing environment or a job-level `if` fails the test.
 - The race suite's step is looked for in every job of ci.yml, and the go
   commands `make ci` must run are read from every job, so moving a step to
@@ -23034,6 +23059,35 @@ The two together, and the configuration checked without the files it names (§ 4
   removed refuses every request, logged once for each reason however many
   requests come, and a token written back is required again, logged once as
   usable again; a token file empty or missing at the start is refused.
+
+## 34.148 CI runs each side's tests when that side changed
+
+The exporter's tests and the target allocator's run when a file each needs changed (§ 34.33):
+
+- tools/ci-packages.sh lists `cmd/pue-allocator` and `internal/allocator`
+  for the allocator and every other package of the module but
+  `test/repository` for the exporter; every package of `go list ./...` is on
+  exactly one side or is `test/repository`, and an unknown side is refused.
+- Each side's filter output in ci.yml matches every file its tests need:
+  every Go file, whatever its build tags, embedded file and `testdata` file
+  of each package of the module `go list -deps -test` gives for the side's
+  packages, every existing path outside its own directory a string literal
+  of one of the side's packages names (a glob such as the XPath `../*` names
+  nothing), and the module files, the workflow and the scripts CI runs them
+  with; a pattern that matches none of these fails the test, and so does a
+  file a side's filter matches that the go filter does not.
+- The allocator's filter without `internal/config/**` or without
+  `cmd/pue-allocator/**` is found missing a file its tests need, and with
+  `internal/grpctest/**` or `Makefile` added is found with a pattern that
+  matches none.
+- The patterns are read as paths-filter reads them: `**` across any number
+  of directories, none among them, `*` within one name.
+- ci.yml's job test runs `test/repository` under the go output and the
+  exporter's packages under the exporter output; the race job and the
+  request types' matrix run the exporter's packages under the exporter
+  output; the allocator job, which starts with the setup of test, runs the
+  allocator's packages once and under the race detector under the allocator
+  output.
 
 # 35. Documentation requirements
 

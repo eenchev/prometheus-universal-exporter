@@ -61,6 +61,62 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/model/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:
@@ -146,8 +202,17 @@ jobs:
       - name: gopls check
         run: make gopls-install gopls-check
         if: steps.changes.outputs.go == 'true'
-      - run: go test ./...
+      # The repository's own checks read the whole tree, so they run on
+      # every change the go filter names. The exporter's packages run when
+      # the exporter filter names a change, the allocator's in a job of their
+      # own; tools/ci-packages.sh lists each side's packages.
+      - run: go test ./test/repository/
         if: steps.changes.outputs.go == 'true'
+      - name: Test the exporter
+        run: |
+          packages="$(sh tools/ci-packages.sh exporter)"
+          go test $packages
+        if: steps.changes.outputs.exporter == 'true'
       - run: go vet ./...
         if: steps.changes.outputs.go == 'true'
       - run: go build ./...
@@ -503,13 +568,13 @@ jobs:
             fi
           done
         if: steps.changes.outputs.chart == 'true'
-  # The race run and the tests of each request type built on its own are
-  # most of CI's time, so they run in jobs of their own, beside test, and CI
-  # takes about as long as its longest job. Each starts with test's setup
-  # steps but helm's, written out the same (a test keeps them identical), and
-  # its Go steps have the condition test's have: a job whose steps are skipped
-  # still succeeds under its own name, which a matrix job skipped by a
-  # job-level `if` would not.
+  # The race run, the tests of each request type built on its own and the
+  # allocator's tests are most of CI's time, so they run in jobs of their
+  # own, beside test, and CI takes about as long as its longest job. Each
+  # starts with test's setup steps but helm's, written out the same (a test
+  # keeps them identical), and gates its own steps on its side's filter
+  # output: a job whose steps are skipped still succeeds under its own name,
+  # which a matrix job skipped by a job-level `if` would not.
   race:
     runs-on: ubuntu-latest
     env:
@@ -552,6 +617,62 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/model/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:
@@ -601,11 +722,15 @@ jobs:
       # run in, or on running only once, is caught. The limit is a package's:
       # go test's own ten minutes are for one run without the race detector,
       # and this is two with it, on whatever machine the job was given. The
-      # Makefile runs the same command and a test keeps the two in step.
-      - run: go test -race -count=2 -shuffle=on -timeout 20m ./...
-        if: steps.changes.outputs.go == 'true'
-  # And test each request type built on its own: a build with one type is one
-  # the exporter ships, so its tests have to pass too. A test that needs a
+      # Makefile runs the same command over ./..., the allocator job over its
+      # side, and a test keeps the three in step.
+      - name: Test the exporter under the race detector
+        run: |
+          packages="$(sh tools/ci-packages.sh exporter)"
+          go test -race -count=2 -shuffle=on -timeout 20m $packages
+        if: steps.changes.outputs.exporter == 'true'
+  # And test the exporter with each request type built on its own: a build
+  # with one type is one the exporter ships, so its tests have to pass too. A test that needs a
   # type says so with a build constraint, so each run is of the tests that
   # build can pass. Once and without -race, which the race job covers with
   # every type. The matrix names every type in the tree; a test keeps it so.
@@ -663,6 +788,62 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/model/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:
@@ -713,8 +894,167 @@ jobs:
           type: ${{ matrix.type }}
         run: |
           tags="$(sh tools/request-type-tags.sh "$type")"
-          go test -count=1 -tags "$tags" ./...
+          packages="$(sh tools/ci-packages.sh exporter "$tags")"
+          go test -count=1 -tags "$tags" $packages
+        if: steps.changes.outputs.exporter == 'true'
+  # The target allocator's tests, when the allocator filter names a change:
+  # once, then twice and shuffled under the race detector, as the exporter's
+  # run in test and race. Not with each request type on its own: those of its
+  # tests that need a type are built with it, so such a build runs a part of
+  # them alone, and test's loop vets and builds the allocator with each type.
+  allocator:
+    runs-on: ubuntu-latest
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
+            chart:
+              - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/model/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+      - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
+        with:
+          go-version: 'stable'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
+      - run: go mod download
+        if: steps.changes.outputs.go == 'true'
+      - name: Test the target allocator
+        run: |
+          packages="$(sh tools/ci-packages.sh allocator)"
+          go test $packages
+        if: steps.changes.outputs.allocator == 'true'
+      - name: Test the target allocator under the race detector
+        run: |
+          packages="$(sh tools/ci-packages.sh allocator)"
+          go test -race -count=2 -shuffle=on -timeout 20m $packages
+        if: steps.changes.outputs.allocator == 'true'
   # The sql-live job is turned off for now: it would run the live tests
   # against PostgreSQL, MySQL and SQL Server service containers on every
   # push and pull request. `make test-sql-live` runs them locally

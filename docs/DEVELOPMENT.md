@@ -24,7 +24,8 @@ make test-external  # opt-in; probes real third-party endpoints
 
 The `main` package at the root holds only the command line (`main.go`) and the
 `--dry-run` report (`check.go`), with the tests of the command line itself
-(`cli_test.go`, `shutdown_test.go`). The tests that check the repository as a
+(`cli_test.go`, `shutdown_test.go`); the target allocator's command line is
+`cmd/pue-allocator`, with its own. The tests that check the repository as a
 whole — the documentation, the chart, the workflows, the Dockerfile, the
 shipped examples and schemas, and the layering below — are in
 `test/repository`, a package of tests only, which runs from the repository
@@ -34,12 +35,14 @@ the ones above them in this list:
 | Package | What it holds |
 | --- | --- |
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
+| `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
 | `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go` and `sql`'s pools, rows and drivers in `sql*.go` behind their tags, and the file reading `localfile` and `sshfile` share in `filereads.go` and `localfile_directory.go`, behind the tags of both — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
+| `internal/allocator` | The target allocator, whose command line is `cmd/pue-allocator`: its input files and the probe targets file, the member list from heartbeats, allocation and handover, bundles, service discovery and its HTTP API. Its time goes through a `Clock`, so its tests move a clock of their own by hand ([Target allocator](ALLOCATOR.md)). |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 | `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |

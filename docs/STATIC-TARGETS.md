@@ -213,6 +213,11 @@ A merge key works inside a target's `request` too — `request: {<<: *request,
 timeout: 2s}` — and a `path` or `body` it brings in replaces the collector's
 as one written there does.
 
+A target may also set `shard_key`, which the exporter ignores: it is for the
+[target allocator](ALLOCATOR.md#static-targets), which hashes it in place of
+the target's name to choose the replica that scrapes the target, so targets
+that share a key share a replica.
+
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
 reports whether each would load, including whether every target names a

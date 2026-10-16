@@ -179,6 +179,7 @@ A flag takes its value as `--name=value`. An argument that is not a flag is refu
 - [Python](docs/PYTHON.md) — the transform and pre-script API.
 - [Self-metrics](docs/SELF-METRICS.md) — what the exporter reports about itself.
 - [Static targets](docs/STATIC-TARGETS.md) — targets the exporter scrapes itself on their own intervals and serves on one endpoint.
+- [Target allocator](docs/ALLOCATOR.md) — `pue-allocator`, which serves several exporter replicas their configuration and each its share of the static targets, and Prometheus the probe targets already pointed at a replica.
 - [OTLP](docs/OTLP.md) — OTLP export, its retries and compression.
 - [Logging](docs/LOGGING.md) — the log format.
 - [Exporter specification](docs/SPECIFICATION-EXPORTER.md) — the implementation specification for the exporter.

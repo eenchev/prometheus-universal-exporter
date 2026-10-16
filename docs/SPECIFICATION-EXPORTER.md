@@ -2065,14 +2065,20 @@ rest MUST live under
 this order, without cycles:
 
 1. `model`: the shared data types.
-2. `expr`: expression compilation and its caches.
-3. `fetch`: request types, probe parameters and transports.
-4. `decode`: response decoding and charset conversion.
-5. `transform`: transforms, metric rules and the Python worker pool.
-6. `config`: loading, validating and reloading the configuration and target
+2. `allocapi`: what the target allocator and a replica say to each other
+   (§ 42.14d).
+3. `expr`: expression compilation and its caches.
+4. `fetch`: request types, probe parameters and transports.
+5. `decode`: response decoding and charset conversion.
+6. `transform`: transforms, metric rules and the Python worker pool.
+7. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-7. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+8. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
+9. `allocator`: the target allocator (§ 42.14d).
+
+The target allocator's command line MUST live in `cmd/pue-allocator`, and
+nothing else of it there.
 
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
@@ -24614,6 +24620,103 @@ expose `http_exporter_static_targets`, the number of targets loaded, and
 `http_exporter_static_targets_exported_via_otlp`, the number with
 `export_via_otlp`. The document's reloads MUST be reported under
 `file="static_targets"` (§ 22.0b).
+
+A target MAY set `shard_key`, any text; the exporter MUST ignore it, and the
+target allocator MUST allocate the target by it in place of its name
+(§ 42.14d).
+
+### 42.14d The target allocator
+
+`pue-allocator`, built from `cmd/pue-allocator` with the request types and
+the version of the exporter, into `bin/pue-allocator` by `make build` and
+into the image at `/bin/pue-allocator`, MUST serve exporter replicas in
+allocator mode their configuration and their share of the static targets,
+and Prometheus the probe targets of its probe targets file, each pointed at a
+replica. What the two sides exchange MUST be the types, paths, timings and
+functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
+files and heartbeats MUST give the same bundles and answers.
+
+**Inputs.** `--config.file` MUST be loaded and checked with the exporter's
+configuration loader, `--static-targets-file` with the static target file's
+loader and checks, against the configuration, and `--probe-targets-file` MUST
+be a document of one key, `probe_jobs`, besides `x-` keys, whose jobs each
+have a `name` (unique, `[A-Za-z0-9_][A-Za-z0-9_.-]*`), a `collector` of the
+configuration, `targets` (not empty, each once, each checked as a static
+target's `target` is for the collector), and MAY have `params` (probe
+parameters, checked as a probe checks them; `target`, `collector`, `debug`
+and a name that makes no label name MUST be refused), `labels` (a label name,
+not `instance` nor starting with `__`; `""` leaves the label out) and
+`shard_key` (`target` or `address`; anything else MUST be refused). A
+`collector_files` entry that is absolute or leaves the configuration's
+directory MUST be refused, and so MUST a collector file whose path relative
+to that directory is `config.yaml` or `static-targets.yaml` and an entry that
+matches `static-targets.yaml`. The allocator MUST NOT expand `${NAME}`
+references. Invalid inputs at the start MUST exit 1. The files MUST be read
+again every `--config.watch-interval` (`0` reads them once); a change MUST be
+put in force only when all are accepted, the last good inputs staying in
+force otherwise, and one refusal MUST be logged and counted
+(`pue_allocator_reloads_total{result="failure"}`) once while its text
+(`model.SameFailureText`) stays the same. What is served MUST be the text
+that was checked: files that change while they are checked MUST be read
+again at the next check.
+
+**Members.** A member MUST be live while its last heartbeat is younger than
+`allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
+being live at once. A change of the live members MUST take effect when it has
+held for `--settle` (default `15s`), so a member live again within it keeps
+its share; the first member list MUST NOT form before a member is live nor
+before `max(--settle, allocapi.HeartbeatInterval)` after the start. Time
+MUST be read through an injectable clock, so tests move it by hand.
+
+**Allocation.** Every target MUST be owned by `allocapi.Owner` over the
+member list: a static target by its `shard_key`, or its name; a probe target
+by its target, or with `shard_key: address` by the host and port it reaches
+(a URL's host, `:80` or `:443` added for `http`/`https` without a port,
+compared without case; anything else as written). A static target whose
+owner changes while its old owner stays in the member list MUST stay in the
+old owner's share for one of its intervals, its own or the file's, and then
+leave it.
+
+**Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
+configuration at `config.yaml` and every collector file at its path
+relative to the configuration's directory, as written, and, when its share
+is not empty, `static-targets.yaml`, a static target file of the file's
+top-level keys but `targets` and `x-` keys, and of the share, draining
+targets included, in file order, each with its name written out and with
+aliases and merge keys replaced by what they stand for. A member not in the
+member list MUST get the configuration alone.
+
+**API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
+an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
+before the member list has formed; a heartbeat without `member` or a
+`host:port` `advertise` MUST be answered `400`. `GET /v1/bundle?member=<id>`
+MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
+when `If-None-Match` names that generation, and `503` with `Retry-After`
+until the member list has formed; with `wait=<duration>` (at most `60s`) a
+request that has its bundle MUST be answered as soon as the bundle changes,
+and `304` when the wait runs out or the allocator shuts down; a request
+without `member`, or with a `wait` that is no duration, MUST be answered
+`400`. `GET /v1/sd/<job>` MUST answer Prometheus HTTP service discovery
+JSON, one group per target, in file order, whose target is the routed
+member's `advertise` and whose labels are the job's labels, `__param_<name>`
+for each parameter, `__metrics_path__=/probe`, `__param_collector`,
+`__param_target`, `instance` (the target) and `__meta_pue_allocator_member`,
+and no `job` label; an unknown job MUST be answered `404`, and `503` while
+the member list has not formed or no member is live. A probe MUST be routed
+among the live members of the member list (all live members if none is),
+narrowed to those whose heartbeat reports a bundle generation whose
+configuration has the job's collector when any does. With
+`--web.token-file`, every endpoint but `/healthz` and `/ready` MUST answer
+`401` to a request without `Authorization: Bearer <token>`; an empty token
+file MUST stop the start. The allocator MUST serve plain HTTP only.
+
+**Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
+`pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
+`pue_allocator_generation_info{member,generation}`,
+`pue_allocator_reloads_total{result}` and
+`pue_allocator_member_changes_total`. `/healthz` MUST answer `200`; `/ready`
+`200` once the inputs are loaded and `503` from the first `SIGTERM` or
+`SIGINT`, which MUST also end every long poll before the server shuts down.
 
 ## 42.15 Redirect following and HTTP/2 negotiation
 

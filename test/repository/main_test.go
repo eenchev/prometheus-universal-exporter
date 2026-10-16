@@ -28,15 +28,22 @@ func TestMain(m *testing.M) {
 
 // exporterHelp is the exporter's -h output, from a binary built once for the
 // tests that compare its flags with the README and the chart.
-var exporterHelp = sync.OnceValues(func() (string, error) {
+var exporterHelp = sync.OnceValues(func() (string, error) { return commandHelp(".") })
+
+// allocatorHelp is the target allocator's -h output, built the same way.
+var allocatorHelp = sync.OnceValues(func() (string, error) { return commandHelp("./cmd/pue-allocator") })
+
+// commandHelp builds the command of the package pkg and returns its -h
+// output.
+func commandHelp(pkg string) (string, error) {
 	dir, err := os.MkdirTemp("", "exporter-help")
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	binary := filepath.Join(dir, "exporter")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("building the exporter: %w\n%s", err, out)
+	binary := filepath.Join(dir, "command")
+	if out, err := exec.Command("go", "build", "-o", binary, pkg).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("building %s: %w\n%s", pkg, err, out)
 	}
 	var stdout bytes.Buffer
 	cmd := exec.Command(binary, "-h")
@@ -44,7 +51,7 @@ var exporterHelp = sync.OnceValues(func() (string, error) {
 	// -h exits non-zero, as the flag package has it; the text is what matters.
 	_ = cmd.Run()
 	return stdout.String(), nil
-})
+}
 
 // helpText returns the exporter's -h output, failing the test when the
 // exporter cannot be built.

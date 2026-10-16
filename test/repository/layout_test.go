@@ -151,7 +151,7 @@ func TestOnlyTestsHoldTheShutdownDelay(t *testing.T) {
 
 // internalLayers is the order of the internal packages: each may import only
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
-var internalLayers = []string{"model", "expr", "fetch", "decode", "transform", "config", "exporter"}
+var internalLayers = []string{"model", "allocapi", "expr", "fetch", "decode", "transform", "config", "exporter", "allocator"}
 
 // testOnly are the internal packages only tests import: testutil, with the
 // package within it, alloctest, that measures allocations, grpctest, the
@@ -221,7 +221,7 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 			}
 		}
 	}
-	for _, file := range []string{"main.go", "check.go"} {
+	for _, file := range []string{"main.go", "check.go", "cmd/pue-allocator/main.go"} {
 		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
 		if err != nil {
 			t.Fatal(err)

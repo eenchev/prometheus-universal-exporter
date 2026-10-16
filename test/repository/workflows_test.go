@@ -556,10 +556,11 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 // it as the way to build the exporter with only some request types. It
 // builds the main package into bin/, under the name the image gives the
 // binary, with the tags of REQUEST_TYPES and SQL_DRIVERS, and the docs that
-// give it say where the binary lands.
+// give it say where the binary lands. The target allocator, cmd/pue-allocator,
+// is built beside it with the same tags, and the image carries both.
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
-	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) .`
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) . && go build -tags "$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)`
 	if got := strings.TrimSpace(recipes["build"]); got != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}
@@ -567,8 +568,27 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	if app == nil {
 		t.Fatal("the Makefile no longer names APP")
 	}
-	if want := "-o /out/" + app[1] + " ."; !strings.Contains(read(t, "Dockerfile"), want) {
+	dockerfile := read(t, "Dockerfile")
+	if want := "-o /out/" + app[1] + " ."; !strings.Contains(dockerfile, want) {
 		t.Errorf("the Dockerfile does not build %q, the binary make build names", want)
+	}
+	allocator := regexp.MustCompile(`(?m)^ALLOCATOR := (\S+)$`).FindStringSubmatch(read(t, "Makefile"))
+	if allocator == nil {
+		t.Fatal("the Makefile no longer names ALLOCATOR")
+	}
+	if _, err := os.Stat(filepath.Join("cmd", allocator[1], "main.go")); err != nil {
+		t.Errorf("the Makefile's ALLOCATOR %s is no command under cmd/: %v", allocator[1], err)
+	}
+	for _, want := range []string{
+		"-o /out/" + allocator[1] + " ./cmd/" + allocator[1] + "\n",
+		"COPY --from=build /out/" + allocator[1] + " /bin/" + allocator[1] + "\n",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("the Dockerfile does not have %q: the image carries the allocator beside the exporter", strings.TrimSpace(want))
+		}
+	}
+	if !strings.Contains(read(t, "docs/ALLOCATOR.md"), "bin/"+allocator[1]) {
+		t.Errorf("docs/ALLOCATOR.md does not say make build leaves the allocator in bin/%s", allocator[1])
 	}
 	for _, doc := range []string{"docs/CONFIGURATION.md", "docs/DEVELOPMENT.md", "docs/GRPC.md"} {
 		text := read(t, doc)

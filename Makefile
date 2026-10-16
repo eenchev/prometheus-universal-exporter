@@ -1,4 +1,7 @@
 APP := prometheus-universal-exporter
+# The target allocator's binary, built from cmd/pue-allocator beside the
+# exporter's, into bin/ and into the image. See docs/ALLOCATOR.md.
+ALLOCATOR := pue-allocator
 
 # Must be a release that supports the Go the build uses: an older one cannot
 # read a newer toolchain's standard library or export data (v2.13.2 against Go
@@ -29,9 +32,11 @@ REQUEST_TYPES ?=
 # See "Building with more drivers" in docs/SQL.md.
 SQL_DRIVERS ?=
 
-# The exporter's binary, bin/$(APP), built from the main package.
+# The exporter's binary, bin/$(APP), built from the main package, and the
+# target allocator's, bin/$(ALLOCATOR), with the same request types: the
+# allocator checks the configuration it serves with the exporter's loader.
 build:
-	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) .
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) . && go build -tags "$$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)
 
 # What ci.yml's build steps run: every package compiled, then each request
 # type vetted and built on its own, so code one type needs cannot quietly
@@ -179,7 +184,7 @@ precommit: fmt-check lint gopls-check vet
 # internal/grpctest, are left out: a vulnerability only a test can reach is
 # none of the exporter's. A test keeps the packages equal to the workflow's
 # and the list of what is left out complete.
-VULNCHECK_PACKAGES := . ./tools/...
+VULNCHECK_PACKAGES := . ./cmd/... ./tools/...
 
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(VULNCHECK_PACKAGES)

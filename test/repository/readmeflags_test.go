@@ -36,14 +36,21 @@ func TestReadmeListsEveryFlag(t *testing.T) {
 // No document names an exporter flag the exporter does not have, such as a
 // --log.format for logs that are always JSON: a reader would pass it and get
 // "flag provided but not defined" instead of a running exporter. Flags of the
-// exporter's own prefixes are checked, which leaves helm's and go's out.
+// exporter's own prefixes are checked, which leaves helm's and go's out. A
+// flag of the target allocator, cmd/pue-allocator, is one too.
 func TestDocsNameOnlyFlagsTheExporterHas(t *testing.T) {
 	flags := map[string]bool{}
-	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(helpText(t), -1) {
-		flags["--"+match[1]] = true
+	allocator, err := allocatorHelp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, help := range []string{helpText(t), allocator} {
+		for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help, -1) {
+			flags["--"+match[1]] = true
+		}
 	}
 	exporterFlag := regexp.MustCompile(`--(?:web|log|config|probe|python|runtime|static-targets)[.-][a-z][a-z.-]*[a-z]`)
-	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

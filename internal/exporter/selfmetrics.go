@@ -212,6 +212,10 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, rejected by an export it accepted (partialSuccess), the oldest waiting past otlp.max_pending_points, or those of the last export before exiting when it failed.",
 	"http_exporter_otlp_export_duration_seconds":               "Duration of the most recent OTLP export, its retries included.",
 	"http_exporter_otlp_last_export_success_timestamp_seconds": "Unix time of the last OTLP export that got through; 0 before the first.",
+	"http_exporter_allocator_generation_info":                  "1, with the generation of the bundle from the target allocator in force as a label; absent before the first.",
+	"http_exporter_allocator_last_sync_timestamp_seconds":      "Unix time the exporter last heard from the target allocator which bundle is its own, unchanged or new; 0 before the first.",
+	"http_exporter_allocator_sync_errors_total":                "Failed exchanges with the target allocator, by stage: heartbeat, fetch (of the bundle) or write (into the cache directory).",
+	"http_exporter_allocator_bundle_refused_total":             "Bundles from the target allocator the exporter refused to put in force; the bundle in force stays.",
 }
 
 // selfMetricHelp indexes the help of every family the self-metrics carry
@@ -415,6 +419,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	started := exporterStart()
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
+	out = append(out, countingSince(s.allocatorStatusMetrics(), started)...)
 	out = append(out, requestFamilies...)
 	out = append(out, s.verboseCollectorMetrics(stats)...)
 	out = append(out, countingSince(s.runtimeMetrics(), started)...)

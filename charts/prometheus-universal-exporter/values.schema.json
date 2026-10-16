@@ -512,8 +512,104 @@
           {"description": "keyKey only beside certKey.", "if": {"properties": {"keyKey": {"minLength": 1}}, "required": ["keyKey"]}, "then": {"properties": {"certKey": {"minLength": 1}}, "required": ["certKey"]}}
         ]
       }
+    },
+
+    "allocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The target allocator: a Deployment of pue-allocator serving config.data, its static targets and its probe jobs, with the exporter pods in allocator mode. Not with staticTargets.enabled nor with an enabled monitors entry.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "replicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Empty fields take image's.",
+          "properties": {
+            "repository": {"type": "string"},
+            "tag": {"type": "string"},
+            "pullPolicy": {"enum": ["", "Always", "IfNotPresent", "Never"]}
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {"$ref": "#/$defs/quantityMap"},
+            "limits": {"$ref": "#/$defs/quantityMap"}
+          }
+        },
+        "settle": {"type": "string", "description": "Rendered as --settle: a Go duration of zero or more; empty leaves the flag out.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as the allocator's --log.level."},
+        "tokenSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The Secret holding the shared bearer token; an empty name sends and requires none.",
+          "properties": {
+            "name": {"type": "string"},
+            "key": {"type": "string", "minLength": 1}
+          }
+        },
+        "staticTargets": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "data": {"type": "string", "description": "The static target document the allocator splits over the exporter pods; empty for none."}
+          }
+        },
+        "probeJobs": {
+          "type": "array",
+          "description": "The allocator's probe jobs, rendered under probe_jobs; the other keys of an entry are the allocator's to check.",
+          "items": {
+            "type": "object",
+            "required": ["name", "collector"],
+            "properties": {
+              "name": {"type": "string", "description": "A DNS-1123 label: it names the job's ScrapeConfig and its path on the allocator.", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+              "collector": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "prometheus": {"type": "array", "description": "NetworkPolicy peers allowed to fetch the probe targets, beside the exporter pods.", "items": {"type": "object"}}
+          }
+        },
+        "pdb": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"}
+          }
+        },
+        "scrapeConfig": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "refreshInterval": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/promDuration"}]},
+            "interval": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/promDuration"}]},
+            "scrapeTimeout": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/promDuration"}]},
+            "labels": {"$ref": "#/$defs/stringMap"}
+          }
+        }
+      }
     }
   },
+
+  "allOf": [
+    {
+      "description": "The allocator owns the static targets: staticTargets.enabled is refused beside allocator.enabled.",
+      "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
+      "then": {"properties": {"staticTargets": {"properties": {"enabled": {"const": false}}}}}
+    },
+    {
+      "description": "With the allocator, probe targets come from allocator.probeJobs: an enabled monitors entry is refused beside allocator.enabled.",
+      "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
+      "then": {"properties": {"monitors": {"items": {"properties": {"enabled": {"const": false}}}}}}
+    }
+  ],
 
   "$defs": {
     "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},

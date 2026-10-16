@@ -686,8 +686,9 @@ type.
   which `make ci` includes, does; a test MUST keep these lists naming every
   opt-in driver of the tree.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
-  `go test` once under each selection's tags, which `make test-request-types`
-  runs locally and `make ci` includes. A test that needs a request type —
+  `go test` once under each selection's tags, over the exporter's packages
+  when they are to run (§ 34.33), which `make test-request-types` runs over
+  every package locally and `make ci` includes. A test that needs a request type —
   its configuration names the type, it stands in for a target of the type,
   or it asserts what only a build with the type does — MUST say so with a
   build constraint on its file, `!select_request_types || request_type_<name>`,
@@ -2064,15 +2065,22 @@ rest MUST live under
 `internal/`, in packages layered so that each imports only packages before it in
 this order, without cycles:
 
-1. `model`: the shared data types.
-2. `expr`: expression compilation and its caches.
-3. `fetch`: request types, probe parameters and transports.
-4. `decode`: response decoding and charset conversion.
-5. `transform`: transforms, metric rules and the Python worker pool.
-6. `config`: loading, validating and reloading the configuration and target
+1. `allocapi`: what the target allocator and an exporter in allocator mode
+   say to each other (§ 42.14d).
+2. `model`: the shared data types.
+3. `expr`: expression compilation and its caches.
+4. `fetch`: request types, probe parameters and transports.
+5. `decode`: response decoding and charset conversion.
+6. `transform`: transforms, metric rules and the Python worker pool.
+7. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-7. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+8. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
+9. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
+10. `allocator`: the target allocator (§ 42.14d).
+
+The target allocator's command line MUST live in `cmd/pue-allocator`, and
+nothing else of it there.
 
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
@@ -6084,7 +6092,8 @@ Recommended behavior:
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
   through; from a `SIGTERM` or `SIGINT` on, while the exporter shuts down
-  (§ 30); `200` otherwise. `otlp.unready_after_failures` MUST default to 0,
+  (§ 30); in allocator mode, until a bundle is in force (§ 42.14e); `200`
+  otherwise. `otlp.unready_after_failures` MUST default to 0,
   which never makes the exporter unready over OTLP: an exporter whose exports
   fail still answers probes, and a Kubernetes pod that is not ready stops
   receiving them. The failures MUST be counted per endpoint, so a reload that
@@ -8047,7 +8056,8 @@ It MUST also be repeatable: every test MUST pass when the suite runs more than
 once in one process and in a random order, and `make test` and CI MUST run it
 with the race detector, twice, shuffled and with a limit for each package of at
 least twenty minutes (`go test -race -count=2 -shuffle=on -timeout 20m`), by
-one command that is the same in both.
+one command that is the same in both, `make test` over every package and CI
+over each side's packages when that side's tests are to run (§ 34.33).
 A test MUST NOT depend on state another test, or an earlier run of itself, left
 behind. Process-wide state a test reads counts from MUST be replaceable per
 test: the Python worker pool MUST be reached through one replaceable reference,
@@ -8170,7 +8180,7 @@ staticcheck ./...
 
 or an equivalent configured toolchain.
 
-CI MUST run the complete test suite on every change and MUST fail on test, build, vet, lint, or required Helm validation failures.
+CI MUST run, on every change, every test the change can affect — the repository's own checks and the tests of each side, the exporter's and the target allocator's, whose packages or the files their tests read changed (§ 34.33) — and MUST fail on test, build, vet, lint, or required Helm validation failures.
 
 ## 34.3 HTTP fetcher tests
 
@@ -9183,11 +9193,28 @@ reads of operator-supplied file paths, fall in this category.
 
 CI SHOULD use changed-path detection to avoid running unrelated suites:
 
-- Go tests, race tests, vet, formatting, and build run when anything the
-  repository tests read changes (§ 42.12): Go source and module files, the
-  workflows, the chart, `configs`, `examples`, `testdata`, the docs and
-  READMEs, the Dockerfile, `.dockerignore`, the Makefile, `tools`, the lint
-  configuration and `test/python`.
+- The repository's own tests (`test/repository`), vet, formatting, lint and
+  build run when anything the repository tests read changes (§ 42.12): Go
+  source and module files, the workflows, the chart, `configs`, `examples`,
+  `testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
+  Makefile, `tools`, the lint configuration and `test/python`.
+- The tests of the packages are split in two sides: the target allocator's,
+  `cmd/pue-allocator` and `internal/allocator`, and the exporter's, every
+  other package of the module but `test/repository`. CI MUST run a side's
+  tests, plain, under the race detector and, for the exporter, under each
+  single-type selection, when a file that side's tests need changed: a file
+  of a package of the module its packages and their tests are built from
+  (`go list -deps -test`), whatever its build tags, with its embedded and
+  `testdata` files, a path outside its packages' directories their tests
+  open, or what CI runs them with (the module files, the workflow, the
+  scripts listing the packages and the tags, and for the exporter the
+  Python the Dockerfile names and `test/python`). The package lists MUST be
+  computed, not written out, so a new package lands on a side by itself, and
+  every package of the module MUST be tested by exactly one side or be
+  `test/repository`. A test MUST keep each side's path filter matching every
+  file the side needs and no entry matching none of them, and every file a
+  side's filter matches MUST be matched by the filter the setup steps run
+  under. `make ci` MUST still run every test of every side.
 - Helm lint and template scenarios run when chart files, or the `configs` and
   `testdata/chart` files they render, change.
 - A change to none of these MAY complete without running either suite.
@@ -9200,7 +9227,7 @@ suite and the tests of each single-type selection — beside the rest rather
 than after it. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
-environment, and MUST gate its steps on that filter's output rather than with
+environment, and MUST gate its steps on that filter's outputs rather than with
 a job-level condition, so that a job with nothing to do still succeeds under
 its own name; a test MUST keep those setups identical, and MUST keep the
 matrix of the single-type tests naming every request type of the tree.
@@ -13183,10 +13210,11 @@ Tests MUST show:
   types it carries, and the message shows no type the build left out.
 - ci.yml has a job of a matrix over the request types, with fail-fast false,
   whose step runs `go test -count=1` under the tags of its type, given as
-  `$type` from the matrix, under the condition of its other Go steps; the
+  `$type` from the matrix, over the exporter's packages a build with those
+  tags compiles, under the condition of the exporter's filter output; the
   matrix and each of its loops over the request types name every type in
   the tree, and so does that of `make test-request-types`, which runs the
-  command ci.yml runs and is part of `make ci`.
+  command ci.yml runs over every package and is part of `make ci`.
 - In a build with grpc and without http the exporter's grpc fixture carries
   its grpc collector alone, so the grpc probe, static target, collectors
   page, debug probe and stale result tests run there too; with http the
@@ -17336,11 +17364,14 @@ Tests MUST show:
 
 ## 34.101 The race suite's limit and the size of a test's input under the race detector
 
-- `ci.yml` runs the race detector in one step, whose command is
-  `go test -race -count=2 -shuffle=on -timeout <limit> ./...` with a limit
-  of at least twenty minutes, under the condition of its other Go steps, and
-  the `test` target of the Makefile runs that very command: a Makefile
-  without the limit, or with another, fails the test, naming both commands.
+- `ci.yml` runs the race detector in one step for each side, the
+  exporter's and the allocator's, whose command is
+  `go test -race -count=2 -shuffle=on -timeout <limit> $packages` with a
+  limit of at least twenty minutes, the side's packages listed by
+  `tools/ci-packages.sh` before it, under the condition of the side's
+  filter output, and the `test` target of the Makefile runs that very
+  command over `./...`: a Makefile without the limit, or with another, fails
+  the test, naming both commands.
 - `alloctest.UnlessRaced(plain, raced)` gives the plain size in a build
   without the race detector and the other in one with it, for a count and
   for a text alike.
@@ -21529,7 +21560,8 @@ The Makefile builds the exporter's binary and `make ci` runs what the CI workflo
 
 - Every go command a step of any job of ci.yml runs (beside `go mod
   download`), its loops over the request types and the request-type-tags
-  line among them, is run by a target `make ci` reaches, every make target
+  line among them, is run by a target `make ci` reaches, over `./...` where
+  ci.yml names a side's packages or `./test/repository/`, every make target
   the jobs run other than the installing ones is reached by `make ci`, at
   least eight go commands are read from ci.yml, and every target of the
   Makefile is `.PHONY`.
@@ -22766,8 +22798,9 @@ The race run and each request type's run in jobs of their own beside the test jo
   type's tests in a job of a matrix (`request-types`), beside the `test` job;
   every job of ci.yml other than `test` starts with `test`'s setup steps, the
   helm setup alone left out, equal to them in their order, has `test`'s env
-  and machine, runs each of its own steps under the condition of the Go
-  steps, and no job of ci.yml has a job-level `if`: a copy of a setup step
+  and machine, runs each of its own steps under the condition of the go,
+  exporter or allocator filter output, and no job of ci.yml has a job-level
+  `if`: a copy of a setup step
   that differs, a missing environment or a job-level `if` fails the test.
 - The race suite's step is looked for in every job of ci.yml, and the go
   commands `make ci` must run are read from every job, so moving a step to
@@ -22812,6 +22845,260 @@ The dependency upgrades of xpath 1.3.9, htmlquery 1.3.7, xmlquery 1.5.2 and x/ne
   every error mode over XML and HTML, a label's failure naming the label,
   one failure to the log over `ab` and `abcde` whatever the bounds, the
   stack at debug level only, and through `/probe` under `log` and `ignore`.
+
+## 34.147 The target allocator
+
+The target allocator (§ 42.14d):
+
+- The first member list of the target allocator forms once its members have
+  held for the settle time and no sooner than a heartbeat interval after the
+  start; a joining member takes effect after the settle time, a silent one
+  leaves after the member TTL and the settle time, one shutting down leaves
+  the live members at once, and one back within the settle time keeps its
+  place with no member list change counted.
+- A heartbeat without a member or a host:port advertise is refused (400 over
+  HTTP); the heartbeat answer is the member's bundle generation, "" before the
+  member list has formed; a shutting-down heartbeat of an unknown member adds
+  nothing.
+- A bundle is config.yaml and every collector file at its path relative to the
+  configuration's directory, as written, plus static-targets.yaml with the
+  member's share, which the exporter's own loaders take from a directory the
+  bundle is written into; the share keeps the file's interval and
+  concurrency, writes a default name out, and carries no alias, merge key or
+  x- key. A member with an empty share, a member not in the list, and every
+  member without a static target file get no static-targets.yaml.
+- The same input files and members give the same bundle generations on two
+  allocators, and a reload of unchanged files changes nothing.
+- The allocator refuses an absolute collector_files entry, one leaving the
+  configuration's directory, a pattern matching static-targets.yaml, a
+  collector file that would be config.yaml in the bundle, a configuration or
+  static target the exporter's loader refuses, and every malformed probe
+  targets file: empty, another top-level key, no jobs, a bad, missing or
+  repeated job name, an unknown collector, no or repeated targets, a target
+  the collector's type refuses, an unknown shard_key, a parameter the
+  allocator sets, that makes no label name or that the probe refuses, the
+  instance or a __ label, an unknown key; x- anchors are taken.
+- Refused input files leave the last good ones in force, the refusal logged
+  and counted once however often it is read; fixed files are put in force and
+  counted; the watch puts an added or removed collector file in force.
+- Every static target is in exactly one member's share, the shares about even;
+  a joining member takes only what it now owns, about 1/(N+1), while each old
+  owner keeps the moved targets for one of their intervals (30s or 1m) and
+  then gives them up; a leaving member's targets move and no others, without
+  draining; targets of one shard_key share a member.
+- GET /v1/bundle answers 503 with Retry-After before the member list forms,
+  then the bundle with its generation as a quoted ETag, 304 to If-None-Match
+  naming it (quoted, weak, bare or first of a list), 400 without member or
+  with a wait that is no duration; a long poll is answered with the new
+  bundle as soon as it changes, and 304 when its wait (capped at 60s) runs out
+  or at the shutdown, when /ready answers 503.
+- GET /v1/sd/<job> answers 503 before the member list forms, 404 for an
+  unknown job, and one group per target at its member's advertise with
+  __metrics_path__=/probe, __param_collector, __param_target, __param_<param>,
+  instance, the job's labels without "" ones, and
+  __meta_pue_allocator_member; a probe goes only to members reporting a
+  bundle with its collector, to any when none does, and to a live member
+  outside the list when none of it is live; shard_key: address keeps one
+  host:port (default ports filled in, case ignored) on one member.
+- With --web.token-file every endpoint but /healthz and /ready answers 401
+  with WWW-Authenticate without the bearer token, and serves with it.
+- /metrics exposes pue_allocator_members, targets{kind}, assigned{kind,member}
+  matching the allocation, generation_info, reloads_total{result} and
+  member_changes_total.
+- pue-allocator exits 2 on a malformed command line (unknown flag, stray
+  argument, negative --settle or --config.watch-interval, bad --log.level or
+  listen address), 1 on refused inputs or an empty or unreadable token file,
+  each with one JSON line; --version and -h answer on stdout.
+- allocapi.Owner is the member of the highest Score whatever the order, Score
+  is SHA-256 of member, NUL, key, an added member takes only what it wins,
+  about 1/(N+1); Generation depends on the files alone, length-prefixed; Seal
+  sets it; CheckFiles refuses a bundle without config.yaml and every path
+  that is not a clean relative path inside it.
+- make build builds bin/pue-allocator beside the exporter with the same tags,
+  the Dockerfile builds it and copies it to /bin/pue-allocator, and
+  docs/ALLOCATOR.md says where it lands; docs may name the allocator's flags.
+
+Allocator mode (§ 42.14e):
+
+- The first bundle from the allocator is written into the cache directory,
+  files 0600 in 0700 directories, reloaded with the trigger `allocator`, and
+  the heartbeat after it carries its generation; the first heartbeat carries
+  the member and the advertised address and no generation, and the first
+  bundle request `member=<member>&wait=30s` without `If-None-Match`.
+- A new generation replaces the files of the old: a file it no longer has is
+  gone from the cache directory, the old generation's directory is removed,
+  and the next bundle request names the new generation in `If-None-Match`.
+- A bundle the check refuses keeps the files in force, its directory is
+  removed, the refusal is counted and reported in the next heartbeat with the
+  generation and the error, the next bundle request names the refused
+  generation, and a later bundle that loads clears the refusal.
+- A bundle the reload refuses after the check let it through is swapped back:
+  the previous generation's files and directory are in place again and the
+  refusal is reported.
+- A bundle with a parent or absolute path, a top-level name beginning with
+  `..`, no `config.yaml`, or a generation that is not its files' digest is
+  refused with nothing written.
+- At every change the swap makes to the cache directory, the files read
+  through its links and through `..data` are all of one generation, and
+  `config.yaml` can always be read.
+- A heartbeat goes to every address the allocator URL's host resolves to, at
+  the URL's port, with the URL's host as `Host`; the bundle request goes to
+  the URL as it is; an IP host is heartbeated alone, without a lookup.
+- With `--allocator.token-file` every request carries `Authorization: Bearer
+  <token>`, read again for each, so a rotated token is sent from the next
+  request; without it no request carries an `Authorization` header.
+- `ShuttingDown` sends a heartbeat with `shutting_down` before it returns, and
+  every later heartbeat carries it too.
+- An allocator that answers bundle requests without a change at once is asked
+  again no sooner than the least backoff each time.
+- A failing bundle request and a cache directory that cannot be written are
+  counted under `stage` `fetch` and `write` and tried again; a heartbeat
+  nobody hears counts under `heartbeat`.
+- A client made with the generation found in the cache directory reports it
+  in its first heartbeat and names it in its first bundle request.
+- `--allocator.url` must be a plain `http://` URL with a host and nothing
+  after its path.
+- An awaiting manager holds an empty configuration with no reload status and
+  stays awaiting through a refused reload, including one that puts only an
+  absent static target file in force; the first reload that puts a
+  configuration in force ends it; a manager made with a configuration never
+  awaits.
+- With `AllowAbsentTargets` a removed static target file reloads as no
+  targets, and the file back reloads its targets; without it the reload is
+  refused as before, and loading a present, absent, empty, target-less or
+  invalid file gives what the old `loadTargets` gave.
+- `CheckReplacement` refuses a configuration without collectors, targets
+  naming a collector the configuration lacks (naming the target file) and a
+  target file without targets, passes a good pair and an absent target file,
+  and changes nothing in force and no reload status.
+- `ReloadReplacing` runs the replacement under the reload lock and reloads
+  what it put in place; a refused reload runs the restore and reloads the old
+  pair; a failed replacement reloads nothing.
+- An exporter awaiting its configuration answers `/ready` 503 `not ready: no
+  configuration yet: waiting for the allocator`, `/probe` 503 with the
+  sentence naming the allocator's URL, the static targets endpoint with no
+  targets, and serves `/self-metrics` and `/health`; once a reload puts a
+  configuration in force `/ready` is 200 and the probe is answered.
+- An exporter made with a configuration answers `/ready` 200 and does not
+  answer probes 503 for awaiting one, whatever awaiting reason it was given.
+- The allocator self-metrics carry the generation in force, the last sync
+  time, the sync errors by stage in order and the refused bundles, each with
+  its description; without a generation there is no `generation_info` and
+  the timestamp is 0; outside allocator mode there are none.
+- `--allocator.url` with `--config.file` (even at its default value, given
+  explicitly) or `--static-targets-file`, at a start and with `--dry-run`, an
+  `--allocator.` flag without `--allocator.url`, `--allocator.url` without
+  `--allocator.cache-dir`, an https URL and an `--allocator.advertise` that
+  is not host:port exit 2 naming the problem.
+- `--dry-run` in allocator mode checks `<cache-dir>/config.yaml`: it fails
+  with no bundle there and passes one that loads.
+- The default `--allocator.advertise` is the listen host when it is one
+  non-loopback address, else the first non-loopback, non-link-local address,
+  IPv4 before IPv6, with the listen port; with none, or when the addresses
+  cannot be listed, an error asks for the flag.
+- In a child process with an empty cache directory the exporter is unready,
+  `/probe` answers 503 naming the allocator, `/self-metrics` is served; the
+  first bundle makes it ready, probes are answered, `config.yaml` is in the
+  cache directory and the self-metrics name the generation; `SIGTERM` sends a
+  `shutting_down` heartbeat with the generation during the held shutdown
+  delay, and the exporter exits 0.
+- A child whose cache directory holds a bundle that loads is ready at once
+  and answers probes with the allocator unreachable; one whose cached bundle
+  does not load is unready and logs why.
+
+The two together, and the configuration checked without the files it names (§ 42.14d):
+
+- `config.WithoutNamedFiles` loads a configuration naming a missing
+  `protoset_file`, missing `proto_files`, missing `otlp.tls` files and
+  missing `web.basic_auth` files, which the plain load refuses naming the
+  file; it fills in the defaults, marks the collectors as not checked
+  against their descriptor files, takes a static target's `message` for a
+  `protoset` collector unchecked and still refuses a health service
+  target's message that does not fit it; it still refuses `protoset`
+  without its file, `proto_files` with `protoset`, a certificate without
+  its key, a password and a password file together, a health service
+  message that does not fit and a method the service lacks. The plain load
+  marks no collector.
+- The allocator takes a configuration whose grpc collector names a missing
+  descriptor set and bearer token file, with missing `otlp.tls` and
+  `web.basic_auth` files, a static target with a message for that collector
+  and a probe job of it, which the exporter's own loader refuses for the
+  missing file; a `protoset_file` with `descriptors: reflection` is still
+  refused.
+- The allocator refuses a collector file whose path begins with `..`, an
+  entry whose directory begins with `..`, and entries of a directory and
+  more whose directory begins with a pattern character or a dot and one
+  (`*/*.yaml`, `.?*/a.yaml`), which on a replica would match the cache
+  directory's own names.
+- An exporter whose allocator answers bundle requests `503` with
+  `Retry-After` counts no sync error, asks again no sooner than
+  `Retry-After` bounded by the most backoff, and puts the bundle in force
+  once the allocator serves it; a `503` without `Retry-After` is counted
+  under `fetch` as before. Its `If-None-Match` is the generation quoted.
+- End to end in one process, the allocator's HTTP API on a clock the test
+  moves and replicas that are exporter servers in allocator mode with real
+  allocator clients: three replicas are unready until the member list
+  forms, then ready, their static targets together the file's, each on one
+  replica; every probe target of the SD answer is at the replica the group
+  names, which answers the probe, and another replica answers it too. A
+  fourth replica is ready at once with the configuration alone and no
+  targets; once the list takes it it holds exactly the targets it owns
+  while each old owner still holds all it held, and after their interval
+  the old owners give the moved targets up, each target again on one
+  replica. A replica shutting down leaves: after the settle time its
+  targets are the others', who lost none of theirs and took none but its,
+  and no SD group points at it. A collector added in a new collector file
+  with a probe job of it reaches every replica; while two replicas are held
+  before putting the bundle in force, every probe of the new job goes to
+  the one that has it, and answers, and once all have it each probe goes to
+  its owner and is answered. It takes about 0.2s, 0.5s under the race
+  detector.
+- The allocator's token file is read again when it changes: a rotated
+  token, of another length or of the same length with a later time, is
+  required from the next request and the old one refused; a file emptied or
+  removed refuses every request, logged once for each reason however many
+  requests come, and a token written back is required again, logged once as
+  usable again; a token file empty or missing at the start is refused.
+
+## 34.148 CI runs each side's tests when that side changed
+
+The exporter's tests and the target allocator's run when a file each needs changed (§ 34.33):
+
+- tools/ci-packages.sh lists `cmd/pue-allocator` and `internal/allocator`
+  for the allocator and every other package of the module but
+  `test/repository` for the exporter; every package of `go list ./...` is on
+  exactly one side or is `test/repository`, and an unknown side is refused.
+- Each side's filter output in ci.yml matches every file its tests need:
+  every Go file, whatever its build tags, embedded file and `testdata` file
+  of each package of the module `go list -deps -test` gives for the side's
+  packages, every existing path outside its own directory a string literal
+  of one of the side's packages names (a glob such as the XPath `../*` names
+  nothing), and the module files, the workflow and the scripts CI runs them
+  with; a pattern that matches none of these fails the test, and so does a
+  file a side's filter matches that the go filter does not.
+- The allocator's filter without `internal/config/**` or without
+  `cmd/pue-allocator/**` is found missing a file its tests need, and with
+  `internal/grpctest/**` or `Makefile` added is found with a pattern that
+  matches none.
+- The patterns are read as paths-filter reads them: `**` across any number
+  of directories, none among them, `*` within one name.
+- ci.yml's job test runs `test/repository` under the go output and the
+  exporter's packages under the exporter output; the race job and the
+  request types' matrix run the exporter's packages under the exporter
+  output; the allocator job, which starts with the setup of test, runs the
+  allocator's packages once and under the race detector under the allocator
+  output.
+
+## 34.149 A heartbeat reply already fetched, and the README naming every source
+
+- A heartbeat whose reply names the generation the bundle loop fetched while
+  the reply was on its way leaves the bundle loop unwoken: the test holds
+  the reply until the client has fetched that generation, and fails when
+  the generation is compared with what was fetched before the heartbeat
+  went out.
+- The README's tagline and sources paragraph each name every request type
+  of `internal/fetch/requesttype_<name>.go`, and a request type the test has
+  no README name for fails it (§ 35).
 
 # 35. Documentation requirements
 
@@ -22860,6 +23147,13 @@ and the commands to run it, the endpoints, the command-line flags, and an index
 of everything else. It MUST NOT carry reference material — decoder and transform
 detail, caching, transport settings, authentication models, operator manifests —
 because a README that answers every question stops answering the first one.
+
+What the exporter is MUST cover every source it reads, not the first one it
+learned: the README's tagline and the sources paragraph after it MUST each name
+every request type in the tree, and a test MUST find each
+`internal/fetch/requesttype_<name>.go` named in both, failing for a request
+type the test has no README name for, so a new type cannot ship while the
+README still describes the exporter without it.
 
 Each subject above MUST live in a dedicated page under `docs/`, and the README's
 index MUST link every one of them. The Helm chart's own README remains the
@@ -24614,6 +24908,212 @@ expose `http_exporter_static_targets`, the number of targets loaded, and
 `http_exporter_static_targets_exported_via_otlp`, the number with
 `export_via_otlp`. The document's reloads MUST be reported under
 `file="static_targets"` (§ 22.0b).
+
+A target MAY set `shard_key`, any text; the exporter MUST ignore it, and the
+target allocator MUST allocate the target by it in place of its name
+(§ 42.14d).
+
+### 42.14d The target allocator
+
+`pue-allocator`, built from `cmd/pue-allocator` with the request types and
+the version of the exporter, into `bin/pue-allocator` by `make build` and
+into the image at `/bin/pue-allocator`, MUST serve exporter replicas in
+allocator mode their configuration and their share of the static targets,
+and Prometheus the probe targets of its probe targets file, each pointed at a
+replica. What the two sides exchange MUST be the types, paths, timings and
+functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
+files and heartbeats MUST give the same bundles and answers.
+
+**Inputs.** `--config.file` MUST be loaded and checked with the exporter's
+configuration loader, `--static-targets-file` with the static target file's
+loader and checks, against the configuration, and `--probe-targets-file` MUST
+be a document of one key, `probe_jobs`, besides `x-` keys, whose jobs each
+have a `name` (unique, `[A-Za-z0-9_][A-Za-z0-9_.-]*`), a `collector` of the
+configuration, `targets` (not empty, each once, each checked as a static
+target's `target` is for the collector), and MAY have `params` (probe
+parameters, checked as a probe checks them; `target`, `collector`, `debug`
+and a name that makes no label name MUST be refused), `labels` (a label name,
+not `instance` nor starting with `__`; `""` leaves the label out) and
+`shard_key` (`target` or `address`; anything else MUST be refused). The
+allocator MUST NOT open the files the configuration names
+(`config.WithoutNamedFiles`): the `otlp.tls` files, the `web.basic_auth`
+files and a grpc collector's `protoset_file` and `proto_files`, with what
+they import, are checked by the replicas, which mount them; every other check
+of the loader MUST be made, and a grpc collector whose descriptors come from
+files, and the `message` of a static target using it, MUST then not be
+checked against them. A
+`collector_files` entry that is absolute or leaves the configuration's
+directory MUST be refused, and so MUST a collector file whose path relative
+to that directory is `config.yaml` or `static-targets.yaml` and an entry that
+matches `static-targets.yaml`; so MUST a collector file whose path relative to
+that directory begins with `..`, and an entry of more than one path element
+whose first element begins with `..`, with `*`, `?`, `[` or `\`, or with a dot
+and one of those, which on a replica could match the cache directory's own
+names. The allocator MUST NOT expand `${NAME}`
+references. Invalid inputs at the start MUST exit 1. The files MUST be read
+again every `--config.watch-interval` (`0` reads them once); a change MUST be
+put in force only when all are accepted, the last good inputs staying in
+force otherwise, and one refusal MUST be logged and counted
+(`pue_allocator_reloads_total{result="failure"}`) once while its text
+(`model.SameFailureText`) stays the same. What is served MUST be the text
+that was checked: files that change while they are checked MUST be read
+again at the next check.
+
+**Members.** A member MUST be live while its last heartbeat is younger than
+`allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
+being live at once. A change of the live members MUST take effect when it has
+held for `--settle` (default `15s`), so a member live again within it keeps
+its share; the first member list MUST NOT form before a member is live nor
+before `max(--settle, allocapi.HeartbeatInterval)` after the start. Time
+MUST be read through an injectable clock, so tests move it by hand.
+
+**Allocation.** Every target MUST be owned by `allocapi.Owner` over the
+member list: a static target by its `shard_key`, or its name; a probe target
+by its target, or with `shard_key: address` by the host and port it reaches
+(a URL's host, `:80` or `:443` added for `http`/`https` without a port,
+compared without case; anything else as written). A static target whose
+owner changes while its old owner stays in the member list MUST stay in the
+old owner's share for one of its intervals, its own or the file's, and then
+leave it.
+
+**Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
+configuration at `config.yaml` and every collector file at its path
+relative to the configuration's directory, as written, and, when its share
+is not empty, `static-targets.yaml`, a static target file of the file's
+top-level keys but `targets` and `x-` keys, and of the share, draining
+targets included, in file order, each with its name written out and with
+aliases and merge keys replaced by what they stand for. A member not in the
+member list MUST get the configuration alone.
+
+**API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
+an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
+before the member list has formed; a heartbeat without `member` or a
+`host:port` `advertise` MUST be answered `400`. `GET /v1/bundle?member=<id>`
+MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
+when `If-None-Match` names that generation, and `503` with `Retry-After`
+until the member list has formed; with `wait=<duration>` (at most `60s`) a
+request that has its bundle MUST be answered as soon as the bundle changes,
+and `304` when the wait runs out or the allocator shuts down; a request
+without `member`, or with a `wait` that is no duration, MUST be answered
+`400`. `GET /v1/sd/<job>` MUST answer Prometheus HTTP service discovery
+JSON, one group per target, in file order, whose target is the routed
+member's `advertise` and whose labels are the job's labels, `__param_<name>`
+for each parameter, `__metrics_path__=/probe`, `__param_collector`,
+`__param_target`, `instance` (the target) and `__meta_pue_allocator_member`,
+and no `job` label; an unknown job MUST be answered `404`, and `503` while
+the member list has not formed or no member is live. A probe MUST be routed
+among the live members of the member list (all live members if none is),
+narrowed to those whose heartbeat reports a bundle generation whose
+configuration has the job's collector when any does. With
+`--web.token-file`, every endpoint but `/healthz` and `/ready` MUST answer
+`401` to a request without `Authorization: Bearer <token>`; an empty or
+unreadable token file MUST stop the start. The file MUST be read again when
+its modification time or size changes, so a rotated token is required from
+the next request; a file that is empty or cannot be read after a change MUST
+refuse every such request with `401` until it holds a token, the failure
+logged once while it stays the same. The allocator MUST serve plain HTTP
+only.
+
+**Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
+`pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
+`pue_allocator_generation_info{member,generation}`,
+`pue_allocator_reloads_total{result}` and
+`pue_allocator_member_changes_total`. `/healthz` MUST answer `200`; `/ready`
+`200` once the inputs are loaded and `503` from the first `SIGTERM` or
+`SIGINT`, which MUST also end every long poll before the server shuts down.
+
+### 42.14e Allocator mode
+
+With `--allocator.url`, the exporter MUST take its configuration, collector
+files and static targets from the target allocator rather than from files of
+its own (allocator mode), as the bundle of files the allocator serves it
+(`internal/allocapi`). `--allocator.url` MUST be an `http://` URL with a
+host and no user, query or fragment. `--allocator.cache-dir` MUST be given
+with it. `--allocator.url` together with `--config.file` or
+`--static-targets-file` given explicitly, and an `--allocator.` flag without
+`--allocator.url`, MUST be command-line errors (exit status `2`) naming the
+flags, at a start and with `--dry-run` alike. `--allocator.member` MUST
+default to the host name, and `--allocator.advertise` to the
+`--web.listen-address` host when it is one address that is neither loopback
+nor unspecified, else to the host's first address that is neither loopback
+nor link-local, IPv4 before IPv6, with the listen port; an
+`--allocator.advertise` that is not `host:port` MUST be refused.
+
+The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
+at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
+put in force or refused, to every address the URL's host resolves to, each at
+the URL's port with the URL's host as its `Host` header, or to the host alone
+when it is an IP address. A heartbeat MUST carry the member, the advertised
+address, the generation in force (empty before the first), the last refused
+generation with its error until a later bundle is put in force, and
+`shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
+exporter MUST send one at once, bounded by 2 seconds, before
+`--web.shutdown-delay` begins. With `--allocator.token-file`, every request
+MUST carry `Authorization: Bearer <token>`, the file read again for each.
+
+The exporter MUST ask for its bundle with `GET
+/v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`
+naming the last generation it fetched (put in force or refused), quoted as an
+entity tag, and MUST take a `304`, or a bundle of that generation or of the
+one in force, as no change. A `503` with a `Retry-After` of seconds, the
+allocator's answer while it has no member list, MUST NOT be counted or logged
+as a failure: the next request MUST follow after `Retry-After`, at least 1
+second and at most 30, or sooner when a heartbeat reply names a generation
+other than the last fetched. Which generation was last fetched MUST be read
+when the heartbeat's replies are in, not when it was sent: a reply naming a
+bundle fetched while it was on its way MUST NOT cut any wait short. A failed request or write MUST be tried again
+after a wait doubling from 1 second to 30, and an answer without a change
+that came within 1 second MUST wait 1 second before the next request, so the
+exporter never asks as fast as the allocator answers.
+
+A new bundle MUST be refused, before anything is written, when
+`allocapi.CheckFiles` refuses it, when its generation is not
+`allocapi.Generation` of its files, or when a top-level name begins with
+`..`. Otherwise it MUST be written into a new directory of the cache
+directory, files `0600` and directories `0700`, and checked there as a
+reload would check it, the configuration and the static target file
+together; a bundle that fails MUST be refused, its directory removed and the
+files in force kept. A bundle that passes MUST be put in place by replacing
+one symbolic link, `..data`, through which the cache directory's top-level
+names link, under the configuration manager's reload lock and followed by a
+reload of both files with the trigger `allocator` under the same lock, so no
+reader opening a file through the cache directory finds files of two
+generations, and no reload reads them half replaced. When that reload is
+refused nonetheless, the previous files MUST be put back and reloaded, and
+the bundle refused. The other generations' directories MUST be removed once
+a bundle is in force. A refused bundle MUST NOT be fetched again until the
+allocator serves another generation.
+
+The manager MUST read `<cache-dir>/config.yaml` and
+`<cache-dir>/static-targets.yaml` with the loader of file mode, so the
+`--config.expand-env`, `--static-targets.expand-env` and `--config.watch`
+flags apply; an absent static target file MUST be a file without targets. At
+startup, a bundle in the cache directory that loads MUST be put in force at
+once, ready, whether or not the allocator answers. Without one, or with one
+that does not load (logged as a warning), the exporter MUST serve its
+endpoints with an empty configuration: `/ready` MUST answer `503` with `not
+ready: no configuration yet: waiting for the allocator`, `/probe` MUST answer
+`503` with `no configuration yet: waiting for the allocator at <url>`, the
+static targets endpoint MUST have no targets, the self-metrics MUST be
+served, and no reload status (§ 22.0b) MUST be reported until a
+configuration is in force. Only a reload that puts a configuration in force
+MUST end that state. `--dry-run` with `--allocator.url` MUST check the
+bundle in the cache directory, and fail when there is none.
+
+The exporter in allocator mode MUST expose, from its start:
+
+```text
+http_exporter_allocator_generation_info{generation}     gauge
+http_exporter_allocator_last_sync_timestamp_seconds     gauge
+http_exporter_allocator_sync_errors_total{stage}        counter
+http_exporter_allocator_bundle_refused_total            counter
+```
+
+`generation_info` MUST be 1 for the generation in force, absent before the
+first; the timestamp MUST be the last answer to a bundle request, 0 before
+one; `stage` MUST be `heartbeat` (one per address a heartbeat failed for),
+`fetch` or `write`, each from zero. An exporter outside allocator mode MUST
+have none of them.
 
 ## 42.15 Redirect following and HTTP/2 negotiation
 

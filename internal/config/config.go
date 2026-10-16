@@ -36,6 +36,14 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // the request, limits, formats and error policies — stop that collector at
 // the first mistake; its metric rules are then each checked in full.
 func Validate(c *model.Config) error {
+	return validate(c, false)
+}
+
+// validate is Validate. namedFilesUnread leaves the files the configuration
+// names unopened (WithoutNamedFiles): the TLS files of otlp.tls, the files of
+// web.basic_auth and the descriptor files of grpc collectors, whose method
+// and messages are then not checked against them. Every other check is made.
+func validate(c *model.Config, namedFilesUnread bool) error {
 	if len(c.Collectors) == 0 {
 		if len(c.CollectorFiles) > 0 {
 			return errors.New("no collectors: neither collectors nor the files collector_files matched define any")
@@ -57,9 +65,12 @@ func Validate(c *model.Config) error {
 			continue
 		}
 		seen[x.Name] = true
+		if namedFilesUnread {
+			x.DescriptorFilesUnread = true
+		}
 		errs = append(errs, inCollectorFile(file, validateCollector(c, x)))
 	}
-	errs = append(errs, validateWebAuthSettings(c), validateOTLP(&c.OTLP))
+	errs = append(errs, validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
 	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}
@@ -869,11 +880,12 @@ func checkPythonRule(x *model.Collector, r *model.MetricRule, where string, wrot
 
 // validateWebAuthSettings checks the exporter's own basic authentication,
 // which cannot share the Authorization header with a collector forwarding it.
-func validateWebAuthSettings(c *model.Config) error {
+// namedFilesUnread leaves its files unread (validate).
+func validateWebAuthSettings(c *model.Config, namedFilesUnread bool) error {
 	if c.Web.BasicAuth == nil || !c.Web.BasicAuth.Enabled {
 		return nil
 	}
-	if err := validateWebAuth(c.Web.BasicAuth); err != nil {
+	if err := validateWebAuth(c.Web.BasicAuth, namedFilesUnread); err != nil {
 		return err
 	}
 	for i := range c.Collectors {
@@ -890,7 +902,8 @@ func validateWebAuthSettings(c *model.Config) error {
 const otlpServiceNameAttribute = "service.name"
 
 // validateOTLP checks the OTLP export settings and fills in their defaults.
-func validateOTLP(o *model.OTLPConfig) error {
+// namedFilesUnread leaves the TLS files unread (validate).
+func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	if !o.Enabled {
 		return nil
 	}
@@ -907,7 +920,11 @@ func validateOTLP(o *model.OTLPConfig) error {
 	if err := fetch.CheckHeaders(o.Headers); err != nil {
 		return fmt.Errorf("otlp.headers %w", err)
 	}
-	if err := fetch.CheckClientTLS(o.TLS); err != nil {
+	checkTLS := fetch.CheckClientTLS
+	if namedFilesUnread {
+		checkTLS = fetch.CheckClientTLSKeys
+	}
+	if err := checkTLS(o.TLS); err != nil {
 		return fmt.Errorf("otlp.tls %w", err)
 	}
 	switch {
@@ -975,6 +992,8 @@ type loadOptions struct {
 	// flag is the flag that turned expansion on, named when a reference
 	// cannot be expanded.
 	flag string
+	// namedFilesUnread is WithoutNamedFiles.
+	namedFilesUnread bool
 }
 
 // Each document has its own flag for expansion: the configuration and its
@@ -999,6 +1018,20 @@ func WithEnvExpansion() LoadOption {
 // --static-targets.expand-env turns on.
 func WithStaticTargetsEnvExpansion() LoadOption {
 	return func(o *loadOptions) { o.expandEnv, o.flag = true, staticTargetsEnvFlag }
+}
+
+// WithoutNamedFiles loads the configuration without opening the files it
+// names (namedFiles): the TLS files of otlp.tls, the username and password
+// files of web.basic_auth, and a grpc collector's protoset_file and
+// proto_files with what they import. Every other check is made; a grpc
+// collector whose descriptors come from files is not checked against them,
+// and neither are the messages of the static targets that use it. It is how
+// the target allocator checks the configuration it serves: those files are
+// mounted on the replicas, which check them when they load it, and not on
+// the allocator. The configuration and its collector files are read as
+// always.
+func WithoutNamedFiles() LoadOption {
+	return func(o *loadOptions) { o.namedFilesUnread = true }
 }
 
 // readDocument reads a configuration file, a collector file or a static
@@ -1076,15 +1109,19 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	if decoded != nil {
 		decoded(&c)
 	}
+	var options loadOptions
+	for _, apply := range opts {
+		apply(&options)
+	}
 	// The collectors that were read are checked even when a collector file
 	// could not be, so one run reports the mistakes of every file.
 	if err != nil {
 		if len(c.Collectors) > 0 {
-			err = model.JoinProblems(err, Validate(&c))
+			err = model.JoinProblems(err, validate(&c, options.namedFilesUnread))
 		}
 		return nil, err
 	}
-	if err = Validate(&c); err != nil {
+	if err = validate(&c, options.namedFilesUnread); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -1202,6 +1239,15 @@ type Manager struct {
 	// prepared are given what every reload is about to put in force
 	// (OnPrepare), under reloadMu.
 	prepared []func(*model.Config, *model.StaticTargetFile)
+	// awaiting says nothing has been put in force yet: the manager of an
+	// exporter in allocator mode that started without a bundle
+	// (NewAwaitingManager) holds an empty configuration until its first
+	// reload puts one in force (allocatormode.go).
+	awaiting atomic.Bool
+	// absentTargets says a static target file that does not exist is one
+	// without targets rather than a file that cannot be read
+	// (AllowAbsentTargets).
+	absentTargets bool
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -1791,6 +1837,9 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	// Reading the file on its own opens no other: one refused here is read
 	// again when it changes, and for nothing else.
 	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
+	if m.absentTargets && targetsAbsent(m.targetPath) {
+		return &model.StaticTargetFile{}, nil
+	}
 	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
 	if err == nil {
 		err = ValidateStaticTargets(f)
@@ -1821,6 +1870,7 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	}
 	m.current.Store(&pair)
 	if c != nil {
+		m.awaiting.Store(false)
 		m.installedConfig(trigger, c)
 	}
 	if f != nil {

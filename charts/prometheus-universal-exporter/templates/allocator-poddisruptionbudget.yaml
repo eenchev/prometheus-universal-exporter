@@ -1,0 +1,16 @@
+{{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
+{{- end }}

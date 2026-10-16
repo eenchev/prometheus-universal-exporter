@@ -24,6 +24,7 @@ import (
 	// host's files are read first where there are any.
 	_ "time/tzdata"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocclient"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -98,6 +99,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, for editors, and exit")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version, request types and sql drivers of this build, and exit")
+	allocator := allocatorFlags{}
+	flags.StringVar(&allocator.url, "allocator.url", "", "Take the configuration and this replica's static targets from the target allocator at this http:// URL, kept in --allocator.cache-dir, rather than from --config.file and --static-targets-file, which cannot be given with it")
+	flags.StringVar(&allocator.cacheDir, "allocator.cache-dir", "", "Directory the bundle from the allocator is written into and loaded from, and a restart resumes from; required with --allocator.url")
+	flags.StringVar(&allocator.member, "allocator.member", "", "This replica's name in the allocator's member list; the host name, such as the pod's name, when left out")
+	flags.StringVar(&allocator.advertise, "allocator.advertise", "", "host:port the allocator tells Prometheus to send this replica's probes to; the listen address's host, or else the host's first address that is not a loopback one, with the listen port, when left out")
+	flags.StringVar(&allocator.tokenFile, "allocator.token-file", "", "File holding the bearer token sent to the allocator, read again for every request")
 	check := flags.Bool("dry-run", false, "Validate the configuration and static target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -179,6 +186,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	alloc, err := allocator.setUp(flags, *listenAddress)
+	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+
 	if *showVersion {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
 		return 0
@@ -213,6 +226,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	logger := newLogger(*logLevel, stderr)
 	if *check {
+		// In allocator mode the files checked are the bundle in the cache
+		// directory, which a restart would start with.
+		if alloc != nil {
+			*configFile, *targetFile = alloc.checkFiles()
+		}
 		return runCheck(checkInputs{
 			ConfigFile:       *configFile,
 			StaticTargetFile: *targetFile,
@@ -223,54 +241,61 @@ func run(args []string, stdout, stderr io.Writer) int {
 			WatchInterval:    *watchInterval,
 		}, stdout, logger)
 	}
-	// Stamped before they are read, so an edit made while they are is seen
-	// by the first watch tick; with the watch on, the descriptor files the
-	// configuration names are stamped as it is read, before it is checked
-	// against them. Without the watch nothing would compare that stamp, and
-	// the configuration is read without it.
-	configStamp := config.TakeStamp(*configFile, true, loadOptions...)
-	targetsStamp := config.TakeStamp(*targetFile, false)
-	load := config.Load
-	if *watchConfig {
-		load = func(path string, opts ...config.LoadOption) (*model.Config, error) {
-			return config.LoadStamped(path, &configStamp, opts...)
+	var manager *config.Manager
+	var generation string
+	if alloc != nil {
+		*configFile = alloc.configFile()
+		manager, generation = alloc.startManager(logger, *pythonPath, loadOptions, staticTargetsLoadOptions, *watchConfig)
+	} else {
+		// Stamped before they are read, so an edit made while they are is seen
+		// by the first watch tick; with the watch on, the descriptor files the
+		// configuration names are stamped as it is read, before it is checked
+		// against them. Without the watch nothing would compare that stamp, and
+		// the configuration is read without it.
+		configStamp := config.TakeStamp(*configFile, true, loadOptions...)
+		targetsStamp := config.TakeStamp(*targetFile, false)
+		load := config.Load
+		if *watchConfig {
+			load = func(path string, opts ...config.LoadOption) (*model.Config, error) {
+				return config.LoadStamped(path, &configStamp, opts...)
+			}
+		}
+		conf, err := load(*configFile, loadOptions...)
+		if err != nil {
+			logger.Error("invalid startup configuration; exiting", "error", err)
+			return 1
+		}
+		config.LogNotices(logger, *configFile, conf)
+
+		if err := config.ValidatePythonScripts(*pythonPath, conf); err != nil {
+			logger.Error("invalid startup configuration; exiting", "error", err)
+			return 1
+		}
+
+		manager = config.NewManager(conf, *configFile, logger)
+		manager.UseStamp(configStamp)
+		if *targetFile != "" {
+			targets, err := config.LoadStaticTargets(*targetFile, staticTargetsLoadOptions...)
+			if err == nil {
+				err = config.ValidateStaticTargets(targets)
+			}
+			if err == nil {
+				err = config.ValidateStaticTargetsAgainst(targets, conf)
+			}
+			if err != nil {
+				logger.Error("invalid static target configuration; exiting", "file", *targetFile, "error", err)
+				return 1
+			}
+			manager.SetTargets(*targetFile, targets)
+			manager.UseTargetsStamp(targetsStamp)
+			logger.Info("static targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 		}
 	}
-	conf, err := load(*configFile, loadOptions...)
-	if err != nil {
-		logger.Error("invalid startup configuration; exiting", "error", err)
-		return 1
-	}
-	config.LogNotices(logger, *configFile, conf)
-
-	if err := config.ValidatePythonScripts(*pythonPath, conf); err != nil {
-		logger.Error("invalid startup configuration; exiting", "error", err)
-		return 1
-	}
-
-	manager := config.NewManager(conf, *configFile, logger)
-	manager.UseStamp(configStamp)
 	manager.SetPythonPath(*pythonPath)
 	manager.SetEnvExpansion(*expandEnv)
 	manager.SetStaticTargetsEnvExpansion(*expandStaticTargetsEnv)
 	if *watchConfig {
 		manager.SetWatchInterval(*watchInterval)
-	}
-	if *targetFile != "" {
-		targets, err := config.LoadStaticTargets(*targetFile, staticTargetsLoadOptions...)
-		if err == nil {
-			err = config.ValidateStaticTargets(targets)
-		}
-		if err == nil {
-			err = config.ValidateStaticTargetsAgainst(targets, conf)
-		}
-		if err != nil {
-			logger.Error("invalid static target configuration; exiting", "file", *targetFile, "error", err)
-			return 1
-		}
-		manager.SetTargets(*targetFile, targets)
-		manager.UseTargetsStamp(targetsStamp)
-		logger.Info("static targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(selfMetricsEndpoint)
@@ -280,6 +305,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetProbeDebug(*enableProbeDebug)
+	if alloc != nil {
+		server.SetAwaitingReason(alloc.awaitingSentence())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -311,7 +339,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(scrapeLoopDone)
 		server.StaticScrapeLoop(loopsCtx)
 	}()
+	// The allocator client heartbeats and takes new bundles until run
+	// returns: through --web.shutdown-delay too, its heartbeats saying the
+	// exporter is shutting down.
+	var allocClient *allocclient.Client
+	if alloc != nil {
+		allocCtx, stopAllocClient := context.WithCancel(context.Background())
+		defer stopAllocClient()
+		allocClient, err = alloc.startClient(allocCtx, manager, generation, logger)
+		if err != nil {
+			logger.Error("invalid command line; exiting", "error", err.Error())
+			return 2
+		}
+		server.SetAllocatorStatus(func() exporter.AllocatorStatus { return exporter.AllocatorStatus(allocClient.Status()) })
+	}
 
+	conf := manager.Get()
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"static_targets", len(manager.StaticTargets()), "config_watch", manager.WatchEnabled(),
 		"config_expand_env", *expandEnv, "static_targets_expand_env", *expandStaticTargetsEnv, "request_types", fetch.BuiltRequestTypes(), "sql_drivers", fetch.BuiltSQLDrivers()}
@@ -320,6 +363,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// configuration can be.
 	if manager.WatchEnabled() {
 		startup = append(startup, "config_watch_interval", manager.WatchInterval().String())
+	}
+	if alloc != nil {
+		startup = append(startup, "allocator", alloc.url, "allocator_cache_dir", alloc.cacheDir, "allocator_member", alloc.member, "allocator_advertise", alloc.advertise,
+			"awaiting_configuration", manager.Awaiting())
 	}
 	logger.Info("starting exporter", startup...)
 	httpServer := exporter.NewHTTPServer(*listenAddress, server.Handler())
@@ -341,6 +388,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// exporter keeps answering them for --web.shutdown-delay.
 		server.BeginShutdown()
 		httpServer.SetKeepAlivesEnabled(false)
+		// The allocator hears of the shutdown at once, and moves this
+		// replica's share to the others, rather than when its heartbeats
+		// stop.
+		if allocClient != nil {
+			heartbeatCtx, cancel := context.WithTimeout(context.Background(), shutdownHeartbeatTimeout)
+			allocClient.ShuttingDown(heartbeatCtx)
+			cancel()
+		}
 		if *shutdownDelay > 0 {
 			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
 			waitOutShutdownDelay(*shutdownDelay)

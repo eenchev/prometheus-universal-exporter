@@ -370,17 +370,18 @@ func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
 }
 
 // A build with one request type is one the exporter ships, so CI runs the
-// tests of each, in a job of a matrix over every type in the tree that lets
-// each type finish when another fails, the type handed to the step as $type,
-// under the condition of its other Go steps; and `make test-request-types`,
-// which `make ci` includes, runs the same command over the same types: a
-// test that needs a type its build lacks fails there, not in somebody's
-// single-type build.
+// exporter's tests with each, in a job of a matrix over every type in the
+// tree that lets each type finish when another fails, the type handed to the
+// step as $type, the packages those of the exporter's side a build with the
+// type compiles, under the condition of the exporter's filter; and
+// `make test-request-types`, which `make ci` includes, runs the same command
+// over every package and the same types: a test that needs a type its build
+// lacks fails there, not in somebody's single-type build.
 func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
-	const tags, command = `tags="$(sh tools/request-type-tags.sh "$type")"`, `go test -count=1 -tags "$tags" ./...`
+	const tags, packages, command = `tags="$(sh tools/request-type-tags.sh "$type")"`, `packages="$(sh tools/ci-packages.sh exporter "$tags")"`, `go test -count=1 -tags "$tags" $packages`
 	var job string
 	for name, steps := range workflowSteps(t, ".github/workflows/ci.yml") {
-		index := stepIndex(steps, tags, command)
+		index := stepIndex(steps, tags, packages, command)
 		if index < 0 {
 			continue
 		}
@@ -395,12 +396,12 @@ func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 		if env, _ := step["env"].(map[string]any); env["type"] != "${{ matrix.type }}" {
 			t.Errorf("ci.yml's job %s runs %s with type %v in its env, not ${{ matrix.type }}", name, command, env["type"])
 		}
-		if condition := step["if"]; condition != "steps.changes.outputs.go == 'true'" {
-			t.Errorf("ci.yml tests each request type under the condition %q, not that of its Go steps", condition)
+		if condition := step["if"]; condition != sideCondition("exporter") {
+			t.Errorf("ci.yml tests each request type under the condition %q, not %q", condition, sideCondition("exporter"))
 		}
 	}
 	if job == "" {
-		t.Fatalf("ci.yml has no step that runs %s for a request type", command)
+		t.Fatalf("ci.yml has no step that runs %s after %s for a request type", command, packages)
 	}
 	definition, _ := workflowDocument(t, ".github/workflows/ci.yml")["jobs"].(map[string]any)[job].(map[string]any)
 	strategy, _ := definition["strategy"].(map[string]any)
@@ -427,7 +428,7 @@ func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 		t.Fatal("the Makefile has no test-request-types target")
 	}
 	recipe := strings.ReplaceAll(target[1], "$$", "$")
-	for _, want := range []string{tags, command} {
+	for _, want := range []string{tags, everyPackage(command)} {
 		if !strings.Contains(recipe, want) {
 			t.Errorf("make test-request-types does not run %s, as ci.yml does:\n%s", want, recipe)
 		}
@@ -486,8 +487,10 @@ func makefileRules(t *testing.T) (prerequisites map[string][]string, recipes map
 // and every target of the Makefile is .PHONY, since none makes a file of
 // its name. go mod download is the one exception: it fills the module cache
 // before CI's steps, which each go command make runs does for itself. Every
-// job of ci.yml is read, not only test: the race run and each request type's
-// tests are jobs of their own.
+// job of ci.yml is read, not only test: the race run, each request type's
+// tests and the allocator's are jobs of their own. CI tests each side's
+// packages, $packages, and test/repository apart; make runs the same command
+// over ./..., every package, which the sides and test/repository make up.
 func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 	prerequisites, recipes := makefileRules(t)
 	reached, queue := map[string]bool{}, []string{"ci"}
@@ -521,8 +524,8 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 			case line == "go mod download":
 			case strings.HasPrefix(line, "go "), strings.HasPrefix(line, "for type in "), strings.HasPrefix(line, `tags="$(sh tools/request-type-tags.sh`):
 				commands++
-				if !strings.Contains(makeCI, line) {
-					t.Errorf("ci.yml runs %s, which no target make ci reaches runs", line)
+				if !strings.Contains(makeCI, everyPackage(line)) {
+					t.Errorf("ci.yml runs %s, which no target make ci reaches runs (as %s)", line, everyPackage(line))
 				}
 			case strings.HasPrefix(line, "make "):
 				for _, target := range strings.Fields(line)[1:] {
@@ -534,7 +537,7 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 		}
 	}
 	// What ci.yml runs today: the suite, raced, vetted and built with every
-	// type and with each on its own, and each type's tests.
+	// type and with each on its own, each type's tests and the allocator's.
 	if commands < 8 {
 		t.Errorf("only %d go commands were read from ci.yml; the reader has stopped finding them", commands)
 	}
@@ -556,10 +559,11 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 // it as the way to build the exporter with only some request types. It
 // builds the main package into bin/, under the name the image gives the
 // binary, with the tags of REQUEST_TYPES and SQL_DRIVERS, and the docs that
-// give it say where the binary lands.
+// give it say where the binary lands. The target allocator, cmd/pue-allocator,
+// is built beside it with the same tags, and the image carries both.
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
-	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) .`
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) . && go build -tags "$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)`
 	if got := strings.TrimSpace(recipes["build"]); got != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}
@@ -567,8 +571,27 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	if app == nil {
 		t.Fatal("the Makefile no longer names APP")
 	}
-	if want := "-o /out/" + app[1] + " ."; !strings.Contains(read(t, "Dockerfile"), want) {
+	dockerfile := read(t, "Dockerfile")
+	if want := "-o /out/" + app[1] + " ."; !strings.Contains(dockerfile, want) {
 		t.Errorf("the Dockerfile does not build %q, the binary make build names", want)
+	}
+	allocator := regexp.MustCompile(`(?m)^ALLOCATOR := (\S+)$`).FindStringSubmatch(read(t, "Makefile"))
+	if allocator == nil {
+		t.Fatal("the Makefile no longer names ALLOCATOR")
+	}
+	if _, err := os.Stat(filepath.Join("cmd", allocator[1], "main.go")); err != nil {
+		t.Errorf("the Makefile's ALLOCATOR %s is no command under cmd/: %v", allocator[1], err)
+	}
+	for _, want := range []string{
+		"-o /out/" + allocator[1] + " ./cmd/" + allocator[1] + "\n",
+		"COPY --from=build /out/" + allocator[1] + " /bin/" + allocator[1] + "\n",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("the Dockerfile does not have %q: the image carries the allocator beside the exporter", strings.TrimSpace(want))
+		}
+	}
+	if !strings.Contains(read(t, "docs/ALLOCATOR.md"), "bin/"+allocator[1]) {
+		t.Errorf("docs/ALLOCATOR.md does not say make build leaves the allocator in bin/%s", allocator[1])
 	}
 	for _, doc := range []string{"docs/CONFIGURATION.md", "docs/DEVELOPMENT.md", "docs/GRPC.md"} {
 		text := read(t, doc)
@@ -585,28 +608,48 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 // takes several times what it takes without: go test's own limit of ten
 // minutes a package, meant for one plain run, was what a slow machine would
 // have failed on before any test did. So the command carries a limit of its
-// own, at least twice go test's, CI runs it in one step of all its jobs,
-// under the condition of its other Go steps, and `make test` runs the very
-// same command, so that what passes here is what passes there.
+// own, at least twice go test's. CI runs it in one step for each side, the
+// exporter's and the allocator's, over the packages tools/ci-packages.sh
+// lists for the side and under the condition of the side's filter, by the
+// same command, and `make test` runs that very command over every package,
+// so that what passes here is what passes there.
 func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
-	pattern := regexp.MustCompile(`(?m)^go test -race -count=2 -shuffle=on -timeout (\S+) \./\.\.\.$`)
+	pattern := regexp.MustCompile(`^go test -race -count=2 -shuffle=on -timeout (\S+) \$packages$`)
+	side := regexp.MustCompile(`^packages="\$\(sh tools/ci-packages\.sh (\S+)\)"$`)
 	var steps []map[string]any
 	for _, job := range workflowSteps(t, ".github/workflows/ci.yml") {
 		steps = append(steps, job...)
 	}
 	var command string
+	sides := map[string]int{}
 	for _, step := range steps {
 		run, _ := step["run"].(string)
 		if !strings.Contains(run, "-race") {
 			continue
 		}
-		if command != "" {
-			t.Fatalf("ci.yml runs the race detector in more than one step: %q and %q", command, strings.TrimSpace(run))
+		lines := strings.Split(strings.TrimSpace(run), "\n")
+		for i := range lines {
+			lines[i] = strings.TrimSpace(lines[i])
 		}
-		command = strings.TrimSpace(run)
-		if condition := step["if"]; condition != "steps.changes.outputs.go == 'true'" {
-			t.Errorf("ci.yml runs %q under the condition %q, not that of its Go steps", command, condition)
+		name := ""
+		if match := side.FindStringSubmatch(lines[0]); len(lines) == 2 && match != nil {
+			name = match[1]
 		}
+		if name == "" {
+			t.Errorf("ci.yml runs the race detector with %q, not after %s naming the side's packages", strings.TrimSpace(run), side)
+			continue
+		}
+		sides[name]++
+		if command != "" && lines[1] != command {
+			t.Errorf("ci.yml runs the race detector with %q and with %q; the sides were meant to run one command", command, lines[1])
+		}
+		command = lines[1]
+		if condition := step["if"]; condition != sideCondition(name) {
+			t.Errorf("ci.yml runs %q for the %s side under the condition %q, not %q", command, name, condition, sideCondition(name))
+		}
+	}
+	if !reflect.DeepEqual(sides, map[string]int{"allocator": 1, "exporter": 1}) {
+		t.Errorf("ci.yml runs the race detector for the sides %v; one step for the exporter and one for the allocator were meant", sides)
 	}
 	match := pattern.FindStringSubmatch(command)
 	if match == nil {
@@ -630,22 +673,41 @@ func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 			raced = append(raced, line)
 		}
 	}
-	if len(raced) != 1 || raced[0] != command {
-		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, command)
+	if len(raced) != 1 || raced[0] != everyPackage(command) {
+		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, everyPackage(command))
 	}
 }
 
-// The race run and each request type's tests run in jobs of their own,
-// beside test, and each starts with the setup steps of test written out
-// again: checkout, the changed-path filter, Go, the image's Python with its
-// libraries and the modules only the tests use, and go mod download, helm's
-// setup alone left out. A copy that drifts from test's — another filter,
-// another Go or Python, a missing module — would have one job run what the
-// others do not, so every other job's steps before its last must be test's
-// setup steps, the same, in their order; its env and machine are test's;
-// each of its own steps has the condition of the Go steps; and no job of
-// ci.yml has a job-level `if`, which would leave a matrix job reported as
-// skipped under a name no check requires.
+// sideCondition is the condition of the steps that run when the named output
+// of ci.yml's changed-path filter is true.
+func sideCondition(output string) string {
+	return "steps.changes.outputs." + output + " == 'true'"
+}
+
+// everyPackage is a go command of ci.yml as make runs it: over ./..., every
+// package, where CI names a side's packages or test/repository.
+func everyPackage(command string) string {
+	for _, packages := range []string{" $packages", " ./test/repository/"} {
+		if strings.HasSuffix(command, packages) {
+			return strings.TrimSuffix(command, packages) + " ./..."
+		}
+	}
+	return command
+}
+
+// The race run, each request type's tests and the allocator's run in jobs of
+// their own, beside test, and each starts with the setup steps of test
+// written out again: checkout, the changed-path filter, Go, the image's
+// Python with its libraries and the modules only the tests use, and go mod
+// download, helm's setup alone left out. A copy that drifts from test's —
+// another filter, another Go or Python, a missing module — would have one
+// job run what the others do not, so every other job's steps before its last
+// must be test's setup steps, the same, in their order; its env and machine
+// are test's; each of its own steps has the condition of one output of the
+// filter whose files the setup's own condition, the go output's, covers
+// (cisides_test.go keeps that so); and no job of ci.yml has a job-level
+// `if`, which would leave a matrix job reported as skipped under a name no
+// check requires.
 func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 	const path = ".github/workflows/ci.yml"
 	all := workflowSteps(t, path)
@@ -686,8 +748,8 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 			}
 		}
 		for _, step := range steps[len(setup):] {
-			if step["if"] != "steps.changes.outputs.go == 'true'" {
-				t.Errorf("ci.yml's job %s runs a step under the condition %v, not that of its Go steps:\n%s", name, step["if"], yamlText(step))
+			if condition := step["if"]; !slices.Contains([]any{sideCondition("go"), sideCondition("exporter"), sideCondition("allocator")}, condition) {
+				t.Errorf("ci.yml's job %s runs a step under the condition %v, not that of the go, exporter or allocator filter:\n%s", name, condition, yamlText(step))
 			}
 		}
 		for _, key := range []string{"env", "runs-on"} {
@@ -696,9 +758,9 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 			}
 		}
 	}
-	// The race job and the request types' matrix.
-	if others < 2 {
-		t.Errorf("ci.yml has %d jobs beside test; the race run and the request types' tests were meant to have one each", others)
+	// The race job, the request types' matrix and the allocator's job.
+	if others < 3 {
+		t.Errorf("ci.yml has %d jobs beside test; the race run, the request types' tests and the allocator's tests were meant to have one each", others)
 	}
 }
 

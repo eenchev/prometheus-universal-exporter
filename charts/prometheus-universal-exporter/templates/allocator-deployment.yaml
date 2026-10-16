@@ -1,0 +1,117 @@
+{{- if and .Values.allocator .Values.allocator.enabled }}
+{{- $allocator := .Values.allocator }}
+{{- $image := $allocator.image | default dict }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "allocator.replicas" $allocator.replicas 1 2147483647) }}
+  selector:
+    matchLabels:
+      {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 8 }}
+      annotations:
+        {{- /* The allocator reads its files at start, so a change to the
+               configuration or a target file rolls it; it keeps no state,
+               and the exporter pods keep their last bundle meanwhile. */}}
+        {{- $checksum := print (include (print $.Template.BasePath "/configmap.yaml") .) (include (print $.Template.BasePath "/allocator-configmaps.yaml") .) | sha256sum }}
+        {{- include "prometheus-universal-exporter.metadataAnnotations" (list . (dict "checksum/config" $checksum)) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
+      {{- /* The allocator never calls the Kubernetes API either. */}}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: allocator
+          image: "{{ $image.repository | default .Values.image.repository }}:{{ $image.tag | default .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $image.pullPolicy | default .Values.image.pullPolicy }}
+          {{- /* The image's entrypoint is the exporter; the allocator is the
+                 binary beside it. */}}
+          command: ["/bin/pue-allocator"]
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - "--web.listen-address=:9116"
+            - "--config.file=/etc/prometheus-universal-exporter/config.yaml"
+            {{- if include "prometheus-universal-exporter.allocatorStaticTargets" . }}
+            - "--static-targets-file=/etc/prometheus-universal-exporter-static-targets/static-targets.yaml"
+            {{- end }}
+            {{- if $allocator.probeJobs }}
+            - "--probe-targets-file=/etc/prometheus-universal-exporter-probe-targets/probe-targets.yaml"
+            {{- end }}
+            {{- if $allocator.tokenSecret.name }}
+            - {{ printf "--web.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
+            {{- end }}
+            - {{ printf "--log.level=%s" ($allocator.logLevel | default "info") | quote }}
+            {{- with $allocator.settle }}
+            - {{ printf "--settle=%s" . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 9116
+              protocol: TCP
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources: {{- toYaml ($allocator.resources | default dict) | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus-universal-exporter
+              readOnly: true
+            {{- if include "prometheus-universal-exporter.allocatorStaticTargets" . }}
+            - name: static-targets
+              mountPath: /etc/prometheus-universal-exporter-static-targets
+              readOnly: true
+            {{- end }}
+            {{- if $allocator.probeJobs }}
+            - name: probe-targets
+              mountPath: /etc/prometheus-universal-exporter-probe-targets
+              readOnly: true
+            {{- end }}
+            {{- if $allocator.tokenSecret.name }}
+            - name: token
+              mountPath: {{ include "prometheus-universal-exporter.allocatorTokenDir" . }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "prometheus-universal-exporter.fullname" . }}
+        {{- if include "prometheus-universal-exporter.allocatorStaticTargets" . }}
+        - name: static-targets
+          configMap:
+            name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}-static-targets
+        {{- end }}
+        {{- if $allocator.probeJobs }}
+        - name: probe-targets
+          configMap:
+            name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}-probe-targets
+        {{- end }}
+        {{- with $allocator.tokenSecret.name }}
+        - name: token
+          secret:
+            secretName: {{ . | quote }}
+            defaultMode: 256
+            items:
+              - key: {{ $allocator.tokenSecret.key | default "token" | quote }}
+                path: token
+        {{- end }}
+{{- end }}

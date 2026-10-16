@@ -38,7 +38,8 @@ import (
 // read at a request, not at the load, so they refuse no configuration. The
 // files a .proto file imports, which the configuration does not name, are
 // known only once the load has read the files that do the importing
-// (importedFiles). A nil configuration names none.
+// (importedFiles). A nil configuration names none. A load WithoutNamedFiles,
+// the target allocator's, opens none of them.
 func namedFiles(configs ...*model.Config) []string {
 	var files []string
 	add := func(paths ...string) {

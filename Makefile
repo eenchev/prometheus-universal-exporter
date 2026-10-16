@@ -1,4 +1,7 @@
 APP := prometheus-universal-exporter
+# The target allocator's binary, built from cmd/pue-allocator beside the
+# exporter's, into bin/ and into the image. See docs/ALLOCATOR.md.
+ALLOCATOR := pue-allocator
 
 # Must be a release that supports the Go the build uses: an older one cannot
 # read a newer toolchain's standard library or export data (v2.13.2 against Go
@@ -29,9 +32,11 @@ REQUEST_TYPES ?=
 # See "Building with more drivers" in docs/SQL.md.
 SQL_DRIVERS ?=
 
-# The exporter's binary, bin/$(APP), built from the main package.
+# The exporter's binary, bin/$(APP), built from the main package, and the
+# target allocator's, bin/$(ALLOCATOR), with the same request types: the
+# allocator checks the configuration it serves with the exporter's loader.
 build:
-	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) .
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) . && go build -tags "$$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)
 
 # What ci.yml's build steps run: every package compiled, then each request
 # type vetted and built on its own, so code one type needs cannot quietly
@@ -179,7 +184,7 @@ precommit: fmt-check lint gopls-check vet
 # internal/grpctest, are left out: a vulnerability only a test can reach is
 # none of the exporter's. A test keeps the packages equal to the workflow's
 # and the list of what is left out complete.
-VULNCHECK_PACKAGES := . ./tools/...
+VULNCHECK_PACKAGES := . ./cmd/... ./tools/...
 
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(VULNCHECK_PACKAGES)
@@ -333,6 +338,27 @@ helm-test: helm-version
 	echo "$$out" | grep -q 'port: "grpc"'; \
 	echo "$$out" | grep -q 'namespaceSelector:'; \
 	echo "$$out" | grep -q '^    - a$$'
+	@# The target allocator: its Deployment and the exporter in allocator
+	@# mode, with the ScrapeConfig of a probe job; and what the allocator
+	@# cannot run with is rejected.
+	@set -eu; \
+	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'allocator.probeJobs=[{"name":"websites","collector":"example","targets":["https://shop.example"]}]')"; \
+	echo "$$out" | grep -q 'command: \["/bin/pue-allocator"\]'; \
+	echo "$$out" | grep -q -- '--allocator.url=http://test-prometheus-universal-exporter-allocator.default.svc:9116'; \
+	echo "$$out" | grep -q 'url: "http://test-prometheus-universal-exporter-allocator.default.svc:9116/v1/sd/websites"'; \
+	if echo "$$out" | grep -q -- '- --config.file='; then \
+		echo "the exporter in allocator mode was given --config.file" >&2; \
+		exit 1; \
+	fi; \
+	echo "$$out" | python3 tools/check-manifests.py; \
+	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml >/dev/null 2>&1; then \
+		echo "helm template accepted the allocator beside staticTargets.enabled" >&2; \
+		exit 1; \
+	fi; \
+	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]' >/dev/null 2>&1; then \
+		echo "helm template accepted a probe monitor beside the allocator" >&2; \
+		exit 1; \
+	fi
 	@# A configuration file whose first line is indented. The render is kept
 	@# first: a pipeline would hide helm failing.
 	@set -eu; \

@@ -35,7 +35,12 @@ RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}")" 
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -tags "${tags}" \
-    -o /out/prometheus-universal-exporter .
+    -o /out/prometheus-universal-exporter . \
+    && CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -tags "${tags}" \
+    -o /out/pue-allocator ./cmd/pue-allocator
 
 FROM python:${PYTHON_VERSION}-slim
 
@@ -68,6 +73,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/prometheus-universal-exporter /bin/prometheus-universal-exporter
+# The target allocator, run from the same image with its own entrypoint,
+# /bin/pue-allocator (docs/ALLOCATOR.md).
+COPY --from=build /out/pue-allocator /bin/pue-allocator
 
 # By number, not name: Kubernetes checks runAsNonRoot against the image's
 # user only when it is numeric, and refuses to start a named one.

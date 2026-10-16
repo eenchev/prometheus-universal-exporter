@@ -182,6 +182,11 @@ func validateGRPCRequest(x *model.Collector) error {
 		// The server is asked at the first call; nothing more is known now.
 		return nil
 	}
+	if x.DescriptorFilesUnread && r.Descriptors != "" {
+		// The descriptor files are not opened (config.WithoutNamedFiles):
+		// the replicas that mount them check the method and the message.
+		return nil
+	}
 	method, err := staticMethod(x)
 	if err != nil {
 		return fmt.Errorf("collector %q: %w", x.Name, err)
@@ -360,7 +365,7 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	if !json.Valid([]byte(t.Request.Message)) {
 		return errors.New("request.message is not JSON; write the message in the protobuf JSON mapping")
 	}
-	if c.Request.Descriptors == descriptorsProtoset || c.Request.Descriptors == descriptorsProto || c.Request.Descriptors == "" {
+	if (c.Request.Descriptors == descriptorsProtoset || c.Request.Descriptors == descriptorsProto) && !c.DescriptorFilesUnread || c.Request.Descriptors == "" {
 		method, err := staticMethod(c)
 		if err != nil {
 			return err

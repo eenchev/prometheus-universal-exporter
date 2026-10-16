@@ -38,7 +38,7 @@ jobs:
       - name: Check for known vulnerabilities
         run: |
           set +e
-          govulncheck . ./tools/... > "$RUNNER_TEMP/govulncheck.txt" 2>&1
+          govulncheck . ./cmd/... ./tools/... > "$RUNNER_TEMP/govulncheck.txt" 2>&1
           status=$?
           set -e
           cat "$RUNNER_TEMP/govulncheck.txt"

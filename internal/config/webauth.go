@@ -26,8 +26,9 @@ import (
 // fails the request with 500 rather than falling back to the old credential,
 // and is logged.
 
-// validateWebAuth checks the credential settings and that the files can be read.
-func validateWebAuth(a *model.ExporterBasicAuth) error {
+// validateWebAuth checks the credential settings and, unless
+// namedFilesUnread (validate), that the files can be read.
+func validateWebAuth(a *model.ExporterBasicAuth, namedFilesUnread bool) error {
 	if a.Password != "" && a.PasswordFile != "" {
 		return errors.New("web.basic_auth sets both password and password_file; use one")
 	}
@@ -44,6 +45,9 @@ func validateWebAuth(a *model.ExporterBasicAuth) error {
 	// never be matched.
 	if err := fetch.CheckBasicUsername(a.Username); err != nil {
 		return fmt.Errorf("web.basic_auth.username %w", err)
+	}
+	if namedFilesUnread {
+		return nil
 	}
 	// The digests the requests are compared with are made here, when the
 	// configuration loads, and again only when a file changes.

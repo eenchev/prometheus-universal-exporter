@@ -26,7 +26,12 @@
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.enable-probe-debug" "set server.probeDebug instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
-  "--web.shutdown-delay" "set server.shutdownDelay instead" -}}
+  "--web.shutdown-delay" "set server.shutdownDelay instead"
+  "--allocator.url" "set allocator.enabled instead, which points the exporter at the chart's allocator"
+  "--allocator.cache-dir" "the chart sets it with allocator.enabled, to the pod's cache volume"
+  "--allocator.member" "the chart sets it with allocator.enabled, to the pod's name"
+  "--allocator.advertise" "the chart sets it with allocator.enabled, to the pod's address and server.listenAddress's port"
+  "--allocator.token-file" "set allocator.tokenSecret instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
        serving, so a pod started with one would restart for ever. */ -}}
 {{- $oneShot := dict
@@ -64,6 +69,16 @@
 {{- if $static -}}
 {{- $_ := set $taken "/etc/prometheus-universal-exporter-static-targets" "the static target directory" -}}
 {{- end -}}
+{{- /* In allocator mode the pod mounts its cache directory and, with a
+       token, the token's Secret. */ -}}
+{{- $allocator := and $.Values.allocator $.Values.allocator.enabled -}}
+{{- $token := and $allocator $.Values.allocator.tokenSecret.name -}}
+{{- if $allocator -}}
+{{- $_ := set $taken (include "prometheus-universal-exporter.allocatorCacheDir" .) "the allocator cache directory" -}}
+{{- end -}}
+{{- if $token -}}
+{{- $_ := set $taken (include "prometheus-universal-exporter.allocatorTokenDir" .) "the allocator token directory" -}}
+{{- end -}}
 {{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
 {{- if and $auth $auth.enabled -}}
@@ -97,6 +112,9 @@
 {{- $readOnly := list (dict "path" "/etc/prometheus-universal-exporter" "what" "the configuration directory /etc/prometheus-universal-exporter" "kind" "ConfigMap" "hint" "; to add a file to it, add the file to config.data instead") -}}
 {{- if $static -}}
 {{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-static-targets" "what" "the static target directory /etc/prometheus-universal-exporter-static-targets" "kind" "ConfigMap" "hint" "") -}}
+{{- end -}}
+{{- if $token -}}
+{{- $readOnly = append $readOnly (dict "path" (include "prometheus-universal-exporter.allocatorTokenDir" .) "what" (printf "the allocator token directory %s" (include "prometheus-universal-exporter.allocatorTokenDir" .)) "kind" "Secret" "hint" "") -}}
 {{- end -}}
 {{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
@@ -290,7 +308,8 @@
 {{- $kind := ternary "PodMonitor" "ServiceMonitor" (eq (.Values.selfMetrics.type | default "service") "pod") }}
 {{- $other := false }}
 {{- range .Values.monitors }}{{- if .enabled }}{{- $other = true }}{{- end }}{{- end }}
-{{- if and .Values.staticTargets.enabled .Values.staticTargets.monitor.enabled }}{{- $other = true }}{{- end }}
+{{- if include "prometheus-universal-exporter.staticTargetsMonitor" . }}{{- $other = true }}{{- end }}
+{{- if include "prometheus-universal-exporter.scrapeConfigs" . }}{{- $other = true }}{{- end }}
 {{- if or $other (.Capabilities.APIVersions.Has (printf "monitoring.coreos.com/v1/%s" $kind)) }}{{ $kind }}{{- end }}
 {{- end }}
 {{- end }}
@@ -628,11 +647,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- include "prometheus-universal-exporter.validateScrapeTiming" (list (printf "monitors entry %s" $label) $monitor.interval $monitor.scrapeTimeout) -}}
 {{- end -}}
 {{- end -}}
+{{- /* A probe job of the allocator names a collector as a monitor does,
+       and is checked the same way. */ -}}
+{{- if and .Values.allocator .Values.allocator.enabled -}}
+{{- range $job := .Values.allocator.probeJobs -}}
+{{- $collector := (kindIs "map" $job) | ternary (get $job "collector") "" | default "" | toString -}}
+{{- if and $complete $collector (not (hasKey $names $collector)) (not (contains "${" $collector)) -}}
+{{- fail (printf "allocator.probeJobs entry %v names collector %q, which config.data does not define; every probe of it would be answered 400" (get $job "name") $collector) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- /* The chart's own monitors, while their values say to render them. */ -}}
 {{- if .Values.selfMetrics.enabled -}}
 {{- include "prometheus-universal-exporter.validateScrapeTiming" (list "selfMetrics" .Values.selfMetrics.interval .Values.selfMetrics.scrapeTimeout) -}}
 {{- end -}}
-{{- if and .Values.staticTargets.enabled .Values.staticTargets.monitor.enabled -}}
+{{- if include "prometheus-universal-exporter.staticTargetsMonitor" . -}}
 {{- include "prometheus-universal-exporter.validateScrapeTiming" (list "staticTargets.monitor" .Values.staticTargets.monitor.interval .Values.staticTargets.monitor.scrapeTimeout) -}}
 {{- end -}}
 {{- end }}
@@ -856,6 +885,115 @@ true
 {{- range $key := list "httpGet" "exec" "tcpSocket" "grpc" -}}
 {{- if hasKey (index $ 1 | default dict) $key -}}
 {{- fail (printf "%s.%s is set by the chart, which checks /health and /ready on the http port; set only timings such as timeoutSeconds and failureThreshold" $name $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- /* The target allocator's objects are named <fullname>-allocator, cut so
+       the name stays a DNS label, as a Service's must. */ -}}
+{{- define "prometheus-universal-exporter.allocatorFullname" -}}
+{{- printf "%s-allocator" (include "prometheus-universal-exporter.fullname" . | trunc 53 | trimSuffix "-") -}}
+{{- end }}
+{{- /* The allocator's pods and Service carry app.kubernetes.io/name
+       <name>-allocator, not the exporter's: every selector of the exporter's
+       — its Service, the self-metrics and static targets monitors, its
+       PodDisruptionBudget and NetworkPolicy — picks by app.kubernetes.io/name
+       and app.kubernetes.io/instance, and would otherwise take the allocator
+       for an exporter pod. */ -}}
+{{- define "prometheus-universal-exporter.allocatorSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-allocator" (include "prometheus-universal-exporter.name" . | trunc 53 | trimSuffix "-") }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- /* An allocator object's labels, from (list root extra): the chart's,
+       with the allocator's name and the component allocator. */ -}}
+{{- define "prometheus-universal-exporter.allocatorLabels" -}}
+{{- $root := index . 0 -}}
+{{- $labels := include "prometheus-universal-exporter.metadataLabels" . | fromYaml -}}
+{{- range $key, $value := (include "prometheus-universal-exporter.allocatorSelectorLabels" $root | fromYaml) }}{{- $_ := set $labels $key $value -}}{{- end -}}
+{{- $_ := set $labels "app.kubernetes.io/component" "allocator" -}}
+{{- toYaml $labels -}}
+{{- end }}
+{{- /* The allocator's address as the exporter pods reach it: its headless
+       Service, whose name resolves to every allocator pod, so a pod's
+       heartbeats reach each of them. */ -}}
+{{- define "prometheus-universal-exporter.allocatorURL" -}}
+{{- printf "http://%s.%s.svc:9116" (include "prometheus-universal-exporter.allocatorFullname" .) (include "prometheus-universal-exporter.namespace" .) -}}
+{{- end }}
+{{- /* Where an exporter pod in allocator mode keeps its last bundle, and
+       where it reads the allocator's token. */ -}}
+{{- define "prometheus-universal-exporter.allocatorCacheDir" -}}
+/var/cache/prometheus-universal-exporter
+{{- end }}
+{{- define "prometheus-universal-exporter.allocatorTokenDir" -}}
+/var/run/prometheus-universal-exporter/allocator-token
+{{- end }}
+{{- /* Whether the allocator serves static targets: the static targets
+       monitor then reads every exporter pod's share. */ -}}
+{{- define "prometheus-universal-exporter.allocatorStaticTargets" -}}
+{{- if and .Values.allocator .Values.allocator.enabled (trim (.Values.allocator.staticTargets.data | default "" | toString)) -}}
+true
+{{- end -}}
+{{- end }}
+{{- /* Whether the chart renders the static targets monitor: with
+       staticTargets.enabled, or with static targets the allocator serves. */ -}}
+{{- define "prometheus-universal-exporter.staticTargetsMonitor" -}}
+{{- if and .Values.staticTargets.monitor.enabled (or .Values.staticTargets.enabled (include "prometheus-universal-exporter.allocatorStaticTargets" .)) -}}
+true
+{{- end -}}
+{{- end }}
+{{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
+{{- define "prometheus-universal-exporter.scrapeConfigs" -}}
+{{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.scrapeConfig.enabled .Values.allocator.probeJobs -}}
+true
+{{- end -}}
+{{- end }}
+{{- /* The allocator's settings, and what the exporter cannot do beside it.
+       The values schema refuses the same; this stands where it is skipped. */ -}}
+{{- define "prometheus-universal-exporter.validateAllocator" -}}
+{{- $allocator := .Values.allocator | default dict -}}
+{{- if $allocator.enabled -}}
+{{- if .Values.staticTargets.enabled -}}
+{{- fail "allocator.enabled and staticTargets.enabled are both true, but with the allocator the exporter pods read no static target file: the allocator splits the static targets over them; move staticTargets.data to allocator.staticTargets.data and set staticTargets.enabled to false" -}}
+{{- end -}}
+{{- range $index, $monitor := .Values.monitors -}}
+{{- if $monitor.enabled -}}
+{{- fail (printf "monitors entry %s is enabled beside allocator.enabled, but with the allocator the probe targets come from allocator.probeJobs, which Prometheus fetches through the ScrapeConfigs the chart renders; move its targets to an allocator.probeJobs entry and disable the monitors entry" (toString ($monitor.name | default (printf "#%d" $index)))) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (include "prometheus-universal-exporter.staticTargetsMonitor" .) .Values.staticTargets.monitor.targets -}}
+{{- fail "staticTargets.monitor.targets is set beside allocator.enabled, but each exporter pod then holds only its share of the static targets, so a name would be missing on most pods; leave staticTargets.monitor.targets empty" -}}
+{{- end -}}
+{{- $settle := $allocator.settle | default "" | toString -}}
+{{- if and $settle (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) -}}
+{{- fail (printf "allocator.settle %q must be a Go duration of zero or more, for example \"15s\"" $settle) -}}
+{{- end -}}
+{{- if not (has ($allocator.logLevel | default "info") (list "debug" "info" "warn" "error")) -}}
+{{- fail (printf "allocator.logLevel %q must be debug, info, warn or error" (toString $allocator.logLevel)) -}}
+{{- end -}}
+{{- range $name := list "POD_NAME" "POD_IP" -}}
+{{- range $entry := $.Values.env -}}
+{{- if eq (toString $entry.name) $name -}}
+{{- fail (printf "env has a %s entry, but with allocator.enabled the chart sets %s from the pod itself for --allocator.member and --allocator.advertise, and Kubernetes keeps the last of two; remove the env entry" $name $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range $index, $job := $allocator.probeJobs -}}
+{{- $name := toString ((kindIs "map" $job) | ternary (get $job "name") "" | default "") -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
+{{- fail (printf "allocator.probeJobs entry #%d has name %q; a probe job's name is a DNS-1123 label, lower-case letters, digits and -, since it names the job's ScrapeConfig and its path on the allocator" $index $name) -}}
+{{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "allocator.probeJobs entries #%v and #%d are both named %q; each job renders a ScrapeConfig <fullname>-<name>, so names must be unique" (get $seen $name) $index $name) -}}
+{{- end -}}
+{{- $_ := set $seen $name $index -}}
+{{- if not (get $job "collector") -}}
+{{- fail (printf "allocator.probeJobs entry %s names no collector; every probe of it would be answered 400" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- with $allocator.scrapeConfig -}}
+{{- if .enabled -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list "allocator.scrapeConfig" .interval .scrapeTimeout) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

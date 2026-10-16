@@ -55,6 +55,11 @@ type StaticTarget struct {
 	// param_<name> probe parameters fill them for a probe
 	// (fetch/requesttemplate.go).
 	Params map[string]string `yaml:"params"`
+	// ShardKey is what the target allocator (cmd/pue-allocator) hashes to
+	// choose the replica that scrapes the target, in place of its name, so
+	// targets that share a key share a replica. The exporter itself does
+	// not read it.
+	ShardKey string `yaml:"shard_key"`
 }
 
 // TargetRequestConfig mirrors the collector request block and the /probe

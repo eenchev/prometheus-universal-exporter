@@ -24,7 +24,8 @@ make test-external  # opt-in; probes real third-party endpoints
 
 The `main` package at the root holds only the command line (`main.go`) and the
 `--dry-run` report (`check.go`), with the tests of the command line itself
-(`cli_test.go`, `shutdown_test.go`). The tests that check the repository as a
+(`cli_test.go`, `shutdown_test.go`); the target allocator's command line is
+`cmd/pue-allocator`, with its own. The tests that check the repository as a
 whole — the documentation, the chart, the workflows, the Dockerfile, the
 shipped examples and schemas, and the layering below — are in
 `test/repository`, a package of tests only, which runs from the repository
@@ -34,12 +35,14 @@ the ones above them in this list:
 | Package | What it holds |
 | --- | --- |
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
+| `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
 | `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go` and `sql`'s pools, rows and drivers in `sql*.go` behind their tags, and the file reading `localfile` and `sshfile` share in `filereads.go` and `localfile_directory.go`, behind the tags of both — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
+| `internal/allocator` | The target allocator, whose command line is `cmd/pue-allocator`: its input files and the probe targets file, the member list from heartbeats, allocation and handover, bundles, service discovery and its HTTP API. Its time goes through a `Clock`, so its tests move a clock of their own by hand ([Target allocator](ALLOCATOR.md)). |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 | `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |
@@ -218,8 +221,9 @@ two to the same lines and the same entries, a full log among them.
 ## Repeatable tests
 
 Every test must pass however many times it runs and in whatever order, which
-`make test` and CI check with
-`go test -race -count=2 -shuffle=on -timeout 20m ./...`. A failure there names
+`make test` checks with
+`go test -race -count=2 -shuffle=on -timeout 20m ./...`, and CI with the same
+command over each side's packages (see the CI section below). A failure there names
 the seed it used; run it again with `-shuffle=<seed>`. The limit is a
 package's, and the command names it because `go test`'s own ten minutes are
 meant for one run without the race detector; a test keeps the Makefile and
@@ -593,7 +597,8 @@ A build can carry only some request types
 ([Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)),
 and such a build's tests have to pass as the default build's do.
 `make test-request-types` runs the suite once for each type built on its own,
-CI runs the same, each type in a job of its own, and `make ci` includes it. One of them by hand:
+CI runs the same over the exporter's packages, each type in a job of its own,
+and `make ci` includes it. One of them by hand:
 
 ```sh
 go test -tags "$(sh tools/request-type-tags.sh localfile)" ./...
@@ -2161,30 +2166,63 @@ it. `test/repository/goversion_test.go` ties them together — it checks that ev
 workflows request, and the one the Dockerfile pins, satisfies the go directive —
 so `go test ./...` catches the mismatch instead of the next red build.
 
-GitHub Actions uses changed-path detection (`.github/workflows/ci.yml`): the Go
-tests/build/vet/race checks run for changes to anything the repository tests
-read — Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
+GitHub Actions uses changed-path detection (`.github/workflows/ci.yml`): the
+checks of the whole repository — formatting, lint, gopls, vet and build (with
+each request type on its own too) and the repository's own tests,
+`test/repository` — run for changes to anything the repository tests read —
+Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
 `examples/`, `testdata/`, `docs/` and every top-level `*.md`, the
 `Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml` and
-`test/python/` — so a documentation-only change runs the Go suite too, whose
-repository tests check the docs. The Helm lint/template checks run for changes
-under `charts/`, `configs/` and `testdata/chart/`, the files the chart steps
-render. A change under `charts/` runs the Go suite because the template guard
-above lives there and is worth least on exactly the changes that would break
-it.
+`test/python/` (the filter's `go` output) — so a documentation-only change
+runs the repository tests too, which check the docs. The Helm lint/template
+checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
+files the chart steps render. A change under `charts/` runs the Go checks
+because the template guard above lives there and is worth least on exactly
+the changes that would break it.
 
-The two slowest parts of CI run in jobs of their own, beside the `test` job
-and at the same time as it: `race` runs the race suite, and `request-types`,
-a matrix over the request types (its checks are named `test (<type>)`), runs
-each type's tests built on its own; `test` keeps everything else, the
-single-type vet and build and the chart steps among it. Each of the two
-starts with `test`'s setup steps but helm's, written out again, and
-`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
-`test`'s, so change them in all three jobs at once. They gate their steps on
-the same changed-path filter rather than with a job-level `if`: a job whose
-steps are skipped still passes under its own name, while a matrix job skipped
-as a whole is reported under a name no check expects. `make ci` runs the same
-commands one after another.
+The tests of the packages themselves are split in two sides, each run only
+when something it depends on changed. `tools/ci-packages.sh allocator` lists
+the target allocator's packages, `cmd/pue-allocator` and `internal/allocator`;
+`tools/ci-packages.sh exporter` every other package but `test/repository`, so
+a new package lands on the exporter's side by itself. The filter's
+`allocator` and `exporter` outputs list, for each side, the directories of
+the module's packages its packages and their tests are built from
+(`go list -deps -test`), the files outside those its tests open (the
+exporter's read `examples/`, `configs/`, `testdata/`, `charts/`, `docs/`, the
+README and the `Dockerfile`), and what CI runs them with (`go.mod`, `go.sum`,
+`ci.yml`, the scripts, and for the exporter `test/python/`). A change to only
+`internal/allocator` runs the allocator's tests and the repository checks,
+not the exporter's; a change to only `internal/exporter` runs both sides,
+since the allocator's end-to-end test runs the exporter.
+`test/repository/cisides_test.go` works the lists out again — every Go file,
+embedded file and `testdata/` file of those packages, and every existing path
+outside its own directory a string literal of a side's package names — and
+fails for a file a side needs that its list leaves out, for an entry that
+matches none of them, for a file a side's list matches that the `go` output
+does not (the setup steps run under `go`), and for a package tested by no
+side or by both. When it fails for a new package or a new file a test reads,
+add its directory or the file to the side's list in all four jobs.
+
+The slowest parts of CI run in jobs of their own, beside the `test` job and
+at the same time as it: `race` runs the exporter's race suite, and
+`request-types`, a matrix over the request types (its checks are named
+`test (<type>)`), runs the exporter's tests with each type built on its own,
+both when the `exporter` output names a change; `allocator` runs the
+allocator's tests, once and then under the race detector, when the
+`allocator` output does. The allocator's tests are not run with each type on
+its own: those that need a type are built with it, so such a build runs a
+part of them alone, and `test`'s loop already vets and builds the allocator
+with each type. `test` keeps everything else: the repository tests, the
+exporter's tests (under `exporter`), the single-type vet and build and the
+chart steps. Each of the other jobs starts with `test`'s setup steps but
+helm's, written out again, and `TestTheGoJobsOfCIStartWithTheSetupOfTest`
+fails when a copy differs from `test`'s, so change them in all four jobs at
+once. They gate their steps on the changed-path filter's outputs rather than
+with a job-level `if`: a job whose steps are skipped still passes under its
+own name, while a matrix job skipped as a whole is reported under a name no
+check expects. `make ci` runs the same commands one after another, each over
+every package (`./...`) where CI names a side's packages, so it runs
+everything whatever changed.
 
 Every workflow sets `permissions` at its top, read-only, so no job runs with
 the repository's default token, which may write to everything; a job that has

@@ -1,0 +1,22 @@
+{{- if and .Values.allocator .Values.allocator.enabled }}
+{{- /* Headless: the name resolves to every allocator pod, and the exporter
+       pods heartbeat to each address, so every allocator hears every pod. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 9116
+      targetPort: http
+      protocol: TCP
+{{- end }}

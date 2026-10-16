@@ -502,6 +502,14 @@
             },
             "type": "object"
           },
+          "shard_key": {
+            "description": "For the target allocator (pue-allocator): what it hashes to choose the replica that scrapes this target, in place of the target's name, so targets with one key share a replica. The exporter itself ignores it. See docs/ALLOCATOR.md.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
           "target": {
             "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one.",
             "type": [

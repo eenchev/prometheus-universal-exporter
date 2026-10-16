@@ -99,6 +99,11 @@ type Server struct {
 	// generation it has been there from, under statsMu: the statistics kept
 	// for it are those of that stay, and no others' (statsSince).
 	since map[string]uint64
+	// awaitingReason is what /probe answers while the manager awaits its
+	// first configuration, and allocatorStatus the source of the allocator
+	// self-metrics, nil outside allocator mode (allocatormode.go).
+	awaitingReason  string
+	allocatorStatus func() AllocatorStatus
 }
 
 // NewServer returns a server using the configuration m holds and running
@@ -272,6 +277,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// GET's status and headers. Anything else is refused before the target
 	// is contacted or the probe counted.
 	if !readOnly(w, r, "use GET or HEAD to probe a target") {
+		return
+	}
+	if s.awaitingConfiguration(w) {
 		return
 	}
 	start := time.Now()

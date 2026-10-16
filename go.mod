@@ -6,9 +6,9 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/andybalholm/cascadia v1.3.5
-	github.com/antchfx/htmlquery v1.3.6
-	github.com/antchfx/xmlquery v1.5.1
-	github.com/antchfx/xpath v1.3.8
+	github.com/antchfx/htmlquery v1.3.7
+	github.com/antchfx/xmlquery v1.5.2
+	github.com/antchfx/xpath v1.3.9
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/itchyny/gojq v0.12.19
@@ -19,7 +19,7 @@ require (
 	github.com/snowflakedb/gosnowflake v1.19.1
 	github.com/vertica/vertica-sql-go v1.3.8
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.60.0
+	golang.org/x/net v0.61.0
 	golang.org/x/text v0.43.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12

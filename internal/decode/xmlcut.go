@@ -7,7 +7,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The XML parser (encoding/xml, and github.com/antchfx/xmlquery v1.5.1
+// The XML parser (encoding/xml, and github.com/antchfx/xmlquery v1.5.2
 // around it) puts names of the document into some of its errors in full, and
 // a name is as long as the target writes it:
 //

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"runtime"
 	"slices"
 	"strings"
@@ -40,10 +41,26 @@ var enginePanics = []struct{ expression, said string }{
 	{"count(//td[ends-with(., 1)])", "ends-with() function argument type must be string"},
 	{"replace(//td, '(', '')", "replace() function second argument is not a valid regexp pattern, err: error parsing regexp: missing closing ): `(`"},
 	{"substring(//td, '1')", "substring() function first argument type must be number"},
-	{"substring('abc', 0 div 0)", "runtime error: slice bounds out of range [9223372036854775807:3]"},
-	{"//td = true()", "runtime error: invalid memory address or nil pointer dereference"},
-	{"true() = //td", "runtime error: invalid memory address or nil pointer dereference"},
+	{"substring('abc', 0 div 0)", substringNaNFailure(3)},
 	{"(//td)[sum('x')]", "sum() function argument type must be a node-set or number"},
+}
+
+// substringNaNFailure is the runtime error the engine fails with on
+// substring() with the position NaN and no length, over a text of n
+// characters: antchfx/xpath v1.3.9 slices the text's characters from the
+// position less one with no check of NaN (func.go:529, `rs[int(start)-1:]`),
+// after both of its tests of the position, `start > len` and `start <= 0`,
+// were false for NaN. Which number NaN converts to is the platform's
+// (math.MinInt64 on amd64, which less one is math.MaxInt64), so the bounds
+// are asked of the same slicing here. It is the engine's runtime error the
+// tests of the recovery are made with: the others they had, the nil
+// dereference of `//a = true()` and a length past the end of the text in
+// `substring(//a, 2, 10)`, were mended in v1.3.9.
+func substringNaNFailure(n int) (said string) {
+	defer func() { said = fmt.Sprint(recover()) }()
+	characters, start := make([]rune, n), math.NaN()
+	_ = characters[int(start)-1:]
+	return ""
 }
 
 // decodedXML is the document an XML body is parsed into.
@@ -124,7 +141,7 @@ func TestAnEnginePanicInALabelNamesTheLabel(t *testing.T) {
 			{"//td", "sum(string(.)) + sum(../td[contains(@x, 5)])", "contains() function argument type must be string"},
 			{"//td", "count(//td[contains(@x, 5)])", "contains() function argument type must be string"},
 			{"//td", "//td[contains(@x, 5)]", "contains() function argument type must be string"},
-			{"count(//td)", "//td = true()", "runtime error: invalid memory address or nil pointer dereference"},
+			{"count(//td)", "substring(//td, 0 div 0)", substringNaNFailure(1)},
 			{"sum(//td)", "substring(//td, '1')", "substring() function first argument type must be number"},
 		} {
 			want := fmt.Sprintf("metric %q label %q: %s %q cannot be evaluated: the XPath engine failed on it: %s", "broken", "kind", kind, test.label, test.said)
@@ -481,8 +498,9 @@ func TestAnEngineFailureTakesThePlaceOfTheNodesThatFailedBeforeIt(t *testing.T) 
 }
 
 // What a runtime error of the engine says after "runtime error:" moves with
-// the response: substring() with a length past the end of the text gives the
-// bounds it sliced at, which are other numbers for a text of another length.
+// the response: substring() at the position NaN gives the bounds it sliced
+// at, the length of the text among them, which are other numbers for a text
+// of another length.
 // The failure reads in full, numbers and all, and is recognised by its text
 // up to there, so the two are one failure to the log; this holds for a rule
 // and for a label, under log and under fail, and for a failed type
@@ -493,14 +511,14 @@ func TestAnEnginesRuntimeErrorIsOneFailureWhateverItsNumbers(t *testing.T) {
 		said, same string
 	}{
 		"a rule": {
-			model.MetricRule{Name: "m", Expression: "substring(//a, 2, 10)"},
-			`metric "m" XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error: slice bounds out of range [:%d] with length %d`,
-			`metric "m" XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error:`,
+			model.MetricRule{Name: "m", Expression: "substring(//a, 0 div 0)"},
+			`metric "m" XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: %s`,
+			`metric "m" XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: runtime error:`,
 		},
 		"a label": {
-			model.MetricRule{Name: "m", Expression: "count(//a)", Labels: []model.LabelRule{{Name: "l", Expression: "substring(//a, 2, 10)"}}},
-			`metric "m" label "l": XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error: slice bounds out of range [:%d] with length %d`,
-			`metric "m" label "l": XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error:`,
+			model.MetricRule{Name: "m", Expression: "count(//a)", Labels: []model.LabelRule{{Name: "l", Expression: "substring(//a, 0 div 0)"}}},
+			`metric "m" label "l": XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: %s`,
+			`metric "m" label "l": XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: runtime error:`,
 		},
 	} {
 		for _, mode := range []string{model.ErrorModeLog, model.ErrorModeFail} {
@@ -514,7 +532,7 @@ func TestAnEnginesRuntimeErrorIsOneFailureWhateverItsNumbers(t *testing.T) {
 					}
 					err = failures[0].First
 				}
-				if want := fmt.Sprintf(test.said, len(text)+1, len(text)); err == nil || err.Error() != want {
+				if want := fmt.Sprintf(test.said, substringNaNFailure(len(text))); err == nil || err.Error() != want {
 					t.Errorf("%s under %s over %q: the failure %v, want %q", name, mode, text, err, want)
 				}
 				recognised = append(recognised, model.SameFailureText(err))
@@ -587,7 +605,7 @@ func TestTheStackOfARuntimeErrorIsLoggedAtDebugLevelOnly(t *testing.T) {
 	}
 	for _, mode := range []string{model.ErrorModeIgnore, model.ErrorModeLog, model.ErrorModeFail} {
 		for name, ctx := range map[string]context.Context{"the transform logs": context.Background(), "the caller logs": LeaveRuleLoggingToCaller(context.Background())} {
-			runtimeError := model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "substring(//a, 2, 10)", ErrorMode: mode}
+			runtimeError := model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "substring(//a, 0 div 0)", ErrorMode: mode}
 			lines := stacks(engineLogs(t, slog.LevelDebug, ctx, runtimeError, page))
 			if len(lines) != 1 {
 				t.Fatalf("under %s, %s: %d lines with a stack at debug level, want one", mode, name, len(lines))
@@ -595,7 +613,7 @@ func TestTheStackOfARuntimeErrorIsLoggedAtDebugLevelOnly(t *testing.T) {
 			line := lines[0]
 			stack, _ := line["stack"].(string)
 			if line["level"] != "DEBUG" || line["msg"] != "the XPath engine failed with a runtime error" || line["collector"] != "attributes" || line["metric"] != "m" ||
-				line["error"] != `metric "m" XPath "substring(//a, 2, 10)" cannot be evaluated: the XPath engine failed on it: runtime error: slice bounds out of range [:3] with length 2` ||
+				line["error"] != `metric "m" XPath "substring(//a, 0 div 0)" cannot be evaluated: the XPath engine failed on it: `+substringNaNFailure(2) ||
 				!strings.Contains(stack, "antchfx/xpath") || !strings.Contains(stack, "evaluateXPathRule") {
 				t.Errorf("under %s, %s: the line %v, want the failure and the stack of the panic at debug level", mode, name, line)
 			}

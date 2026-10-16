@@ -103,7 +103,7 @@ func checkXPathWhole(expression string, namespaces map[string]string) error {
 	read := strings.TrimRightFunc(expression[:end], unicode.IsSpace)
 	rest := strings.TrimLeftFunc(expression[len(read):], unicode.IsSpace)
 	at := len(expression) - len(rest) + 1
-	if why := xpathPredicateNotRead(read, rest, namespaces); why != "" {
+	if why := xpathPredicateNotRead(read, rest); why != "" {
 		return fmt.Errorf("what stands from byte %d on, %q, would be ignored: %s", at, rest, why)
 	}
 	return fmt.Errorf("what stands from byte %d on, %q, is no part of the expression before it, which is all the XPath engine would read; join the two with an operator, or take it out", at, rest)
@@ -136,39 +136,17 @@ func xpathReadStart(expression string, readWhole func(start string) bool) (end i
 // parser does not take, and what to write for it; it is empty where rest is
 // anything else, which joining the two or taking it out mends.
 //
-// A step takes as many predicates as are written after it, and what stands
-// in parentheses, a function call and a literal take one: the parser reads
-// the first and stops at the second, so `(//a)[@x][1]` would be `(//a)[@x]`.
-// What the parser read ends in a predicate only there. What works is the
-// expression and its first predicate in parentheses of their own, which is
-// shown written out when that is all it takes: when the engine reads that
-// to its end, as it does not with a third predicate, or with something else
-// amiss in rest.
-//
 // After parentheses within a path, as in `//a/(b)[1]`, the parser reads no
-// predicate at all: after those that begin an expression, a call's and a
-// node test's it reads one, so what it read ends in `)` only there.
-func xpathPredicateNotRead(read, rest string, namespaces map[string]string) string {
-	switch {
-	case !strings.HasPrefix(rest, "["):
-		return ""
-	case strings.HasSuffix(read, ")"):
+// predicate at all. After anything else it reads every predicate written —
+// a step's, and those after an expression in parentheses, a function call
+// or a literal, which the engine (antchfx/xpath from v1.3.9) evaluates in
+// turn — so what it read ends in `)` with a predicate after it only there.
+func xpathPredicateNotRead(read, rest string) string {
+	if strings.HasPrefix(rest, "[") && strings.HasSuffix(read, ")") {
 		return `the XPath engine reads no predicate after parentheses within a path; write the predicate inside them, after the step it is for, as in "//a/(b[1])"`
-	case !strings.HasSuffix(read, "]"):
-		return ""
 	}
-	as, works := "as in", "((//a)[@x])[1]"
-	if example := "(" + read + ")" + rest; len(example) <= xpathExampleBytes {
-		if _, err := compileXPath("("+example+")", namespaces); err == nil {
-			as, works = "as", example
-		}
-	}
-	return fmt.Sprintf("the XPath engine reads only one predicate after an expression in parentheses, a function call or a literal; for a second one, put the expression and its first predicate in parentheses of their own, %s %q", as, works)
+	return ""
 }
-
-// xpathExampleBytes is the longest expression a refusal writes out as the
-// form that works.
-const xpathExampleBytes = 200
 
 // xpathClosesNothing finds the first closing parenthesis or bracket of an
 // expression, outside its strings, that no opening one before it pairs with.

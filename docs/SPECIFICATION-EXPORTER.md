@@ -2525,11 +2525,12 @@ expression with something after it is evaluated as its start. A closing
 place, as `XPath "sum(//a))": the ")" at byte 9 closes nothing`, and
 anything else that follows a complete expression — `//a 'x'`, `1 2`,
 `//a/sum(b)` — with the byte where what would be ignored starts. A
-predicate that would be ignored, the second after an expression in
-parentheses, a function call or a literal, of which the engine's parser
-reads one, MUST be refused as that, and the error MUST show the form the
-engine reads where one more pair of parentheses makes it: `(//a)[@x][1]`
-with `((//a)[@x])[1]`. An expression with a NUL byte in it, which the
+predicate after parentheses within a path, as in `//a/(b)[1]`, of which
+the engine's parser reads none, MUST be refused as that, and the error
+MUST show where to write it: `//a/(b[1])`. Predicates that follow one
+another after an expression in parentheses, a function call or a literal,
+as `(//a)[@x][1]`, are read and evaluated in turn by the engine and MUST
+NOT be refused. An expression with a NUL byte in it, which the
 engine's scanner takes for the end of the text, MUST be refused with the
 byte's place before anything is made of it, the key of the compiled
 expressions included. The rule has no exception for depth: an expression
@@ -2546,10 +2547,11 @@ in the time it takes to compile it.
 
 The XPath engine compiles expressions it then panics on, by what a response
 holds: `sum('abc')`, `sum(string(//a))` over text, `//a[contains(@x, 5)]`
-once an `a` has an `x`, `substring(//a, '1')`, `//a = true()`. A panic while
-a rule is evaluated — its expression, a label of it, the nodes of a sum in
-either — MUST be that rule's failure, handled by its `error_mode` like any
-other failure of the rule, and MUST NOT leave the transform: the other
+once an `a` has an `x`, `substring(//a, '1')`, `substring(//a, 0 div 0)`.
+A panic while a rule is evaluated — its expression, a label of it, the
+nodes of a sum in either — MUST be that rule's failure, handled by its
+`error_mode` like any other failure of the rule, and MUST NOT leave the
+transform: the other
 rules MUST give their series, `on_transform_error` MUST NOT be asked, the
 failure MUST be counted, logged and held back on repeats as a rule's
 failure is, and under `fail` the probe MUST answer as it does any rule's
@@ -2568,7 +2570,7 @@ on it: sum() function argument type must be a node-set or number`. A
 runtime error, of the engine or of the exporter's own code, MUST be
 recovered the same way and MUST read `runtime error: ...` there. What
 follows `runtime error:` moves with the response, as the bounds of
-`substring(//a, 2, 10)` over texts of different lengths do, so such a
+`substring(//a, 0 div 0)` over texts of different lengths do, so such a
 failure MUST be recognised by the log by its text up to and including
 `runtime error:`, while its text is logged and answered in full; a panic
 with the engine's own message MUST be recognised by its whole text. The
@@ -14695,20 +14697,19 @@ Tests MUST show:
 ## 34.91 Follow-ups to § 34.90: an engine that fails, expressions not read to their end, labels read once, failures the log recognises, and what follows a reload
 
 - A panic of the XPath engine while a rule is evaluated is that rule's
-  failure: for fourteen expressions the engine compiles and panics on over a
+  failure: for twelve expressions the engine compiles and panics on over a
   table of three cells — `sum('abc')`, `sum(string(//td))`, a sum of a
   `translate()`, `//td[contains(@x, 5)]` alone, in a sum the exporter adds up
   and in one the engine computes, `starts-with(1, 'a')` and `ends-with(., 1)`
   in predicates, `replace(//td, '(', '')`, `substring(//td, '1')`,
-  `substring('abc', 0 div 0)`, `//td = true()`, `true() = //td` and
-  `(//td)[sum('x')]` — over XML and over HTML, under `ignore` and `log` the
-  rules before and after it give their series and one failure, no missing
-  value, is reported for the rule, logged under `log` alone, and under `fail`
-  the transform fails with the rule's `MetricFailure` and no series; the error
-  is `metric "broken" XPath "sum('abc')" cannot be evaluated: the XPath engine
-  failed on it: sum() function argument type must be a node-set or number`,
-  `HTML XPath` over HTML, and for the engine's own runtime errors ends
-  `runtime error: invalid memory address or nil pointer dereference` and
+  `substring('abc', 0 div 0)` and `(//td)[sum('x')]` — over XML and over
+  HTML, under `ignore` and `log` the rules before and after it give their
+  series and one failure, no missing value, is reported for the rule, logged
+  under `log` alone, and under `fail` the transform fails with the rule's
+  `MetricFailure` and no series; the error is `metric "broken" XPath
+  "sum('abc')" cannot be evaluated: the XPath engine failed on it: sum()
+  function argument type must be a node-set or number`, `HTML XPath` over
+  HTML, and for the engine's own runtime error ends
   `runtime error: slice bounds out of range [...]`.
 - A label the engine panics on fails its rule with `metric "broken" label
   "kind": XPath "contains(@x, 5)" cannot be evaluated: the XPath engine failed
@@ -15071,13 +15072,14 @@ Tests MUST show:
   under `log` and under `ignore`, and under `ignore` nothing is logged;
   under `fail` each probe answers 502 for the cell without a value.
 - A runtime error of the engine is one failure whatever its numbers:
-  `substring(//a, 2, 10)` over `ab` and over `abcde` fails with `runtime
-  error: slice bounds out of range [:3] with length 2` and `[:6] with length
-  5`, read in full, and both are recognised by the text up to and including
-  `runtime error:`, as a rule's expression and as a label's, under `log` and
-  under `fail`; so is a failed type assertion; a panic with the engine's own
-  message, and an error the engine raised whose text starts with `runtime
-  error:`, are recognised by their whole text.
+  `substring(//a, 0 div 0)` over `ab` and over `abcde` fails with
+  `runtime error: slice bounds out of range [9223372036854775807:2]` and
+  `[9223372036854775807:5]` on amd64 (the first bound is the platform's
+  conversion of NaN), read in full, and both are recognised by the text up to
+  and including `runtime error:`, as a rule's expression and as a label's,
+  under `log` and under `fail`; so is a failed type assertion; a panic with
+  the engine's own message, and an error the engine raised whose text starts
+  with `runtime error:`, are recognised by their whole text.
 - The failure of a rule the engine panicked on reads as it read, for eleven
   panics — strings, errors, a number, nil and four runtime errors — as the
   rule's expression and as each of three labels, over XML and HTML, and but
@@ -15088,25 +15090,25 @@ Tests MUST show:
   and `fail`, whether the transform or its caller logs the rules' failures;
   the failure's text has no stack, a logger at info level gets no such line,
   and a failure the engine raised itself has none at debug level either.
-- Through `/probe`: a rule `substring(//a, 2, 10)` under `log` and under
+- Through `/probe`: a rule `substring(//a, 0 div 0)` under `log` and under
   `ignore`, probed over texts of three lengths, answers 200 with the other
   rule's series and neither a stack nor the error; the log at info level has
   one `metric extraction failed` line, the first text's, no line with a
   stack and none for the collector under `ignore`; a debug probe of that
   collector shows the line with the stack.
-- A second predicate after an expression in parentheses, a function call or
-  a literal is refused with the form that works: `(//a)[@x][1]` with `what
-  stands from byte 10 on, "[1]", would be ignored: the XPath engine reads
-  only one predicate after an expression in parentheses, a function call or
-  a literal; for a second one, put the expression and its first predicate in
-  parentheses of their own, as "((//a)[@x])[1]"`, and so `(//a)[1][@x]`,
-  `'x'[1][2]`, `count(//a)[1][2]`, with blanks, a line break, a multi-byte
-  name and a path or a union after the predicate, the form shown compiling
-  each time; with a third predicate or something else amiss after the second
-  the form is `as in "((//a)[@x])[1]"`; `//a/(b)[1]` is refused with `the
-  XPath engine reads no predicate after parentheses within a path; ... as in
-  "//a/(b[1])"`; and `/[1]` and `/ [` as before, with `is no part of the
-  expression before it`.
+- A predicate after parentheses within a path is refused: `//a/(b)[1]` with
+  `what stands from byte 8 on, "[1]", would be ignored: the XPath engine
+  reads no predicate after parentheses within a path; write the predicate
+  inside them, after the step it is for, as in "//a/(b[1])"`, and so
+  `//a/(b, c)[1][2] | d`; `/[1]` and `/ [` as before, with `is no part of
+  the expression before it`. Predicates that follow one another after an
+  expression in parentheses, a function call or a literal, which the engine
+  reads from antchfx/xpath v1.3.9 on, compile: `(//a)[@x][1]`,
+  `(//a)[1][@x]`, `'x'[1][2]`, `count(//a)[1][2]`, with blanks, a line break
+  and a path, a union or a call around them, with and without namespaces,
+  each evaluating to what the same expression with its first predicate in
+  parentheses of its own evaluates to — `(//a)[@x][2]` to the second `a` of
+  those with an `x`; `(//a)[1][2] 'x'` is refused at the `'x'`.
 - A NUL byte in an XPath expression is refused where it is compiled: `//td`,
   a NUL and ` | //zz 'junk' )`, which compiled as `//td`, a NUL alone, one
   after a multi-byte name and `//p:td` followed by the bytes of a namespace
@@ -15121,8 +15123,8 @@ Tests MUST show:
   deep`; 198 deep compiles, alone and in a union, and is refused with the
   place of an `'x'` after it; 200 deep is the engine's own refusal, whose
   wording the check knows it by.
-- At load, a rule's and a label's expression with a NUL, with a second
-  predicate after parentheses and with `'x'` after 199 parentheses are
+- At load, a rule's and a label's expression with a NUL, with a predicate
+  after parentheses within a path and with `'x'` after 199 parentheses are
   refused with `collector "attributes" metric "m" [label "l" ]XPath "...":
   ...`, over XML, HTML and with `response.namespaces`, and the forms the
   refusals name load.
@@ -15137,8 +15139,8 @@ Tests MUST show:
   expressions, read whole and refused, with and without namespaces, and for
   every one of the 60,000 strung together at random that compiles, its
   answer is, to the letter, that of the check before these follow-ups, but
-  where what would be ignored is a bracket after a predicate or after
-  parentheses, which is refused at the same byte with the new words.
+  where what would be ignored is a bracket after parentheses within a path,
+  which is refused at the same byte with the new words.
 - A static target whose scrape is in flight while reloads change it and
   change it back, change its collector and change it back, or remove it and
   bring it back with a read of the endpoint between, all before the schedule
@@ -22770,6 +22772,46 @@ The race run and each request type's run in jobs of their own beside the test jo
 - The race suite's step is looked for in every job of ci.yml, and the go
   commands `make ci` must run are read from every job, so moving a step to
   another job keeps both checks.
+
+## 34.146 XPath 1.3.9: chained predicates read, the engine's failures still recovered
+
+The dependency upgrades of xpath 1.3.9, htmlquery 1.3.7, xmlquery 1.5.2 and x/net 0.61.0 (§ 7):
+
+- With antchfx/xpath v1.3.9, which reads and evaluates every predicate after
+  an expression in parentheses, a function call or a literal, the load no
+  longer refuses a second one: `(//a)[@x][1]`, `(//a)[1][@x]`, `'x'[1][2]`,
+  `count(//a)[1][2]`, with blanks, a line break and a path, a union or a
+  call around them, compile with and without namespaces, each evaluating to
+  what the same expression with its first predicate in parentheses of its
+  own evaluates to (`(//a)[@x][2]` to the second `a` of those with an `x`);
+  `(//a)[1][2] 'x'` is refused at the `'x'` with `is no part of the
+  expression before it`, and `'x'[1][.` with the engine's `has an invalid
+  token`.
+- A predicate after parentheses within a path, which v1.3.9 still does not
+  read, is refused as before: `//a/(b)[1]` and `//a/(b, c)[1][2] | d` with
+  `the XPath engine reads no predicate after parentheses within a path;
+  write the predicate inside them, after the step it is for, as in
+  "//a/(b[1])"`, as a rule's expression and as a label's, over XML and HTML,
+  and `//a/(b[1])` loads.
+- A rule and a label with chained predicates load and select through the
+  transform over XML, HTML and with `response.namespaces`: over four cells,
+  three with an `x`, `(//td)[@x][2]` and `(//td)[@x] [2] [. = 3]` give the
+  third cell's series `3`, `(//td)[position() > 1][@x][last()]` the fourth's,
+  `sum((//td)[@x][position() > 1])` is 7, `(//td)[@x][2][. = 4]` gives no
+  series, and a label `string((//td)[@x][3][. = 4]/@x)` is `c`.
+- The check without the refusal of a second predicate answers, to the
+  letter, as the check with it did, for the hand-written expressions, those
+  the refusal was about, one 199 deep with `'x'` after it and 6,000
+  expressions strung together at random from bracket-heavy pieces (1,500
+  under the race detector), with and without namespaces: with v1.3.9 the
+  refusal could not be reached.
+- The recovery of an engine panic is shown with the runtime error v1.3.9
+  still has, `substring(//a, 0 div 0)` (func.go:529 slices the text's
+  characters from `int(NaN)-1`), in place of `//a = true()` and
+  `substring(//a, 2, 10)`, which v1.3.9 evaluates: a rule's failure under
+  every error mode over XML and HTML, a label's failure naming the label,
+  one failure to the log over `ab` and `abcde` whatever the bounds, the
+  stack at debug level only, and through `/probe` under `log` and `ignore`.
 
 # 35. Documentation requirements
 

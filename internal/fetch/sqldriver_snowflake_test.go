@@ -550,3 +550,13 @@ func TestTheSnowflakeDriversLogGoesToTheExportersLogger(t *testing.T) {
 		t.Errorf("%v", records)
 	}
 }
+
+// The driver logs its errors whatever the environment: its own init lowers
+// its level to fatal when GITHUB_ACTIONS is set, which would leave the
+// exporter's log without them on a runner of GitHub's, and the exporter
+// sets it back to error. CI runs this with GITHUB_ACTIONS set.
+func TestTheSnowflakeDriverLogsItsErrorsWhereverItRuns(t *testing.T) {
+	if level := gosnowflake.GetLogger().GetLogLevel(); level != "error" { //nolint:staticcheck // SA1019: the driver's logger
+		t.Errorf("the driver logs at %q, want error (GITHUB_ACTIONS=%q)", level, os.Getenv("GITHUB_ACTIONS"))
+	}
+}

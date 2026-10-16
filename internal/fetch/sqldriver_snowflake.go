@@ -37,10 +37,15 @@ import (
 // GCP metadata services and AWS STS, with the ambient AWS credentials, which
 // platform it runs on, outside the exporter's dialer and policy. It reads the
 // switch, an environment variable, when it detects; it has no Config field.
-// The driver's log goes to the exporter's logger (snowflakeLog).
+// The driver's log goes to the exporter's logger (snowflakeLog), at the
+// driver's level of error, which its own init lowers to fatal, logging
+// nothing, when GITHUB_ACTIONS is set: the exporter logs the same wherever
+// it runs.
 func init() {
 	_ = os.Setenv("SNOWFLAKE_DISABLE_PLATFORM_DETECTION", "true")
-	gosnowflake.GetLogger().SetOutput(snowflakeLog{}) //nolint:staticcheck // SA1019: still the driver's only way to its log
+	driverLog := gosnowflake.GetLogger() //nolint:staticcheck // SA1019: still the driver's only way to its log
+	driverLog.SetOutput(snowflakeLog{})
+	_ = driverLog.SetLogLevel("error")
 	registerSQLDriver(&sqlDriver{
 		name:      SQLDriverSnowflake,
 		port:      func(map[string]string) string { return "443" },

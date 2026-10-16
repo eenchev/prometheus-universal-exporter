@@ -772,6 +772,37 @@ func TestAnAnswerWithoutAChangeIsNotAskedAgainAtOnce(t *testing.T) {
 	}
 }
 
+// A heartbeat whose reply names the generation the bundle loop fetched while
+// the reply was on its way does not wake the loop: the bundle is no news,
+// and a wake would cut short the wait after an answer without a change.
+func TestAHeartbeatReplyAlreadySeenDoesNotWakeTheBundleLoop(t *testing.T) {
+	const generation = "g1"
+	received, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(received)
+		<-release
+		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{Generation: generation})
+	}))
+	t.Cleanup(server.Close)
+	c := newTestClient(t, newFakeAllocator(t), t.TempDir(), func(o *Options) { o.URL = server.URL })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.heartbeat(context.Background())
+	}()
+	<-received
+	c.mu.Lock()
+	c.seen, c.inForce = generation, generation
+	c.mu.Unlock()
+	close(release)
+	<-done
+	select {
+	case <-c.wake:
+		t.Error("a heartbeat reply naming the generation already fetched woke the bundle loop")
+	default:
+	}
+}
+
 // A bundle request that fails, and a bundle that cannot be written into the
 // cache directory, are counted by stage and tried again.
 func TestFailuresAreCountedByStageAndTriedAgain(t *testing.T) {

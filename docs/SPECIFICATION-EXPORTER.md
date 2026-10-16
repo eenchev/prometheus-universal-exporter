@@ -23089,6 +23089,17 @@ The exporter's tests and the target allocator's run when a file each needs chang
   allocator's packages once and under the race detector under the allocator
   output.
 
+## 34.149 A heartbeat reply already fetched, and the README naming every source
+
+- A heartbeat whose reply names the generation the bundle loop fetched while
+  the reply was on its way leaves the bundle loop unwoken: the test holds
+  the reply until the client has fetched that generation, and fails when
+  the generation is compared with what was fetched before the heartbeat
+  went out.
+- The README's tagline and sources paragraph each name every request type
+  of `internal/fetch/requesttype_<name>.go`, and a request type the test has
+  no README name for fails it (§ 35).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -25048,7 +25059,9 @@ one in force, as no change. A `503` with a `Retry-After` of seconds, the
 allocator's answer while it has no member list, MUST NOT be counted or logged
 as a failure: the next request MUST follow after `Retry-After`, at least 1
 second and at most 30, or sooner when a heartbeat reply names a generation
-other than the last fetched. A failed request or write MUST be tried again
+other than the last fetched. Which generation was last fetched MUST be read
+when the heartbeat's replies are in, not when it was sent: a reply naming a
+bundle fetched while it was on its way MUST NOT cut any wait short. A failed request or write MUST be tried again
 after a wait doubling from 1 second to 30, and an answer without a change
 that came within 1 second MUST wait 1 second before the next request, so the
 exporter never asks as fast as the allocator answers.

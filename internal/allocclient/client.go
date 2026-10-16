@@ -339,11 +339,11 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 // heartbeat sends one heartbeat to every address the allocator URL's host
 // resolves to, at once, and waits for them: two copies of the allocator
 // behind one name both hear every replica. A reply naming a generation
-// other than the last seen wakes the bundle loop from a backoff.
+// other than the last the bundle loop has seen, by the time the replies are
+// in, wakes the bundle loop from a backoff.
 func (c *Client) heartbeat(ctx context.Context) {
 	c.mu.Lock()
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
-	seen := c.seen
 	c.mu.Unlock()
 	body, err := json.Marshal(hb)
 	if err != nil {
@@ -374,8 +374,14 @@ func (c *Client) heartbeat(ctx context.Context) {
 	if all == nil {
 		c.recovered(StageHeartbeat)
 	}
+	// What the bundle loop has seen is read now, not when the heartbeat
+	// went out: a bundle it fetched while the replies were on their way is
+	// no news, and waking it for one would ask again without waiting.
+	c.mu.Lock()
+	seen, inForce := c.seen, c.inForce
+	c.mu.Unlock()
 	for _, generation := range replies {
-		if generation != "" && generation != seen {
+		if generation != "" && generation != seen && generation != inForce {
 			signal(c.wake)
 			break
 		}

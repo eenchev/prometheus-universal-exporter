@@ -2520,7 +2520,8 @@ over HTML and for a rule that selects elements, text nodes or attributes:
 its text, trimmed; no label where it selects nothing or computes blanks; a
 required label that is missing; the sum the exporter adds up; and the
 failure of a sum over text that is no number, which MUST name each node as
-before. A rule without such a label MUST cost what it cost. The
+before. Its text MUST be written once too, a sum's included, and not
+formatted again at each node. A rule without such a label MUST cost what it cost. The
 documentation MUST say which labels are evaluated once, and that any other
 label with an absolute path in it walks the document at every node.
 
@@ -14859,8 +14860,11 @@ Tests MUST show:
 - A label that cannot depend on the node is evaluated once: over 400 rows a
   rule with `count(//row)`, `//last/@id`, `/status/@site`, `sum(//v)` or
   `name(/*)` for a label allocates what the rule with a static label does,
-  give or take one evaluation, and gives the value on the last row, while
-  `count(//row) + count(*)` is evaluated at each.
+  give or take one evaluation, measured as what reading the label at the
+  first row allocates (a few allocations of slack, and no allowance per
+  row), and gives the value on the last row, while
+  `count(//row) + count(*)` is evaluated at each. A sum's text formatted
+  at each row fails it.
 - A rule failing on every scrape with its empty cell in row 3, 3, 7, 7, 3
   and 5 of a table is one failure to the log, for a `csv`, an `xpath`, a
   `css` (items) and a `jq` (items) rule alike: under `error_mode: log` one

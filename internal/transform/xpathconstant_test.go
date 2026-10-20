@@ -419,6 +419,13 @@ func TestARuleWithAConstantLabelGivesWhatItGaveWithTheLabelReadAtEachNode(t *tes
 // rule with `count(//row)` or `//last/@id` for a label allocates what the
 // rule with a label of a fixed value does, give or take the one evaluation,
 // where each row cost an evaluation of the whole document more.
+//
+// The one evaluation is measured rather than assumed: what reading the label
+// at the first row allocates depends on the XPath engine and the Go release
+// (a sum() reads every node it adds up, once by the engine and once by the
+// exporter), and a fixed allowance per row passed on one toolchain and
+// failed on another. An evaluation at every row costs that measure once for
+// each of the four hundred rows.
 func TestAConstantLabelIsEvaluatedOnceForItsRule(t *testing.T) {
 	if raceDetector {
 		t.Skip("allocations cannot be counted under the race detector")
@@ -443,21 +450,45 @@ func TestAConstantLabelIsEvaluatedOnceForItsRule(t *testing.T) {
 		})
 		return allocations, labels
 	}
+	// read is what reading label at the first row allocates, its one
+	// evaluation included: the rule's labels planned afresh each time, so
+	// a label that cannot depend on the node is evaluated each time too.
+	first := xmlquery.FindOne(root, "//row[1]/v")
+	if first == nil {
+		t.Fatal("no first row")
+	}
+	read := func(label model.LabelRule) float64 {
+		rule := model.MetricRule{Name: "m", Expression: "//row/v", Labels: []model.LabelRule{label}}
+		allocations, _ := alloctest.Allocations(10, func() {
+			plan := planXPathLabels(rule, nil, false)
+			labels := xpathLabels(xmlNodes, first, plan)
+			if summed := summedXPathLabels(plan); summed != nil {
+				if err := readSummedXPathLabels(xmlNodes, first, rule, plan, summed, 0, labels); err != nil {
+					t.Fatal(err)
+				}
+			}
+			releaseXPathLabels(plan)
+		})
+		return allocations
+	}
 	static, _ := cost(model.LabelRule{Name: "l", Value: "z"})
 	for expression, want := range map[string]string{"count(//row)": "400", "//last/@id": "z", "/status/@site": "fra1", "sum(//v)": "79800", "name(/*)": "status"} {
 		once, labels := cost(model.LabelRule{Name: "l", Expression: expression})
 		if labels["l"] != want {
 			t.Errorf("%s: the label %q on the last row, want %q", expression, labels["l"], want)
 		}
-		// One evaluation may allocate for every node it reads, as the sum
-		// does; an evaluation at each row allocates for each some twenty
-		// times over.
-		if once > static+4*rows {
-			t.Errorf("%s: %v allocations for %d rows, and %v with a static label: the label is evaluated at the rows", expression, once, rows, static)
+		// The one evaluation, and a few allocations of slack; an
+		// evaluation at each row would cost it rows times.
+		evaluation := read(model.LabelRule{Name: "l", Expression: expression})
+		if once > static+evaluation+32 {
+			t.Errorf("%s: %v allocations for %d rows, %v with a static label and %v for one evaluation: the label is evaluated at the rows", expression, once, rows, static, evaluation)
 		}
 	}
 	// One that does depend on the node is evaluated at each.
-	if each, _ := cost(model.LabelRule{Name: "l", Expression: "count(//row) + count(*)"}); each < static+8*rows {
-		t.Errorf("a label read at every node cost %v allocations, and a static one %v: the test tells nothing", each, static)
+	// It costs its evaluation at each of the rows, which the bound above
+	// would catch many times over.
+	eachLabel := model.LabelRule{Name: "l", Expression: "count(//row) + count(*)"}
+	if each, evaluation := func() (float64, float64) { e, _ := cost(eachLabel); return e, read(eachLabel) }(); each < static+evaluation+32 || each < static+rows {
+		t.Errorf("a label read at every node cost %v allocations, a static one %v and one evaluation %v: the test tells nothing", each, static, evaluation)
 	}
 }

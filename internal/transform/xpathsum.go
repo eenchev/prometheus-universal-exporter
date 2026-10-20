@@ -194,8 +194,22 @@ func readSummedXPathLabels[N comparable](nodes xpathNodes[N], node N, rule model
 		case fault != nil:
 			return model.Errorf("metric %q node %d label %q: %s %q %w", rule.Name, model.Position(index), label.name, nodes.kind, rule.Labels[at].Expression, fault.reason())
 		case own:
-			labels[label.name] = xpathText(sum)
+			labels[label.name] = summedLabelText(label, sum)
 		}
 	}
 	return nil
+}
+
+// summedLabelText is the text of a label that is one sum(): written once for
+// a label that cannot depend on the node, which has the same sum at every
+// node, rather than formatted again at each.
+func summedLabelText(label *xpathLabel, sum float64) string {
+	once := label.constant
+	if once == nil {
+		return xpathText(sum)
+	}
+	if !once.sumWritten {
+		once.sumText, once.sumWritten = xpathText(sum), true
+	}
+	return once.sumText
 }

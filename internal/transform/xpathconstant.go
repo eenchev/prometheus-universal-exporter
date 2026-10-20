@@ -33,6 +33,10 @@ type xpathConstant struct {
 	summed, own bool
 	sum         float64
 	fault       *xpathSumFault
+
+	// sumWritten says sumText is the sum's text, written once.
+	sumWritten bool
+	sumText    string
 }
 
 // labelXPathSums is readXPathSums of a label's sums at node: read once for

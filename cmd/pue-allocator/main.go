@@ -98,7 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	paths := allocator.Paths{Config: *configFile, StaticTargets: *staticTargetsFile, ProbeTargets: *probeTargetsFile}
-	inputs, err := allocator.LoadInputs(paths)
+	inputs, err := loadStartInputs(allocator.LoadInputs, paths, time.Sleep)
 	if err != nil {
 		logger.Error("invalid input files; exiting", "error", err)
 		return 1
@@ -141,6 +141,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// startLoadTries is how often the start reads input files that keep
+// changing while they are read, startLoadPause apart: a ConfigMap being
+// swapped is a moment's change, not a refusal to exit for.
+const (
+	startLoadTries = 5
+	startLoadPause = time.Second
+)
+
+// loadStartInputs reads the input files at the start with load, again after
+// sleep(startLoadPause) while they change under the read
+// (allocator.ErrChanged), up to startLoadTries times. Any other error is
+// returned at once.
+func loadStartInputs(load func(allocator.Paths) (*allocator.Inputs, error), p allocator.Paths, sleep func(time.Duration)) (*allocator.Inputs, error) {
+	for try := 1; ; try++ {
+		in, err := load(p)
+		if !errors.Is(err, allocator.ErrChanged) {
+			return in, err
+		}
+		if try == startLoadTries {
+			return nil, fmt.Errorf("%w, %d times, %s apart", err, startLoadTries, startLoadPause)
+		}
+		sleep(startLoadPause)
+	}
 }
 
 // newServer is the allocator's HTTP server: the exporter's, with its header

@@ -23195,6 +23195,51 @@ The exporter's tests and the target allocator's run when a file each needs chang
   whose message is the SPDX identifier of the license `LICENSE` holds,
   Apache-2.0, and never the dynamic `github/license` endpoint (§ 35).
 
+## 34.151 Handover on reload, ordered heartbeats, the cache kept in place, and the non-goals
+
+- A static target a reload moves to another member by a changed shard_key
+  stays in its old owner's share, beside its new owner's, for its interval,
+  then leaves it; a target the reload removes is in no share at once.
+- A refusal a heartbeat reports is logged once however often it is
+  reported, and again when the same bundle is refused after a heartbeat
+  without a refusal.
+- pue-allocator's start reads input files that change while read again
+  after a pause of a second, up to five reads, and stops on another error
+  at once, or after the fifth read saying how often it read them.
+- A heartbeat whose sequence is not greater than the last applied of its
+  member and instance changes nothing: arriving after the shutting-down
+  heartbeat, with --settle 15s or 0, it does not make the member live
+  again; a new instance with sequence 1 is taken, and a late heartbeat of
+  the instance it replaced is not applied.
+- A heartbeat without an instance, with one over 64 bytes, or without a
+  sequence is refused (400 at the endpoint, a negative sequence too).
+- The allocator client's heartbeats carry its instance and a sequence
+  counting from 1, the shutting-down heartbeat numbered after every one
+  before it; a restarted client has a new instance and counts from 1.
+- A cached bundle that did not load at startup, sent again by the allocator
+  to a client with no generation in force, is checked and reloaded in the
+  directory `..data` names, unwritten: `config.yaml` reads it at every change
+  the client makes and every directory it syncs, and the directory stays,
+  with `..data` naming it, whether the reload takes the bundle or refuses
+  it; the test fails when the directory is written again or `..data` is
+  removed first (§ 42.14e).
+- The cache is synced in order: the generation's deepest directory first and
+  its own directory last, before the first link is made, then the cache
+  directory once the new links are made and before `..data` is replaced, and
+  again after; the test records the syncs through the `syncDir` seam beside
+  the client's steps and fails on any other order (§ 42.14e).
+- `allocapi.CheckFiles` refuses a bundle that names a path both as a file
+  and as a directory of another (`a` and `a/b`, `a/b` and `a/b/c.yaml`,
+  `config.yaml/x`), by whole path components, and takes names that only
+  share leading characters (`a`, `ab/c`, `a.d/e`, `a-b`) (§ 42.14e).
+- A bundle that names a file also as a directory of another is refused by
+  the client before anything is written: reported in the heartbeat,
+  counted in `bundle_refused_total` and not as a write failure, not fetched
+  again, and the generation in force kept (§ 42.14e).
+- No non-goal of § 37 names a request type of the tree or static targets,
+  what follows a parenthesis or "other than" aside; the test fails on
+  "Database connectors" and "Static targets scraped by the exporter itself".
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -23283,15 +23328,19 @@ Do NOT implement these unless required to support the core design:
 - Arbitrary outbound network access from Python
 - Runtime package installation
 - General-purpose data science environment
-- Database connectors
+- Database access from Python (databases are the `sql` request type, § 5.1)
 - SNMP
 - Kafka
 - Protobuf-encoded HTTP responses (gRPC calls are a request type, § 5.1)
 - GraphQL client logic
-- Long-running background jobs per target
-- Static targets scraped by the exporter itself
+- Long-running background jobs per target other than the scrape loops of static targets
 
-The architecture should leave room for future decoders, but the initial implementation should stay focused on HTTP-to-Prometheus conversion.
+A non-goal MUST NOT name what the exporter does: when a feature listed here
+is implemented, its entry is removed or narrowed to what is still left out,
+and a test fails on an entry naming a request type of the tree or static
+targets. The architecture should leave room for future decoders and request
+types, but every source stays one request type that turns what it reads into
+Prometheus metrics.
 
 ---
 
@@ -25045,7 +25094,9 @@ that directory begins with `..`, and an entry of more than one path element
 whose first element begins with `..`, with `*`, `?`, `[` or `\`, or with a dot
 and one of those, which on a replica could match the cache directory's own
 names. The allocator MUST NOT expand `${NAME}`
-references. Invalid inputs at the start MUST exit 1. The files MUST be read
+references. Invalid inputs at the start MUST exit 1; files that change while
+the start reads them MUST be read again after a pause of 1 second, up to 5
+reads in all, and exit 1 only then. The files MUST be read
 again every `--config.watch-interval` (`0` reads them once); a change MUST be
 put in force only when all are accepted, the last good inputs staying in
 force otherwise, and one refusal MUST be logged and counted
@@ -25056,7 +25107,16 @@ again at the next check.
 
 **Members.** A member MUST be live while its last heartbeat is younger than
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
-being live at once. A change of the live members MUST take effect when it has
+being live at once. A heartbeat whose `sequence` is not greater than that of
+the last heartbeat applied of its member with the same `instance`, or whose
+`instance` is the one its member's current `instance` replaced, MUST be
+answered as any other and change nothing; a heartbeat of another `instance`
+MUST be applied whatever its `sequence`. A member not live MUST be kept,
+with its `instance` and `sequence`, until its last heartbeat is
+`allocapi.MemberTTL` old, so a heartbeat arriving after the one saying
+`shutting_down` does not make it live again. A refusal a heartbeat reports
+MUST be logged once while the member keeps reporting it, and again when it
+reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
@@ -25076,7 +25136,9 @@ by its target, or with `shard_key: address` by the host and port it reaches
 compared without case; anything else as written). A static target whose
 owner changes while its old owner stays in the member list MUST stay in the
 old owner's share for one of its intervals, its own or the file's, and then
-leave it.
+leave it, whether a change of the member list or a reload of the input
+files changed its owner (its `shard_key` changed, say); a static target a
+reload removes MUST leave every share at once.
 
 **Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
 configuration at `config.yaml` and every collector file at its path
@@ -25089,9 +25151,10 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed; a heartbeat without `member` or a
-`host:port` `advertise` with a host and a decimal port from 1 to 65535 MUST
-be answered `400`, a body over 64 KiB `413`, and one refused for
+before the member list has formed; a heartbeat without `member`, a
+`host:port` `advertise` with a host and a decimal port from 1 to 65535, an
+`instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
+`400`, a body over 64 KiB `413`, and one refused for
 `--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
@@ -25150,8 +25213,11 @@ put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
 when it is an IP address. A heartbeat MUST carry the member, the advertised
 address, the generation in force (empty before the first), the last refused
-generation with its error until a later bundle is put in force, and
-`shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
+generation with its error until a later bundle is put in force,
+`shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
+random name made once at the exporter's start, and the `sequence`, 1 for the
+process's first heartbeat and one more for each heartbeat built after it, so
+that a heartbeat given up on and arriving late is known for an old one; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
 built once the one before is back, so no heartbeat without `shutting_down`
@@ -25182,7 +25248,10 @@ less when a heartbeat reply names a generation other than the last fetched,
 so the exporter never asks as fast as the allocator answers.
 
 A new bundle MUST be refused, before anything is written, when
-`allocapi.CheckFiles` refuses it, when its generation is not
+`allocapi.CheckFiles` refuses it (a path that is not relative, leaves the
+bundle's directory, or names a file that another path's whole leading
+components also name, as `a` and `a/b` do, which no directory can hold; or
+no `config.yaml`), when its generation is not
 `allocapi.Generation` of its files, or when a top-level name begins with
 `..`. Otherwise it MUST be written into a new directory of the cache
 directory, files `0600` and directories `0700`, and checked there as a
@@ -25200,9 +25269,18 @@ as a failure to write, neither refused nor taken as fetched, and tried
 again, and before the next bundle is written the files in force MUST be put
 back, and reloaded, under the reload lock. The other generations'
 directories MUST be removed once a bundle is in force, and a refused
-bundle's at once, but the directory `..data` names MUST never be removed.
-A refused bundle MUST NOT be fetched again until the
-allocator serves another generation.
+bundle's at once, but the directory `..data` names MUST never be removed
+nor written again. With no generation in force, a bundle of the generation
+`..data` names whose directory holds its files, as a cached bundle that did
+not load at startup is when the allocator sends it again, MUST be checked
+and reloaded in that directory, unwritten, so `config.yaml` stays readable
+throughout and a refusal leaves the directory and `..data` as they were.
+Every file MUST be synced before its directory, every directory of a
+generation after the files and directories in it and before the swap, and
+the cache directory after the new links are made, before `..data` is
+replaced, and again after it is, so a restart after a crash finds the
+generation before or the whole new one. A refused bundle MUST NOT be
+fetched again until the allocator serves another generation.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the

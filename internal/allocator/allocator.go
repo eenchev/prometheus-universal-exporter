@@ -116,6 +116,10 @@ type member struct {
 	lastSeen     time.Time
 	generation   string
 	shuttingDown bool
+	// instance and sequence are those of the last heartbeat applied, and
+	// retired the instance before it, so a late heartbeat is known.
+	instance, retired string
+	sequence          uint64
 }
 
 type drainKey struct{ target, member string }
@@ -154,16 +158,19 @@ func New(in *Inputs, opts Options) *Allocator {
 	return a
 }
 
-// ErrBadHeartbeat is the answer to a heartbeat that names no member or no
-// address to probe it at.
-var ErrBadHeartbeat = errors.New("a heartbeat names its member and the host:port Prometheus sends its probes to")
+// ErrBadHeartbeat is the answer to a heartbeat that names no member, no
+// address to probe it at, no instance or no sequence.
+var ErrBadHeartbeat = errors.New("a heartbeat names its member, the host:port Prometheus sends its probes to, its instance and its sequence")
 
 // ErrTooManyMembers is the answer to a heartbeat of a new member while the
 // allocator has as many live members as it takes (Options.MaxMembers).
 var ErrTooManyMembers = errors.New("the allocator has as many live members as --members.max allows")
 
 // Heartbeat records hb and answers with the generation of the bundle the
-// member is to have, "" while the member list has not been formed.
+// member is to have, "" while the member list has not been formed. A
+// heartbeat older than the last applied of its member (allocapi.Heartbeat's
+// Instance and Sequence), or of a member shutting down that the allocator
+// does not hold, is answered the same but changes nothing.
 func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, error) {
 	if err := checkHeartbeat(hb); err != nil {
 		return allocapi.HeartbeatReply{}, err
@@ -171,7 +178,10 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	m := a.members[hb.Member]
-	if m == nil && !hb.ShuttingDown {
+	if (m != nil && m.stale(hb)) || (m == nil && hb.ShuttingDown) {
+		return a.replyLocked(hb.Member), nil
+	}
+	if m == nil {
 		if n := a.liveCount(); n >= a.maxMembers {
 			a.membersRefused++
 			if !a.full {
@@ -181,22 +191,45 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 			return allocapi.HeartbeatReply{}, fmt.Errorf("%w (%d); member %q is not taken until one of them stops heartbeating", ErrTooManyMembers, a.maxMembers, hb.Member)
 		}
 		a.full = false
-	}
-	if m == nil {
 		m = &member{}
 		a.members[hb.Member] = m
 	}
+	if m.instance != hb.Instance {
+		m.retired, m.instance = m.instance, hb.Instance
+	}
+	m.sequence = hb.Sequence
 	m.advertise, m.lastSeen, m.generation, m.shuttingDown = hb.Advertise, a.clock.Now(), hb.Generation, hb.ShuttingDown
-	if hb.Refused != nil && a.refusals[hb.Member] != hb.Refused.Generation {
+	switch {
+	case hb.Refused == nil:
+		// The replica keeps reporting a refusal until it puts a later
+		// bundle in force, so one without is a refusal over: the next
+		// one is news, even of the same generation.
+		delete(a.refusals, hb.Member)
+	case a.refusals[hb.Member] != hb.Refused.Generation:
 		a.refusals[hb.Member] = hb.Refused.Generation
 		a.logger.Warn("a replica refused its bundle and keeps its last good one; fix the configuration the allocator serves", "member", hb.Member, "generation", hb.Refused.Generation, "error", hb.Refused.Error)
 	}
 	a.update()
+	return a.replyLocked(hb.Member), nil
+}
+
+// stale reports whether hb is older than the last heartbeat applied to m:
+// of the same process and not counted past it, or of the process the
+// current one replaced, which has ended.
+func (m *member) stale(hb allocapi.Heartbeat) bool {
+	if hb.Instance == m.instance {
+		return hb.Sequence <= m.sequence
+	}
+	return hb.Instance == m.retired
+}
+
+// replyLocked is the answer to a heartbeat of member.
+func (a *Allocator) replyLocked(member string) allocapi.HeartbeatReply {
 	reply := allocapi.HeartbeatReply{}
-	if b := a.bundleLocked(hb.Member); b != nil {
+	if b := a.bundleLocked(member); b != nil {
 		reply.Generation = b.Generation
 	}
-	return reply, nil
+	return reply
 }
 
 // Bundle is the bundle member is to have, and nil while the member list
@@ -277,7 +310,10 @@ func (a *Allocator) update() {
 	for name, m := range a.members {
 		if live(m, now) {
 			liveMembers = append(liveMembers, name)
-		} else if !slices.Contains(a.effective, name) {
+		} else if !slices.Contains(a.effective, name) && now.Sub(m.lastSeen) >= allocapi.MemberTTL {
+			// A member shutting down is kept for the member TTL, though
+			// not live: a heartbeat it sent before, arriving late, is then
+			// known for what it is rather than taken as a new member's.
 			delete(a.members, name)
 			delete(a.refusals, name)
 		}
@@ -355,6 +391,35 @@ func (a *Allocator) takeEffect(now time.Time) {
 		return
 	}
 	a.logger.Info("member list changed", "members", after, "added", added, "removed", removed, "draining", len(a.draining))
+}
+
+// handOver keeps, for one of its intervals, a static target the reload
+// from old to the inputs in force moves to another member, in the share of
+// the member that had it, as takeEffect does for a change of the member
+// list: a changed shard_key moves a target as surely as a new member does.
+// A target the new inputs no longer have drains nowhere, nor does one that
+// is back with the member draining it.
+func (a *Allocator) handOver(old *Inputs, now time.Time) {
+	in := a.inputs
+	if a.settled && old != nil && old.Targets != nil && in.Targets != nil && len(a.effective) > 0 {
+		for i := range in.Targets.Targets {
+			t := &in.Targets.Targets[i]
+			j, ok := old.targetIndex[t.Name]
+			if !ok {
+				continue
+			}
+			was, _ := allocapi.Owner(a.effective, old.shardKeys[j])
+			is, _ := allocapi.Owner(a.effective, in.shardKeys[i])
+			if was != is {
+				a.draining[drainKey{t.Name, was}] = now.Add(time.Duration(t.Interval))
+			}
+		}
+	}
+	for key := range a.draining {
+		if owner := a.ownerOf(key.target); owner == "" || owner == key.member {
+			delete(a.draining, key)
+		}
+	}
 }
 
 // ownerOf is the effective member that owns the static target named name,
@@ -551,8 +616,8 @@ func (a *Allocator) Reload(p Paths) bool {
 		}
 	}
 	in, err := LoadInputs(p)
-	if errors.Is(err, errChanged) {
-		a.logger.Debug(err.Error())
+	if errors.Is(err, ErrChanged) {
+		a.logger.Debug(err.Error() + "; they are read again at the next check")
 		return false
 	}
 	if err != nil {
@@ -571,14 +636,10 @@ func (a *Allocator) Reload(p Paths) bool {
 	if a.inputs != nil && a.inputs.digest == in.digest {
 		return false
 	}
+	old := a.inputs
 	a.inputs = in
 	a.reloadsOK++
-	// A target the file no longer has drains nowhere.
-	for key := range a.draining {
-		if a.ownerOf(key.target) == "" {
-			delete(a.draining, key)
-		}
-	}
+	a.handOver(old, a.clock.Now())
 	a.rebuild()
 	a.schedule()
 	a.logger.Info("input files reloaded", in.logAttrs()...)

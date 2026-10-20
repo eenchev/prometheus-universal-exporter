@@ -553,6 +553,31 @@ func TestABundleThatCouldLeaveTheCacheDirectoryIsRefusedUnwritten(t *testing.T) 
 	}
 }
 
+// A bundle that names a file also as a directory of another could never be
+// written: it is refused, reported to the allocator and counted as refused,
+// not failed as a write and fetched again.
+func TestABundleWithAFileThatIsAlsoADirectoryIsRefused(t *testing.T) {
+	a := newFakeAllocator(t)
+	c := startClient(t, a, nil)
+	good := a.serveFiles(map[string]string{"config.yaml": "good\n"})
+	c.waitFor(t, EventInstalled)
+	bad := a.serveFiles(map[string]string{"config.yaml": "c\n", "teams": "t\n", "teams/a.yaml": "a\n"})
+	if e := c.waitFor(t, EventRefused); e.Generation != bad || !strings.Contains(e.Err.Error(), "both as a file and as a directory") {
+		t.Fatalf("refused %+v", e)
+	}
+	hb := a.heartbeatWhere(t, "with the refusal", func(hb sentHeartbeat) bool { return hb.Refused != nil })
+	if hb.Generation != good || hb.Refused.Generation != bad {
+		t.Errorf("heartbeat %+v %+v", hb.Heartbeat, hb.Refused)
+	}
+	if st := c.Status(); st.Refused != 1 || st.SyncErrors[StageWrite] != 0 || st.Generation != good {
+		t.Errorf("status %+v", st)
+	}
+	a.bundleRequestNaming(t, bad)
+	if got := generations(t, c.dir); len(got) != 1 || got[0] != good {
+		t.Errorf("generation directories %v", got)
+	}
+}
+
 // Whoever reads the cache directory finds the files of one generation: at
 // every change the swap makes, the files read through the cache directory's
 // links, and through ..data, are all of the generation before or all of the
@@ -1098,5 +1123,31 @@ func TestARepeatedHeartbeatErrorIsLoggedOncePerAddress(t *testing.T) {
 	}
 	if st := c.Status(); st.SyncErrors[StageHeartbeat] != 6 {
 		t.Errorf("status %+v", st)
+	}
+}
+
+// Every heartbeat names the client's instance and the next sequence, from
+// 1, so the allocator knows one arriving after a later one for an old one;
+// the shutting-down heartbeat is numbered after every heartbeat before it.
+// A restarted client, another process, has an instance of its own and
+// counts from 1 again.
+func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
+	a := newFakeAllocator(t)
+	dir := t.TempDir()
+	c := newTestClient(t, a, dir, nil)
+	for want := uint64(1); want <= 3; want++ {
+		c.heartbeat(context.Background())
+		if hb := a.nextHeartbeat(t); hb.Instance == "" || hb.Instance != c.instance || hb.Sequence != want {
+			t.Fatalf("heartbeat %d: instance %q sequence %d, want instance %q sequence %d", want, hb.Instance, hb.Sequence, c.instance, want)
+		}
+	}
+	c.ShuttingDown(context.Background())
+	if hb := a.nextHeartbeat(t); !hb.ShuttingDown || hb.Sequence != 4 {
+		t.Errorf("the shutting-down heartbeat: shutting down %v sequence %d, want sequence 4", hb.ShuttingDown, hb.Sequence)
+	}
+	restarted := newTestClient(t, a, dir, nil)
+	restarted.heartbeat(context.Background())
+	if hb := a.nextHeartbeat(t); hb.Instance == "" || hb.Instance == c.instance || hb.Sequence != 1 {
+		t.Errorf("the restarted client's first heartbeat: instance %q (the old one's %q) sequence %d, want a new instance and sequence 1", hb.Instance, c.instance, hb.Sequence)
 	}
 }

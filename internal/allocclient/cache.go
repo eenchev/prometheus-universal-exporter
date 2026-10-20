@@ -1,10 +1,12 @@
 package allocclient
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,11 +28,21 @@ import (
 // and the swap and its reload happen under its reload lock, so no reload
 // reads the configuration of one generation with the collector files of
 // another. The other generations' directories are removed once the new one
-// is in force, and a refused one at once, but never the one ..data names:
-// a swap or a restore cut short can leave ..data at the new generation, and
-// that is put right before the next bundle is written (repair). Files are
-// written 0600 and directories 0700: a bundle holds configuration, which may
-// name credentials.
+// is in force, and a refused one at once, but never the one ..data names,
+// nor is that one written again: a swap or a restore cut short can leave
+// ..data at the new generation, and that is put right before the next
+// bundle is written (repair); and when ..data names a generation not in
+// force, as a cached bundle that did not load at the start, and that
+// generation is received again, it is checked and reloaded where it is.
+// Files are written 0600 and directories 0700: a bundle holds
+// configuration, which may name credentials.
+//
+// What is put in force survives a crash: each file is synced before its
+// generation's directory is, each directory after the files and
+// directories in it, and the cache directory after the generation's
+// directory and the new links are made, before ..data is replaced, and
+// again after it is, so a restart finds either the generation before or
+// the whole new one.
 //
 // At the start the cache directory is tidied (Tidy): a bundle is resumed
 // only when the client installed it, and what a write cut short by a crash
@@ -164,20 +176,24 @@ func Tidy(cacheDir string, logger *slog.Logger) string {
 // failure to write into the cache directory, b neither in force nor
 // refused, to be fetched and tried again. A reload that refused b, with the
 // files before it not put back, is such a failure: ..data may still name
-// b's directory, which is kept, and the next try puts them back first.
+// b's directory, which is kept, and the next try puts them back first. A
+// b already in the directory ..data names, with none in force, is checked
+// and reloaded there unwritten (inUseUnchanged).
 func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 	if err := checkBundle(b); err != nil {
 		return err, nil
 	}
-	if err := c.repair(); err != nil {
-		return nil, fmt.Errorf("putting the bundle in force back in the cache directory: %w", err)
-	}
 	dir := filepath.Join(c.o.CacheDir, genPrefix+b.Generation)
-	if err := writeTree(dir, b.Files); err != nil {
-		c.discard(b.Generation)
-		return nil, err
+	if !c.inUseUnchanged(b) {
+		if err := c.repair(); err != nil {
+			return nil, fmt.Errorf("putting the bundle in force back in the cache directory: %w", err)
+		}
+		if err := writeTree(dir, b.Files); err != nil {
+			c.discard(b.Generation)
+			return nil, err
+		}
+		c.step("wrote " + filepath.Base(dir))
 	}
-	c.step("wrote " + filepath.Base(dir))
 	if err := c.o.Manager.CheckReplacement(filepath.Join(dir, allocapi.ConfigFile), filepath.Join(dir, allocapi.StaticTargetsFile)); err != nil {
 		c.discard(b.Generation)
 		return err, nil
@@ -210,6 +226,25 @@ func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 	c.mu.Unlock()
 	c.removeOtherGenerations(b.Generation)
 	return nil, nil
+}
+
+// inUseUnchanged reports whether b is the generation ..data names, its
+// directory holding b's files, while no generation is in force: a cached
+// bundle that did not load at the start is so, and the allocator, asked
+// without a generation, sends it again. Its directory is then checked and
+// reloaded where it is, not written again: config.yaml reads it all the
+// while, and a refusal leaves it as it was. With a generation in force,
+// ..data naming another is what a swap or a restore cut short left, and
+// repair puts the one in force back first.
+func (c *Client) inUseUnchanged(b *allocapi.Bundle) bool {
+	c.mu.Lock()
+	inForce := c.inForce
+	c.mu.Unlock()
+	if inForce != "" || linkedGeneration(c.o.CacheDir) != b.Generation {
+		return false
+	}
+	files, err := readTree(filepath.Join(c.o.CacheDir, genPrefix+b.Generation))
+	return err == nil && maps.Equal(files, b.Files)
 }
 
 // discard removes the directory of generation, unless ..data names it.
@@ -271,7 +306,10 @@ func checkBundle(b *allocapi.Bundle) error {
 	return nil
 }
 
-// writeTree writes files into dir, which it makes anew.
+// writeTree writes files into dir, which it makes anew, and syncs each
+// directory it made, the deepest first and dir last, so the names in them
+// are on disk before the swap makes dir reachable. The cache directory's
+// entry for dir is synced by the swap (relink), before ..data names dir.
 func writeTree(dir string, files map[string]string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return err
@@ -279,20 +317,45 @@ func writeTree(dir string, files map[string]string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	dirs := map[string]bool{dir: true}
 	for name, content := range files {
 		path := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
+		for d := filepath.Dir(path); !dirs[d]; d = filepath.Dir(d) {
+			dirs[d] = true
+		}
 		if err := writeFile(path, content); err != nil {
+			return err
+		}
+	}
+	// A directory's path is longer than its parent's: the longest first
+	// syncs each before the directory holding it.
+	order := slices.SortedFunc(maps.Keys(dirs), func(a, b string) int {
+		return cmp.Or(cmp.Compare(len(b), len(a)), strings.Compare(a, b))
+	})
+	for _, d := range order {
+		if err := syncDir(d); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// syncDir has the entries of the directory at path on disk; a test
+// replaces it to see which directories are synced, and when.
+var syncDir = func(path string) error {
+	f, err := os.Open(path) // #nosec G304 -- a directory under the cache directory
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
+}
+
 // writeFile writes content into a new file at path, and has it on disk
-// before it returns: a restart after the swap finds the whole file.
+// before it returns, so syncing its directory then makes the whole file
+// reachable after a crash.
 func writeFile(path, content string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- a path under the cache directory, checked by checkBundle
 	if err != nil {
@@ -366,7 +429,10 @@ func (c *Client) link(name, target string) error {
 // each name that has none, then ..data is pointed at the generation's
 // directory, or removed when generation is empty, and then the links of
 // other names are removed. Until ..data is replaced every link finds the
-// old generation, or nothing, and from then on the new one.
+// old generation, or nothing, and from then on the new one. The cache
+// directory is synced before ..data is replaced, so the generation's
+// directory and the new links are on disk before ..data can name them, and
+// again at the end, so the replacement is.
 func (c *Client) relink(generation string, names []string) error {
 	have := c.linkedNames()
 	for _, name := range names {
@@ -375,6 +441,9 @@ func (c *Client) relink(generation string, names []string) error {
 				return err
 			}
 		}
+	}
+	if err := syncDir(c.o.CacheDir); err != nil {
+		return err
 	}
 	if generation == "" {
 		if err := os.Remove(filepath.Join(c.o.CacheDir, dataLink)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -392,7 +461,7 @@ func (c *Client) relink(generation string, names []string) error {
 			c.step("unlinked " + name)
 		}
 	}
-	return nil
+	return syncDir(c.o.CacheDir)
 }
 
 // swap puts the generation written into its directory in force in the cache

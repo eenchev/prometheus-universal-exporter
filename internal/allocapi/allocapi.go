@@ -53,6 +53,20 @@ type Heartbeat struct {
 	Member string `json:"member"`
 	// Advertise is host:port Prometheus should send this replica's probes to.
 	Advertise string `json:"advertise"`
+	// Instance names the replica's process: random, made at its start, so
+	// a restarted replica of the same Member is told from the one before.
+	// Sequence counts the process's heartbeats from 1, one more for each,
+	// in the order they are built. A heartbeat can reach the allocator
+	// after a later one, when the replica gave up waiting for it and sent
+	// the next: the allocator applies a heartbeat only when its Sequence is
+	// greater than that of the last it applied of the same Instance, so a
+	// late one cannot undo a later one, and a member shutting down is not
+	// made live again by a heartbeat it sent before. A heartbeat of another
+	// Instance is applied whatever its Sequence, as a restarted replica
+	// counts from 1 again, but not one of the Instance it replaced, which
+	// has ended.
+	Instance string `json:"instance"`
+	Sequence uint64 `json:"sequence"`
 	// ShuttingDown is set from the first signal on: the replica stops being
 	// live at once rather than a MemberTTL after its heartbeats stop, so no
 	// probe is routed to it any more, and it leaves the member list, and
@@ -111,7 +125,9 @@ func Generation(files map[string]string) string {
 }
 
 // CheckFiles refuses a bundle whose file paths could reach outside the
-// directory it is written into, or that has no main configuration.
+// directory it is written into, that names a file also as a directory of
+// another, such as a and a/b, which no directory can hold, or that has no
+// main configuration.
 func CheckFiles(files map[string]string) error {
 	if _, ok := files[ConfigFile]; !ok {
 		return fmt.Errorf("the bundle has no %s", ConfigFile)
@@ -122,6 +138,18 @@ func CheckFiles(files map[string]string) error {
 		}
 		if clean := path.Clean(name); clean != name || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 			return fmt.Errorf("the bundle names a file %q outside its directory", name)
+		}
+	}
+	// Checked after every name is known to be clean, so a prefix is one by
+	// whole path components.
+	for name := range files {
+		for i := range len(name) {
+			if name[i] != '/' {
+				continue
+			}
+			if _, ok := files[name[:i]]; ok {
+				return fmt.Errorf("the bundle names %q both as a file and as a directory of %q", name[:i], name)
+			}
 		}
 	}
 	return nil

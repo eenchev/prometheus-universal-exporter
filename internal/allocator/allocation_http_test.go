@@ -4,12 +4,14 @@ package allocator
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // owned are the static targets of in that member owns among members, by
@@ -121,7 +123,7 @@ func TestALeavingMembersTargetsMoveAndNoOthers(t *testing.T) {
 	in := mustLoad(t, writeInputs(t, testConfig, staticTargets(300), ""))
 	before := []string{"r1", "r2", "r3"}
 	a, clock := settledAllocator(t, in, before...)
-	if _, err := a.Heartbeat(allocapi.Heartbeat{Member: "r3", Advertise: "r3:9115", ShuttingDown: true}); err != nil {
+	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r3", Advertise: "r3:9115", ShuttingDown: true})); err != nil {
 		t.Fatal(err)
 	}
 	keepBeating(t, a, clock, 15*time.Second, "r1", "r2")
@@ -159,5 +161,65 @@ func TestStaticTargetsOfOneShardKeyShareAMember(t *testing.T) {
 		if len(got) != 0 && len(got) != 15 && len(got) != 30 {
 			t.Errorf("%s's share %v splits a shard key", m, got)
 		}
+	}
+}
+
+// shardKeyed is a static target file of n targets, each with the shard key
+// keys gives it.
+func shardKeyed(n int, key func(i int) string) string {
+	var b strings.Builder
+	b.WriteString("interval: 30s\ntargets:\n")
+	for i := range n {
+		fmt.Fprintf(&b, "  - name: t%d\n    collector: demo\n    target: http://t%d.example\n    shard_key: %s\n", i, i, key(i))
+	}
+	return b.String()
+}
+
+// A static target a reload moves to another member, by a changed shard_key,
+// stays with the member that had it for one of its intervals, while its new
+// owner already has it, as one a change of the member list moves does. A
+// target the reload removes is in no share at once.
+func TestAReloadThatMovesATargetHandsItOver(t *testing.T) {
+	members := []string{"r1", "r2", "r3"}
+	p := writeInputs(t, testConfig, shardKeyed(10, func(i int) string { return fmt.Sprintf("k%d", i) }), "")
+	a, clock := settledAllocator(t, mustLoad(t, p), members...)
+	was, _ := allocapi.Owner(members, "k0")
+	moved := ""
+	for i := range 100 {
+		if owner, _ := allocapi.Owner(members, fmt.Sprintf("x%d", i)); owner != was {
+			moved = fmt.Sprintf("x%d", i)
+			break
+		}
+	}
+	is, _ := allocapi.Owner(members, moved)
+	gone, _ := allocapi.Owner(members, "k9")
+	// t0 gets the shard key that moves it, and t9 is removed.
+	text := shardKeyed(9, func(i int) string {
+		if i == 0 {
+			return moved
+		}
+		return fmt.Sprintf("k%d", i)
+	})
+	testutil.WriteIn(t, filepath.Dir(p.Config), filepath.Base(p.StaticTargets), text)
+	if !a.Reload(p) {
+		t.Fatal("the changed file was not put in force")
+	}
+	if got := share(t, a, is); !slices.Contains(got, "t0") {
+		t.Errorf("t0's new owner %s does not have it: %v", is, got)
+	}
+	if got := share(t, a, was); !slices.Contains(got, "t0") {
+		t.Errorf("t0's old owner %s gave it up at once: %v", was, got)
+	}
+	for _, m := range members {
+		if slices.Contains(share(t, a, m), "t9") {
+			t.Errorf("the removed t9 is still in %s's share (it was %s's)", m, gone)
+		}
+	}
+	keepBeating(t, a, clock, 30*time.Second, members...)
+	if got := share(t, a, was); slices.Contains(got, "t0") {
+		t.Errorf("t0's old owner %s still has it after its interval: %v", was, got)
+	}
+	if got := share(t, a, is); !slices.Contains(got, "t0") {
+		t.Errorf("t0's new owner %s lost it: %v", is, got)
 	}
 }

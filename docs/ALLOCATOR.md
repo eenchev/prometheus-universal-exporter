@@ -50,7 +50,9 @@ pue-allocator \
 | `--version` | | Print the version and the request types of the build, and exit. |
 
 Input files that are refused at the start stop the allocator with exit
-status 1, and a malformed command line with 2. `SIGTERM` or `SIGINT` shuts it
+status 1, and a malformed command line with 2. Files that change while the
+start reads them, as a ConfigMap being swapped does, are read again a second
+later, up to five times in all, before the start gives up with exit status 1. `SIGTERM` or `SIGINT` shuts it
 down: `/ready` answers `503`, every long poll is answered at once, and the
 server stops within ten seconds.
 
@@ -191,7 +193,15 @@ files may.
 
 A replica in allocator mode heartbeats to the allocator every 10s with its
 id, the address Prometheus should send its probes to, and the generation of
-the bundle it has in force. The replicas heard from within the last 30s, and
+the bundle it has in force. A heartbeat the replica gave up waiting for can
+still reach the allocator after a later one, so each carries the name of the
+replica's process, random and made at its start, and a sequence number
+counting that process's heartbeats from 1: the allocator applies a heartbeat
+only when its sequence is greater than that of the last it applied of the
+same process, and so a late heartbeat neither undoes a later one nor puts a
+replica that said it is shutting down back among the live members. A
+restarted replica, a new process of the same id, is taken at its first
+heartbeat, and a late heartbeat of the process it replaced is not. The replicas heard from within the last 30s, and
 not shutting down, are the live members; a replica that says it is shutting
 down stops being live at once, so no probe is routed to it any more, and
 leaves the member list as any other change does, after `--settle`.
@@ -222,8 +232,10 @@ about one in N+1; removing one moves only its own.
 **Handover.** A static target that moves from a replica still in the member
 list stays in that replica's share for one of the target's intervals, its own
 or the file's, while its new owner already scrapes it, so its series has no
-gap; then the old owner gives it up. A target whose old owner left has
-nobody to drain it.
+gap; then the old owner gives it up. That holds whether the member list
+changed or a reload of the input files moved the target, by a changed
+`shard_key` say. A target whose old owner left has nobody to drain it, and
+one the reload removed is in no share at once.
 
 A probe target moves when Prometheus next refreshes the job, and keeps its
 series, since its `instance` is its target. A probe is routed among the
@@ -254,12 +266,22 @@ holds a token again, logged once.
 ### Heartbeats
 
 ```json
-{"member": "exporter-0", "advertise": "10.0.3.7:9115", "generation": "8117cfab…",
+{"member": "exporter-0", "advertise": "10.0.3.7:9115",
+ "instance": "J7KTZ3TQWK76RFHIUQJRRUD646", "sequence": 42, "generation": "8117cfab…",
  "shutting_down": false, "refused": {"generation": "…", "error": "…"}}
 ```
 
-`member` and `advertise`, a `host:port` with a host and a decimal port from 1
-to 65535, are required; anything else is answered `400`. A body over 64 KiB
+`member`, `advertise`, a `host:port` with a host and a decimal port from 1
+to 65535, `instance`, the replica process's name of 1 to 64 bytes, and
+`sequence`, from 1, are required; anything else is answered `400`. A
+heartbeat whose sequence is not greater than the last applied of its member
+and instance, or whose instance is the one its member's current instance
+replaced, is answered as any other but changes nothing. A member that said
+it is shutting down is remembered for 30s after its last heartbeat, though
+not live, so a late heartbeat of it is still known for one. A replica
+reports a refused bundle until it puts a later one in force; the allocator
+logs a refusal once, and again when the replica refuses a bundle after
+having reported none. A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…"}`, the generation of the
 member's bundle, or `""` while the member list has not formed. A replica

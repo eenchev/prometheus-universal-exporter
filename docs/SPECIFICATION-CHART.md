@@ -220,12 +220,25 @@ added unless one Prometheus's probes reach one pod.
 
 The chart MUST offer an optional `autoscaling/v2` HorizontalPodAutoscaler,
 `autoscaling`, disabled by default, scaling the Deployment on CPU utilization
-(80% by default), memory utilization, further metrics or none of these but
-not all absent, with `behavior` passed through; with it the Deployment MUST NOT
-render `replicas`. `maxReplicas` below `minReplicas`, or nothing to scale on,
-MUST fail rendering.
+(80% by default), memory utilization, the exporter's own load, its static
+targets per pod, further metrics or none of these but not all absent, with
+`behavior` passed through; with it the Deployment MUST NOT render `replicas`.
+`maxReplicas` below `minReplicas`, or nothing to scale on, MUST fail
+rendering. `autoscaling.targetBusy`, null by default, MUST render a `Pods`
+metric named `autoscaling.busyMetric` (`http_exporter_busy` by default) with
+an `AverageValue` target of it, quoted: a number above 0, rendered as JSON
+writes it, or a decimal quantity with an optional `m`; zero, a negative
+number or any other text MUST fail rendering. `autoscaling.targetStaticTargetsPerPod`,
+null by default, a whole number from 1 to 2147483647, MUST render a `Pods`
+metric named `autoscaling.staticTargetsMetric` (`http_exporter_static_targets`
+by default) the same way, and MUST fail rendering without `allocator.enabled`,
+since without the allocator every pod scrapes every static target and their
+number per pod does not fall as pods are added. Either target with its metric
+name empty MUST fail rendering. The chart README MUST say that a metrics
+adapter serves the two metrics, and link the self-metrics documentation's
+prometheus-adapter rules and KEDA example.
 
-Every replica scrapes every static target, so the chart MUST document running
+Without the allocator every replica scrapes every static target, so the chart MUST document running
 static targets with one replica and without autoscaling: each added replica
 contacts every target again, and exports every target with `export_via_otlp`
 again, as duplicate series. Its notes MUST warn when `staticTargets.enabled`
@@ -1171,7 +1184,13 @@ are skipped and the text checks of the templates still run:
    with neither of `minAvailable` and `maxUnavailable`, and both MUST fail
    rendering; `autoscaling.enabled` MUST render a HorizontalPodAutoscaler for
    the Deployment and leave `replicas` out of it, and `maxReplicas` below
-   `minReplicas` MUST fail rendering.
+   `minReplicas` MUST fail rendering; `autoscaling.targetBusy` of `0.5` and
+   `"1500m"` MUST render a `Pods` metric of `http_exporter_busy`, or of the
+   `busyMetric` set, with `averageValue` `"0.5"` and `"1500m"`;
+   `autoscaling.targetStaticTargetsPerPod: 40` with `allocator.enabled` MUST
+   render one of `http_exporter_static_targets` with `averageValue: "40"`, and
+   without the allocator MUST fail rendering, as MUST a `targetBusy` of `0m`
+   or `lots` and an empty `busyMetric`.
 18. Pod scheduling and metadata: `priorityClassName` MUST render on the pod;
    a `topologySpreadConstraints` entry without a `labelSelector` MUST render
    with one matching the Deployment's selector, and one with its own MUST

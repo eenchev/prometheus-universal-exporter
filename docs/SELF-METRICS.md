@@ -106,7 +106,8 @@ up * on (instance) group_left (version) http_exporter_build_info
 | `http_exporter_static_targets_exported_via_otlp` | gauge | Those of them with `export_via_otlp`, also delivered over OTLP. |
 
 A static target's scrapes are counted in its collector's families above, as
-probes are. Each target's own health, `http_exporter_target_up` and
+probes are, and the time they take in
+`http_exporter_static_targets_scrape_seconds_total` ([Autoscaling](#autoscaling)). Each target's own health, `http_exporter_target_up` and
 `http_exporter_target_scrape_duration_seconds`, is served with its results on
 the [static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint),
 not here.
@@ -183,6 +184,146 @@ started without a bundle has none of those until the first is in force.
 increase(http_exporter_allocator_bundle_refused_total[15m]) > 0
 time() - http_exporter_allocator_last_sync_timestamp_seconds > 120
 ```
+
+## Autoscaling
+
+Two counters say how busy a replica is, for a HorizontalPodAutoscaler to
+scale the exporter on rather than on CPU. Each is one series for the whole
+exporter, with no `collector` or target label, so it costs the same however
+many targets there are, and both are there from the start at `0`, whether or
+not the exporter has static targets or is probed:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_static_targets_scrape_seconds_total` | counter | Seconds spent on static target scrapes, each from its start to its end, waiting for a slot under `max_concurrent_probes` or `--probe.max-concurrent` included, a scrape answered from the cache or a reload made another target's too; not one the shutdown cut short. |
+| `http_exporter_probes_seconds_total` | counter | Seconds spent serving probes, each from its start to its answer being ready, the probes counted in `http_exporter_scrapes_total`: a cache hit, a probe that [shared](#shared-probes) another's trip and one a limit turned away too; not a refused request, such as one with no collector, nor a [debug probe](CONFIGURATION.md#debugging-a-probe). |
+
+Each scrape or probe adds the time it took when it ends, the time its
+collector's `http_exporter_scrape_duration_seconds` reports. Their rate is
+seconds of work per second: the average number of static target scrapes and
+probes in progress over the window, which a gauge such as
+`http_exporter_trips_in_flight` only samples at the moment it is scraped.
+Added up, they are the load of one replica:
+
+```promql
+sum by (pod) (rate(http_exporter_static_targets_scrape_seconds_total[2m]))
+  + sum by (pod) (rate(http_exporter_probes_seconds_total[2m]))
+```
+
+A value of 3 is three scrapes or probes in progress on average. Probes spread
+over the replicas through the Service, and with the
+[target allocator](ALLOCATOR.md) so do static targets, each replica scraping
+its share; so adding replicas brings each one's load down. Without the
+allocator every replica scrapes every static target, and its static target
+load does not fall as replicas are added: scale such a release on its probes,
+or not at all (see the [chart README](../charts/prometheus-universal-exporter/README.md#autoscaling)).
+
+In allocator mode `http_exporter_static_targets` is the replica's share of
+the static targets, those it keeps draining included, and the allocator's
+`pue_allocator_targets{kind="static"}` and
+`pue_allocator_targets_per_member{kind="static"}` are the count across
+replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)).
+
+### Pods metrics from prometheus-adapter
+
+A HorizontalPodAutoscaler reads a Pods metric from the custom metrics API,
+which [prometheus-adapter](https://github.com/kubernetes-sigs/prometheus-adapter)
+serves from Prometheus. Prometheus must scrape the self-metrics of every pod,
+with `namespace` and `pod` labels, as the chart's self-metrics monitor does.
+These rules, in the prometheus-adapter chart's `rules.custom`, serve the load
+above as `http_exporter_busy` and the static targets of each pod as
+`http_exporter_static_targets`, the names the exporter chart's
+`autoscaling.busyMetric` and `autoscaling.staticTargetsMetric` default to:
+
+```yaml
+rules:
+  custom:
+    - seriesQuery: 'http_exporter_probes_seconds_total{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: "^.*$"
+        as: http_exporter_busy
+      metricsQuery: |
+        sum by (<<.GroupBy>>) (rate(http_exporter_static_targets_scrape_seconds_total{<<.LabelMatchers>>}[2m]))
+          + sum by (<<.GroupBy>>) (rate(http_exporter_probes_seconds_total{<<.LabelMatchers>>}[2m]))
+    - seriesQuery: 'http_exporter_static_targets{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: "^.*$"
+        as: http_exporter_static_targets
+      metricsQuery: sum by (<<.GroupBy>>) (<<.Series>>{<<.LabelMatchers>>})
+```
+
+The window, `2m`, should hold at least four scrapes of the self-metrics, so
+that a missed scrape does not leave a rate without two samples. Then the
+exporter chart scales on them:
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: null
+  # Three probes and static target scrapes in progress per pod on average.
+  targetBusy: 3
+  # With allocator.enabled only: 200 static targets per pod.
+  targetStaticTargetsPerPod: 200
+```
+
+The autoscaler runs as many pods as bring the average of each metric down to
+its target, the most that any metric asks for: with 1,000 static targets and
+`targetStaticTargetsPerPod: 200`, five. Keep `targetBusy` well below
+`server.probeMaxConcurrent` when that is set, since a pod at its limit turns
+probes away rather than getting busier. A new pod reports no static targets
+until the allocator's member list has taken it in, after `--settle`, which
+lowers the average meanwhile; Kubernetes' default scale-down stabilization
+window, five minutes, outlasts that, and a shorter one in
+`behavior.scaleDown` should too.
+
+The allocator's own count can be an External metric instead, which does not
+depend on the replicas having caught up with the allocator: served by a rule
+like the second, on `pue_allocator_targets{kind="static"}` with no `pod`
+resource, under `autoscaling.metrics` with `target.type: AverageValue`, which
+the autoscaler divides by the replica count itself.
+
+### KEDA
+
+[KEDA](https://keda.sh) queries Prometheus itself, without an adapter. Leave
+the chart's `autoscaling` disabled, since KEDA makes its own
+HorizontalPodAutoscaler, and point a ScaledObject at the Deployment; its
+`threshold` is the average per pod, as `targetBusy` is:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: exporter
+  namespace: monitoring
+spec:
+  scaleTargetRef:
+    name: exporter-prometheus-universal-exporter
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        query: |
+          sum(rate(http_exporter_static_targets_scrape_seconds_total{namespace="monitoring",pod=~"exporter-prometheus-universal-exporter-.*"}[2m]))
+            + sum(rate(http_exporter_probes_seconds_total{namespace="monitoring",pod=~"exporter-prometheus-universal-exporter-.*"}[2m]))
+        threshold: "3"
+```
+
+The query is the load of every pod together, which KEDA divides by the
+target to find the replica count. With the allocator, a second trigger with
+the query `pue_allocator_targets{kind="static"}` and the threshold `"200"`
+does what `targetStaticTargetsPerPod` does.
 
 ## Shared probes
 

@@ -360,6 +360,7 @@ scrape_configs:
 | `pue_allocator_members` | gauge | Members of the member list allocation uses. |
 | `pue_allocator_targets{kind}` | gauge | Targets of the input files in force, `static` or `probe`. |
 | `pue_allocator_assigned{member,kind}` | gauge | Static targets each member owns, without those it drains, and probe targets routed to it. |
+| `pue_allocator_targets_per_member{kind}` | gauge | Those allocated to the members, by `kind`, divided by the number of members: what each replica has on average; `0` with no member. |
 | `pue_allocator_generation_info{member,generation}` | gauge | `1`, with the generation of each member's bundle. |
 | `pue_allocator_reloads_total{result}` | counter | Changed input files put in force (`success`) or refused (`failure`). |
 | `pue_allocator_member_changes_total` | counter | Changes of the member list after the first. |
@@ -386,6 +387,12 @@ allocator. A restarted container starts with the bundle its exporter
 installed there, and with nothing else: a `config.yaml` put into the
 directory by other means is removed. Each probe job
 becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
+
+Since each replica scrapes only its share of the static targets, adding
+replicas spreads them thinner, and the chart's `autoscaling` can scale the
+replicas on the static targets per pod, `autoscaling.targetStaticTargetsPerPod`,
+or on how busy they are, `autoscaling.targetBusy`
+([Autoscaling](SELF-METRICS.md#autoscaling)).
 
 ## Without Kubernetes
 

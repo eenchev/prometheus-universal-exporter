@@ -74,6 +74,9 @@ type Server struct {
 	flights    *probeFlights
 	// trips bounds each collector's trips to its targets (triplimit.go).
 	trips *tripLimiter
+	// load adds up the time spent on static target scrapes and probes
+	// (loadmetrics.go).
+	load loadCounters
 	// lifecycle enables POST /-/reload (lifecycle.go).
 	lifecycle bool
 	// otlp is how exports are going (otlp.go).
@@ -403,6 +406,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// new request tracked.
 	finish := func(ok, refused bool) {
 		duration := time.Since(start)
+		s.load.addProbe(duration)
 		rec.update(func(x *serverStats) {
 			if ok {
 				x.success++

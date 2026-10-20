@@ -462,7 +462,8 @@ readinessProbe:
 # target, and each replica serves its own results at the static targets
 # endpoint. A target with export_via_otlp is then exported over OTLP once per
 # replica, as duplicate series under the same resource. Keep static targets
-# in a release without autoscaling. Utilization is measured against
+# in a release without autoscaling, or give them to the allocator, which
+# splits them over the replicas. Utilization is measured against
 # resources.requests, so keep those set.
 autoscaling:
   enabled: false
@@ -470,6 +471,23 @@ autoscaling:
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: null
+  # Scaling on the exporter's own load, as Pods metrics that a metrics
+  # adapter, such as prometheus-adapter, serves from the self-metrics
+  # Prometheus scrapes (selfMetrics); the adapter's rules are in "Autoscaling"
+  # in docs/SELF-METRICS.md. targetBusy is the average number of probes and
+  # static target scrapes in progress per pod to keep, a number above 0 or a
+  # Kubernetes quantity such as "1500m": keep it well below
+  # server.probeMaxConcurrent when that is set. busyMetric is the name the
+  # adapter serves the metric under. null leaves the metric out.
+  targetBusy: null
+  busyMetric: http_exporter_busy
+  # The static targets per pod to keep, a whole number, with allocator.enabled,
+  # where each pod scrapes its own share of them: the autoscaler then runs
+  # about allocator.staticTargets' count divided by it. Without the allocator
+  # every pod scrapes every static target, and setting it fails rendering.
+  # staticTargetsMetric is the name the adapter serves the metric under.
+  targetStaticTargetsPerPod: null
+  staticTargetsMetric: http_exporter_static_targets
   # Further autoscaling/v2 metrics, such as a Pods metric from an adapter.
   metrics: []
   # autoscaling/v2 behavior: scaleUp and scaleDown policies.

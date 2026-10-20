@@ -97,6 +97,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
+		// The time was spent whether or not the result is published below:
+		// it is load all the same.
+		s.load.addStaticScrape(elapsed)
 		// A scrape of a target, or of a collector, that a reload has removed,
 		// changed or brought back since the scrape read them is another
 		// target's under the name: its outcome is not that target's, and its

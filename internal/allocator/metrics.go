@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
@@ -70,6 +71,24 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"probe\",member=\"%s\"} %d\n", escape(name), assigned[name].probe)
 		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"static\",member=\"%s\"} %d\n", escape(name), assigned[name].static)
 	}
+
+	// The average is what one more member would take off each: the figure to
+	// scale the exporter's replicas by when it is to keep so many targets
+	// each. A member list that is empty has no average, and shows 0, as it
+	// shows no member assigned anything.
+	family("pue_allocator_targets_per_member", "gauge", "Targets allocated to the members of the member list, by kind, divided by the number of members: static targets and probe targets per member on average; 0 with no member.")
+	var allStatic, allProbe int
+	for _, name := range names {
+		allStatic += assigned[name].static
+		allProbe += assigned[name].probe
+	}
+	perMember := func(total int) string {
+		if len(a.effective) == 0 {
+			return "0"
+		}
+		return strconv.FormatFloat(float64(total)/float64(len(a.effective)), 'g', -1, 64)
+	}
+	fmt.Fprintf(&b, "pue_allocator_targets_per_member{kind=\"probe\"} %s\npue_allocator_targets_per_member{kind=\"static\"} %s\n", perMember(allProbe), perMember(allStatic))
 
 	family("pue_allocator_generation_info", "gauge", "The generation of the bundle each member of the member list is to have; a replica reports the one it has in force in its heartbeats.")
 	members := make([]string, 0, len(a.bundles))

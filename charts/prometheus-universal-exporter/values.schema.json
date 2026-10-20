@@ -354,13 +354,40 @@
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out. Every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
+      "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out, on CPU, memory, the exporter's own load (targetBusy) or, with the allocator, its static targets per pod. Without the allocator every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
       "properties": {
         "enabled": {"type": "boolean"},
         "minReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "maxReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "targetCPUUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
         "targetMemoryUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
+        "targetBusy": {
+          "type": [
+            "number",
+            "string",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,9})?m?$",
+          "description": "The average number of probes and static target scrapes in progress per pod to keep, a number above 0 or a Kubernetes quantity such as 1500m, served by a metrics adapter as busyMetric."
+        },
+        "busyMetric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetStaticTargetsPerPod": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "The static targets per pod to keep, with allocator.enabled only, served by a metrics adapter as staticTargetsMetric."
+        },
+        "staticTargetsMetric": {
+          "type": "string",
+          "minLength": 1
+        },
         "metrics": {"type": "array", "items": {"type": "object"}},
         "behavior": {"type": "object"}
       }

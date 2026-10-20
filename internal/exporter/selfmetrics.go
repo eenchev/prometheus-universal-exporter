@@ -215,6 +215,8 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
+	"http_exporter_static_targets_scrape_seconds_total":        "Seconds spent on static target scrapes, from the start of each to its end, waiting for a slot included; its rate is the average number of static target scrapes in progress.",
+	"http_exporter_probes_seconds_total":                       "Seconds spent serving probes, from the start of each to its answer being ready, cache hits and shared probes included; its rate is the average number of probes in progress.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
 	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, rejected by an export it accepted (partialSuccess), the oldest waiting past otlp.max_pending_points, or those of the last export before exiting when it failed.",
@@ -420,6 +422,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
+	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
 	// The reload counters are the configuration manager's and the OTLP ones
 	// the server's, neither of which a reload replaces, and the go_ and
 	// process_ ones the runtime's and the kernel's: all count since the

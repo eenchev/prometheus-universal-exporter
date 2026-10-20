@@ -359,6 +359,19 @@ helm-test: helm-version
 		echo "helm template accepted a probe monitor beside the allocator" >&2; \
 		exit 1; \
 	fi
+	@# Autoscaling on the exporter's own load and, with the allocator, on
+	@# the static targets per pod, as Pods metrics; the second without the
+	@# allocator is rejected.
+	@set -eu; \
+	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set autoscaling.enabled=true --set autoscaling.targetBusy=2 --set autoscaling.targetStaticTargetsPerPod=40)"; \
+	echo "$$out" | grep -q 'name: "http_exporter_busy"'; \
+	echo "$$out" | grep -q 'name: "http_exporter_static_targets"'; \
+	echo "$$out" | grep -q 'averageValue: "40"'; \
+	echo "$$out" | python3 tools/check-manifests.py; \
+	if helm template test charts/prometheus-universal-exporter --set autoscaling.enabled=true --set autoscaling.targetStaticTargetsPerPod=40 >/dev/null 2>&1; then \
+		echo "helm template accepted autoscaling.targetStaticTargetsPerPod without the allocator" >&2; \
+		exit 1; \
+	fi
 	@# A configuration file whose first line is indented. The render is kept
 	@# first: a pipeline would hide helm failing.
 	@set -eu; \

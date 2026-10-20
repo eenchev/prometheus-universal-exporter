@@ -411,6 +411,22 @@ jobs:
             echo "helm template accepted a probe monitor beside the allocator" >&2
             exit 1
           fi
+      - name: Render autoscaling on the exporter's own metrics
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # The exporter's own load and, with the allocator, the static
+          # targets per pod, as Pods metrics; the second without the allocator
+          # is rejected.
+          out="$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set autoscaling.enabled=true --set autoscaling.targetBusy=2 --set autoscaling.targetStaticTargetsPerPod=40)"
+          echo "$out" | grep -q 'name: "http_exporter_busy"'
+          echo "$out" | grep -q 'name: "http_exporter_static_targets"'
+          echo "$out" | grep -q 'averageValue: "40"'
+          echo "$out" | python3 tools/check-manifests.py
+          if helm template test charts/prometheus-universal-exporter --set autoscaling.enabled=true --set autoscaling.targetStaticTargetsPerPod=40 >/dev/null 2>&1; then
+            echo "helm template accepted autoscaling.targetStaticTargetsPerPod without the allocator" >&2
+            exit 1
+          fi
       - name: Render a configuration file whose first line is indented
         if: steps.changes.outputs.chart == 'true'
         run: |

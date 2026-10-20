@@ -116,6 +116,23 @@ func TestChartRendersItsOptions(t *testing.T) {
 			want:  []string{"kind: HorizontalPodAutoscaler", "maxReplicas: 6", "averageUtilization: 80", "averageUtilization: 70", "kind: Deployment\n    name: test-prometheus-universal-exporter\n"},
 			avoid: []string{"replicas: 1\n"},
 		},
+		// The exporter's own load as a Pods metric, under the name the
+		// metrics adapter serves it by, beside CPU, and a quantity as
+		// written.
+		"autoscaling on the exporter's load": {
+			args: []string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetBusy=0.5"},
+			want: []string{"averageUtilization: 80", "- type: Pods\n      pods:\n        metric:\n          name: \"http_exporter_busy\"\n        target:\n          type: AverageValue\n          averageValue: \"0.5\"\n"},
+		},
+		"autoscaling on a renamed load metric": {
+			args:  []string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetCPUUtilizationPercentage=null", "--set-string", "autoscaling.targetBusy=1500m", "--set", "autoscaling.busyMetric=pue_busy"},
+			want:  []string{"name: \"pue_busy\"\n        target:\n          type: AverageValue\n          averageValue: \"1500m\"\n"},
+			avoid: []string{"averageUtilization", "http_exporter_static_targets"},
+		},
+		"autoscaling on static targets per pod with the allocator": {
+			args:  []string{"--set", "autoscaling.enabled=true", "--set", "allocator.enabled=true", "--set", "autoscaling.targetStaticTargetsPerPod=40"},
+			want:  []string{"- type: Pods\n      pods:\n        metric:\n          name: \"http_exporter_static_targets\"\n        target:\n          type: AverageValue\n          averageValue: \"40\"\n"},
+			avoid: []string{"http_exporter_busy"},
+		},
 		"network policy alone": {
 			args:  []string{"--set", "networkPolicy.enabled=true"},
 			want:  []string{"kind: NetworkPolicy", "policyTypes:\n    - Ingress\n  ingress:\n    - ports:\n        - port: http\n          protocol: TCP"},
@@ -273,25 +290,29 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		args []string
 		want string
 	}{
-		"negative probe limit":                 {[]string{"--set", "server.probeMaxConcurrent=-1"}, "probeMaxConcurrent"},
-		"fractional worker limit":              {[]string{"--set", "server.pythonMaxWorkers=1.5"}, "pythonMaxWorkers"},
-		"memory ratio above 1":                 {[]string{"--set", "goMemLimit.ratio=1.5"}, "ratio"},
-		"memory ratio of 0":                    {[]string{"--set", "goMemLimit.ratio=0"}, "ratio"},
-		"a probe's own check":                  {[]string{"--set", "livenessProbe.httpGet.path=/x"}, "livenessProbe"},
-		"both disruption budgets":              {[]string{"--set", "podDisruptionBudget.enabled=true", "--set", "podDisruptionBudget.minAvailable=1", "--set", "podDisruptionBudget.maxUnavailable=1"}, "sets both minAvailable and maxUnavailable"},
-		"fewer maximum than minimum":           {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.minReplicas=5"}, "is below autoscaling.minReplicas"},
-		"autoscaling on nothing":               {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetCPUUtilizationPercentage=null"}, "needs something to scale on"},
-		"a flag the chart manages":             {[]string{"--set", "extraArgs[0]=--probe.max-concurrent=3"}, "server.probeMaxConcurrent"},
-		"the memory ratio as an extra":         {[]string{"--set", "extraArgs[0]=--runtime.memory-limit-ratio=0.5"}, "goMemLimit.ratio"},
-		"a probe monitor without the Service":  {[]string{"--set", "service.enabled=false", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example"}]`}, "service.enabled=false leaves out"},
-		"a monitor without a collector":        {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service"}]`}, "names no collector"},
-		"a monitor of an unknown collector":    {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"nope"}]`}, `names collector "nope", which config.data does not define`},
-		"the self monitor without the Service": {[]string{"--set", "service.enabled=false", "--api-versions", "monitoring.coreos.com/v1/ServiceMonitor"}, "selfMetrics.type service"},
-		"a zero watch interval":                {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0s"}, "watchConfigInterval"},
-		"a zero compound watch interval":       {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
-		"probe debug as an extra":              {[]string{"--set", "extraArgs[0]=--web.enable-probe-debug"}, "server.probeDebug"},
-		"a pod label the chart sets":           {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
-		"a spread without a topology key":      {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
+		"negative probe limit":                         {[]string{"--set", "server.probeMaxConcurrent=-1"}, "probeMaxConcurrent"},
+		"fractional worker limit":                      {[]string{"--set", "server.pythonMaxWorkers=1.5"}, "pythonMaxWorkers"},
+		"memory ratio above 1":                         {[]string{"--set", "goMemLimit.ratio=1.5"}, "ratio"},
+		"memory ratio of 0":                            {[]string{"--set", "goMemLimit.ratio=0"}, "ratio"},
+		"a probe's own check":                          {[]string{"--set", "livenessProbe.httpGet.path=/x"}, "livenessProbe"},
+		"both disruption budgets":                      {[]string{"--set", "podDisruptionBudget.enabled=true", "--set", "podDisruptionBudget.minAvailable=1", "--set", "podDisruptionBudget.maxUnavailable=1"}, "sets both minAvailable and maxUnavailable"},
+		"fewer maximum than minimum":                   {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.minReplicas=5"}, "is below autoscaling.minReplicas"},
+		"autoscaling on nothing":                       {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetCPUUtilizationPercentage=null"}, "needs something to scale on"},
+		"static targets per pod without the allocator": {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetStaticTargetsPerPod=40"}, "targetStaticTargetsPerPod is set without allocator.enabled"},
+		"a busy target of zero":                        {[]string{"--set", "autoscaling.enabled=true", "--set-string", "autoscaling.targetBusy=0m"}, "autoscaling.targetBusy 0m must be a number above 0"},
+		"a busy target that is no quantity":            {[]string{"--set", "autoscaling.enabled=true", "--set-string", "autoscaling.targetBusy=lots"}, "targetBusy"},
+		"a busy target with no metric name":            {[]string{"--set", "autoscaling.enabled=true", "--set", "autoscaling.targetBusy=1", "--set", "autoscaling.busyMetric="}, "busyMetric"},
+		"a flag the chart manages":                     {[]string{"--set", "extraArgs[0]=--probe.max-concurrent=3"}, "server.probeMaxConcurrent"},
+		"the memory ratio as an extra":                 {[]string{"--set", "extraArgs[0]=--runtime.memory-limit-ratio=0.5"}, "goMemLimit.ratio"},
+		"a probe monitor without the Service":          {[]string{"--set", "service.enabled=false", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example"}]`}, "service.enabled=false leaves out"},
+		"a monitor without a collector":                {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service"}]`}, "names no collector"},
+		"a monitor of an unknown collector":            {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"nope"}]`}, `names collector "nope", which config.data does not define`},
+		"the self monitor without the Service":         {[]string{"--set", "service.enabled=false", "--api-versions", "monitoring.coreos.com/v1/ServiceMonitor"}, "selfMetrics.type service"},
+		"a zero watch interval":                        {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0s"}, "watchConfigInterval"},
+		"a zero compound watch interval":               {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
+		"probe debug as an extra":                      {[]string{"--set", "extraArgs[0]=--web.enable-probe-debug"}, "server.probeDebug"},
+		"a pod label the chart sets":                   {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
+		"a spread without a topology key":              {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
 		// The chart renders the collector and target parameters itself; a
 		// params entry of either would be a second key of the same name.
 		"a monitor's params.collector": {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","params":{"collector":["other"]}}]`}, "sets params.collector; the chart renders the collector parameter itself, so set the entry's .collector instead"},

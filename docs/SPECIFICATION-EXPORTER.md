@@ -5609,6 +5609,8 @@ http_exporter_sql_limit_failures_total
 http_exporter_sql_rows
 http_exporter_trips_in_flight
 http_exporter_trips_max_concurrent
+http_exporter_static_targets_scrape_seconds_total
+http_exporter_probes_seconds_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -25138,7 +25140,18 @@ self-metrics rather than in per-target series, so exporter self-metric
 cardinality does not grow with the number of targets. The exporter MUST
 expose `http_exporter_static_targets`, the number of targets loaded, and
 `http_exporter_static_targets_exported_via_otlp`, the number with
-`export_via_otlp`. The document's reloads MUST be reported under
+`export_via_otlp`. For autoscaling, the exporter MUST expose the counters
+`http_exporter_static_targets_scrape_seconds_total`, the seconds every static
+target scrape took from its start to its end, waiting for a slot included and
+a scrape whose result a reload superseded too, but not one the shutdown cut
+short, and `http_exporter_probes_seconds_total`, the seconds every probe
+counted in `http_exporter_scrapes_total` took until its answer was ready, a
+cache hit, a shared probe and one a limit turned away included, but not a
+debug probe or a request refused before it was counted. Each MUST add the
+same duration as its collector's `http_exporter_scrape_duration_seconds`,
+MUST be one series without labels, also without verbose self-metrics, and
+MUST be exposed from the start at `0`, so that their rate, the average number
+in progress, can be added up per pod. The document's reloads MUST be reported under
 `file="static_targets"` (§ 22.0b).
 
 A target MAY set `shard_key`, any text; the exporter MUST ignore it, and the
@@ -25271,6 +25284,8 @@ only.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
+`pue_allocator_targets_per_member{kind}` (the targets allocated to the
+members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
 `pue_allocator_member_changes_total` and

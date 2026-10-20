@@ -430,3 +430,33 @@ func TestTheMetricsDescribeTheAllocation(t *testing.T) {
 		t.Errorf("the members are allocated %d probe targets, want 2:\n%s", probes, body)
 	}
 }
+
+// pue_allocator_targets_per_member is the targets allocated to the members,
+// by kind, over the number of members: 9 static targets over two members are
+// 4.5 each, whichever of them owns more; before the member list has formed it
+// is 0.
+func TestTheMetricsAverageTheTargetsPerMember(t *testing.T) {
+	p := writeInputs(t, testConfig, staticTargets(9), testProbes)
+	in := mustLoad(t, p)
+	unformed := New(in, Options{Settle: 15 * time.Second, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	_, body := get(t, serve(t, unformed, "")+"/metrics")
+	for _, want := range []string{
+		"# TYPE pue_allocator_targets_per_member gauge\n",
+		`pue_allocator_targets_per_member{kind="probe"} 0` + "\n",
+		`pue_allocator_targets_per_member{kind="static"} 0` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics with no member lacks %q:\n%s", want, body)
+		}
+	}
+	a, _ := settledAllocator(t, in, "r1", "r2")
+	_, body = get(t, serve(t, a, "")+"/metrics")
+	for _, want := range []string{
+		`pue_allocator_targets_per_member{kind="probe"} 1` + "\n",
+		`pue_allocator_targets_per_member{kind="static"} 4.5` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics lacks %q:\n%s", want, body)
+		}
+	}
+}

@@ -263,6 +263,21 @@
 {{- int64 $text -}}
 {{- end -}}
 {{- end }}
+{{- /* A Kubernetes quantity above zero, from (list name value), for an
+       autoscaler's averageValue: a number, written out as JSON writes it, so
+       0.5 stays 0.5, or a string of a decimal number with m for thousandths,
+       such as "1500m". Anything else, zero included, fails rendering, since
+       Kubernetes would refuse it or the autoscaler scale to its maximum on
+       it. A value left out or null renders nothing. */ -}}
+{{- define "prometheus-universal-exporter.averageValue" -}}
+{{- if not (kindIs "invalid" (index . 1)) -}}
+{{- $text := include "prometheus-universal-exporter.text" (index . 1) -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,9})?m?$" $text)) (regexMatch "^[0.]*m?$" $text) -}}
+{{- fail (printf "%s %s must be a number above 0, or a Kubernetes quantity such as \"1500m\"" (index . 0) $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+{{- end }}
 {{- /* A disruption budget's count, from (list name value): a string, which
        is how a percentage is written, as it is, and a number as the whole
        number it is. The string is rendered bare, so a string of digits

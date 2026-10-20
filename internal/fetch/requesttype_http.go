@@ -3,9 +3,6 @@
 package fetch
 
 import (
-	"context"
-	"net/http"
-
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -22,7 +19,7 @@ func init() {
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
-			"allowed_targets", "denied_targets", "accept_status",
+			"allowed_targets", "denied_targets", "accept_status", "pagination",
 		},
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
@@ -35,11 +32,14 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_status",
 		},
-		URLPath:     true,
-		Validate:    validateHTTPRequest,
-		CheckTarget: checkHTTPTarget,
-		Fetch: func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-			return fetch(ctx, target, c, overrides, forwarded)
+		URLPath: true,
+		Validate: func(c *model.Collector) error {
+			if err := validateHTTPRequest(c); err != nil {
+				return err
+			}
+			return validatePagination(c)
 		},
+		CheckTarget: checkHTTPTarget,
+		Fetch:       fetchHTTP,
 	})
 }

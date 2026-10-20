@@ -186,6 +186,10 @@ type requestPolicy struct {
 	DeniedTargets  []string `json:"denied_targets,omitempty"`
 	AcceptStatus   []string `json:"accept_status,omitempty"`
 	AcceptCodes    []string `json:"accept_codes,omitempty"`
+	// Pagination is request.pagination as it will be applied, its defaults
+	// filled in: max_pages above all, which bounds what one trip asks of
+	// the target.
+	Pagination *model.PaginationConfig `json:"pagination,omitempty"`
 }
 
 // requestPolicies are the policies of the collectors that set one, by name.
@@ -193,8 +197,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	out := map[string]requestPolicy{}
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
-		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes}
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 {
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination}
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil {
 			out[c.Name] = p
 		}
 	}

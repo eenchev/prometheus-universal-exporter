@@ -38,6 +38,10 @@ type statsValues struct {
 	// out before the rules saw it (graphitereport.go), linesSkipped also the
 	// sample lines the prometheus decoder left out (prometheusreport.go).
 	seriesLeftOut, linesSkipped uint64
+	// pagesFetched counts the pages request.pagination fetched, and
+	// pagesStopped the trips that stopped at its max_pages with another
+	// page to come (paginationreport.go).
+	pagesFetched, pagesStopped uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -121,6 +125,8 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_invalid_utf8_total", model.CounterMetricType, "Label values and help texts this collector produced that were not valid UTF-8, whose invalid bytes were replaced with U+FFFD.", func(v statsValues) float64 { return float64(v.invalidUTF8) }},
 	{"http_exporter_decoder_series_left_out_total", model.CounterMetricType, "Series the graphite decoder left out before the metric rules saw them: with no point that has a value, with the newest point older than response.graphite.max_age, or answered twice.", func(v statsValues) float64 { return float64(v.seriesLeftOut) }},
 	{"http_exporter_decoder_lines_skipped_total", model.CounterMetricType, "Lines a decoder left out and read on: carbon lines the graphite decoder could not read, under response.graphite.invalid_lines: skip, and sample lines the prometheus decoder found to be no part of their histogram or summary family.", func(v statsValues) float64 { return float64(v.linesSkipped) }},
+	{"http_exporter_pages_fetched_total", model.CounterMetricType, "Pages this http collector's request.pagination fetched, the first of each trip included, in trips that ended with an answer; 0 without request.pagination.", func(v statsValues) float64 { return float64(v.pagesFetched) }},
+	{"http_exporter_pagination_max_pages_reached_total", model.CounterMetricType, "Trips of this http collector that stopped at request.pagination.max_pages with another page to come; their series are of the pages fetched.", func(v statsValues) float64 { return float64(v.pagesStopped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead, and one a concurrency limit turned away only as rejected.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
@@ -159,19 +165,21 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 var requestTypeFamilies = map[string][]string{
 	"http_exporter_scrape_grpc_status_code": {"grpc"},
 	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total":        {"http", "graphite", "grpc", "sshfile", "sql"},
-	"http_exporter_sshfile_connections":          {"sshfile"},
-	"http_exporter_sshfile_connects_total":       {"sshfile"},
-	"http_exporter_sshfile_limit_waits_total":    {"sshfile"},
-	"http_exporter_sshfile_limit_failures_total": {"sshfile"},
-	"http_exporter_sql_connections":              {"sql"},
-	"http_exporter_sql_idle_connections":         {"sql"},
-	"http_exporter_sql_targets":                  {"sql"},
-	"http_exporter_sql_connects_total":           {"sql"},
-	"http_exporter_sql_keepalive_failures_total": {"sql"},
-	"http_exporter_sql_limit_waits_total":        {"sql"},
-	"http_exporter_sql_limit_failures_total":     {"sql"},
-	"http_exporter_sql_rows":                     {"sql"},
+	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql"},
+	"http_exporter_pages_fetched_total":                {"http"},
+	"http_exporter_pagination_max_pages_reached_total": {"http"},
+	"http_exporter_sshfile_connections":                {"sshfile"},
+	"http_exporter_sshfile_connects_total":             {"sshfile"},
+	"http_exporter_sshfile_limit_waits_total":          {"sshfile"},
+	"http_exporter_sshfile_limit_failures_total":       {"sshfile"},
+	"http_exporter_sql_connections":                    {"sql"},
+	"http_exporter_sql_idle_connections":               {"sql"},
+	"http_exporter_sql_targets":                        {"sql"},
+	"http_exporter_sql_connects_total":                 {"sql"},
+	"http_exporter_sql_keepalive_failures_total":       {"sql"},
+	"http_exporter_sql_limit_waits_total":              {"sql"},
+	"http_exporter_sql_limit_failures_total":           {"sql"},
+	"http_exporter_sql_rows":                           {"sql"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value

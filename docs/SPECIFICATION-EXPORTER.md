@@ -737,6 +737,7 @@ type.
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
+| `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -744,6 +745,83 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
 and the basic and bearer credential keys.
+
+##### Pagination
+
+`request.pagination` MUST fetch the pages of a paginated answer after the
+first and merge them into one JSON document, which the decoder, the
+transform and the limits MUST read as the trip's one answer: the first page,
+with the array `items` names holding the items of every page, in order. It
+is the `http` type's alone, and neither a static target nor a probe
+parameter MAY set or change it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `type` | none | Required: `link`, `next_url`, `cursor`, `page` or `offset`, matched without regard to case or surrounding whitespace. |
+| `items` | none | Required: a jq path to the array of a page's items, such as `.items` or `.`. An expression that is not one path of keys and indexes — evaluated against `null` at load, it fails or names other than one place — MUST be refused at load. |
+| `next` | none | Required with `next_url` and `cursor`, refused with the others: a jq expression over the page, with `$status` and `$headers` bound as in a rule, giving the next URL or cursor. |
+| `param` | none | Required with `cursor`, `page` and `offset`, refused with the others: the query parameter the cursor, page number or offset is sent in. A name with a control character, and a `request.query` key that is the same name in any case, MUST be refused at load. |
+| `start` | 1 for `page`, 0 for `offset` | `page` and `offset` only, not negative: the first page's number or offset, sent on the first page. |
+| `size` | the items received | `offset` only, at least 1: how far the offset moves from one page to the next. |
+| `max_pages` | 10 | From 1 to 1000: the most pages one trip fetches, the first included. |
+
+A key that does not apply to the type MUST be refused at load naming it and
+how the type finds its next page, and so MUST `pagination` with method
+`HEAD`, whose answers have no body. Every refusal MUST name the collector.
+The pages are read as JSON: a collector with `pagination` MUST decode with
+`json`, a `decoder.type` left out or `auto` MUST become `json`, and any other
+MUST be refused at load.
+
+The next page MUST be: for `link`, the target of the `Link` header's link
+whose first `rel` lists `next`, compared without regard to case (RFC 8288),
+a comma or semicolon inside a quoted value separating nothing and a malformed
+link skipped without hiding the others; for `next_url`, the URL `next` gives;
+both resolved against the URL of the page that names them, without a
+fragment. For `cursor`, it MUST be the URL of the page before with `param`
+set to the text `next` gives, a number as its text; for `page`, `param` one
+more than the page before's, from `start`; for `offset`, `param` moved on
+from `start` by the number of items the page before held, or by `size`. A
+parameter of the target's query or of a next URL that is `param` in any case
+MUST be dropped where `param` is set, and `param` MUST be sent last. `next`
+giving `null`, `false` or `""` MUST end the pages, more than one value or
+another kind MUST fail the trip, and so MUST items that are neither an array
+nor missing or `null`, which are no items.
+
+The pages MUST end at the first that names no next page — no `rel="next"`,
+no next URL or cursor, or, for `page` and `offset`, no items — or at
+`max_pages`. A trip that stops at `max_pages` while the last page named
+another page, or for `page` and `offset` held items, MUST NOT fail: its
+answer MUST be the pages fetched, the trip MUST be counted in
+`http_exporter_pagination_max_pages_reached_total` and logged at warn level
+through the failure log (§ 25.1), with the pages and `max_pages`, and the end of
+it logged when a trip of that collector and target fetches every page again.
+Every page fetched by a trip that ends with an answer MUST be counted in
+`http_exporter_pages_fetched_total` (§ 22).
+
+Every page MUST be a request of the collector's own, made as the first is:
+the same method, body, headers, credentials, forwarded headers, TLS
+settings, retries, redirect rules and target policy (§ 26.1), the policy
+checked on each page's connections. A next page whose scheme, host or port
+— a port left out being its scheme's — is not the first page's MUST fail the
+trip before it is asked for, since it would be sent the target's
+credentials, and so MUST a next page whose URL a page of the trip already
+had. The probe's `timeout` and the trip's deadline MUST cover every page
+together. The response limit (§ 20) MUST hold each page, the pages' bodies
+added up, failing the trip after the page that takes them past it, and the
+merged document, each failure a limit failure (`ErrLimitExceeded`).
+
+A first page that is not JSON, or answered with a status the collector does
+not accept, MUST be the answer as it came, failing in the `decode` or the
+`http_status` stage as without pagination. A later page answered with such
+a status MUST be the trip's answer, with its status, headers and body,
+failing in the `http_status` stage with an error that names its number and
+its URL, with credential query values masked:
+`received HTTP status 503 on page 3 of request.pagination, <url>`. A later
+page that is not JSON, or whose request failed, MUST fail the trip naming
+the page. An answer of one page MUST be the page byte for byte; the merged
+document of several MUST be written again as JSON, each number as it was
+written, the first page's status and headers, without its
+`Content-Length`.
 
 #### `localfile`
 
@@ -5503,6 +5581,8 @@ http_exporter_metrics_emitted_total
 http_exporter_invalid_utf8_total
 http_exporter_decoder_series_left_out_total
 http_exporter_decoder_lines_skipped_total
+http_exporter_pages_fetched_total
+http_exporter_pagination_max_pages_reached_total
 http_exporter_series_limit_exceeded_total
 
 http_exporter_cache_hits_total
@@ -5588,6 +5668,13 @@ returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`.
+`http_exporter_pages_fetched_total` and
+`http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
+for `http` collectors, `0` for one without `request.pagination`, per
+collector and per request in verbose mode: the pages `request.pagination`
+fetched in trips that ended with an answer, the first of each included, and
+the trips that stopped at `max_pages` with another page to come (§ 5.1,
+`http`).
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -7946,8 +8033,9 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status` or `accept_codes` is listed under
-  `details.request_policies` with those lists as normalised for use;
+  `accept_status`, `accept_codes` or `pagination` is listed under
+  `details.request_policies` with those settings as normalised for use, a
+  `pagination` with its defaults filled in;
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
@@ -25769,15 +25857,20 @@ and MUST answer `200` with a `text/plain` report of it:
   it would have, and its age;
 - every request sent, with retries and redirects, its method, URL, headers
   and outcome, a redirect with the headers it was sent and the names of the
-  ones withheld from it (§ 42.15c); a `grpc` call with its method, metadata and code; a
-  `localfile` read as its file;
+  ones withheld from it (§ 42.15c); a request of `request.pagination` with
+  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a `grpc`
+  call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
   the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the
   target's own. The body is shown up to 64 KiB and only when it is text. A
   body that was converted MUST be listed with its size as sent and the
   encoding it was converted from, and shown as the same text in UTF-8, in
   which an XML declaration still names the encoding it was sent in. A
-  directory is shown as its files, with their sizes as read;
+  directory is shown as its files, with their sizes as read. A response of
+  `request.pagination` MUST say how many pages it is merged from, or which
+  page's status failed the trip, and whether the pages stopped at
+  `max_pages` with another to come, and the fetch stage's note MUST give the
+  number of pages;
 - each stage, its duration and outcome, saying when `error_handling` carried
   on;
 - the series by metric name, the rules that gave none, each by the name its

@@ -482,6 +482,25 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.pagination as it will be applied,
+// its defaults filled in, max_pages among them, and refuses one startup
+// refuses, as startup words it.
+func TestDryRunReportsPagination(t *testing.T) {
+	paged := func(pagination string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: paged\n    request:\n      type: http\n      pagination: "+pagination+"\n    transform: {type: jq}\n    metrics: [{name: v, expression: length}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+paged("{type: Page, param: p, items: .}"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["paged"].(map[string]any)
+	if want := map[string]any{"type": "page", "param": "p", "items": ".", "start": float64(1), "max_pages": float64(10)}; check.code != 0 || !reflect.DeepEqual(policy["pagination"], want) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	out := runCheckCLI(t, "--config.file="+paged("{type: page, items: .}"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "paged" request.pagination.param is required with type page`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run takes a status of request.accept_status written as a number with
 // a point, an exponent or in hex, as startup does and as the schema an editor
 // checks the file against does, and lists it as the status it is; a number

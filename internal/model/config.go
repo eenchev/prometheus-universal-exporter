@@ -173,6 +173,12 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// Pagination fetches the further pages of a paginated answer and merges
+	// them into one JSON document, the first page with its items array
+	// holding every page's items (fetch/pagination.go). Left out of a
+	// collector written as YAML when unset, as the sql keys are below, so
+	// the fingerprint of a collector without it is what it was.
+	Pagination *PaginationConfig `yaml:"pagination,omitempty"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses
@@ -276,6 +282,49 @@ type SQLKeepalive struct {
 	Interval *Duration `yaml:"interval"`
 	Check    string    `yaml:"check"`
 }
+
+// PaginationConfig is an http collector's request.pagination: how the next
+// page of an answer is found, where each page holds its items, and how many
+// pages one trip fetches at most.
+type PaginationConfig struct {
+	// Type is how the next page is found: link, the Link header's
+	// rel="next"; next_url, a URL Next reads from the page; cursor, a value
+	// Next reads from the page, sent as the query parameter Param; page, a
+	// page number in Param counting from Start; offset, an offset in Param
+	// from Start, moved on by the items received or by Size.
+	Type string `yaml:"type" json:"type,omitempty"`
+	// Items is the jq path of the array each page holds its items in, such
+	// as .items, or . for a page that is an array.
+	Items string `yaml:"items" json:"items,omitempty"`
+	// Next is the jq expression of the next page's URL (next_url) or cursor
+	// (cursor); null, false or "" ends the pagination.
+	Next  string `yaml:"next" json:"next,omitempty"`
+	Param string `yaml:"param" json:"param,omitempty"`
+	// Start is the first page's number (page, 1 when unset) or offset
+	// (offset, 0 when unset).
+	Start *int `yaml:"start" json:"start,omitempty"`
+	// Size is how far the offset moves from one page to the next; unset,
+	// by the number of items the page held.
+	Size int `yaml:"size" json:"size,omitempty"`
+	// MaxPages is the most pages one trip fetches, the first included;
+	// DefaultMaxPages when unset, at most MaxMaxPages.
+	MaxPages int `yaml:"max_pages" json:"max_pages,omitempty"`
+}
+
+// The pagination types, the default of request.pagination.max_pages and its
+// largest value.
+const (
+	PaginationLink    = "link"
+	PaginationNextURL = "next_url"
+	PaginationCursor  = "cursor"
+	PaginationPage    = "page"
+	PaginationOffset  = "offset"
+	DefaultMaxPages   = 10
+	MaxMaxPages       = 1000
+)
+
+// PaginationTypes are the values of request.pagination.type.
+var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCursor, PaginationPage, PaginationOffset}
 
 // RetryConfig is request.retry: how often a failed request is tried again,
 // and how long to wait before each attempt.

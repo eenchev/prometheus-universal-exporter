@@ -58,7 +58,8 @@ every metric the collector exports. See
 [Prefixing a collector's metrics](docs/CONFIGURATION.md#prefixing-a-collectors-metrics).
 For a list of things — servers, rows, components — give a metric `items` and
 write its value and labels against one item at a time; see
-[Metrics per item](docs/CONFIGURATION.md#metrics-per-item).
+[Metrics per item](docs/CONFIGURATION.md#metrics-per-item). A paged API is read
+page by page into one answer; see [Pagination](docs/REQUESTS.md#pagination).
 Collectors can also live in files of their own, listed under `collector_files`
 — one per team or per ConfigMap key; a collector name must be unique across all
 of them. See [Collector files](docs/CONFIGURATION.md#collector-files).

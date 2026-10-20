@@ -1392,6 +1392,149 @@
                 "description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers.",
                 "type": "object"
               },
+              "pagination": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "type": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "items": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ]
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "next_url",
+                            "cursor"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "next": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "next"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "cursor",
+                            "page",
+                            "offset"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "param": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "param"
+                      ]
+                    }
+                  }
+                ],
+                "description": "http: fetch the further pages of a paginated answer and merge them into one JSON document, the first page with its items array holding every page's items, which the decoder and the rules read as the answer. Every page is sent the request's headers, credentials and body, and must stay on the target's scheme, host and port. The decoder is json. See docs/REQUESTS.md#pagination.",
+                "properties": {
+                  "items": {
+                    "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order.",
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "max_pages": {
+                    "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged.",
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "next": {
+                    "description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "param": {
+                    "description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "size": {
+                    "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": {
+                    "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size.",
+                    "enum": [
+                      "link",
+                      "next_url",
+                      "cursor",
+                      "page",
+                      "offset"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
               "passphrase_file": {
                 "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with.",
                 "not": {

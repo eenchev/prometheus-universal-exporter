@@ -43,6 +43,9 @@ const (
 	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - name: up\n        # metric\n"
 )
 
+// paginatedCollector is jqCollector fetching its pages by page number.
+var paginatedCollector = strings.Replace(jqCollector, "      # request\n", "      pagination:\n        type: page\n        param: page\n        items: .items\n", 1)
+
 // escapingNames is a configuration of one collector with its name_escaping
 // set.
 func escapingNames(configuration, escaping string) string {
@@ -119,6 +122,11 @@ func httpSchemaKeys() []schemaKey {
 		// exporter took, and the schema but for a name written "".
 		{key: "collectors[].metrics[].name", of: "of a prometheus rule without an expression", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        name: up\n", 1), at: "        name: up\n", setting: "        name: %s\n", valid: "up", invalid: "bad-name", absentWas: taken},
 		{key: "collectors[].metrics[].expression", of: "of a prometheus rule without a name", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        expression: '^up$'\n", 1), at: "        expression: '^up$'\n", setting: "        expression: %s\n", valid: `"^up$"`, invalid: `"  "`, invalidWas: taken, absentWas: taken, emptyWas: taken},
+		// The keys request.pagination requires: written "", each is as
+		// missing as left out, to both, and items of blanks alone, which
+		// names no array, both refuse.
+		{key: "collectors[].request.pagination.type", document: paginatedCollector, at: "        type: page\n", setting: "        type: %s\n", valid: "offset", invalid: "pages"},
+		{key: "collectors[].request.pagination.items", document: paginatedCollector, at: "        items: .items\n", setting: "        items: %s\n", valid: ".data.results", invalid: `"  "`, booleanAlone: `request.pagination.items "true" is not a path`, numberAlone: `request.pagination.items "1" is not a path`},
 		// Optional, with allowed values or a pattern: "" is the default.
 		{key: "collectors[].metrics_prefix", document: jqCollector, at: collector, setting: "    metrics_prefix: %s\n", valid: "grafana", invalid: "grafana_", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].name_escaping", document: jqCollector, at: collector, setting: "    name_escaping: %s\n", valid: "underscores", invalid: "escape", absent: true, empty: true, emptyWas: refused},

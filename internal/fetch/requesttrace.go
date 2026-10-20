@@ -31,6 +31,9 @@ type TracedRequest struct {
 	Header http.Header
 	// Redirect is set on a request that followed a redirect.
 	Redirect bool
+	// Page is the page of request.pagination the request asked for, from
+	// 1; 0 without request.pagination.
+	Page int
 	// Withheld names the headers of the first request that a redirect to a
 	// host the collector does not trust was not sent (redirecttrust.go),
 	// and WithheldWhy says why the redirect was not trusted.
@@ -43,6 +46,15 @@ type TracedRequest struct {
 }
 
 type requestTraceKey struct{}
+
+// pageKey holds, in the context of a request request.pagination makes, the
+// page it asks for, which the trace records with it.
+type pageKey struct{}
+
+// withPage marks the requests made with ctx as asking for page n.
+func withPage(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, pageKey{}, n)
+}
 
 // WithRequestTrace returns a context whose trips record their requests in
 // the returned trace.
@@ -75,7 +87,8 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, started: time.Now()})
+	page, _ := ctx.Value(pageKey{}).(int)
+	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()})
 }
 
 // traceWithheld records the names of the headers the last request recorded,

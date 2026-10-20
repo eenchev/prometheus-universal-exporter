@@ -1979,6 +1979,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
+| `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -4370,11 +4371,13 @@ A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
-Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`
-or `accept_codes` is listed under `details.request_policies`, by name, with
-those lists as they will be applied — `2XX` as `2xx`, `not_found` as
-`NOT_FOUND` — so a list that lets through more or less than meant shows before
-it is deployed.
+Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
+`accept_codes` or `pagination` is listed under `details.request_policies`, by
+name, with those settings as they will be applied — `2XX` as `2xx`,
+`not_found` as `NOT_FOUND`, a `pagination` with its defaults, `max_pages: 10`
+among them — so a list that lets through more or less than meant, or a
+pagination that asks the target for more pages than meant, shows before it is
+deployed.
 
 The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
 target of one, reads when it connects — its private key, passphrase,

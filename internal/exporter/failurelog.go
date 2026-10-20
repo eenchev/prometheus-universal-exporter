@@ -157,6 +157,9 @@ const (
 	// and the prometheus decoder left out.
 	carbonLinesAspect failureAspect = "\x00carbon lines"
 	sampleLinesAspect failureAspect = "\x00sample lines"
+	// pagesAspect is a trip that stopped at request.pagination.max_pages
+	// with another page to come.
+	pagesAspect failureAspect = "\x00pages"
 )
 
 // ruleKeyMarker is what stands, in the key of a rule's failure, between the

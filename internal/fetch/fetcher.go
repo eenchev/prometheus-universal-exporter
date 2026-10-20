@@ -57,6 +57,35 @@ type HTTPResponse struct {
 	// has: a csv rule that reads one is then reading empty cells, not a
 	// column the answer lacks.
 	Columns []string
+	// Pages is what an http collector's request.pagination fetched: each
+	// page asked for, and whether it stopped at max_pages with another page
+	// to come. Body is then the pages merged into one document, Headers
+	// the first page's; or, when a page after the first was answered with
+	// a status the collector does not accept, StatusCode, Headers and Body
+	// are that page's (pagination.go). nil without request.pagination.
+	Pages *PagesRead
+}
+
+// PagesRead is what request.pagination fetched for one trip.
+type PagesRead struct {
+	// Pages is every page asked for, in order, the first included.
+	Pages []PageRead
+	// MoreLeft says the trip stopped at request.pagination.max_pages while
+	// the last page named another, or, for page and offset, held items.
+	MoreLeft bool
+	// Merged says the response is every page's, accepted, merged into one
+	// document, or the first page alone when it was the only one; unset,
+	// the response is that of the last page, whose status the collector
+	// does not accept.
+	Merged bool
+}
+
+// PageRead is one page request.pagination asked for: its URL, its status and
+// the size of its body.
+type PageRead struct {
+	URL    string
+	Status int
+	Bytes  int
 }
 
 // Status is the answer's status as rules read it, $status in jq and yq and
@@ -131,6 +160,10 @@ type RequestOverrides struct {
 	// Params are the param_<name> probe parameters, bound into the
 	// {{param_<name>}} placeholders of the collector's request.path.
 	Params map[string]string
+	// pageURL is the URL of a page after the first that request.pagination
+	// asks for, sent instead of the one the target and the request make
+	// (pagination.go). Only the pagination sets it.
+	pageURL *url.URL
 }
 
 // parseBoolOverride reads an optional boolean probe parameter. An absent
@@ -263,6 +296,17 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 // different URL than the one that was fetched.
 func resolveRequestURL(target string, c *model.Collector, overrides RequestOverrides) (*url.URL, error) {
 	return buildRequestURL(target, c, overrides, true)
+}
+
+// requestURL is the URL a request is sent to: the page request.pagination
+// asks for, when it is one after the first, and resolveRequestURL's
+// otherwise.
+func requestURL(target string, c *model.Collector, overrides RequestOverrides) (*url.URL, error) {
+	if overrides.pageURL != nil {
+		u := *overrides.pageURL
+		return &u, nil
+	}
+	return resolveRequestURL(target, c, overrides)
 }
 
 // buildRequestURL is resolveRequestURL with the choice of whether to bind path
@@ -634,7 +678,7 @@ func requestMethod(c *model.Collector, overrides RequestOverrides) string {
 }
 
 func fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded ...http.Header) (*HTTPResponse, error) {
-	u, err := resolveRequestURL(target, c, overrides)
+	u, err := requestURL(target, c, overrides)
 	if err != nil {
 		return nil, err
 	}

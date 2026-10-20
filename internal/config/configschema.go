@@ -463,6 +463,14 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.targets":                         {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
 		"collectors[].request.from":                            {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
 		"collectors[].request.until":                           {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
+		"collectors[].request.pagination":                      paginationRule(),
+		"collectors[].request.pagination.type":                 {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
+		"collectors[].request.pagination.items":                {"not": onlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
+		"collectors[].request.pagination.next":                 {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
+		"collectors[].request.pagination.param":                {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
+		"collectors[].request.pagination.start":                {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it."},
+		"collectors[].request.pagination.size":                 {"minimum": 1, "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held."},
+		"collectors[].request.pagination.max_pages":            {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
 		"collectors[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
 		"collectors[].request.retry.non_idempotent":            {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
 		"collectors[].request.retry.codes":                     {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
@@ -788,6 +796,25 @@ func requestSchemaRule() map[string]any {
 		rule["allOf"] = conditions
 	}
 	return rule
+}
+
+// paginationRule is the rule of request.pagination: type and items
+// required, each written with something other than "", next with type
+// next_url and cursor, and param with cursor, page and offset, as the
+// exporter has them (fetch.validatePagination).
+func paginationRule() map[string]any {
+	when := func(types ...string) map[string]any {
+		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
+	}
+	return map[string]any{
+		"description": "http: fetch the further pages of a paginated answer and merge them into one JSON document, the first page with its items array holding every page's items, which the decoder and the rules read as the answer. Every page is sent the request's headers, credentials and body, and must stay on the target's scheme, host and port. The decoder is json. See docs/REQUESTS.md#pagination.",
+		"allOf": []any{
+			writtenKey("type"),
+			writtenKey("items"),
+			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": writtenKey("next")},
+			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": writtenKey("param")},
+		},
+	}
 }
 
 // sshfileRequired is what an sshfile collector's request requires, as the

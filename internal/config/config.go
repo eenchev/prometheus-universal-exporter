@@ -290,6 +290,16 @@ func normalizeFormats(x *model.Collector) error {
 			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a grpc call is answered with; use jq, yq or python", x.Name, x.Transform.Type)
 		}
 	}
+	if x.Request.Pagination != nil {
+		// The pages are read as JSON to find the next one and their items,
+		// and merged into one JSON document, whatever their Content-Type.
+		switch x.Decoder.Type {
+		case "auto", "json":
+			x.Decoder.Type = "json"
+		default:
+			return fmt.Errorf("collector %q decodes with %s, but request.pagination reads its pages as JSON and merges them into one JSON document; leave decoder.type out, or set json", x.Name, x.Decoder.Type)
+		}
+	}
 	if x.Request.Type == fetch.RequestTypeSQL {
 		if err := checkSQLFormats(x); err != nil {
 			return err

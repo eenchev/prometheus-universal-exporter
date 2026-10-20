@@ -245,7 +245,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			x.grpcCode, x.grpcCalled = grpcCode, true
 		}
 	})
-	if !fetch.AcceptedStatus(c, j.overrides, response.StatusCode) {
+	accepted := fetch.AcceptedStatus(c, j.overrides, response.StatusCode)
+	s.notePages(ctx, response, accepted, c, rec, j.display, j.target)
+	if !accepted {
 		// The target's own explanation is usually in the body; the start of
 		// it goes to the log, not to the answer, which Prometheus may keep.
 		var excerpt []any
@@ -259,6 +261,10 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// was not sent what the collector identifies itself with
 			// (fetch/redirecttrust.go): most often why it answers 401 or 403.
 			statusErr = fmt.Errorf("received HTTP status %d %s", response.StatusCode, response.RedirectWithheld)
+		}
+		if pages := response.Pages; pages != nil && len(pages.Pages) > 1 {
+			// A page after the first: the pages before it were accepted.
+			statusErr = fmt.Errorf("%w on page %d of request.pagination, %s", statusErr, len(pages.Pages), fetch.RedactURLString(pages.Pages[len(pages.Pages)-1].URL, fetch.MaskCredentialQueryValues))
 		}
 		failure := stageFailed("http_status", statusErr, c.ErrorHandling.OnFetchError, excerpt...)
 		failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
@@ -573,6 +579,13 @@ func fetchedNote(r *fetch.HTTPResponse) string {
 		return fmt.Sprintf("gRPC status %d, %d bytes", *r.GRPCCode, len(r.Body))
 	case r.NoStatus:
 		return fmt.Sprintf("%d bytes", len(r.Body))
+	}
+	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
+		note := fmt.Sprintf("status %d, %d bytes, %d pages", r.StatusCode, len(r.Body), len(p.Pages))
+		if p.MoreLeft {
+			note += ", stopped at request.pagination.max_pages with another page to come"
+		}
+		return note
 	}
 	return fmt.Sprintf("status %d, %d bytes", r.StatusCode, len(r.Body))
 }

@@ -601,8 +601,11 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	}
 	for i, req := range requests {
 		via := ""
+		if req.Page > 0 {
+			via = fmt.Sprintf(" (page %d)", req.Page)
+		}
 		if req.Redirect {
-			via = " (redirect)"
+			via += " (redirect)"
 		}
 		outcome := req.Outcome
 		if outcome == "" {
@@ -775,6 +778,9 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 	}
+	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
+		b.WriteString(pagesLine(p))
+	}
 	if len(r.Headers) > 0 {
 		b.WriteString("  Headers\n")
 		writeHeaders(b, r.Headers, "    ")
@@ -798,6 +804,23 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 		return false
 	}
 	return true
+}
+
+// pagesLine says what of request.pagination's pages the response is: all
+// of them merged, with the status and headers of the first, or the page
+// whose status failed the trip; and that the pages stopped at max_pages.
+func pagesLine(p *fetch.PagesRead) string {
+	line := fmt.Sprintf("  Page %d of request.pagination, whose status the collector does not accept", len(p.Pages))
+	if p.Merged {
+		line = fmt.Sprintf("  %d pages of request.pagination merged into one document; the status and headers are the first page's", len(p.Pages))
+		if len(p.Pages) == 1 {
+			line = "  1 page of request.pagination"
+		}
+	}
+	if p.MoreLeft {
+		line += ", stopped at request.pagination.max_pages with another page to come"
+	}
+	return line + "\n"
 }
 
 // writeBody renders a body, up to debugBodyLimit, text only. The report is

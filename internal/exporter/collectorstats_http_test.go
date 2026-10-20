@@ -266,10 +266,10 @@ func newTwin(t *testing.T, cfg *model.Config) *Server {
 }
 
 // One read of the statistics of 500 collectors, each of which has its own,
-// makes what it returns and no more: at most 515 allocations and 210,000
-// bytes, where it makes 510 of 194,992 - the copy of each collector's
+// makes what it returns and no more: at most 515 allocations and 226,000
+// bytes, where it makes 510 of 210,992 - the copy of each collector's
 // counters, the two maps and the slices at their size, and the sort - and
-// where it made 531 of 228,560 while the map of the statistics and the slice
+// where it made 531 of 244,560 while the map of the statistics and the slice
 // of the names grew as they were filled, with the statistics lock held. The
 // read as it was is measured beside it, and is past both bounds.
 func TestReadingTheStatisticsAllocatesNothingThatGrows(t *testing.T) {
@@ -277,7 +277,7 @@ func TestReadingTheStatisticsAllocatesNothingThatGrows(t *testing.T) {
 		// The race detector changes what is allocated.
 		return
 	}
-	const collectors, mostAllocs, mostBytes = 500, 515, 210_000
+	const collectors, mostAllocs, mostBytes = 500, 515, 226_000
 	cfg := &model.Config{}
 	for i := range collectors {
 		cfg.Collectors = append(cfg.Collectors, testutil.Collector(fmt.Sprintf("c%d", i), "text"))

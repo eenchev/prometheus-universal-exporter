@@ -1039,6 +1039,145 @@ joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the
 code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
 `localfile` or `sshfile` collector, which has no status, it is `null`.
 
+## Pagination
+
+An API that pages its answer gives one request only the first page. With
+`request.pagination` an `http` collector fetches the pages after it too and
+merges them into one JSON document: the first page, with the array its items
+are in, `items`, holding the items of every page in order. The decoder, the
+rules and the limits then read that document as the answer, so a collector
+written for one page reads every page unchanged.
+
+```yaml
+request:
+  type: http
+  path: /orgs/acme/repos
+  query:
+    per_page: "100"
+  bearer_token_file: /etc/secrets/github-token
+  pagination:
+    type: link    # follow the Link header's rel="next"
+    items: .      # each page is an array of repositories
+    max_pages: 20
+transform:
+  type: jq
+metrics:
+  - name: github_repos
+    expression: length
+  - name: github_repo_stars
+    items: .[]
+    expression: .stargazers_count
+    labels:
+      - name: repo
+        expression: .name
+```
+
+GitHub answers the first page of `/orgs/acme/repos` with
+
+```text
+Link: <https://api.github.com/organizations/1/repos?per_page=100&page=2>; rel="next",
+      <https://api.github.com/organizations/1/repos?per_page=100&page=7>; rel="last"
+```
+
+and the collector asks for page 2, then each page its `Link` names, until a
+page names none. `github_repos` is the number of repositories on every page,
+not on the first.
+
+`type` says how the next page is found:
+
+| `type` | The next page | Needs |
+| --- | --- | --- |
+| `link` | The URL of the `Link` header's `rel="next"` (RFC 8288), absolute or relative to the page's URL. | — |
+| `next_url` | The URL the jq expression `next` reads from the page, absolute or relative to the page's URL. | `next` |
+| `cursor` | The first page's URL with the value `next` reads from the page in the query parameter `param`. | `next`, `param` |
+| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. | `param` |
+| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. | `param` |
+
+```yaml
+pagination:              # {"data":{"hosts":[...]},"links":{"next":"/api/hosts?page=2"}}
+  type: next_url
+  next: .links.next
+  items: .data.hosts
+```
+
+```yaml
+pagination:              # {"items":[...],"meta":{"next_cursor":"dXNlcjo0Mg=="}}
+  type: cursor
+  next: .meta.next_cursor
+  param: cursor          # ...&cursor=dXNlcjo0Mg==
+  items: .items
+```
+
+```yaml
+pagination:              # /tickets?page=1, ?page=2, ... until a page has no tickets
+  type: page
+  param: page
+  items: .tickets
+```
+
+```yaml
+pagination:              # /events?offset=0, ?offset=50, ... with limit: "50" in request.query
+  type: offset
+  param: offset
+  size: 50
+  items: .events
+```
+
+`items` is a jq path, such as `.items`, `.data.results` or `.data[0].rows`,
+or `.` for a page that is an array; an expression that names no place, such as
+`.items | length`, is refused when the configuration loads. A page whose items
+array is missing or `null` has no items. `next` is any jq expression over the
+page, with `$headers` and `$status` as in a [rule](#accepting-other-statuses),
+so a cursor sent in a header is `$headers["x-next-cursor"]`; it gives the next
+URL or cursor as text, a cursor as a number too, and `null`, `false` or `""`
+when there is no next page. `param` replaces a parameter of that name in the
+target's own query; `request.query` may not set it, since the pagination sets
+it on every page.
+
+The pages end at the first page that names no next one: no `rel="next"`, a
+`next` that gives `null`, `false` or `""`, or, for `page` and `offset`, a page
+whose items array is empty or missing. They end at `max_pages` too, 10 by
+default and at most 1000, the first page included. A trip that stops at
+`max_pages` while the last page named another, or for `page` and `offset` held
+items, is no failure: it is answered with the pages it fetched, counted in
+`http_exporter_pagination_max_pages_reached_total`, and logged at warn level,
+once and then sparingly while it repeats, until a trip fetches every page
+again. Every page fetched is counted in `http_exporter_pages_fetched_total`
+(see [self-metrics](SELF-METRICS.md)).
+
+Every page is a request of the collector's own: the same method, body,
+headers, credentials, TLS settings, retries and redirect rules, and the same
+[`allowed_targets` and `denied_targets`](#restricting-targets), checked on
+each page's connections. A next page is the target's to name, and is sent the
+collector's credentials, so one that leaves the target's origin — its scheme,
+host or port — fails the trip before it is asked for, and so does one that
+names a page fetched already, which would go round in a circle. The probe's
+`timeout`, and the scrape's deadline, cover every page together. The response
+limit (`max_response_bytes`) holds each page, the pages together, and the
+merged document.
+
+The pages are read as JSON: a collector with `request.pagination` decodes with
+`json`, which a `decoder.type` left out becomes, and any other decoder is
+refused when the configuration loads. A first page that is not JSON, or is
+answered with a status the collector does not
+[accept](#accepting-other-statuses), is the answer as it would be without
+pagination, and fails in the `decode` or the `http_status` stage. A later page
+with such a status fails the trip in the `http_status` stage with that page's
+status and body, the error naming the page: `received HTTP status 503 on page 3
+of request.pagination, https://api.example.com/tickets?page=3`. A later page
+that is not JSON, items that are not an array, and a `next` that gives
+something other than text or a number fail it in the fetch stage, naming the
+page. An answer of one page is the page as it came, byte for byte; an answer
+of several is the merged document written again as JSON, its other keys those
+of the first page, its status and headers the first page's.
+
+A [debug probe](CONFIGURATION.md#debugging-a-probe) lists every page's request
+with its number, `(page 2)`, says how many pages the response is merged from,
+and whether the pages stopped at `max_pages`. A static target of the
+collector pages through its own target and path the same way.
+`request.pagination` is the collector's: a static target cannot set it, nor a
+probe parameter change it.
+
 ## TLS
 
 The collector can configure target TLS verification and trust material:

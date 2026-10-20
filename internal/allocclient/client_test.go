@@ -186,14 +186,16 @@ func (a *fakeAllocator) bundleRequestNaming(t *testing.T, generation string) {
 // fakeManager is the configuration manager as the client uses it. Its
 // reload reads <dir>/config.yaml through the cache directory's link, under
 // its lock, as the manager's does, and refuses a configuration refuse
-// accepts; check is CheckReplacement's verdict.
+// accepts; check is CheckReplacement's verdict. failRestore makes the next
+// restore after a refused reload fail at the first link it makes.
 type fakeManager struct {
-	dir     string
-	mu      sync.Mutex
-	check   func(configPath string) error
-	refuse  func(config string) bool
-	inForce string
-	reloads []string
+	dir         string
+	mu          sync.Mutex
+	check       func(configPath string) error
+	refuse      func(config string) bool
+	failRestore bool
+	inForce     string
+	reloads     []string
 }
 
 func (f *fakeManager) CheckReplacement(configPath, _ string) error {
@@ -220,6 +222,18 @@ func (f *fakeManager) ReloadReplacing(trigger string, replace func() (func() err
 	got := read()
 	f.reloads = append(f.reloads, trigger+": "+got)
 	if f.refuse != nil && f.refuse(got) {
+		if f.failRestore {
+			// A directory where the restore makes its links fails the
+			// first link it makes, as a full disk would.
+			f.failRestore = false
+			block := filepath.Join(f.dir, tmpLink, "block")
+			if err := os.MkdirAll(block, 0o700); err != nil {
+				return err
+			}
+			err := restore()
+			_ = os.RemoveAll(filepath.Dir(block))
+			return errors.Join(errors.New("the reload refused "+got), err)
+		}
 		if err := restore(); err != nil {
 			return err
 		}
@@ -249,8 +263,14 @@ type testClient struct {
 // at once, at its start and after a bundle, and asks for others.
 func startClient(t *testing.T, a *fakeAllocator, adjust func(*Options)) *testClient {
 	t.Helper()
-	dir := t.TempDir()
-	c := newTestClient(t, a, dir, adjust)
+	c := newTestClient(t, a, t.TempDir(), adjust)
+	runClient(t, c)
+	return c
+}
+
+// runClient runs c until the test ends.
+func runClient(t *testing.T, c *testClient) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -269,7 +289,6 @@ func startClient(t *testing.T, a *fakeAllocator, adjust func(*Options)) *testCli
 			}
 		}
 	})
-	return c
 }
 
 // newTestClient is startClient without running the client.
@@ -899,5 +918,185 @@ func TestTheAllocatorURLMustBeAPlainHTTPURL(t *testing.T) {
 		if _, err := ParseURL(bad); err == nil || !strings.Contains(err.Error(), "--allocator.url") {
 			t.Errorf("%q: %v", bad, err)
 		}
+	}
+}
+
+// A heartbeat built before ShuttingDown, and still on its way, is waited for
+// before the one saying the replica is shutting down is sent: the allocator
+// keeps the last heartbeat it hears, and the earlier one arriving after
+// would put the replica back in the member list. The allocator here holds
+// the earlier heartbeat, unheard, until the later one arrives or 100ms have
+// passed; the last it hears must say the replica is shutting down.
+func TestAHeartbeatOnItsWayIsNotHeardAfterTheShutdownOne(t *testing.T) {
+	var mu sync.Mutex
+	var heard []bool
+	first, arrived, held := make(chan struct{}), make(chan struct{}, 8), make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	n := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var hb allocapi.Heartbeat
+		_ = json.NewDecoder(r.Body).Decode(&hb)
+		mu.Lock()
+		n++
+		earliest := n == 1
+		mu.Unlock()
+		if earliest {
+			close(first)
+			<-held
+		} else {
+			arrived <- struct{}{}
+		}
+		mu.Lock()
+		heard = append(heard, hb.ShuttingDown)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{})
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(release)
+	c := newTestClient(t, newFakeAllocator(t), t.TempDir(), func(o *Options) { o.URL = server.URL })
+	periodic := make(chan struct{})
+	go func() {
+		defer close(periodic)
+		c.heartbeat(context.Background())
+	}()
+	<-first
+	shutdown := make(chan struct{})
+	go func() {
+		defer close(shutdown)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		c.ShuttingDown(ctx)
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	<-periodic
+	<-shutdown
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 2 || !heard[1] {
+		t.Errorf("the allocator heard shutting_down %v; the last must be true", heard)
+	}
+}
+
+// fakeTimer stands in for the timer of the bundle loop's waits: each wait
+// is told on waits, and ends when the test sends on fire.
+type fakeTimer struct {
+	waits chan time.Duration
+	fire  chan time.Time
+}
+
+func useFakeTimer(c *testClient) *fakeTimer {
+	f := &fakeTimer{waits: make(chan time.Duration, 64), fire: make(chan time.Time)}
+	c.newTimer = func(d time.Duration) (<-chan time.Time, func() bool) {
+		f.waits <- d
+		return f.fire, func() bool { return true }
+	}
+	return f
+}
+
+// next is the wait the bundle loop starts next.
+func (f *fakeTimer) next(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case d := <-f.waits:
+		return d
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the bundle loop to wait")
+	}
+	return 0
+}
+
+// A failing bundle request is tried again after a backoff that doubles from
+// the least to the most, with the defaults 1s to 30s.
+func TestTheFailureBackoffDoublesFromTheLeastToTheMost(t *testing.T) {
+	a := newFakeAllocator(t)
+	a.failBundle = http.StatusInternalServerError
+	c := newTestClient(t, a, t.TempDir(), func(o *Options) { o.MinBackoff, o.MaxBackoff = 0, 0 })
+	timer := useFakeTimer(c)
+	runClient(t, c)
+	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second} {
+		if got := timer.next(t); got != want {
+			t.Fatalf("waited %s, want %s", got, want)
+		}
+		timer.fire <- time.Now()
+	}
+}
+
+// A heartbeat reply naming a new generation does not cut short the backoff
+// after a failure: a failure that persists would otherwise fetch the whole
+// bundle at every heartbeat. It does cut short the wait for Retry-After.
+func TestAHeartbeatReplyDoesNotCutAFailureBackoffShort(t *testing.T) {
+	a := newFakeAllocator(t)
+	a.failBundle = http.StatusInternalServerError
+	a.serveFiles(map[string]string{"config.yaml": "c\n"})
+	c := newTestClient(t, a, t.TempDir(), nil)
+	timer := useFakeTimer(c)
+	runClient(t, c)
+	if got := timer.next(t); got != time.Millisecond {
+		t.Fatalf("the first backoff is %s", got)
+	}
+	c.heartbeat(context.Background())
+	select {
+	case d := <-timer.waits:
+		t.Fatalf("a heartbeat reply cut the backoff short; the next wait, %s, began", d)
+	case <-time.After(200 * time.Millisecond):
+	}
+	a.mu.Lock()
+	a.retryAfter = "1"
+	a.failBundle = http.StatusServiceUnavailable
+	a.mu.Unlock()
+	timer.fire <- time.Now()
+	if got := timer.next(t); got != 10*time.Millisecond {
+		t.Fatalf("the wait for Retry-After is %s", got)
+	}
+	c.heartbeat(context.Background())
+	if got := timer.next(t); got != 10*time.Millisecond {
+		t.Fatalf("after the heartbeat reply the next wait is %s", got)
+	}
+}
+
+// syncBuffer is a log written by the client and read by the test.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// A heartbeat error repeated at every heartbeat is logged once for each
+// allocator address, though the addresses fail in turn with errors that
+// name them.
+func TestARepeatedHeartbeatErrorIsLoggedOncePerAddress(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	port := closed.URL[strings.LastIndex(closed.URL, ":")+1:]
+	var logs syncBuffer
+	c := newTestClient(t, newFakeAllocator(t), t.TempDir(), func(o *Options) {
+		o.URL = "http://allocator.test:" + port
+		o.Resolve = func(context.Context, string) ([]string, error) { return []string{"127.0.0.1", "127.0.0.2"}, nil }
+		o.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	})
+	for range 3 {
+		c.heartbeat(context.Background())
+	}
+	lines := strings.Count(logs.String(), "sync with the target allocator failed")
+	if lines != 2 || !strings.Contains(logs.String(), "address=127.0.0.1") || !strings.Contains(logs.String(), "address=127.0.0.2") {
+		t.Errorf("%d failures logged, want one per address:\n%s", lines, logs.String())
+	}
+	if st := c.Status(); st.SyncErrors[StageHeartbeat] != 6 {
+		t.Errorf("status %+v", st)
 	}
 }

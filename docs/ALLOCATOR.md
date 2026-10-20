@@ -358,7 +358,9 @@ and their pod's IP as the address to advertise, keep their bundle in an
 `emptyDir`, and keep the credential Secrets mounted, which the allocator does
 not need. The `emptyDir` survives a container restart but not the pod's
 replacement: a new pod starts with no bundle, not ready, and waits for the
-allocator. Each probe job
+allocator. A restarted container starts with the bundle its exporter
+installed there, and with nothing else: a `config.yaml` put into the
+directory by other means is removed. Each probe job
 becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
 
 ## Without Kubernetes

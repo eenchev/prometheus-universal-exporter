@@ -25058,8 +25058,15 @@ address, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force, and
 `shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
-`--web.shutdown-delay` begins. With `--allocator.token-file`, every request
+`--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
+built once the one before is back, so no heartbeat without `shutting_down`
+can reach the allocator after the one with it: a heartbeat on its way at
+the signal MUST be waited for, within the 2 seconds, and when it is not
+back by then the heartbeat with `shutting_down` MUST follow as soon as it
+is. With `--allocator.token-file`, every request
 MUST carry `Authorization: Bearer <token>`, the file read again for each.
+A failure repeated at every try MUST be logged once, for each stage and,
+for a heartbeat, for each address, until it changes or ends.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`
@@ -25072,9 +25079,12 @@ second and at most 30, or sooner when a heartbeat reply names a generation
 other than the last fetched. Which generation was last fetched MUST be read
 when the heartbeat's replies are in, not when it was sent: a reply naming a
 bundle fetched while it was on its way MUST NOT cut any wait short. A failed request or write MUST be tried again
-after a wait doubling from 1 second to 30, and an answer without a change
-that came within 1 second MUST wait 1 second before the next request, so the
-exporter never asks as fast as the allocator answers.
+after a wait doubling from 1 second to 30, which a heartbeat reply MUST NOT
+cut short, so a failure that persists does not fetch the whole bundle at
+every heartbeat; an answer without a change
+that came within 1 second MUST wait 1 second before the next request, or
+less when a heartbeat reply names a generation other than the last fetched,
+so the exporter never asks as fast as the allocator answers.
 
 A new bundle MUST be refused, before anything is written, when
 `allocapi.CheckFiles` refuses it, when its generation is not
@@ -25090,16 +25100,30 @@ reload of both files with the trigger `allocator` under the same lock, so no
 reader opening a file through the cache directory finds files of two
 generations, and no reload reads them half replaced. When that reload is
 refused nonetheless, the previous files MUST be put back and reloaded, and
-the bundle refused. The other generations' directories MUST be removed once
-a bundle is in force. A refused bundle MUST NOT be fetched again until the
+the bundle refused. When putting them back fails, the bundle MUST be counted
+as a failure to write, neither refused nor taken as fetched, and tried
+again, and before the next bundle is written the files in force MUST be put
+back, and reloaded, under the reload lock. The other generations'
+directories MUST be removed once a bundle is in force, and a refused
+bundle's at once, but the directory `..data` names MUST never be removed.
+A refused bundle MUST NOT be fetched again until the
 allocator serves another generation.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the
 `--config.expand-env`, `--static-targets.expand-env` and `--config.watch`
 flags apply; an absent static target file MUST be a file without targets. At
-startup, a bundle in the cache directory that loads MUST be put in force at
-once, ready, whether or not the allocator answers. Without one, or with one
+startup, a bundle the exporter installed in the cache directory that loads
+MUST be put in force at once, ready, whether or not the allocator answers.
+Only a bundle the exporter installed is one: `..data` linking to
+`..gen-<generation>`, whose files are a bundle of that generation, with each
+of its top-level names linking through `..data`. Before anything reads the
+cache directory, the other generations' directories and `..tmp-link`, left
+by a write a crash or a kill cut short, MUST be removed, and without an
+installed bundle also `..data`, the links through it, and `config.yaml` and
+`static-targets.yaml`, such as files put there by hand; with one, a
+`config.yaml` or `static-targets.yaml` that does not link through `..data`.
+Other files MUST be left alone. Without an installed bundle, or with one
 that does not load (logged as a warning), the exporter MUST serve its
 endpoints with an empty configuration: `/ready` MUST answer `503` with `not
 ready: no configuration yet: waiting for the allocator`, `/probe` MUST answer
@@ -25108,7 +25132,11 @@ static targets endpoint MUST have no targets, the self-metrics MUST be
 served, and no reload status (§ 22.0b) MUST be reported until a
 configuration is in force. Only a reload that puts a configuration in force
 MUST end that state. `--dry-run` with `--allocator.url` MUST check the
-bundle in the cache directory, and fail when there is none.
+bundle in the cache directory, fail when there is none, fail a `config.yaml`
+there that is not an installed bundle, and change nothing. On shutdown the
+exporter MUST stop the allocator client once the probes have finished, and
+wait for it, so a bundle being written is put in force or refused before
+the process exits.
 
 The exporter in allocator mode MUST expose, from its start:
 

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,9 +166,16 @@ type Client struct {
 	o      Options
 	base   *url.URL
 	client *http.Client
-	// wake asks the bundle loop to stop waiting out a backoff, and beat the
-	// heartbeat loop to heartbeat now.
+	// wake asks the bundle loop to stop waiting for Retry-After or after an
+	// answer without a change, and beat the heartbeat loop to heartbeat now.
 	wake, beat chan struct{}
+	// sending is held by the heartbeat being sent, one at a time: the
+	// allocator keeps the last heartbeat it hears, so the one ShuttingDown
+	// sends must not be overtaken by one built before it.
+	sending chan struct{}
+	// newTimer starts the wait between two bundle requests; a test makes
+	// it a timer of its own.
+	newTimer func(time.Duration) (<-chan time.Time, func() bool)
 
 	mu sync.Mutex
 	// inForce is the generation of the bundle in force, seen that of the
@@ -180,10 +188,15 @@ type Client struct {
 	lastSync      time.Time
 	syncErrors    map[string]uint64
 	refusedTotal  uint64
-	// lastLogged is the last error logged for each stage, so an error
-	// repeated at every try is logged once, until it changes or ends.
-	lastLogged map[string]string
+	// lastLogged is the last error logged for each stage and allocator
+	// address, so an error repeated at every try is logged once, until it
+	// changes or ends: with several addresses failing, each has its own.
+	lastLogged map[logKey]string
 }
+
+// logKey is what an error is logged once for: a stage, and for a heartbeat
+// the allocator address it went to, empty for the lookup of the addresses.
+type logKey struct{ stage, address string }
 
 // New checks o and returns a client for it.
 func New(o Options) (*Client, error) {
@@ -217,10 +230,14 @@ func New(o Options) (*Client, error) {
 	}
 	return &Client{
 		o: o, base: base, client: &http.Client{Transport: o.Transport},
-		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1),
+		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1), sending: make(chan struct{}, 1),
+		newTimer: func(d time.Duration) (<-chan time.Time, func() bool) {
+			t := time.NewTimer(d)
+			return t.C, t.Stop
+		},
 		inForce: o.Generation, seen: o.Generation,
 		syncErrors: map[string]uint64{StageHeartbeat: 0, StageFetch: 0, StageWrite: 0},
-		lastLogged: map[string]string{},
+		lastLogged: map[logKey]string{},
 	}, nil
 }
 
@@ -245,11 +262,17 @@ func (c *Client) Run(ctx context.Context) {
 // ShuttingDown makes every heartbeat from now on say the replica is shutting
 // down, and sends one at once, within ctx, so the allocator takes the
 // replica out of the member list now rather than when its heartbeats stop.
+// A heartbeat already on its way, built before and so not saying it, is
+// waited for first: the allocator keeps the last heartbeat it hears, and
+// that one arriving after would put the replica back. When ctx ends before
+// it is back, the heartbeat loop sends the one saying so as soon as it is.
 func (c *Client) ShuttingDown(ctx context.Context) {
 	c.mu.Lock()
 	c.shuttingDown = true
 	c.mu.Unlock()
-	c.heartbeat(ctx)
+	if !c.heartbeat(ctx) {
+		signal(c.beat)
+	}
 }
 
 // Status returns how the client is keeping up with the allocator.
@@ -280,26 +303,52 @@ func signal(ch chan struct{}) {
 }
 
 // failed counts a failure at stage and logs it, unless the last failure
-// logged at that stage said the same.
-func (c *Client) failed(stage string, err error) {
+// logged at that stage, for a heartbeat to the same allocator address, said
+// the same.
+func (c *Client) failed(stage, address string, err error) {
+	key := logKey{stage, address}
 	c.mu.Lock()
 	c.syncErrors[stage]++
-	repeated := c.lastLogged[stage] == err.Error()
-	c.lastLogged[stage] = err.Error()
+	repeated := c.lastLogged[key] == err.Error()
+	c.lastLogged[key] = err.Error()
 	c.mu.Unlock()
 	if !repeated {
-		c.o.Logger.Warn("sync with the target allocator failed; trying again", "stage", stage, "allocator", c.base.String(), "error", err.Error())
+		c.o.Logger.Warn("sync with the target allocator failed; trying again", c.logAttrs(key, "error", err.Error())...)
 	}
 }
 
-// recovered logs that stage works again after a failure was logged.
-func (c *Client) recovered(stage string) {
+// recovered logs that stage, for a heartbeat to address, works again after a
+// failure was logged.
+func (c *Client) recovered(stage, address string) {
+	key := logKey{stage, address}
 	c.mu.Lock()
-	was := c.lastLogged[stage]
-	delete(c.lastLogged, stage)
+	was := c.lastLogged[key]
+	delete(c.lastLogged, key)
 	c.mu.Unlock()
 	if was != "" {
-		c.o.Logger.Info("sync with the target allocator works again", "stage", stage, "allocator", c.base.String())
+		c.o.Logger.Info("sync with the target allocator works again", c.logAttrs(key)...)
+	}
+}
+
+// logAttrs are the attributes of a failure's log line, and more after them.
+func (c *Client) logAttrs(key logKey, more ...any) []any {
+	attrs := []any{"stage", key.stage, "allocator", c.base.String()}
+	if key.address != "" {
+		attrs = append(attrs, "address", key.address)
+	}
+	return append(attrs, more...)
+}
+
+// forgetAddresses drops what was logged for heartbeats to addresses the
+// allocator's host no longer resolves to: a copy of the allocator that is
+// gone neither recovers nor fails again.
+func (c *Client) forgetAddresses(addrs []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.lastLogged {
+		if key.stage == StageHeartbeat && key.address != "" && !slices.Contains(addrs, key.address) {
+			delete(c.lastLogged, key)
+		}
 	}
 }
 
@@ -340,24 +389,34 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 // resolves to, at once, and waits for them: two copies of the allocator
 // behind one name both hear every replica. A reply naming a generation
 // other than the last the bundle loop has seen, by the time the replies are
-// in, wakes the bundle loop from a backoff.
-func (c *Client) heartbeat(ctx context.Context) {
+// in, wakes the bundle loop from its wait. One heartbeat is sent at a time,
+// built once the one before is back; sent is false when ctx ended before
+// this one's turn came, and nothing was sent.
+func (c *Client) heartbeat(ctx context.Context) (sent bool) {
+	select {
+	case c.sending <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	defer func() { <-c.sending }()
 	c.mu.Lock()
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
 	c.mu.Unlock()
 	body, err := json.Marshal(hb)
 	if err != nil {
-		c.failed(StageHeartbeat, err)
+		c.failed(StageHeartbeat, "", err)
 		c.event(Event{Kind: EventHeartbeat, Err: err})
-		return
+		return true
 	}
 	addrs, err := c.addresses(ctx)
 	if err != nil {
 		err = fmt.Errorf("resolving the allocator's host %s: %w", c.base.Hostname(), err)
-		c.failed(StageHeartbeat, err)
+		c.failed(StageHeartbeat, "", err)
 		c.event(Event{Kind: EventHeartbeat, Err: err})
-		return
+		return true
 	}
+	c.recovered(StageHeartbeat, "")
+	c.forgetAddresses(addrs)
 	errs := make([]error, len(addrs))
 	replies := make([]string, len(addrs))
 	var wg sync.WaitGroup
@@ -365,15 +424,14 @@ func (c *Client) heartbeat(ctx context.Context) {
 		wg.Go(func() { replies[i], errs[i] = c.heartbeatTo(ctx, addr, body) })
 	}
 	wg.Wait()
-	for _, err := range errs {
+	for i, err := range errs {
 		if err != nil {
-			c.failed(StageHeartbeat, err)
+			c.failed(StageHeartbeat, addrs[i], err)
+		} else {
+			c.recovered(StageHeartbeat, addrs[i])
 		}
 	}
 	all := errors.Join(errs...)
-	if all == nil {
-		c.recovered(StageHeartbeat)
-	}
 	// What the bundle loop has seen is read now, not when the heartbeat
 	// went out: a bundle it fetched while the replies were on their way is
 	// no news, and waking it for one would ask again without waiting.
@@ -387,6 +445,7 @@ func (c *Client) heartbeat(ctx context.Context) {
 		}
 	}
 	c.event(Event{Kind: EventHeartbeat, Err: all})
+	return true
 }
 
 // addresses are the addresses the allocator URL's host resolves to, or the
@@ -470,7 +529,11 @@ func firstLine(b []byte) string {
 // which the allocator holds for up to Wait while it has no other. A failure
 // is tried again after a backoff that doubles up to MaxBackoff; an answer
 // without a change that came at once waits MinBackoff, so the loop never
-// asks as fast as an allocator can answer.
+// asks as fast as an allocator can answer. A heartbeat reply naming a new
+// generation cuts short the wait for Retry-After and the wait after an
+// answer without a change, but not a backoff: a failure that persists, such
+// as a cache directory that cannot be written, would otherwise fetch the
+// whole bundle again at every heartbeat.
 func (c *Client) bundleLoop(ctx context.Context) {
 	backoff := time.Duration(0)
 	for ctx.Err() == nil {
@@ -486,26 +549,27 @@ func (c *Client) bundleLoop(ctx context.Context) {
 		default:
 		}
 		var wait time.Duration
+		wake := c.wake
 		switch {
 		case retryAfter > 0:
 			backoff, wait = 0, min(max(retryAfter, c.o.MinBackoff), c.o.MaxBackoff)
 		case !ok:
 			backoff = min(max(backoff*2, c.o.MinBackoff), c.o.MaxBackoff)
-			wait = backoff
+			wait, wake = backoff, nil
 		case unchanged && time.Since(asked) < c.o.MinBackoff:
 			backoff, wait = 0, c.o.MinBackoff
 		default:
 			backoff = 0
 			continue
 		}
-		timer := time.NewTimer(wait)
+		fired, stop := c.newTimer(wait)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
+			stop()
 			return
-		case <-timer.C:
-		case <-c.wake:
-			timer.Stop()
+		case <-fired:
+		case <-wake:
+			stop()
 		}
 	}
 }
@@ -521,15 +585,15 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 	case err != nil && ctx.Err() != nil:
 		return false, false, 0
 	case errors.As(err, &notSettled):
-		c.recovered(StageFetch)
+		c.recovered(StageFetch, "")
 		c.event(Event{Kind: EventNotSettled, Err: err})
 		return true, true, notSettled.after
 	case err != nil:
-		c.failed(StageFetch, err)
+		c.failed(StageFetch, "", err)
 		c.event(Event{Kind: EventError, Err: err})
 		return false, false, 0
 	}
-	c.recovered(StageFetch)
+	c.recovered(StageFetch, "")
 	c.mu.Lock()
 	c.lastSync = time.Now()
 	same := b == nil || b.Generation == c.seen || b.Generation == c.inForce
@@ -540,11 +604,11 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 	}
 	refusal, err := c.apply(b)
 	if err != nil {
-		c.failed(StageWrite, err)
+		c.failed(StageWrite, "", err)
 		c.event(Event{Kind: EventError, Generation: b.Generation, Err: err})
 		return false, false, 0
 	}
-	c.recovered(StageWrite)
+	c.recovered(StageWrite, "")
 	c.mu.Lock()
 	c.seen = b.Generation
 	if refusal != nil {

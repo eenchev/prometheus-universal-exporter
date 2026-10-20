@@ -23330,6 +23330,95 @@ The exporter's tests and the target allocator's run when a file each needs chang
   what follows a parenthesis or "other than" aside; the test fails on
   "Database connectors" and "Static targets scraped by the exporter itself".
 
+## 34.152 Pagination and autoscaling signals
+
+Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
+
+- `link` follows the `Link` header's `rel="next"`, absolute and relative,
+  among other links, a quoted title holding a comma and a semicolon, and a
+  `rel` listing several types in another case; every page is sent the
+  collector's bearer token and headers, the trace records each request with
+  its page number, and a top-level array merges into one array.
+- `next_url` reads the next URL from the page, relative to the page's URL;
+  the merged document is the first page with `.data.hosts` holding every
+  page's items, its other keys the first page's, and a number of twenty
+  digits and `1.5e400` kept as written.
+- `cursor` sends the cursor `next` reads, from `$headers` or as a number, in
+  `param`, replacing the parameter of that name in the target's query and
+  going last; a page without a cursor is the last.
+- `page` counts from 1, or from `start: 0`, and ends at a page without
+  items; `offset` moves on by the items each page held, or by `size`.
+- A trip stops at `max_pages`, 10 when unset, and says another page was to
+  come; one whose last page at `max_pages` names no next page does not.
+- A next page on another port, host or scheme than the target's is refused
+  before it is asked for, the foreign server never reached, the error naming
+  the target's origin and the credentials; a next page fetched already is
+  refused as a circle.
+- The response limit holds each page, the pages added up (failing after the
+  third page of 400-byte pages under 1000), and the merged document (pages
+  of 34, 34 and 12 bytes whose invalid UTF-8 merges into 137 under 100),
+  each a limit failure.
+- The probe's `timeout` covers every page together: pages of 150 ms under a
+  400 ms timeout fail on page 3 with the deadline.
+- A later page answered 503 is the answer with its status and body and the
+  pages before it; a first page that is no JSON is the answer as it came; a
+  later page with a second JSON value fails naming the page and its URL.
+- An answer of one page is the page byte for byte; items that are an object,
+  and a `next` that gives an array, fail naming the page.
+- The `Link` header parser: separators inside quotes, only a link's first
+  `rel`, escaped quotes, a malformed link skipped, a link without `rel` and
+  an unclosed one.
+- Load-time checks: a missing and an unknown `type`, `items` missing, not a
+  path, naming two places or not compiling, `next` and `param` required by
+  their types and refused by the others, a control character in `param`,
+  `request.query` setting `param` in another case, `start` and `size` on
+  the wrong types or out of range, `max_pages` outside 1 to 1000, and method
+  `HEAD`; the type is lower-cased and `max_pages` and `start` filled in.
+- A probe of a GitHub-style collector reads all three pages into its jq
+  rules and counts them in `http_exporter_pages_fetched_total`; with
+  `max_pages: 2` two probes answer the first two pages, count 2 in
+  `http_exporter_pagination_max_pages_reached_total` and warn once; a 503 on
+  page 2 fails the probe with 502 in the `http_status` stage naming page 2
+  and its URL.
+- A debug probe lists each page's request with `(page N)`, says the response
+  is merged from 2 pages and stopped at `max_pages`, and the fetch stage's
+  note gives the pages.
+- A collector with `pagination` and no decoder decodes with `json`; one with
+  `decoder.type: yaml` is refused at load.
+- A static target of a paginated collector, with its own `path`, is scraped
+  page by page.
+- `--dry-run` lists `pagination` under `request_policies` with `start` and
+  `max_pages` filled in, and refuses a `page` pagination without `param` as
+  startup does.
+- The schema holds `request.pagination.type` to its values and requires
+  `type` and `items`, refusing either written `""` and `items` of blanks, as
+  the exporter does (schema tables).
+- `http_exporter_static_targets_scrape_seconds_total` and
+  `http_exporter_probes_seconds_total` are in the self-metrics of a server
+  without verbose mode, typed counter, as one series each without labels, at
+  `0` before anything was scraped or probed.
+- One static target scrape of a target answering after 20ms adds to
+  `http_exporter_static_targets_scrape_seconds_total` exactly what its
+  collector's `http_exporter_scrape_duration_seconds` reports, at least
+  20ms, and nothing to the probes' counter; a second scrape adds its own
+  duration.
+- One probe of the same target adds to `http_exporter_probes_seconds_total`
+  exactly what its collector's `http_exporter_scrape_duration_seconds`
+  reports, and nothing to the static targets' counter; a second probe,
+  answered from the cache, adds its own duration.
+- The allocator's `/metrics` shows
+  `pue_allocator_targets_per_member{kind}` as a gauge, `0` for both kinds
+  before the member list has formed, and, with 9 static targets and 2 probe
+  targets over two members, `4.5` static and `1` probe.
+- The chart renders `autoscaling.targetBusy` of `0.5` as a `Pods` metric of
+  `http_exporter_busy` with `averageValue: "0.5"` beside CPU, `"1500m"` with
+  `busyMetric: pue_busy` as a `Pods` metric of `pue_busy` alone, and
+  `autoscaling.targetStaticTargetsPerPod: 40` with `allocator.enabled` as
+  one of `http_exporter_static_targets` with `averageValue: "40"`; it fails
+  rendering `targetStaticTargetsPerPod` without the allocator, a `targetBusy`
+  of `0m` or `lots`, and `targetBusy` with an empty `busyMetric`
+  (`make helm-test` and ci.yml render and refuse the same).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

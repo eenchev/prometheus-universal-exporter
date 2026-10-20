@@ -667,3 +667,9 @@ func parseLinks(value string) []link {
 	}
 	return links
 }
+
+// withPage marks the requests made with ctx as asking for page n. It lives
+// here, behind http's constraint, since only pagination calls it.
+func withPage(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, pageKey{}, n)
+}

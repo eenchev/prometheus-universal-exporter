@@ -51,11 +51,6 @@ type requestTraceKey struct{}
 // page it asks for, which the trace records with it.
 type pageKey struct{}
 
-// withPage marks the requests made with ctx as asking for page n.
-func withPage(ctx context.Context, n int) context.Context {
-	return context.WithValue(ctx, pageKey{}, n)
-}
-
 // WithRequestTrace returns a context whose trips record their requests in
 // the returned trace.
 func WithRequestTrace(ctx context.Context) (context.Context, *RequestTrace) {

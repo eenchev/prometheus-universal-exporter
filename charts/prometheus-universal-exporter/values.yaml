@@ -691,6 +691,10 @@ allocator:
   # zero or more; empty leaves the flag out and the allocator's default, 15s,
   # in force.
   settle: 15s
+  # How many live members the allocator takes (--members.max): the heartbeat
+  # of a new pod beyond them is refused until one stops heartbeating. A whole
+  # number from 1; keep it above the most exporter pods the autoscaler runs.
+  maxMembers: 1000
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
   # An optional shared bearer token, from a Secret in the release's namespace:
@@ -708,11 +712,20 @@ allocator:
   # staticTargets.enabled) scrapes on every pod.
   staticTargets:
     data: ""
+    # Expand ${NAME} references in the exporter pods' share of the document
+    # (--static-targets.expand-env on the exporter pods), as
+    # staticTargets.expandEnv does without the allocator, which is refused
+    # beside it. The allocator checks and serves the document as written, so
+    # a reference must stand where the value as written passes its checks: in
+    # a credential, a header, a label or a URL's path, not in a target's
+    # scheme or host, which the allocator refuses.
+    expandEnv: false
   # The probe jobs, rendered as the allocator's probe targets file
   # (probe_jobs). Each entry: name, a DNS-1123 label, which also names its
   # ScrapeConfig <fullname>-<name>; collector, one the configuration defines;
-  # targets; and optionally params, labels and shard_key: address, as the
-  # allocator's file takes them.
+  # targets, at least one; and optionally params, labels and shard_key
+  # (target or address). These are the keys the allocator's file takes, and
+  # any other key fails rendering, as the allocator would refuse it.
   #
   #   probeJobs:
   #     - name: websites
@@ -742,6 +755,36 @@ allocator:
   # A PodDisruptionBudget of maxUnavailable: 1 for the allocator.
   pdb:
     enabled: true
+  # Labels and annotations of the allocator's pods only, over defaultLabels
+  # and defaultAnnotations, as podLabels and podAnnotations are for the
+  # exporter's: a label the chart sets itself fails rendering, and
+  # checksum/config stays the chart's.
+  podLabels: {}
+  podAnnotations: {}
+  # Scheduling of the allocator's pods, independent of the exporter's.
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Pod topology spread constraints of the allocator's pods. One without a
+  # labelSelector spreads the allocator's pods. The default keeps the
+  # replicas on different nodes where it can, so one node going away does not
+  # take every allocator with it; [] renders none.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  # A Prometheus Operator ServiceMonitor for the allocator's own /metrics,
+  # selecting the allocator's Service only, and presenting tokenSecret's token
+  # as Bearer credentials when one is set. It needs the Prometheus Operator's
+  # ServiceMonitor CRD. interval and scrapeTimeout are Prometheus durations;
+  # empty leaves them out. labels are added to the ServiceMonitor, for a
+  # Prometheus serviceMonitorSelector.
+  serviceMonitor:
+    enabled: false
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}
   # A Prometheus Operator ScrapeConfig per probe job, which fetches the job's
   # targets from the allocator (http_sd_configs) every refreshInterval and
   # probes each on the exporter pod the allocator chose. It needs the

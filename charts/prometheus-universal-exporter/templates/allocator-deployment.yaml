@@ -12,24 +12,64 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 spec:
   replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "allocator.replicas" $allocator.replicas 1 2147483647) }}
+  {{- /* /ready holds before the new pod allocates anything; see the
+         helper. */}}
+  minReadySeconds: {{ include "prometheus-universal-exporter.allocatorMinReadySeconds" . }}
   selector:
     matchLabels:
       {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 8 }}
+        {{- /* As for the exporter's pods, allocator.podLabels may not set a
+               label the chart sets: allocatorLabels would put the selector's
+               two back silently. */}}
+        {{- $chartLabels := merge (include "prometheus-universal-exporter.allocatorSelectorLabels" . | fromYaml) (include "prometheus-universal-exporter.labels" . | fromYaml) (dict "app.kubernetes.io/component" "allocator") }}
+        {{- range $key, $_ := $allocator.podLabels }}
+        {{- if hasKey $chartLabels $key }}
+        {{- fail (printf "allocator.podLabels sets %s, which the chart sets itself on every allocator pod (the Deployment finds its pods by app.kubernetes.io/name and app.kubernetes.io/instance); use another label name" $key) }}
+        {{- end }}
+        {{- end }}
+        {{- include "prometheus-universal-exporter.allocatorLabels" (list . $allocator.podLabels) | nindent 8 }}
       annotations:
         {{- /* The allocator reads its files at start, so a change to the
                configuration or a target file rolls it; it keeps no state,
-               and the exporter pods keep their last bundle meanwhile. */}}
+               and the exporter pods keep their last bundle meanwhile. So
+               allocator.podAnnotations cannot replace checksum/config. */}}
         {{- $checksum := print (include (print $.Template.BasePath "/configmap.yaml") .) (include (print $.Template.BasePath "/allocator-configmaps.yaml") .) | sha256sum }}
-        {{- include "prometheus-universal-exporter.metadataAnnotations" (list . (dict "checksum/config" $checksum)) | nindent 8 }}
+        {{- $podAnnotations := deepCopy ($allocator.podAnnotations | default dict) }}
+        {{- $_ := set $podAnnotations "checksum/config" $checksum }}
+        {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
       {{- /* The allocator never calls the Kubernetes API either. */}}
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      {{- with $allocator.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with $allocator.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $allocator.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $allocator.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $allocator.topologySpreadConstraints }}
+      {{- /* A constraint without a labelSelector spreads the allocator's
+             pods, as its Deployment selects them. */}}
+      {{- $constraints := list }}
+      {{- range . }}
+      {{- $constraint := deepCopy . }}
+      {{- if not (hasKey $constraint "labelSelector") }}
+      {{- $_ := set $constraint "labelSelector" (dict "matchLabels" (include "prometheus-universal-exporter.allocatorSelectorLabels" $ | fromYaml)) }}
+      {{- end }}
+      {{- $constraints = append $constraints $constraint }}
+      {{- end }}
+      topologySpreadConstraints: {{- toYaml $constraints | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -57,6 +97,9 @@ spec:
             {{- with $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
             {{- end }}
+            {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
+                   taken for unset. */}}
+            - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}
           ports:
             - name: http
               containerPort: 9116

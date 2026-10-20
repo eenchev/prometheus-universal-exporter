@@ -86,6 +86,9 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 
 	family("pue_allocator_member_changes_total", "counter", "Changes of the member list allocation uses, after the one it was first formed with.")
 	fmt.Fprintf(&b, "pue_allocator_member_changes_total %d\n", a.memberChanges)
+
+	family("pue_allocator_members_refused_total", "counter", "Heartbeats of new members refused because as many members as --members.max allows were live.")
+	fmt.Fprintf(&b, "pue_allocator_members_refused_total %d\n", a.membersRefused)
 	_, err := io.WriteString(w, b.String())
 	return err
 }

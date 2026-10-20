@@ -228,11 +228,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *check {
 		// In allocator mode the files checked are the bundle in the cache
 		// directory, which a restart would start with.
+		var configErr error
 		if alloc != nil {
-			*configFile, *targetFile = alloc.checkFiles()
+			*configFile, *targetFile, configErr = alloc.checkFiles()
 		}
 		return runCheck(checkInputs{
 			ConfigFile:       *configFile,
+			ConfigError:      configErr,
 			StaticTargetFile: *targetFile,
 			PythonPath:       *pythonPath,
 			ExpandEnv:        *expandEnv,
@@ -343,14 +345,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// returns: through --web.shutdown-delay too, its heartbeats saying the
 	// exporter is shutting down.
 	var allocClient *allocclient.Client
+	stopAllocClient := func() {}
 	if alloc != nil {
-		allocCtx, stopAllocClient := context.WithCancel(context.Background())
-		defer stopAllocClient()
-		allocClient, err = alloc.startClient(allocCtx, manager, generation, logger)
+		allocClient, stopAllocClient, err = alloc.startClient(manager, generation, logger)
 		if err != nil {
 			logger.Error("invalid command line; exiting", "error", err.Error())
 			return 2
 		}
+		defer stopAllocClient()
 		server.SetAllocatorStatus(func() exporter.AllocatorStatus { return exporter.AllocatorStatus(allocClient.Status()) })
 	}
 
@@ -423,6 +425,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// bounded by otlp.timeout.
 		<-exportLoopDone
 		<-scrapeLoopDone
+		// The allocator client stops once nothing is served any more, and is
+		// waited for: a bundle it is writing is put in force or refused
+		// before the process ends, rather than left half written.
+		stopAllocClient()
 		server.FlushOTLP()
 		// Nothing reads any more: the connections kept across scrapes, an
 		// sshfile collector's to its hosts and a sql collector's to its

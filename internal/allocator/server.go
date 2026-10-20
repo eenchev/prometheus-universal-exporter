@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,11 +81,22 @@ func authorized(token func() (string, error), next http.Handler) http.Handler {
 func (a *Allocator) serveHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var hb allocapi.Heartbeat
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxHeartbeatBytes)).Decode(&hb); err != nil {
+		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
+			http.Error(w, fmt.Sprintf("the heartbeat is larger than %d bytes, more than any heartbeat needs", tooLarge.Limit), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "the heartbeat is not a JSON object as allocapi.Heartbeat describes: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	reply, err := a.Heartbeat(hb)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrTooManyMembers):
+		// Retry-After is the member TTL: the soonest a silent member can
+		// have freed its place.
+		w.Header().Set("Retry-After", strconv.Itoa(int(allocapi.MemberTTL/time.Second)))
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	case err != nil:
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -98,15 +110,22 @@ func checkHeartbeat(hb allocapi.Heartbeat) error {
 		return fmt.Errorf("%w; member %q is not a replica's id: give its pod or host name, at most 253 bytes", ErrBadHeartbeat, hb.Member)
 	}
 	if !validAddress(hb.Advertise) {
-		return fmt.Errorf("%w; advertise %q is not a host:port", ErrBadHeartbeat, hb.Advertise)
+		return fmt.Errorf("%w; advertise %q is not a host:port with a port from 1 to 65535", ErrBadHeartbeat, hb.Advertise)
 	}
 	return nil
 }
 
-// validAddress reports whether address is a host:port with both.
+// validAddress reports whether address is a host:port with a host and a
+// decimal port from 1 to 65535: the address service discovery hands
+// Prometheus, where a named port, port 0 or one out of range would only fail
+// later, at every probe.
 func validAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)
-	return err == nil && host != "" && port != ""
+	if err != nil || host == "" || port == "" || strings.TrimLeft(port, "0123456789") != "" {
+		return false
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // serveBundle answers GET /v1/bundle?member=<id>[&wait=<duration>]. An

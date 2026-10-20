@@ -149,6 +149,7 @@ func TestChartRendersTheAllocatorAndTheExporterInAllocatorMode(t *testing.T) {
 		"--probe-targets-file=/etc/prometheus-universal-exporter-probe-targets/probe-targets.yaml",
 		"--log.level=info",
 		"--settle=15s",
+		"--members.max=1000",
 	}
 	if got := scalars(path(container, "args")); !slices.Equal(got, wantArgs) {
 		t.Errorf("the allocator's args are %v, want %v", got, wantArgs)
@@ -266,7 +267,7 @@ func TestChartRendersTheAllocatorAndTheExporterInAllocatorMode(t *testing.T) {
 // presented on the probes.
 func TestChartRendersAScrapeConfigPerProbeJob(t *testing.T) {
 	helm := requireHelm(t)
-	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example"},{"name":"apis","collector":"example"}]`,
+	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","targets":["https://shop.example"]},{"name":"apis","collector":"example","targets":["https://api.example"]}]`,
 		"--set", "allocator.scrapeConfig.interval=1m", "--set", "allocator.scrapeConfig.scrapeTimeout=20s", "--set", "allocator.scrapeConfig.labels.release=main")
 	for _, job := range []string{"websites", "apis"} {
 		scrape := manifest(t, docs, "ScrapeConfig/test-prometheus-universal-exporter-"+job)
@@ -428,16 +429,26 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 			"staticTargets.enabled", "allocator.enabled and staticTargets.enabled are both true"},
 		"a probe monitor beside the allocator": {[]string{"--set", "allocator.enabled=true", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example"}]`},
 			"monitors.0.enabled", "monitors entry apps is enabled beside allocator.enabled"},
-		"a probe job of an unknown collector": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"nope"}]`},
+		"a probe job of an unknown collector": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"nope","targets":["https://shop.example"]}]`},
 			"", `allocator.probeJobs entry websites names collector "nope", which config.data does not define`},
 		"a probe job without a collector": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites"}]`},
 			"allocator.probeJobs.0", "allocator.probeJobs entry websites names no collector"},
-		"a probe job named in upper case": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"Websites","collector":"example"}]`},
+		"a probe job named in upper case": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"Websites","collector":"example","targets":["https://shop.example"]}]`},
 			"allocator.probeJobs.0.name", `allocator.probeJobs entry #0 has name "Websites"`},
-		"two probe jobs of one name": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"w","collector":"example"},{"name":"w","collector":"example"}]`},
+		"two probe jobs of one name": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"w","collector":"example","targets":["https://a.example"]},{"name":"w","collector":"example","targets":["https://b.example"]}]`},
 			"", `allocator.probeJobs entries #0 and #1 are both named "w"`},
+		"a probe job without targets": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example"}]`},
+			"missing property 'targets'", "allocator.probeJobs entry websites lists no targets"},
+		"a probe job of no target": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","targets":[]}]`},
+			"allocator.probeJobs.0.targets", "allocator.probeJobs entry websites lists no targets"},
+		"a probe job with a key the allocator refuses": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","targets":["https://shop.example"],"target":"https://docs.example"}]`},
+			"additional properties 'target' not allowed", "allocator.probeJobs entry websites has the key target, which the allocator refuses"},
+		"staticTargets.expandEnv beside the allocator": {[]string{"--set", "allocator.enabled=true", "--set", "staticTargets.expandEnv=true"},
+			"staticTargets.expandEnv", "staticTargets.expandEnv is true beside allocator.enabled"},
 		"no allocator replica": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.replicas=0"},
 			"allocator.replicas", "allocator.replicas 0 must be a whole number from 1 to 2147483647"},
+		"no member the allocator takes": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.maxMembers=0"},
+			"allocator.maxMembers", "allocator.maxMembers 0 must be a whole number from 1 to 2147483647"},
 		"a settle that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=soon"},
 			"allocator.settle", `allocator.settle "soon" must be a Go duration`},
 		"an unknown log level": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.logLevel=loud"},
@@ -452,6 +463,10 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 			"", "which the chart already mounts as the allocator cache directory"},
 		"a credential over the token": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.tokenSecret.name=t", "--set", "webAuth.enabled=true", "--set", "webAuth.secretName=s", "--set", "webAuth.mountPath=/var/run/prometheus-universal-exporter/allocator-token"},
 			"", "is also the allocator token directory"},
+		"an allocator ServiceMonitor timeout over its interval": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.serviceMonitor.enabled=true", "--set", "allocator.serviceMonitor.interval=10s", "--set", "allocator.serviceMonitor.scrapeTimeout=1m"},
+			"", "allocator.serviceMonitor has scrapeTimeout 1m, longer than its interval 10s"},
+		"an allocator pod label the chart sets": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.podLabels={"app.kubernetes.io/name":"mine"}`},
+			"", "allocator.podLabels sets app.kubernetes.io/name, which the chart sets itself"},
 		"a scrape timeout over its interval": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.scrapeConfig.interval=10s", "--set", "allocator.scrapeConfig.scrapeTimeout=1m"},
 			"", "allocator.scrapeConfig has scrapeTimeout 1m, longer than its interval 10s"},
 	} {

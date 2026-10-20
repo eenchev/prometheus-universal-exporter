@@ -2520,7 +2520,8 @@ over HTML and for a rule that selects elements, text nodes or attributes:
 its text, trimmed; no label where it selects nothing or computes blanks; a
 required label that is missing; the sum the exporter adds up; and the
 failure of a sum over text that is no number, which MUST name each node as
-before. A rule without such a label MUST cost what it cost. The
+before. Its text MUST be written once too, a sum's included, and not
+formatted again at each node. A rule without such a label MUST cost what it cost. The
 documentation MUST say which labels are evaluated once, and that any other
 label with an absolute path in it walks the document at every node.
 
@@ -14859,8 +14860,11 @@ Tests MUST show:
 - A label that cannot depend on the node is evaluated once: over 400 rows a
   rule with `count(//row)`, `//last/@id`, `/status/@site`, `sum(//v)` or
   `name(/*)` for a label allocates what the rule with a static label does,
-  give or take one evaluation, and gives the value on the last row, while
-  `count(//row) + count(*)` is evaluated at each.
+  give or take one evaluation, measured as what reading the label at the
+  first row allocates (a few allocations of slack, and no allowance per
+  row), and gives the value on the last row, while
+  `count(//row) + count(*)` is evaluated at each. A sum's text formatted
+  at each row fails it.
 - A rule failing on every scrape with its empty cell in row 3, 3, 7, 7, 3
   and 5 of a table is one failure to the log, for a `csv`, an `xpath`, a
   `css` (items) and a `jq` (items) rule alike: under `error_mode: log` one
@@ -23100,6 +23104,97 @@ The exporter's tests and the target allocator's run when a file each needs chang
   of `internal/fetch/requesttype_<name>.go`, and a request type the test has
   no README name for fails it (§ 35).
 
+## 34.150 The allocator's bounds, allocator mode's cache and shutdown, and the allocator's chart values
+
+- A bundle long poll whose wait is longer than the read timeout of the HTTP
+  server pue-allocator builds is answered 304 when its wait runs out, over a
+  real TCP connection, and not cut short with an empty answer.
+- A heartbeat whose advertise has no host or a port that is not a decimal
+  number from 1 to 65535 (a:http, a:0, a:65536, a:99999, a:+80, a:-1, a:0x50,
+  :9115) is refused, 400 over HTTP; a:1, a:65535 and [::1]:9115 are taken.
+- A heartbeat body over 64 KiB is answered 413 saying it is too large.
+- With --members.max members live, the heartbeat of a new member is refused
+  (429 with Retry-After: 30 over HTTP), logged once until a new member is
+  taken again and counted in pue_allocator_members_refused_total; the members
+  held keep heartbeating, a shutting-down stranger is no new member, and a
+  member whose TTL ran out frees its place while still in the member list.
+- pue-allocator exits 2 on --members.max=0, and -h lists --members.max with
+  its default, 1000.
+- A reload that refuses a bundle, whose restore then fails at its first
+  link, leaves the directory `..data` names in place, so `config.yaml` still
+  reads; the bundle counts as a write failure, neither refused nor fetched,
+  and the next try puts the files in force back, reloads them, and then
+  refuses the bundle with only the good generation's directory left
+  (`TestARefusedReloadWhoseRestoreFailsKeepsTheDirectoryInUse`).
+- `CachedGeneration` names a bundle the client installed and nothing else: a
+  plain `config.yaml`, a changed file in the generation's directory, a
+  top-level name not linked, `config.yaml` linked elsewhere, `..data` gone
+  or naming another generation each give none.
+- `Tidy` with an installed bundle keeps it and removes a cut-short
+  generation's directory, `..tmp-link` and a static target file the bundle
+  does not link, leaving other files; without one (a changed generation, or
+  files put there by hand) it removes `..data`, its links, every
+  generation's directory, `config.yaml` and `static-targets.yaml`, leaving
+  other files.
+- A heartbeat on its way when `ShuttingDown` is called is waited for: the
+  allocator, holding it unheard until the next arrives or 100ms pass, hears
+  the shutting-down heartbeat last.
+- With the default bounds a failing bundle request waits 1s, 2s, 4s, 8s,
+  16s, 30s, 30s, read from a stand-in timer.
+- A heartbeat reply naming a new generation does not end a failure backoff
+  early, and does end the wait for `Retry-After`.
+- Two allocator addresses failing at every heartbeat are each logged once,
+  naming the address, over three heartbeats, and every failure is counted.
+- A child whose cache directory holds a plain `config.yaml` is unready with
+  `--config.watch` and the file is removed; `--dry-run` fails such a file as
+  not an installed bundle and leaves it; the resume, the bundle that does
+  not load and the passing `--dry-run` tests use a bundle laid out as the
+  client installs it.
+- Stopping the allocator client does not return while it is putting a
+  bundle in force, and returns once that is done.
+- A probe job of `allocator.probeJobs` without `targets`, with an empty
+  `targets` list, or with a key the allocator does not take (`target`) is
+  refused by the values schema and, with the schema skipped, by the
+  templates; the schema's and the templates' probe job keys are exactly the
+  yaml keys of `allocator.ProbeJob`, the schema refuses any other key and
+  requires `name`, `collector` and at least one target
+  (SPECIFICATION-CHART.md § 33.10c).
+- `allocator.staticTargets.expandEnv` renders `--static-targets.expand-env`
+  on the exporter pods in allocator mode and never on the allocator, and
+  nothing without it; `staticTargets.expandEnv` beside `allocator.enabled`
+  fails rendering with the schema and without (SPECIFICATION-CHART.md
+  § 33.10c).
+- The allocator's pods are scheduled by `allocator.nodeSelector`,
+  `tolerations`, `affinity`, `priorityClassName` and
+  `topologySpreadConstraints`, never the exporter's values; by default one
+  soft spread over `kubernetes.io/hostname` selecting the allocator's pods
+  and not the exporter's; a constraint without a `labelSelector` is given the
+  allocator's selector labels and `[]` renders none; `allocator.podLabels`
+  and `podAnnotations` reach the pods, a pod label the chart sets fails
+  rendering, and `checksum/config` stays the chart's
+  (SPECIFICATION-CHART.md § 33.10c).
+- The allocator Deployment's `minReadySeconds` is `max(settle, 10s)`,
+  rounded up, plus 10 seconds, for an empty, fractional, millisecond and
+  compound `allocator.settle` (SPECIFICATION-CHART.md § 33.10c).
+- `allocator.serviceMonitor.enabled` renders a ServiceMonitor of the
+  allocator's `/metrics` on port `http` selecting the allocator's Service and
+  not the exporter's, with the interval, timeout and labels given, the token
+  as Bearer credentials only with `allocator.tokenSecret`, the self-metrics
+  monitor beside it, nothing by default or without the allocator, and a
+  timeout longer than its interval failing rendering
+  (SPECIFICATION-CHART.md § 33.10c).
+- Every changed-path filter output a step of `ci.yml` runs under matches
+  `ci.yml` itself, so a change to the chart steps alone runs them; the test
+  fails on the chart filter without `.github/workflows/ci.yml`
+  (SPECIFICATION-CHART.md § 42.12).
+- Every value the chart README's tables name, and every key an object's row
+  of its Values table lists, is declared by the values schema; the test
+  fails on the `allocator` row listing `cache` (SPECIFICATION-CHART.md
+  § 33.13).
+- The README's license badge is a static shields.io badge linking `LICENSE`
+  whose message is the SPDX identifier of the license `LICENSE` holds,
+  Apache-2.0, and never the dynamic `github/license` endpoint (§ 35).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -24963,8 +25058,15 @@ again at the next check.
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
 being live at once. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
-its share; the first member list MUST NOT form before a member is live nor
-before `max(--settle, allocapi.HeartbeatInterval)` after the start. Time
+its share; the first member list MUST form only once the live members have
+not changed for `--settle`, and MUST NOT form before a member is live nor
+before `max(--settle, allocapi.HeartbeatInterval)` after the start. A member
+that stops being live MUST leave the member list only after `--settle`, as
+any other change does. The allocator MUST take at most `--members.max`
+(default `1000`, at least `1`) live members: the heartbeat of a member it
+does not hold, not shutting down, while that many are live MUST be refused
+and add nothing, logged once until a new member is taken again and counted;
+a member no longer live MUST no longer count against the bound. Time
 MUST be read through an injectable clock, so tests move it by hand.
 
 **Allocation.** Every target MUST be owned by `allocapi.Owner` over the
@@ -24988,13 +25090,15 @@ member list MUST get the configuration alone.
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
 before the member list has formed; a heartbeat without `member` or a
-`host:port` `advertise` MUST be answered `400`. `GET /v1/bundle?member=<id>`
+`host:port` `advertise` with a host and a decimal port from 1 to 65535 MUST
+be answered `400`, a body over 64 KiB `413`, and one refused for
+`--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
 until the member list has formed; with `wait=<duration>` (at most `60s`) a
 request that has its bundle MUST be answered as soon as the bundle changes,
-and `304` when the wait runs out or the allocator shuts down; a request
-without `member`, or with a `wait` that is no duration, MUST be answered
+and `304` when the wait runs out or the allocator shuts down, a wait longer
+than the HTTP server's read timeout included; a request without `member`, or with a `wait` that is no duration, MUST be answered
 `400`. `GET /v1/sd/<job>` MUST answer Prometheus HTTP service discovery
 JSON, one group per target, in file order, whose target is the routed
 member's `advertise` and whose labels are the job's labels, `__param_<name>`
@@ -25017,8 +25121,9 @@ only.
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
 `pue_allocator_generation_info{member,generation}`,
-`pue_allocator_reloads_total{result}` and
-`pue_allocator_member_changes_total`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_reloads_total{result}`,
+`pue_allocator_member_changes_total` and
+`pue_allocator_members_refused_total`. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 
@@ -25048,8 +25153,15 @@ address, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force, and
 `shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
-`--web.shutdown-delay` begins. With `--allocator.token-file`, every request
+`--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
+built once the one before is back, so no heartbeat without `shutting_down`
+can reach the allocator after the one with it: a heartbeat on its way at
+the signal MUST be waited for, within the 2 seconds, and when it is not
+back by then the heartbeat with `shutting_down` MUST follow as soon as it
+is. With `--allocator.token-file`, every request
 MUST carry `Authorization: Bearer <token>`, the file read again for each.
+A failure repeated at every try MUST be logged once, for each stage and,
+for a heartbeat, for each address, until it changes or ends.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`
@@ -25062,9 +25174,12 @@ second and at most 30, or sooner when a heartbeat reply names a generation
 other than the last fetched. Which generation was last fetched MUST be read
 when the heartbeat's replies are in, not when it was sent: a reply naming a
 bundle fetched while it was on its way MUST NOT cut any wait short. A failed request or write MUST be tried again
-after a wait doubling from 1 second to 30, and an answer without a change
-that came within 1 second MUST wait 1 second before the next request, so the
-exporter never asks as fast as the allocator answers.
+after a wait doubling from 1 second to 30, which a heartbeat reply MUST NOT
+cut short, so a failure that persists does not fetch the whole bundle at
+every heartbeat; an answer without a change
+that came within 1 second MUST wait 1 second before the next request, or
+less when a heartbeat reply names a generation other than the last fetched,
+so the exporter never asks as fast as the allocator answers.
 
 A new bundle MUST be refused, before anything is written, when
 `allocapi.CheckFiles` refuses it, when its generation is not
@@ -25080,16 +25195,30 @@ reload of both files with the trigger `allocator` under the same lock, so no
 reader opening a file through the cache directory finds files of two
 generations, and no reload reads them half replaced. When that reload is
 refused nonetheless, the previous files MUST be put back and reloaded, and
-the bundle refused. The other generations' directories MUST be removed once
-a bundle is in force. A refused bundle MUST NOT be fetched again until the
+the bundle refused. When putting them back fails, the bundle MUST be counted
+as a failure to write, neither refused nor taken as fetched, and tried
+again, and before the next bundle is written the files in force MUST be put
+back, and reloaded, under the reload lock. The other generations'
+directories MUST be removed once a bundle is in force, and a refused
+bundle's at once, but the directory `..data` names MUST never be removed.
+A refused bundle MUST NOT be fetched again until the
 allocator serves another generation.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the
 `--config.expand-env`, `--static-targets.expand-env` and `--config.watch`
 flags apply; an absent static target file MUST be a file without targets. At
-startup, a bundle in the cache directory that loads MUST be put in force at
-once, ready, whether or not the allocator answers. Without one, or with one
+startup, a bundle the exporter installed in the cache directory that loads
+MUST be put in force at once, ready, whether or not the allocator answers.
+Only a bundle the exporter installed is one: `..data` linking to
+`..gen-<generation>`, whose files are a bundle of that generation, with each
+of its top-level names linking through `..data`. Before anything reads the
+cache directory, the other generations' directories and `..tmp-link`, left
+by a write a crash or a kill cut short, MUST be removed, and without an
+installed bundle also `..data`, the links through it, and `config.yaml` and
+`static-targets.yaml`, such as files put there by hand; with one, a
+`config.yaml` or `static-targets.yaml` that does not link through `..data`.
+Other files MUST be left alone. Without an installed bundle, or with one
 that does not load (logged as a warning), the exporter MUST serve its
 endpoints with an empty configuration: `/ready` MUST answer `503` with `not
 ready: no configuration yet: waiting for the allocator`, `/probe` MUST answer
@@ -25098,7 +25227,11 @@ static targets endpoint MUST have no targets, the self-metrics MUST be
 served, and no reload status (§ 22.0b) MUST be reported until a
 configuration is in force. Only a reload that puts a configuration in force
 MUST end that state. `--dry-run` with `--allocator.url` MUST check the
-bundle in the cache directory, and fail when there is none.
+bundle in the cache directory, fail when there is none, fail a `config.yaml`
+there that is not an installed bundle, and change nothing. On shutdown the
+exporter MUST stop the allocator client once the probes have finished, and
+wait for it, so a bundle being written is put in force or refused before
+the process exits.
 
 The exporter in allocator mode MUST expose, from its start:
 

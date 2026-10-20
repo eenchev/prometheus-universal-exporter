@@ -14,6 +14,7 @@ package allocator
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sort"
@@ -29,11 +30,20 @@ import (
 // moves, and keeps its share.
 const DefaultSettle = 15 * time.Second
 
+// DefaultMaxMembers is how many live members the allocator takes by default:
+// a heartbeat may name any member, so without a bound each new name would
+// add one, and with it a bundle to build and keep.
+const DefaultMaxMembers = 1000
+
 // Options are an Allocator's settings.
 type Options struct {
 	// Settle is how long a changed member list must hold before it takes
 	// effect; 0 takes it at once.
 	Settle time.Duration
+	// MaxMembers is how many live members the allocator takes: a heartbeat
+	// of a member it does not know is refused (ErrTooManyMembers) while
+	// that many are live. 0 takes DefaultMaxMembers.
+	MaxMembers int
 	// Logger is where the allocator logs; slog's default when nil.
 	Logger *slog.Logger
 	// Clock is the allocator's time; the wall clock when nil. Tests give
@@ -48,6 +58,11 @@ type Allocator struct {
 	clock  Clock
 	logger *slog.Logger
 	settle time.Duration
+	// maxMembers bounds the live members; full says a heartbeat was
+	// refused for it since the last new member was taken, so the refusals
+	// are logged once while the allocator stays full.
+	maxMembers int
+	full       bool
 	// started is when the allocator began to listen for heartbeats: the
 	// first member list takes effect no sooner than a heartbeat interval
 	// after it, so every replica has been heard from by then.
@@ -88,7 +103,7 @@ type Allocator struct {
 	// refused, so each refusal is logged once.
 	refusals map[string]string
 	// What /metrics counts.
-	reloadsOK, reloadsFailed, memberChanges uint64
+	reloadsOK, reloadsFailed, memberChanges, membersRefused uint64
 	// reloadMu serializes reloads; lastRefusal is the text the last
 	// refused reload is recognised by (model.SameFailureText), so the
 	// same refusal at every check is logged and counted once.
@@ -111,6 +126,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		clock:        opts.Clock,
 		logger:       opts.Logger,
 		settle:       opts.Settle,
+		maxMembers:   opts.MaxMembers,
 		inputs:       in,
 		members:      map[string]*member{},
 		draining:     map[drainKey]time.Time{},
@@ -126,6 +142,9 @@ func New(in *Inputs, opts Options) *Allocator {
 	if a.logger == nil {
 		a.logger = slog.Default()
 	}
+	if a.maxMembers <= 0 {
+		a.maxMembers = DefaultMaxMembers
+	}
 	a.started = a.clock.Now()
 	a.proposedAt = a.started
 	a.mu.Lock()
@@ -139,6 +158,10 @@ func New(in *Inputs, opts Options) *Allocator {
 // address to probe it at.
 var ErrBadHeartbeat = errors.New("a heartbeat names its member and the host:port Prometheus sends its probes to")
 
+// ErrTooManyMembers is the answer to a heartbeat of a new member while the
+// allocator has as many live members as it takes (Options.MaxMembers).
+var ErrTooManyMembers = errors.New("the allocator has as many live members as --members.max allows")
+
 // Heartbeat records hb and answers with the generation of the bundle the
 // member is to have, "" while the member list has not been formed.
 func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, error) {
@@ -148,6 +171,17 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	m := a.members[hb.Member]
+	if m == nil && !hb.ShuttingDown {
+		if n := a.liveCount(); n >= a.maxMembers {
+			a.membersRefused++
+			if !a.full {
+				a.full = true
+				a.logger.Warn("refusing the heartbeats of new members: the allocator has as many live members as --members.max allows; raise it, or find what sends heartbeats of new names", "member", hb.Member, "live_members", n, "max_members", a.maxMembers)
+			}
+			return allocapi.HeartbeatReply{}, fmt.Errorf("%w (%d); member %q is not taken until one of them stops heartbeating", ErrTooManyMembers, a.maxMembers, hb.Member)
+		}
+		a.full = false
+	}
 	if m == nil {
 		m = &member{}
 		a.members[hb.Member] = m
@@ -212,6 +246,20 @@ func (a *Allocator) BeginShutdown() {
 	if a.timer != nil {
 		a.timer.Stop()
 	}
+}
+
+// liveCount is how many members are live now. A member whose heartbeats
+// stopped no longer counts once its TTL has run out, so it frees its place
+// for a new one.
+func (a *Allocator) liveCount() int {
+	now := a.clock.Now()
+	n := 0
+	for _, m := range a.members {
+		if live(m, now) {
+			n++
+		}
+	}
+	return n
 }
 
 // live reports whether m counts as a member at now: heard from within the

@@ -4486,7 +4486,7 @@ prometheus-universal-exporter \
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--allocator.url` | none | The allocator's `http://` URL. It turns allocator mode on. |
-| `--allocator.cache-dir` | none, required | The directory the bundle is written into and loaded from. A restart starts with the bundle there. |
+| `--allocator.cache-dir` | none, required | The directory the bundle is written into and loaded from. A restart starts with the bundle the exporter installed there. |
 | `--allocator.member` | the host name | This exporter's name among the allocator's members: in Kubernetes the pod's name, which the host name is. |
 | `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. |
 | `--allocator.token-file` | none | A file holding a bearer token sent with every request to the allocator, read again for each, so a rotated Secret takes effect at once. |
@@ -4509,15 +4509,28 @@ the directory finds part of one bundle and part of another; the exporter then
 reloads it, with `"trigger":"allocator"` in the log. A bundle that does not
 load is refused: the one in force stays, the refusal is logged and reported in
 the next heartbeat, and it is not asked for again until the allocator has
-another. A request that fails is tried again after a wait that doubles from
-one second to 30; an allocator that has just started answers `503` until its
+another. A bundle whose reload is refused, when the files before it cannot be
+put back, is a failure to write: the exporter puts them back before it tries
+again. A request or write that fails is tried again after a wait that
+doubles from one second to 30, which a heartbeat does not cut short; a
+failure repeated at every try is logged once, for heartbeats once for each
+allocator address. An allocator that has just started answers `503` until its
 member list has formed, which is no failure: the exporter keeps what it has
 and asks again when the allocator's `Retry-After` says. On `SIGTERM` or `SIGINT` the exporter tells the allocator at
 once that it is shutting down, before [`--web.shutdown-delay`](#shutting-down),
-so its share of the targets moves to the others.
+so its share of the targets moves to the others; a heartbeat on its way then
+is waited for first, so none saying otherwise reaches the allocator after
+it. Once the probes have finished, the exporter waits for a bundle it is
+writing to be put in force or refused before it exits.
 
-An exporter whose cache directory holds a bundle that loads starts with it at
-once, ready, whether or not the allocator answers. One without, or whose
+An exporter whose cache directory holds a bundle that it installed, and that
+loads, starts with it at once, ready, whether or not the allocator answers.
+At the start the exporter removes what a write cut short by a crash or a
+kill left in the cache directory; without a bundle it installed, it also
+removes a `config.yaml` or `static-targets.yaml` there, such as one put
+there by hand, and starts without a configuration: the cache directory is
+the exporter's, not a place to put files for it. Other files are left
+alone. One without a bundle, or whose
 bundle does not load, serves its endpoints while it waits for the first:
 `/ready` answers `503` (`not ready: no configuration yet: waiting for the
 allocator`), `/probe` answers `503` with `no configuration yet: waiting for
@@ -4525,7 +4538,9 @@ the allocator at <url>`, the static targets endpoint has no targets and the
 self-metrics are served. The first bundle makes it ready. The
 [self-metrics](SELF-METRICS.md#target-allocator) say how it keeps up with the
 allocator. `--dry-run` with `--allocator.url` checks the bundle in the cache
-directory, the one a restart would start with, and fails when there is none.
+directory, the one a restart would start with, and fails when there is none,
+or when the `config.yaml` there is not one the exporter installed; it changes
+nothing there.
 
 ## Related pages
 

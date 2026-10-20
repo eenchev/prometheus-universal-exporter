@@ -40,7 +40,11 @@ const (
 
 // checkInputs are the flags that decide what startup loads and how.
 type checkInputs struct {
-	ConfigFile       string
+	ConfigFile string
+	// ConfigError, when set, fails the configuration check without reading
+	// ConfigFile: in allocator mode, a config.yaml in the cache directory
+	// that is not a bundle the client installed, which a start ignores.
+	ConfigError      error
 	StaticTargetFile string
 	PythonPath       string
 	ExpandEnv        bool
@@ -118,7 +122,11 @@ func checkStartup(in checkInputs) checkReport {
 	}
 	var results []checkResult
 
-	conf, err := config.Load(in.ConfigFile, options...)
+	var conf *model.Config
+	err := in.ConfigError
+	if err == nil {
+		conf, err = config.Load(in.ConfigFile, options...)
+	}
 	if err != nil {
 		results = append(results, failedCheck("config", in.ConfigFile, err))
 	} else {

@@ -221,11 +221,35 @@ func TestAllocatorModeIsUnreadyUntilTheFirstBundle(t *testing.T) {
 	}
 }
 
+// installBundle lays files out in the cache directory dir as the allocator
+// client installs a bundle (internal/allocclient/cache.go): in
+// ..gen-<generation>, with ..data linking to it and each top-level name
+// linking through ..data. It returns the generation.
+func installBundle(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	generation := allocapi.Generation(files)
+	linked := map[string]bool{}
+	for name, content := range files {
+		testutil.WriteIn(t, filepath.Join(dir, "..gen-"+generation), name, content)
+		top, _, _ := strings.Cut(name, "/")
+		if !linked[top] {
+			linked[top] = true
+			if err := os.Symlink("..data/"+top, filepath.Join(dir, top)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Symlink("..gen-"+generation, filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	return generation
+}
+
 // An exporter in allocator mode whose cache directory holds a bundle starts
 // with it at once, ready, although the allocator cannot be reached.
 func TestAllocatorModeResumesFromTheCacheDirectoryWithoutTheAllocator(t *testing.T) {
 	dir := t.TempDir()
-	testutil.WriteIn(t, dir, "config.yaml", allocatorTestConfig)
+	installBundle(t, dir, map[string]string{"config.yaml": allocatorTestConfig})
 	gone := httptest.NewServer(http.NotFoundHandler())
 	gone.Close()
 	p := startAllocatorExporter(t, "--allocator.url="+gone.URL, "--allocator.cache-dir="+dir, "--allocator.member=pod-0", "--allocator.advertise=10.0.0.7:8080")
@@ -241,7 +265,7 @@ func TestAllocatorModeResumesFromTheCacheDirectoryWithoutTheAllocator(t *testing
 // the exporter awaits the allocator, and says why.
 func TestAllocatorModeAwaitsTheAllocatorWhenTheCachedBundleDoesNotLoad(t *testing.T) {
 	dir := t.TempDir()
-	testutil.WriteIn(t, dir, "config.yaml", "collectors: []\n")
+	installBundle(t, dir, map[string]string{"config.yaml": "collectors: []\n"})
 	gone := httptest.NewServer(http.NotFoundHandler())
 	gone.Close()
 	p := startAllocatorExporter(t, "--allocator.url="+gone.URL, "--allocator.cache-dir="+dir, "--allocator.member=pod-0", "--allocator.advertise=10.0.0.7:8080")
@@ -257,9 +281,96 @@ func TestAllocatorModeAwaitsTheAllocatorWhenTheCachedBundleDoesNotLoad(t *testin
 // loads.
 func TestDryRunInAllocatorModePassesACachedBundle(t *testing.T) {
 	dir := t.TempDir()
-	testutil.WriteIn(t, dir, "config.yaml", allocatorTestConfig)
+	installBundle(t, dir, map[string]string{"config.yaml": allocatorTestConfig})
 	out := runCheckCLI(t, "--allocator.url=http://pue-allocator:8080", "--allocator.cache-dir="+dir)
 	if out.code != 0 || out.result(t, "config").File != filepath.Join(dir, "config.yaml") {
 		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+	}
+}
+
+// A config.yaml in the cache directory that the allocator client did not
+// install, such as one put there by hand, is no bundle: the exporter starts
+// without a configuration, unready, and removes the file, so neither a
+// reload nor the watch puts it in force while the heartbeats report no
+// generation.
+func TestAllocatorModeIgnoresAConfigurationItDidNotInstall(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteIn(t, dir, "config.yaml", allocatorTestConfig)
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	p := startAllocatorExporter(t, "--allocator.url="+gone.URL, "--allocator.cache-dir="+dir, "--allocator.member=pod-0", "--allocator.advertise=10.0.0.7:8080", "--config.watch")
+	if code, body := p.get(t, "/ready"); code != http.StatusServiceUnavailable {
+		t.Fatalf("/ready: %d %q\n%s", code, body, p.logs.String())
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "config.yaml")); !os.IsNotExist(err) {
+		t.Errorf("the config.yaml put there by hand is still in the cache directory: %v", err)
+	}
+}
+
+// --dry-run in allocator mode fails a config.yaml in the cache directory that
+// the allocator client did not install, which a start ignores, and leaves
+// it there.
+func TestDryRunInAllocatorModeFailsAConfigurationItDidNotInstall(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteIn(t, dir, "config.yaml", allocatorTestConfig)
+	out := runCheckCLI(t, "--allocator.url=http://pue-allocator:8080", "--allocator.cache-dir="+dir)
+	if result := out.result(t, "config"); out.code != 1 || !strings.Contains(strings.Join(result.Errors, " "), "is not a bundle the allocator client installed") {
+		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err != nil {
+		t.Errorf("--dry-run changed the cache directory: %v", err)
+	}
+}
+
+// blockingReloader is a configuration manager whose reload of a new bundle
+// waits until the test releases it.
+type blockingReloader struct {
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (r *blockingReloader) CheckReplacement(string, string) error { return nil }
+
+func (r *blockingReloader) ReloadReplacing(_ string, replace func() (func() error, error)) error {
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	_, err := replace()
+	return err
+}
+
+// Stopping the allocator client waits for its Run to return: a bundle being
+// put in force when the exporter shuts down is finished, not cut short by
+// the process ending.
+func TestStoppingTheAllocatorClientWaitsForItsRun(t *testing.T) {
+	a := newAllocatorStandIn(t)
+	a.serve(map[string]string{"config.yaml": allocatorTestConfig})
+	mode := &allocatorMode{url: a.server.URL, cacheDir: t.TempDir(), member: "pod-0", advertise: "10.0.0.7:8080"}
+	r := &blockingReloader{entered: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(r.release) })
+	t.Cleanup(release)
+	_, stop, err := mode.startClient(r, "", newLogger("error", io.Discard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the client did not put the bundle in force")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		stop()
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while the client was putting a bundle in force")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-stopped:
+	case <-time.After(30 * time.Second):
+		t.Fatal("stop did not return once the bundle was in force")
 	}
 }

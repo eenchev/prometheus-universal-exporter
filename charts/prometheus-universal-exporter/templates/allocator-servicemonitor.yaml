@@ -1,0 +1,36 @@
+{{- /* A ServiceMonitor for the allocator's own /metrics. It selects the
+       allocator's Service by its app.kubernetes.io/name, <name>-allocator,
+       which neither the exporter's Service nor its pods carry. The token
+       guards /metrics as it guards the API, so it is presented when set. */ -}}
+{{- if include "prometheus-universal-exporter.allocatorServiceMonitor" . }}
+{{- $monitor := .Values.allocator.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list . $monitor.labels) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      {{- with $monitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with $monitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with .Values.allocator.tokenSecret.name }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ . | quote }}
+          key: {{ $.Values.allocator.tokenSecret.key | default "token" | quote }}
+      {{- end }}
+{{- end }}

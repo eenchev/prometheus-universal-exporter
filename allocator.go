@@ -140,35 +140,47 @@ func defaultAdvertise(listenAddress string) (string, error) {
 
 // checkFiles are the files --dry-run checks in allocator mode: the bundle in
 // the cache directory, which a restart would start with, and its static
-// targets when it has any.
-func (a *allocatorMode) checkFiles() (configFile, staticTargetsFile string) {
+// targets when it has any. A config.yaml there that is not a bundle the
+// client installed is not checked, but fails: a start would ignore it.
+// Nothing in the cache directory is changed.
+func (a *allocatorMode) checkFiles() (configFile, staticTargetsFile string, configErr error) {
+	if allocclient.CachedGeneration(a.cacheDir) == "" {
+		if exists(a.configFile()) {
+			configErr = fmt.Errorf("%s is not a bundle the allocator client installed, which a start ignores", a.configFile())
+		}
+		return a.configFile(), "", configErr
+	}
 	if exists(a.staticTargetsFile()) {
 		staticTargetsFile = a.staticTargetsFile()
 	}
-	return a.configFile(), staticTargetsFile
+	return a.configFile(), staticTargetsFile, nil
 }
 
-// startManager makes the manager of allocator mode. With a bundle in the
-// cache directory that loads it starts with that, and returns its
-// generation; with none, or one that does not load, the manager awaits the
-// first bundle from the allocator (config.NewAwaitingManager).
+// startManager makes the manager of allocator mode. The cache directory is
+// tidied first (allocclient.Tidy): only a bundle the client installed is
+// started with, and what else is there, such as a config.yaml put there by
+// hand, is removed. With a bundle that loads the manager starts with it,
+// and its generation is returned; with none, or one that does not load,
+// the manager awaits the first bundle from the allocator
+// (config.NewAwaitingManager).
 func (a *allocatorMode) startManager(logger *slog.Logger, pythonPath string, loadOptions, staticTargetsLoadOptions []config.LoadOption, watch bool) (*config.Manager, string) {
 	configFile, targetsFile := a.configFile(), a.staticTargetsFile()
 	if err := os.MkdirAll(a.cacheDir, 0o700); err != nil {
 		logger.Warn("the allocator's cache directory cannot be made; bundles cannot be kept until it can", "cache_dir", a.cacheDir, "error", err.Error())
 	}
-	generation := allocclient.CachedGeneration(a.cacheDir)
+	generation := allocclient.Tidy(a.cacheDir, logger)
 	var manager *config.Manager
-	if conf, targets, stamp, err := loadCached(configFile, targetsFile, pythonPath, loadOptions, staticTargetsLoadOptions, watch); err == nil {
+	if generation == "" {
+		manager = config.NewAwaitingManager(configFile, logger)
+		manager.SetTargets(targetsFile, nil)
+	} else if conf, targets, stamp, err := loadCached(configFile, targetsFile, pythonPath, loadOptions, staticTargetsLoadOptions, watch); err == nil {
 		config.LogNotices(logger, configFile, conf)
 		manager = config.NewManager(conf, configFile, logger)
 		manager.UseStamp(stamp)
 		manager.SetTargets(targetsFile, targets)
 		logger.Info("starting with the bundle in the allocator's cache directory", "cache_dir", a.cacheDir, "generation", generation)
 	} else {
-		if !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("the bundle in the allocator's cache directory does not load; waiting for the allocator", "cache_dir", a.cacheDir, "error", err.Error())
-		}
+		logger.Warn("the bundle in the allocator's cache directory does not load; waiting for the allocator", "cache_dir", a.cacheDir, "generation", generation, "error", err.Error())
 		generation = ""
 		manager = config.NewAwaitingManager(configFile, logger)
 		manager.SetTargets(targetsFile, nil)
@@ -178,8 +190,7 @@ func (a *allocatorMode) startManager(logger *slog.Logger, pythonPath string, loa
 }
 
 // loadCached loads the bundle in the cache directory as startup loads files:
-// the configuration, and the static targets when there are any. An error
-// that is os.ErrNotExist says there is no bundle.
+// the configuration, and the static targets when there are any.
 func loadCached(configFile, targetsFile, pythonPath string, loadOptions, staticTargetsLoadOptions []config.LoadOption, watch bool) (*model.Config, *model.StaticTargetFile, config.Stamp, error) {
 	if _, err := os.Stat(configFile); err != nil {
 		return nil, nil, config.Stamp{}, err
@@ -229,17 +240,27 @@ func noNotExist(err error) error {
 	return err
 }
 
-// startClient makes the allocator client and runs it until ctx ends.
-func (a *allocatorMode) startClient(ctx context.Context, manager *config.Manager, generation string, logger *slog.Logger) (*allocclient.Client, error) {
-	client, err := allocclient.New(allocclient.Options{
+// startClient makes the allocator client and runs it until stop, which
+// returns once the client's Run has: a bundle being written then is put in
+// force or refused, not cut short. stop may be called more than once.
+func (a *allocatorMode) startClient(manager allocclient.Reloader, generation string, logger *slog.Logger) (client *allocclient.Client, stop func(), err error) {
+	client, err = allocclient.New(allocclient.Options{
 		URL: a.url, CacheDir: a.cacheDir, Member: a.member, Advertise: a.advertise, TokenFile: a.tokenFile,
 		Manager: manager, Logger: logger, Generation: generation,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	go client.Run(ctx)
-	return client, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.Run(ctx)
+	}()
+	return client, func() {
+		cancel()
+		<-done
+	}, nil
 }
 
 // shutdownHeartbeatTimeout bounds the heartbeat that tells the allocator the

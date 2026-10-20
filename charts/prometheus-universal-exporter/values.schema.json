@@ -539,6 +539,7 @@
           }
         },
         "settle": {"type": "string", "description": "Rendered as --settle: a Go duration of zero or more; empty leaves the flag out.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "maxMembers": {"type": "integer", "minimum": 1, "maximum": 2147483647, "description": "Rendered as --members.max: how many live members the allocator takes."},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as the allocator's --log.level."},
         "tokenSecret": {
           "type": "object",
@@ -553,18 +554,24 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "data": {"type": "string", "description": "The static target document the allocator splits over the exporter pods; empty for none."}
+            "data": {"type": "string", "description": "The static target document the allocator splits over the exporter pods; empty for none."},
+            "expandEnv": {"type": "boolean", "description": "Rendered as --static-targets.expand-env on the exporter pods."}
           }
         },
         "probeJobs": {
           "type": "array",
-          "description": "The allocator's probe jobs, rendered under probe_jobs; the other keys of an entry are the allocator's to check.",
+          "description": "The allocator's probe jobs, rendered under probe_jobs. An entry holds the keys of the allocator's probe job (internal/allocator ProbeJob), which decodes it strictly, and no other.",
           "items": {
             "type": "object",
-            "required": ["name", "collector"],
+            "additionalProperties": false,
+            "required": ["name", "collector", "targets"],
             "properties": {
               "name": {"type": "string", "description": "A DNS-1123 label: it names the job's ScrapeConfig and its path on the allocator.", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
-              "collector": {"type": "string", "minLength": 1}
+              "collector": {"type": "string", "minLength": 1},
+              "targets": {"type": "array", "minItems": 1, "uniqueItems": true, "description": "The probes' targets, at least one; the allocator refuses an empty list, an empty entry and one listed twice.", "items": {"type": "string", "minLength": 1}},
+              "params": {"type": "object", "description": "Query parameters sent on every probe.", "additionalProperties": {"type": ["string", "number", "boolean"]}},
+              "labels": {"type": "object", "description": "Labels on every target of the job.", "additionalProperties": {"type": ["string", "number", "boolean"]}},
+              "shard_key": {"enum": ["", "target", "address"], "description": "What a target is allocated by: its text (target, the default) or the host and port it reaches (address)."}
             }
           }
         },
@@ -581,6 +588,24 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"}
+          }
+        },
+        "podLabels": {"$ref": "#/$defs/stringMap"},
+        "podAnnotations": {"$ref": "#/$defs/stringMap"},
+        "priorityClassName": {"type": "string"},
+        "nodeSelector": {"$ref": "#/$defs/stringMap"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "affinity": {"type": "object"},
+        "topologySpreadConstraints": {"type": "array", "description": "One without a labelSelector spreads the allocator's pods; [] renders none.", "items": {"type": "object", "required": ["maxSkew", "topologyKey", "whenUnsatisfiable"]}},
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "A ServiceMonitor for the allocator's /metrics, over the allocator's Service alone.",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "interval": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/promDuration"}]},
+            "scrapeTimeout": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/promDuration"}]},
+            "labels": {"$ref": "#/$defs/stringMap"}
           }
         },
         "scrapeConfig": {
@@ -603,6 +628,11 @@
       "description": "The allocator owns the static targets: staticTargets.enabled is refused beside allocator.enabled.",
       "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
       "then": {"properties": {"staticTargets": {"properties": {"enabled": {"const": false}}}}}
+    },
+    {
+      "description": "With the allocator the exporter pods read its static targets, which allocator.staticTargets.expandEnv expands: staticTargets.expandEnv is refused beside allocator.enabled.",
+      "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
+      "then": {"properties": {"staticTargets": {"properties": {"expandEnv": {"const": false}}}}}
     },
     {
       "description": "With the allocator, probe targets come from allocator.probeJobs: an enabled monitors entry is refused beside allocator.enabled.",

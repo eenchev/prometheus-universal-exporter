@@ -45,6 +45,7 @@ pue-allocator \
 | `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. |
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
+| `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
 
@@ -104,9 +105,11 @@ own checks:
   health service is checked in full.
 - The allocator expands no `${NAME}` reference: it checks the files as
   written and serves them so, and a replica started with
-  `--config.expand-env` expands them from its own environment. A reference
-  in a value the loader checks, a number say, is therefore refused by the
-  allocator; write such values out.
+  `--config.expand-env` expands the configuration and its collector files
+  from its own environment, and one started with
+  `--static-targets.expand-env` its share of the static targets. A reference
+  in a value the loader checks, a number say, or a static target's scheme or
+  host, is therefore refused by the allocator; write such values out.
 - Python scripts are not run by the allocator; each replica checks its
   collectors' scripts when it loads the bundle, and reports a bundle it
   refuses in its heartbeats, which the allocator logs once.
@@ -190,15 +193,26 @@ A replica in allocator mode heartbeats to the allocator every 10s with its
 id, the address Prometheus should send its probes to, and the generation of
 the bundle it has in force. The replicas heard from within the last 30s, and
 not shutting down, are the live members; a replica that says it is shutting
-down leaves them at once.
+down stops being live at once, so no probe is routed to it any more, and
+leaves the member list as any other change does, after `--settle`.
 
 A change to the live members takes effect once it has held for `--settle`:
 a replica that restarts and is back within it keeps its share, and nothing
-moves. The first member list forms that long after the first heartbeat, and
-no sooner than a heartbeat interval after the allocator started, so a
-restarted allocator has heard from every replica before it hands out
-shares. Until then the bundle and service discovery endpoints answer `503`,
-and replicas and Prometheus keep what they have.
+moves. The first member list forms once the live members have not changed
+for `--settle`, each replica heard from for the first time starting the wait
+again, and no sooner than `--settle` or a heartbeat interval, whichever is
+longer, after the allocator started, so a restarted allocator has heard from
+every replica before it hands out shares. Until then the bundle and service
+discovery endpoints answer `503`, and replicas and Prometheus keep what they
+have.
+
+The allocator takes `--members.max` live members, 1000 by default. A heartbeat
+names any member it likes, so without a bound every new name would add one;
+beyond it the heartbeat of a member the allocator does not know is answered
+`429`, with `Retry-After: 30`, logged once while the allocator stays full, and
+counted in `pue_allocator_members_refused_total`. The members it has keep
+heartbeating, and a replica whose heartbeats stop frees its place when its
+30s run out, though it stays in the member list until `--settle` after that.
 
 Every target, static or probe, belongs to the member with the highest
 rendezvous score, the first 8 bytes of SHA-256 of the member's id, a NUL and
@@ -244,8 +258,10 @@ holds a token again, logged once.
  "shutting_down": false, "refused": {"generation": "…", "error": "…"}}
 ```
 
-`member` and `advertise`, a `host:port`, are required; anything else is
-answered `400`. The answer is `{"generation": "…"}`, the generation of the
+`member` and `advertise`, a `host:port` with a host and a decimal port from 1
+to 65535, are required; anything else is answered `400`. A body over 64 KiB
+is answered `413`, and the heartbeat of a new member beyond `--members.max`
+`429`. The answer is `{"generation": "…"}`, the generation of the
 member's bundle, or `""` while the member list has not formed. A replica
 whose bundle differs fetches it.
 
@@ -325,6 +341,7 @@ scrape_configs:
 | `pue_allocator_generation_info{member,generation}` | gauge | `1`, with the generation of each member's bundle. |
 | `pue_allocator_reloads_total{result}` | counter | Changed input files put in force (`success`) or refused (`failure`). |
 | `pue_allocator_member_changes_total` | counter | Changes of the member list after the first. |
+| `pue_allocator_members_refused_total` | counter | Heartbeats of new members refused because `--members.max` members were live. |
 
 ## On Kubernetes
 
@@ -343,7 +360,9 @@ and their pod's IP as the address to advertise, keep their bundle in an
 `emptyDir`, and keep the credential Secrets mounted, which the allocator does
 not need. The `emptyDir` survives a container restart but not the pod's
 replacement: a new pod starts with no bundle, not ready, and waits for the
-allocator. Each probe job
+allocator. A restarted container starts with the bundle its exporter
+installed there, and with nothing else: a `config.yaml` put into the
+directory by other means is removed. Each probe job
 becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
 
 ## Without Kubernetes

@@ -16,7 +16,7 @@
   "--static-targets-file" "set staticTargets.enabled and staticTargets.data instead"
   "--web.static-targets-path" "set staticTargets.path instead"
   "--config.expand-env" "set server.expandEnv instead"
-  "--static-targets.expand-env" "set staticTargets.expandEnv instead"
+  "--static-targets.expand-env" "set staticTargets.expandEnv instead, or allocator.staticTargets.expandEnv with the allocator"
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
   "--probe.default-timeout" "set server.probeDefaultTimeout instead"
@@ -310,6 +310,7 @@
 {{- range .Values.monitors }}{{- if .enabled }}{{- $other = true }}{{- end }}{{- end }}
 {{- if include "prometheus-universal-exporter.staticTargetsMonitor" . }}{{- $other = true }}{{- end }}
 {{- if include "prometheus-universal-exporter.scrapeConfigs" . }}{{- $other = true }}{{- end }}
+{{- if include "prometheus-universal-exporter.allocatorServiceMonitor" . }}{{- $other = true }}{{- end }}
 {{- if or $other (.Capabilities.APIVersions.Has (printf "monitoring.coreos.com/v1/%s" $kind)) }}{{ $kind }}{{- end }}
 {{- end }}
 {{- end }}
@@ -940,6 +941,32 @@ true
 true
 {{- end -}}
 {{- end }}
+{{- /* Whether the chart renders the allocator's ServiceMonitor. */ -}}
+{{- define "prometheus-universal-exporter.allocatorServiceMonitor" -}}
+{{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.serviceMonitor .Values.allocator.serviceMonitor.enabled -}}
+true
+{{- end -}}
+{{- end }}
+{{- /* The allocator Deployment's minReadySeconds. /ready answers 200 once the
+       allocator has read its inputs, but its first member list takes effect
+       max(settle, 10s) after it starts (internal/allocator firstSettle), and
+       the exporter pods learn of it at their next heartbeat, 10s later. Until
+       then the new pod hands out no targets, so a rollout that took it for
+       available at once could replace every old pod before any new one
+       allocates. The settle is a Go duration, fractions and ms, us and ns
+       included; empty is the allocator's default, 15s. */ -}}
+{{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
+{{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
+{{- $factor := dict "h" 3600000.0 "m" 60000.0 "s" 1000.0 "ms" 1.0 "us" 0.001 "ns" 0.000001 -}}
+{{- $milliseconds := 0.0 -}}
+{{- range $part := regexFindAll "[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)" $settle -1 -}}
+{{- $unit := regexFind "(ns|us|ms|s|m|h)$" $part -}}
+{{- $milliseconds = addf $milliseconds (mulf (trimSuffix $unit $part | float64) (get $factor $unit)) -}}
+{{- end -}}
+{{- $seconds := ceil (divf $milliseconds 1000) | int64 -}}
+{{- if lt $seconds 10 -}}{{- $seconds = 10 -}}{{- end -}}
+{{- add $seconds 10 -}}
+{{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}
 {{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.scrapeConfig.enabled .Values.allocator.probeJobs -}}
@@ -988,6 +1015,25 @@ true
 {{- $_ := set $seen $name $index -}}
 {{- if not (get $job "collector") -}}
 {{- fail (printf "allocator.probeJobs entry %s names no collector; every probe of it would be answered 400" $name) -}}
+{{- end -}}
+{{- /* The allocator decodes the file strictly and refuses a job without
+       targets, so either would stop it at start. */ -}}
+{{- range $key, $_ := $job -}}
+{{- if not (has $key (list "name" "collector" "targets" "params" "labels" "shard_key")) -}}
+{{- fail (printf "allocator.probeJobs entry %s has the key %s, which the allocator refuses; a probe job takes name, collector, targets, params, labels and shard_key" $name $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $targets := get $job "targets" -}}
+{{- if or (not (kindIs "slice" $targets)) (not $targets) -}}
+{{- fail (printf "allocator.probeJobs entry %s lists no targets; the allocator refuses a probe job without targets, so give it at least one" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.staticTargets.expandEnv -}}
+{{- fail "staticTargets.expandEnv is true beside allocator.enabled, but with the allocator the exporter pods read the static targets the allocator hands them, not staticTargets.data; set allocator.staticTargets.expandEnv instead" -}}
+{{- end -}}
+{{- with $allocator.serviceMonitor -}}
+{{- if .enabled -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list "allocator.serviceMonitor" .interval .scrapeTimeout) -}}
 {{- end -}}
 {{- end -}}
 {{- with $allocator.scrapeConfig -}}

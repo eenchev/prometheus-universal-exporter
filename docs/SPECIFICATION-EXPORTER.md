@@ -23195,6 +23195,51 @@ The exporter's tests and the target allocator's run when a file each needs chang
   whose message is the SPDX identifier of the license `LICENSE` holds,
   Apache-2.0, and never the dynamic `github/license` endpoint (§ 35).
 
+## 34.151 Handover on reload, ordered heartbeats, the cache kept in place, and the non-goals
+
+- A static target a reload moves to another member by a changed shard_key
+  stays in its old owner's share, beside its new owner's, for its interval,
+  then leaves it; a target the reload removes is in no share at once.
+- A refusal a heartbeat reports is logged once however often it is
+  reported, and again when the same bundle is refused after a heartbeat
+  without a refusal.
+- pue-allocator's start reads input files that change while read again
+  after a pause of a second, up to five reads, and stops on another error
+  at once, or after the fifth read saying how often it read them.
+- A heartbeat whose sequence is not greater than the last applied of its
+  member and instance changes nothing: arriving after the shutting-down
+  heartbeat, with --settle 15s or 0, it does not make the member live
+  again; a new instance with sequence 1 is taken, and a late heartbeat of
+  the instance it replaced is not applied.
+- A heartbeat without an instance, with one over 64 bytes, or without a
+  sequence is refused (400 at the endpoint, a negative sequence too).
+- The allocator client's heartbeats carry its instance and a sequence
+  counting from 1, the shutting-down heartbeat numbered after every one
+  before it; a restarted client has a new instance and counts from 1.
+- A cached bundle that did not load at startup, sent again by the allocator
+  to a client with no generation in force, is checked and reloaded in the
+  directory `..data` names, unwritten: `config.yaml` reads it at every change
+  the client makes and every directory it syncs, and the directory stays,
+  with `..data` naming it, whether the reload takes the bundle or refuses
+  it; the test fails when the directory is written again or `..data` is
+  removed first (§ 42.14e).
+- The cache is synced in order: the generation's deepest directory first and
+  its own directory last, before the first link is made, then the cache
+  directory once the new links are made and before `..data` is replaced, and
+  again after; the test records the syncs through the `syncDir` seam beside
+  the client's steps and fails on any other order (§ 42.14e).
+- `allocapi.CheckFiles` refuses a bundle that names a path both as a file
+  and as a directory of another (`a` and `a/b`, `a/b` and `a/b/c.yaml`,
+  `config.yaml/x`), by whole path components, and takes names that only
+  share leading characters (`a`, `ab/c`, `a.d/e`, `a-b`) (§ 42.14e).
+- A bundle that names a file also as a directory of another is refused by
+  the client before anything is written: reported in the heartbeat,
+  counted in `bundle_refused_total` and not as a write failure, not fetched
+  again, and the generation in force kept (§ 42.14e).
+- No non-goal of § 37 names a request type of the tree or static targets,
+  what follows a parenthesis or "other than" aside; the test fails on
+  "Database connectors" and "Static targets scraped by the exporter itself".
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -23283,15 +23328,19 @@ Do NOT implement these unless required to support the core design:
 - Arbitrary outbound network access from Python
 - Runtime package installation
 - General-purpose data science environment
-- Database connectors
+- Database access from Python (databases are the `sql` request type, § 5.1)
 - SNMP
 - Kafka
 - Protobuf-encoded HTTP responses (gRPC calls are a request type, § 5.1)
 - GraphQL client logic
-- Long-running background jobs per target
-- Static targets scraped by the exporter itself
+- Long-running background jobs per target other than the scrape loops of static targets
 
-The architecture should leave room for future decoders, but the initial implementation should stay focused on HTTP-to-Prometheus conversion.
+A non-goal MUST NOT name what the exporter does: when a feature listed here
+is implemented, its entry is removed or narrowed to what is still left out,
+and a test fails on an entry naming a request type of the tree or static
+targets. The architecture should leave room for future decoders and request
+types, but every source stays one request type that turns what it reads into
+Prometheus metrics.
 
 ---
 

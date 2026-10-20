@@ -61,6 +61,8 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
             # Each side's tests run when a file they need changed: the
             # directories of the module's packages tools/ci-packages.sh lists
             # for that side and of every package of the module their tests
@@ -617,6 +619,8 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
             # Each side's tests run when a file they need changed: the
             # directories of the module's packages tools/ci-packages.sh lists
             # for that side and of every package of the module their tests
@@ -788,6 +792,8 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
             # Each side's tests run when a file they need changed: the
             # directories of the module's packages tools/ci-packages.sh lists
             # for that side and of every package of the module their tests
@@ -944,6 +950,8 @@ jobs:
               # The chart steps render configs and testdata files.
               - 'configs/**'
               - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
             # Each side's tests run when a file they need changed: the
             # directories of the module's packages tools/ci-packages.sh lists
             # for that side and of every package of the module their tests

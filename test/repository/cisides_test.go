@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -452,5 +453,42 @@ func TestEveryPackageIsTestedByOneSideOfCI(t *testing.T) {
 	}
 	if out, err := exec.Command("sh", "tools/ci-packages.sh", "neither").CombinedOutput(); err == nil {
 		t.Errorf("tools/ci-packages.sh accepted an unknown side and printed %q", out)
+	}
+}
+
+// stepOutputCondition reads the filter output a step's if tests.
+var stepOutputCondition = regexp.MustCompile(`steps\.changes\.outputs\.([A-Za-z0-9_-]+) == 'true'`)
+
+// The steps of ci.yml are part of what each filter output guards: a pull
+// request that changes only the helm steps, or only the go steps, must run
+// them. So every output a step of a ci.yml job runs under matches ci.yml
+// itself; the chart filter once listed only the chart and the files it
+// renders, and a change to its steps alone skipped them.
+func TestEveryFilterACIStepRunsUnderMatchesCIItself(t *testing.T) {
+	const workflow = ".github/workflows/ci.yml"
+	filters := ciFilters(t)
+	used := map[string]bool{}
+	for _, steps := range workflowSteps(t, workflow) {
+		for _, step := range steps {
+			condition, _ := step["if"].(string)
+			for _, match := range stepOutputCondition.FindAllStringSubmatch(condition, -1) {
+				used[match[1]] = true
+			}
+		}
+	}
+	for _, output := range []string{"go", "chart", "exporter"} {
+		if !used[output] {
+			t.Errorf("no step of ci.yml runs under the %s output; the reader has stopped finding them", output)
+		}
+	}
+	for output := range used {
+		patterns, ok := filters[output]
+		if !ok {
+			t.Errorf("a step of ci.yml runs under steps.changes.outputs.%s, which its changed-path filter does not define", output)
+			continue
+		}
+		if !matchesAny(patterns, workflow) {
+			t.Errorf("ci.yml's %s filter does not match %s, so a change to the steps it runs alone would skip them", output, workflow)
+		}
 	}
 }

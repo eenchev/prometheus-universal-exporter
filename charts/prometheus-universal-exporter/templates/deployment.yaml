@@ -141,6 +141,11 @@ spec:
             - --static-targets.expand-env
             {{- end }}
             {{- end }}
+            {{- /* In allocator mode the static target file is the bundle's,
+                   which the pod reads, and expands, as it would its own. */}}
+            {{- if and $allocator .Values.allocator.staticTargets.expandEnv }}
+            - --static-targets.expand-env
+            {{- end }}
             {{- if .Values.server.expandEnv }}
             - --config.expand-env
             {{- end }}

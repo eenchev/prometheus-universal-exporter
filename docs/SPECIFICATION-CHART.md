@@ -535,6 +535,7 @@ values schema:
 | `config` | `--config.file`, the chart's mount path of `config.yaml` (§ 33.2), rendered unless `allocator.enabled` |
 | `allocator.enabled` | `--allocator.url`, `--allocator.cache-dir`, `--allocator.member`, `--allocator.advertise`, rendered only when enabled (§ 33.10c) |
 | `allocator.tokenSecret.name`, `allocator.tokenSecret.key` | `--allocator.token-file`, rendered only with `allocator.enabled` and a name (§ 33.10c) |
+| `allocator.staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `allocator.enabled` (§ 33.10c) |
 
 An invalid value MUST fail rendering and be refused by the values schema.
 
@@ -759,7 +760,22 @@ configuration's `config.yaml`, `--static-targets-file` while
 mounted file with `allocator.tokenSecret.name`, `--log.level`
 from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
 empty, and `--members.max` from `allocator.maxMembers`, 1000 by default, a
-whole number from 1 to 2147483647. Its pods and objects MUST carry
+whole number from 1 to 2147483647. Its `minReadySeconds` MUST be `max(allocator.settle, 10s)`, an empty
+settle counting as the allocator's 15s, rounded up to whole seconds, plus 10:
+`/ready` answers once the allocator has read its inputs, but its first member
+list takes effect that settle after it starts and the exporter pods hear of it
+at their next heartbeat, so a rollout counting a new pod available at once
+could replace every old allocator before a new one hands out a target. Its
+pods MUST be scheduled by `allocator.nodeSelector`, `allocator.tolerations`,
+`allocator.affinity`, `allocator.priorityClassName` and
+`allocator.topologySpreadConstraints`, never the exporter's values of those
+names, and carry `allocator.podLabels` and `allocator.podAnnotations` over
+`defaultLabels` and `defaultAnnotations`; a pod label the chart sets MUST
+fail rendering and `checksum/config` MUST stay the chart's. A topology spread
+constraint without a `labelSelector` MUST be given the allocator's selector
+labels; the default MUST be one constraint of `maxSkew: 1` over
+`kubernetes.io/hostname` with `whenUnsatisfiable: ScheduleAnyway`, and `[]`
+MUST render none. Its pods and objects MUST carry
 `app.kubernetes.io/name: <name>-allocator`, so no selector of the exporter's —
 its Service, its monitors, its disruption budget and NetworkPolicy — selects
 them. The chart MUST render a headless Service `<fullname>-allocator` with
@@ -778,7 +794,26 @@ the configuration directory; `allocator.staticTargets.data` and
 `allocator.probeJobs`, the latter rendered under `probe_jobs` as given, MUST be
 ConfigMaps of their own, mounted into the allocator only, outside the
 configuration directory. The allocator's pods MUST roll when any of the three
-changes.
+changes. A probe job MUST hold only the keys the allocator's probe targets
+file takes, `name`, `collector`, `targets`, `params`, `labels` and
+`shard_key`, since the allocator decodes it strictly, and MUST list at least
+one target; the values schema MUST declare exactly those keys.
+
+`allocator.staticTargets.expandEnv`, off by default, MUST render
+`--static-targets.expand-env` on the exporter pods in allocator mode, which
+read the static target file of the allocator's bundle as their own, and
+never on the allocator, which serves the document as written.
+`staticTargets.expandEnv` beside `allocator.enabled` MUST fail rendering,
+naming `allocator.staticTargets.expandEnv`.
+
+`allocator.serviceMonitor.enabled`, off by default, MUST render a
+`ServiceMonitor` `<fullname>-allocator` of the allocator's `/metrics` on its
+`http` port, selecting the allocator's Service by its selector labels and so
+no Service of the exporter's, with `interval`, `scrapeTimeout` and `labels`
+from `allocator.serviceMonitor` when set, a timeout longer than the interval
+failing rendering, and presenting the token as `Bearer` credentials when
+`allocator.tokenSecret.name` is set. Being asked for, it MUST NOT wait on the
+CRD's presence, and counts as another monitor for the self monitor (§ 33.5).
 
 In allocator mode the exporter pods MUST NOT be given `--config.file`,
 `--static-targets-file` or `--config.watch`, and MUST NOT mount the
@@ -826,7 +861,9 @@ refused by the values schema where it can express them:
 `allocator.enabled` beside `staticTargets.enabled`, since the allocator owns
 the static targets; `allocator.enabled` beside an enabled `monitors` entry,
 since probe targets then come from `allocator.probeJobs` through the
-ScrapeConfigs; and an `extraArgs` entry naming an `--allocator.*` flag the chart renders.
+ScrapeConfigs; a probe job without a target or with a key the allocator does
+not take; `staticTargets.expandEnv` beside `allocator.enabled`; and an
+`extraArgs` entry naming an `--allocator.*` flag the chart renders.
 
 ### 33.11 Helm validation
 
@@ -1874,8 +1911,9 @@ in another namespace reaches it, and MUST fail rendering with
 
 With `selfMetrics.enabled`, exactly one self-health monitor MUST be rendered,
 a ServiceMonitor or, with `selfMetrics.type: pod`, a PodMonitor, when the
-chart renders any other monitor (a probe monitor or the static targets
-monitor) or the cluster serves that kind; a ServiceMonitor with
+chart renders any other monitor (a probe monitor, the static targets
+monitor, a probe job's ScrapeConfig or the allocator's ServiceMonitor) or the
+cluster serves that kind; a ServiceMonitor with
 `service.enabled: false` MUST fail rendering, and so MUST a static targets
 monitor of type `service`.
 
@@ -2004,7 +2042,9 @@ The CI workflow MUST run the Go suite for changes to anything the repository
 tests read — Go sources, workflows, the chart, `configs`, `examples`,
 `testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
 Makefile, `tools` and the lint configuration — and the chart steps for
-changes to the chart and the files they render with. The image MUST report
+changes to the chart, the files they render with and `ci.yml` itself, which
+defines them: every changed-path filter a step of `ci.yml` runs under MUST
+match `ci.yml`, so a change to those steps alone runs them. The image MUST report
 the commit it was built from: the release workflow passes it as the
 `REVISION` build argument, and `.dockerignore` keeps `.git` out of the build
 context.

@@ -105,9 +105,11 @@ own checks:
   health service is checked in full.
 - The allocator expands no `${NAME}` reference: it checks the files as
   written and serves them so, and a replica started with
-  `--config.expand-env` expands them from its own environment. A reference
-  in a value the loader checks, a number say, is therefore refused by the
-  allocator; write such values out.
+  `--config.expand-env` expands the configuration and its collector files
+  from its own environment, and one started with
+  `--static-targets.expand-env` its share of the static targets. A reference
+  in a value the loader checks, a number say, or a static target's scheme or
+  host, is therefore refused by the allocator; write such values out.
 - Python scripts are not run by the allocator; each replica checks its
   collectors' scripts when it loads the bundle, and reports a bundle it
   refuses in its heartbeats, which the allocator logs once.

@@ -125,7 +125,9 @@ func Generation(files map[string]string) string {
 }
 
 // CheckFiles refuses a bundle whose file paths could reach outside the
-// directory it is written into, or that has no main configuration.
+// directory it is written into, that names a file also as a directory of
+// another, such as a and a/b, which no directory can hold, or that has no
+// main configuration.
 func CheckFiles(files map[string]string) error {
 	if _, ok := files[ConfigFile]; !ok {
 		return fmt.Errorf("the bundle has no %s", ConfigFile)
@@ -136,6 +138,18 @@ func CheckFiles(files map[string]string) error {
 		}
 		if clean := path.Clean(name); clean != name || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 			return fmt.Errorf("the bundle names a file %q outside its directory", name)
+		}
+	}
+	// Checked after every name is known to be clean, so a prefix is one by
+	// whole path components.
+	for name := range files {
+		for i := range len(name) {
+			if name[i] != '/' {
+				continue
+			}
+			if _, ok := files[name[:i]]; ok {
+				return fmt.Errorf("the bundle names %q both as a file and as a directory of %q", name[:i], name)
+			}
 		}
 	}
 	return nil

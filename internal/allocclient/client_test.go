@@ -553,6 +553,31 @@ func TestABundleThatCouldLeaveTheCacheDirectoryIsRefusedUnwritten(t *testing.T) 
 	}
 }
 
+// A bundle that names a file also as a directory of another could never be
+// written: it is refused, reported to the allocator and counted as refused,
+// not failed as a write and fetched again.
+func TestABundleWithAFileThatIsAlsoADirectoryIsRefused(t *testing.T) {
+	a := newFakeAllocator(t)
+	c := startClient(t, a, nil)
+	good := a.serveFiles(map[string]string{"config.yaml": "good\n"})
+	c.waitFor(t, EventInstalled)
+	bad := a.serveFiles(map[string]string{"config.yaml": "c\n", "teams": "t\n", "teams/a.yaml": "a\n"})
+	if e := c.waitFor(t, EventRefused); e.Generation != bad || !strings.Contains(e.Err.Error(), "both as a file and as a directory") {
+		t.Fatalf("refused %+v", e)
+	}
+	hb := a.heartbeatWhere(t, "with the refusal", func(hb sentHeartbeat) bool { return hb.Refused != nil })
+	if hb.Generation != good || hb.Refused.Generation != bad {
+		t.Errorf("heartbeat %+v %+v", hb.Heartbeat, hb.Refused)
+	}
+	if st := c.Status(); st.Refused != 1 || st.SyncErrors[StageWrite] != 0 || st.Generation != good {
+		t.Errorf("status %+v", st)
+	}
+	a.bundleRequestNaming(t, bad)
+	if got := generations(t, c.dir); len(got) != 1 || got[0] != good {
+		t.Errorf("generation directories %v", got)
+	}
+}
+
 // Whoever reads the cache directory finds the files of one generation: at
 // every change the swap makes, the files read through the cache directory's
 // links, and through ..data, are all of the generation before or all of the

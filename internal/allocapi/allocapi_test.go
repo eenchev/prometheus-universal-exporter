@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,25 @@ func TestCheckFilesRefusesPathsOutsideTheBundle(t *testing.T) {
 		if err := CheckFiles(map[string]string{ConfigFile: "", name: ""}); err == nil {
 			t.Errorf("the file name %q was taken", name)
 		}
+	}
+}
+
+// CheckFiles refuses a bundle that names a file also as a directory of
+// another, by whole path components: no directory can hold both, so such a
+// bundle could never be written. Names that only share leading characters
+// are taken.
+func TestCheckFilesRefusesAFileThatIsAlsoADirectory(t *testing.T) {
+	for _, names := range [][]string{{"a", "a/b"}, {"a/b", "a/b/c.yaml"}, {ConfigFile + "/x"}} {
+		files := map[string]string{ConfigFile: ""}
+		for _, name := range names {
+			files[name] = ""
+		}
+		err := CheckFiles(files)
+		if err == nil || !strings.Contains(err.Error(), "both as a file and as a directory") {
+			t.Errorf("%v: %v", names, err)
+		}
+	}
+	if err := CheckFiles(map[string]string{ConfigFile: "", "a": "", "ab/c": "", "a.d/e": "", "a-b": ""}); err != nil {
+		t.Errorf("names sharing leading characters were refused: %v", err)
 	}
 }

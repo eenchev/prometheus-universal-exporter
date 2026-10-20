@@ -25199,7 +25199,10 @@ less when a heartbeat reply names a generation other than the last fetched,
 so the exporter never asks as fast as the allocator answers.
 
 A new bundle MUST be refused, before anything is written, when
-`allocapi.CheckFiles` refuses it, when its generation is not
+`allocapi.CheckFiles` refuses it (a path that is not relative, leaves the
+bundle's directory, or names a file that another path's whole leading
+components also name, as `a` and `a/b` do, which no directory can hold; or
+no `config.yaml`), when its generation is not
 `allocapi.Generation` of its files, or when a top-level name begins with
 `..`. Otherwise it MUST be written into a new directory of the cache
 directory, files `0600` and directories `0700`, and checked there as a
@@ -25217,9 +25220,18 @@ as a failure to write, neither refused nor taken as fetched, and tried
 again, and before the next bundle is written the files in force MUST be put
 back, and reloaded, under the reload lock. The other generations'
 directories MUST be removed once a bundle is in force, and a refused
-bundle's at once, but the directory `..data` names MUST never be removed.
-A refused bundle MUST NOT be fetched again until the
-allocator serves another generation.
+bundle's at once, but the directory `..data` names MUST never be removed
+nor written again. With no generation in force, a bundle of the generation
+`..data` names whose directory holds its files, as a cached bundle that did
+not load at startup is when the allocator sends it again, MUST be checked
+and reloaded in that directory, unwritten, so `config.yaml` stays readable
+throughout and a refusal leaves the directory and `..data` as they were.
+Every file MUST be synced before its directory, every directory of a
+generation after the files and directories in it and before the swap, and
+the cache directory after the new links are made, before `..data` is
+replaced, and again after it is, so a restart after a crash finds the
+generation before or the whole new one. A refused bundle MUST NOT be
+fetched again until the allocator serves another generation.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the

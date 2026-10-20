@@ -68,6 +68,101 @@ func TestARefusedReloadWhoseRestoreFailsKeepsTheDirectoryInUse(t *testing.T) {
 	}
 }
 
+// A cached bundle that did not load at the start leaves ..data naming its
+// generation with none in force, so the client's first bundle request
+// names no generation and the allocator sends the same bundle again. Its
+// directory is checked and reloaded where it is, not written again:
+// config.yaml reads it at every change the client makes and every
+// directory it syncs, and the directory is kept whether the reload takes
+// the bundle or refuses it.
+func TestReceivingTheGenerationDataNamesAgainKeepsItsDirectory(t *testing.T) {
+	files := map[string]string{"config.yaml": "cached\n", "collectors/a.yaml": "a\n"}
+	for _, refused := range []bool{false, true} {
+		t.Run(map[bool]string{false: "taken", true: "refused"}[refused], func(t *testing.T) {
+			dir := t.TempDir()
+			generation := install(t, dir, files)
+			observe := func(when string) {
+				if b, err := os.ReadFile(filepath.Join(dir, "config.yaml")); err != nil || string(b) != "cached\n" { // #nosec G304 -- a test's file
+					t.Errorf("%s: config.yaml reads %q, %v", when, b, err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, genPrefix+generation, "collectors/a.yaml")); err != nil {
+					t.Errorf("%s: the directory ..data names lost a file: %v", when, err)
+				}
+			}
+			sync := syncDir
+			t.Cleanup(func() { syncDir = sync })
+			syncDir = func(path string) error {
+				observe("syncing " + path)
+				return sync(path)
+			}
+			a := newFakeAllocator(t)
+			// Generation is empty, as startManager leaves it when the cached
+			// bundle does not load.
+			c := newTestClient(t, a, dir, func(o *Options) { o.Step = observe })
+			if refused {
+				c.manager.refuse = func(config string) bool { return config == "cached\n" }
+			}
+			runClient(t, c)
+			if r := a.nextBundleRequest(t); r.Header.Get("If-None-Match") != "" {
+				t.Fatalf("the first bundle request names %q", r.Header.Get("If-None-Match"))
+			}
+			a.serveFiles(files)
+			want, status := EventInstalled, Status{Generation: generation}
+			if refused {
+				want, status = EventRefused, Status{Refused: 1}
+			}
+			if e := c.waitFor(t, want); e.Generation != generation {
+				t.Fatalf("%s %+v", want, e)
+			}
+			observe("after the reload")
+			if got := generations(t, dir); len(got) != 1 || got[0] != generation || CachedGeneration(dir) != generation {
+				t.Errorf("generation directories %v, cached %q", got, CachedGeneration(dir))
+			}
+			if st := c.Status(); st.Generation != status.Generation || st.Refused != status.Refused || st.SyncErrors[StageWrite] != 0 {
+				t.Errorf("status %+v", st)
+			}
+			if _, reloads := c.manager.state(); len(reloads) != 1 || reloads[0] != "allocator: cached\n" {
+				t.Errorf("reloads %q", reloads)
+			}
+		})
+	}
+}
+
+// A bundle is on disk before ..data names it, and ..data's replacement
+// after: each directory of the generation is synced after the directories
+// in it and before the swap, and the cache directory once the new links
+// are made, before ..data is replaced, and again after it is.
+func TestTheCacheIsSyncedBeforeAndAfterTheSwap(t *testing.T) {
+	dir := t.TempDir()
+	var log []string
+	sync := syncDir
+	t.Cleanup(func() { syncDir = sync })
+	syncDir = func(path string) error {
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		log = append(log, "synced "+filepath.ToSlash(rel))
+		return sync(path)
+	}
+	c := newTestClient(t, newFakeAllocator(t), dir, func(o *Options) {
+		o.Step = func(change string) { log = append(log, change) }
+	})
+	b := &allocapi.Bundle{Files: map[string]string{"config.yaml": "c\n", "teams/a/x.yaml": "x\n", "teams/b.yaml": "b\n"}}
+	b.Seal()
+	if refusal, err := c.apply(b); refusal != nil || err != nil {
+		t.Fatal(refusal, err)
+	}
+	gen := genPrefix + b.Generation
+	want := []string{
+		"synced " + gen + "/teams/a", "synced " + gen + "/teams", "synced " + gen, "wrote " + gen,
+		"linked config.yaml", "linked teams", "synced .", "linked " + dataLink, "synced .",
+	}
+	if !slices.Equal(log, want) {
+		t.Errorf("the changes and syncs were\n%q\nwant\n%q", log, want)
+	}
+}
+
 // install puts files in force in dir as the client does, and returns their
 // generation.
 func install(t *testing.T, dir string, files map[string]string) string {

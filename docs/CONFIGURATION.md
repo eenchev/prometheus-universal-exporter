@@ -4506,8 +4506,12 @@ a request the allocator holds for up to 30 seconds until the bundle changes.
 A new bundle is written beside the one in force, checked as a reload would
 check it, and put in place by replacing one symbolic link, so nothing reading
 the directory finds part of one bundle and part of another; the exporter then
-reloads it, with `"trigger":"allocator"` in the log. A bundle that does not
-load is refused: the one in force stays, the refusal is logged and reported in
+reloads it, with `"trigger":"allocator"` in the log. Each file, the
+bundle's directories and the cache directory are synced to disk before the
+link is replaced, and the cache directory again after, so a crash leaves
+the bundle before or the whole new one. A bundle that does not load, or
+that names a file also as a directory of another, as `a` and `a/b`, is
+refused: the one in force stays, the refusal is logged and reported in
 the next heartbeat, and it is not asked for again until the allocator has
 another. A bundle whose reload is refused, when the files before it cannot be
 put back, is a failure to write: the exporter puts them back before it tries
@@ -4535,7 +4539,9 @@ bundle does not load, serves its endpoints while it waits for the first:
 `/ready` answers `503` (`not ready: no configuration yet: waiting for the
 allocator`), `/probe` answers `503` with `no configuration yet: waiting for
 the allocator at <url>`, the static targets endpoint has no targets and the
-self-metrics are served. The first bundle makes it ready. The
+self-metrics are served. The first bundle makes it ready. When the allocator
+sends again the bundle that did not load, it is checked and reloaded where
+it lies, not written again, and stays there when it is refused. The
 [self-metrics](SELF-METRICS.md#target-allocator) say how it keeps up with the
 allocator. `--dry-run` with `--allocator.url` checks the bundle in the cache
 directory, the one a restart would start with, and fails when there is none,

@@ -24963,8 +24963,15 @@ again at the next check.
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
 being live at once. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
-its share; the first member list MUST NOT form before a member is live nor
-before `max(--settle, allocapi.HeartbeatInterval)` after the start. Time
+its share; the first member list MUST form only once the live members have
+not changed for `--settle`, and MUST NOT form before a member is live nor
+before `max(--settle, allocapi.HeartbeatInterval)` after the start. A member
+that stops being live MUST leave the member list only after `--settle`, as
+any other change does. The allocator MUST take at most `--members.max`
+(default `1000`, at least `1`) live members: the heartbeat of a member it
+does not hold, not shutting down, while that many are live MUST be refused
+and add nothing, logged once until a new member is taken again and counted;
+a member no longer live MUST no longer count against the bound. Time
 MUST be read through an injectable clock, so tests move it by hand.
 
 **Allocation.** Every target MUST be owned by `allocapi.Owner` over the
@@ -24988,13 +24995,15 @@ member list MUST get the configuration alone.
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
 before the member list has formed; a heartbeat without `member` or a
-`host:port` `advertise` MUST be answered `400`. `GET /v1/bundle?member=<id>`
+`host:port` `advertise` with a host and a decimal port from 1 to 65535 MUST
+be answered `400`, a body over 64 KiB `413`, and one refused for
+`--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
 until the member list has formed; with `wait=<duration>` (at most `60s`) a
 request that has its bundle MUST be answered as soon as the bundle changes,
-and `304` when the wait runs out or the allocator shuts down; a request
-without `member`, or with a `wait` that is no duration, MUST be answered
+and `304` when the wait runs out or the allocator shuts down, a wait longer
+than the HTTP server's read timeout included; a request without `member`, or with a `wait` that is no duration, MUST be answered
 `400`. `GET /v1/sd/<job>` MUST answer Prometheus HTTP service discovery
 JSON, one group per target, in file order, whose target is the routed
 member's `advertise` and whose labels are the job's labels, `__param_<name>`
@@ -25017,8 +25026,9 @@ only.
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
 `pue_allocator_generation_info{member,generation}`,
-`pue_allocator_reloads_total{result}` and
-`pue_allocator_member_changes_total`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_reloads_total{result}`,
+`pue_allocator_member_changes_total` and
+`pue_allocator_members_refused_total`. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 

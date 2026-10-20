@@ -53,8 +53,11 @@ type Heartbeat struct {
 	Member string `json:"member"`
 	// Advertise is host:port Prometheus should send this replica's probes to.
 	Advertise string `json:"advertise"`
-	// ShuttingDown is set from the first signal on: the replica leaves the
-	// member list at once rather than when its heartbeats stop.
+	// ShuttingDown is set from the first signal on: the replica stops being
+	// live at once rather than a MemberTTL after its heartbeats stop, so no
+	// probe is routed to it any more, and it leaves the member list, and
+	// its static targets move, once the live members have held for the
+	// allocator's settle time.
 	ShuttingDown bool `json:"shutting_down,omitempty"`
 	// Generation is the generation of the bundle the replica has in force,
 	// empty before its first.

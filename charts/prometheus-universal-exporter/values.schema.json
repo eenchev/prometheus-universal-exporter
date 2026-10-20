@@ -539,6 +539,7 @@
           }
         },
         "settle": {"type": "string", "description": "Rendered as --settle: a Go duration of zero or more; empty leaves the flag out.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "maxMembers": {"type": "integer", "minimum": 1, "maximum": 2147483647, "description": "Rendered as --members.max: how many live members the allocator takes."},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as the allocator's --log.level."},
         "tokenSecret": {
           "type": "object",

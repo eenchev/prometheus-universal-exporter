@@ -691,6 +691,10 @@ allocator:
   # zero or more; empty leaves the flag out and the allocator's default, 15s,
   # in force.
   settle: 15s
+  # How many live members the allocator takes (--members.max): the heartbeat
+  # of a new pod beyond them is refused until one stops heartbeating. A whole
+  # number from 1; keep it above the most exporter pods the autoscaler runs.
+  maxMembers: 1000
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
   # An optional shared bearer token, from a Secret in the release's namespace:

@@ -17,6 +17,7 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		"--nope":                       "flag provided but not defined",
 		"stray":                        `unexpected argument "stray"`,
 		"--settle=-1s":                 "--settle must not be negative",
+		"--members.max=0":              "--members.max must be 1 or more",
 		"--config.watch-interval=-1s":  "--config.watch-interval must not be negative",
 		"--log.level=verbose":          `--log.level "verbose" is not a level`,
 		"--web.listen-address=nowhere": "--web.listen-address",
@@ -42,13 +43,13 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-version"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-version"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") {
-		t.Errorf("-h does not give the defaults of the listen address and the settle time:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 1000)") {
+		t.Errorf("-h does not give the defaults of the listen address, the settle time and the member bound:\n%s", stdout.String())
 	}
 }
 

@@ -149,6 +149,7 @@ func TestChartRendersTheAllocatorAndTheExporterInAllocatorMode(t *testing.T) {
 		"--probe-targets-file=/etc/prometheus-universal-exporter-probe-targets/probe-targets.yaml",
 		"--log.level=info",
 		"--settle=15s",
+		"--members.max=1000",
 	}
 	if got := scalars(path(container, "args")); !slices.Equal(got, wantArgs) {
 		t.Errorf("the allocator's args are %v, want %v", got, wantArgs)
@@ -438,6 +439,8 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 			"", `allocator.probeJobs entries #0 and #1 are both named "w"`},
 		"no allocator replica": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.replicas=0"},
 			"allocator.replicas", "allocator.replicas 0 must be a whole number from 1 to 2147483647"},
+		"no member the allocator takes": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.maxMembers=0"},
+			"allocator.maxMembers", "allocator.maxMembers 0 must be a whole number from 1 to 2147483647"},
 		"a settle that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=soon"},
 			"allocator.settle", `allocator.settle "soon" must be a Go duration`},
 		"an unknown log level": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.logLevel=loud"},

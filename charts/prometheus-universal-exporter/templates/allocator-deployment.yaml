@@ -57,6 +57,9 @@ spec:
             {{- with $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
             {{- end }}
+            {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
+                   taken for unset. */}}
+            - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}
           ports:
             - name: http
               containerPort: 9116

@@ -203,13 +203,33 @@ func TestTheHeartbeatEndpoint(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &reply); err != nil || resp.StatusCode != http.StatusOK || reply.Generation != a.Bundle("r1").Generation {
 		t.Errorf("got %s %s, want the bundle's generation %s", resp.Status, body, a.Bundle("r1").Generation)
 	}
-	for _, bad := range []string{"", "[]", `{"member":"","advertise":"a:1"}`, `{"member":"r1","advertise":"nowhere"}`} {
+	for _, bad := range []string{"", "[]", `{"member":"","advertise":"a:1"}`, `{"member":"r1","advertise":"nowhere"}`,
+		`{"member":"r1","advertise":"a:http"}`, `{"member":"r1","advertise":"a:0"}`, `{"member":"r1","advertise":"a:99999"}`, `{"member":"r1","advertise":":9115"}`} {
 		if resp, _ = post(t, url+"/v1/heartbeat", bad); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%q: got %s, want 400", bad, resp.Status)
 		}
 	}
+	huge := `{"member":"r1","advertise":"10.0.0.1:9115","generation":"` + strings.Repeat("x", maxHeartbeatBytes) + `"}`
+	if resp, body = post(t, url+"/v1/heartbeat", huge); resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(body, "larger than 65536 bytes") {
+		t.Errorf("a heartbeat over the bound: got %s %q, want 413 saying it is too large", resp.Status, body)
+	}
 	if resp, _ = get(t, url+"/v1/heartbeat"); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("GET /v1/heartbeat: got %s, want 405", resp.Status)
+	}
+}
+
+// The heartbeat of a new member while the allocator has as many live
+// members as it takes is answered 429, with Retry-After the member TTL.
+func TestAHeartbeatBeyondTheMemberBoundIs429(t *testing.T) {
+	p := writeInputs(t, testConfig, "", "")
+	a := New(mustLoad(t, p), Options{MaxMembers: 1, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	url := serve(t, a, "")
+	if resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the first member: got %s %s", resp.Status, body)
+	}
+	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r2","advertise":"10.0.0.2:9115"}`)
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "30" || !strings.Contains(body, "--members.max") {
+		t.Errorf("a member beyond the bound: got %s, Retry-After %q, %q; want 429 naming --members.max", resp.Status, resp.Header.Get("Retry-After"), body)
 	}
 }
 

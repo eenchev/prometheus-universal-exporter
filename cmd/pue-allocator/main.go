@@ -52,6 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
+	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -78,6 +79,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *settle < 0 {
 		return commandLineError(stderr, fmt.Errorf("--settle must not be negative, got %s", *settle))
 	}
+	if *maxMembers < 1 {
+		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
+	}
 	if *showVersion {
 		b := exporter.BuildVersion()
 		_, _ = fmt.Fprintf(stdout, "pue-allocator version %s (revision %s, %s, request types %s)\n", b.Version, b.Revision, b.GoVersion, strings.Join(b.RequestTypes, ","))
@@ -99,7 +103,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("invalid input files; exiting", "error", err)
 		return 1
 	}
-	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, Logger: logger})
+	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, Logger: logger})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -112,12 +116,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Info("starting allocator", append([]any{"version", exporter.BuildVersion().Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "token", token != nil}, inputs.LogAttrs()...)...)
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "token", token != nil}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {
 		handler = alloc.HandlerReading(token)
 	}
-	server := exporter.NewHTTPServer(*listenAddress, handler)
+	server := newServer(*listenAddress, handler)
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.ListenAndServe() }()
 	select {
@@ -137,6 +141,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// newServer is the allocator's HTTP server: the exporter's, with its header
+// and read timeouts and its header size bound. The read timeout, 30s, is
+// shorter than a bundle long poll may wait (allocator.MaxWait), and does not
+// cut one: net/http lifts the read deadline once a request's body has been
+// read, before the handler's background read of the connection begins, so
+// only reading the request is bounded by it. A test holds this to the server
+// built here.
+func newServer(address string, handler http.Handler) *http.Server {
+	return exporter.NewHTTPServer(address, handler)
 }
 
 func commandLineError(stderr io.Writer, err error) int {

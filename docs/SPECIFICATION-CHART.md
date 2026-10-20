@@ -757,8 +757,9 @@ configuration's `config.yaml`, `--static-targets-file` while
 `allocator.staticTargets.data` is not empty, `--probe-targets-file` while
 `allocator.probeJobs` is not empty, `--web.token-file` naming the token's
 mounted file with `allocator.tokenSecret.name`, `--log.level`
-from `allocator.logLevel` and `--settle` from `allocator.settle` unless it is
-empty. Its pods and objects MUST carry
+from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
+empty, and `--members.max` from `allocator.maxMembers`, 1000 by default, a
+whole number from 1 to 2147483647. Its pods and objects MUST carry
 `app.kubernetes.io/name: <name>-allocator`, so no selector of the exporter's —
 its Service, its monitors, its disruption budget and NetworkPolicy — selects
 them. The chart MUST render a headless Service `<fullname>-allocator` with
@@ -1622,8 +1623,8 @@ are skipped and the text checks of the templates still run:
    - The chart with `allocator.enabled` renders the allocator's Deployment of
      `allocator.replicas` pods running `/bin/pue-allocator` from the exporter's
      image with `--web.listen-address=:9116`, `--config.file`,
-     `--static-targets-file`, `--probe-targets-file`, `--log.level` and
-     `--settle`, mounting the configuration ConfigMap and its own static target
+     `--static-targets-file`, `--probe-targets-file`, `--log.level`,
+     `--settle` and `--members.max`, mounting the configuration ConfigMap and its own static target
      and probe target ConfigMaps (the probe jobs under `probe_jobs` as given); a
      headless Service on port `http`, 9116; a PodDisruptionBudget of
      `maxUnavailable: 1`; and a NetworkPolicy admitting the exporter's pods and,
@@ -1656,8 +1657,8 @@ are skipped and the text checks of the templates still run:
    - The chart refuses, with the values schema and with the schema skipped, the
      allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
      a probe job of an unknown or no collector, a probe job name that is no
-     DNS-1123 label or is used twice, `allocator.replicas` 0, a `settle` that
-     is no duration, an unknown log level, an `env` entry `POD_IP`, an
+     DNS-1123 label or is used twice, `allocator.replicas` 0,
+     `allocator.maxMembers` 0, a `settle` that is no duration, an unknown log level, an `env` entry `POD_IP`, an
      `--allocator.*` flag in `extraArgs`, `staticTargets.monitor.targets`
      beside the allocator, a mount over the cache or token directory, and a
      ScrapeConfig timeout longer than its interval.

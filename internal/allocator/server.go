@@ -103,14 +103,24 @@ func (a *Allocator) serveHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, reply)
 }
 
-// checkHeartbeat refuses a heartbeat without a member or an address to
-// probe it at.
+// maxInstanceBytes bounds a heartbeat's instance, which the allocator keeps
+// for each member.
+const maxInstanceBytes = 64
+
+// checkHeartbeat refuses a heartbeat without a member, an address to probe
+// it at, an instance or a sequence.
 func checkHeartbeat(hb allocapi.Heartbeat) error {
 	if strings.TrimSpace(hb.Member) == "" || len(hb.Member) > 253 || strings.ContainsFunc(hb.Member, func(r rune) bool { return r < ' ' || r == 0x7f }) {
 		return fmt.Errorf("%w; member %q is not a replica's id: give its pod or host name, at most 253 bytes", ErrBadHeartbeat, hb.Member)
 	}
 	if !validAddress(hb.Advertise) {
 		return fmt.Errorf("%w; advertise %q is not a host:port with a port from 1 to 65535", ErrBadHeartbeat, hb.Advertise)
+	}
+	if hb.Instance == "" || len(hb.Instance) > maxInstanceBytes {
+		return fmt.Errorf("%w; instance %q is not a replica process's name of 1 to %d bytes", ErrBadHeartbeat, hb.Instance, maxInstanceBytes)
+	}
+	if hb.Sequence == 0 {
+		return fmt.Errorf("%w; the sequence counts a replica's heartbeats from 1", ErrBadHeartbeat)
 	}
 	return nil
 }

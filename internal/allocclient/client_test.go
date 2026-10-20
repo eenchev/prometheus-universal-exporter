@@ -1100,3 +1100,29 @@ func TestARepeatedHeartbeatErrorIsLoggedOncePerAddress(t *testing.T) {
 		t.Errorf("status %+v", st)
 	}
 }
+
+// Every heartbeat names the client's instance and the next sequence, from
+// 1, so the allocator knows one arriving after a later one for an old one;
+// the shutting-down heartbeat is numbered after every heartbeat before it.
+// A restarted client, another process, has an instance of its own and
+// counts from 1 again.
+func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
+	a := newFakeAllocator(t)
+	dir := t.TempDir()
+	c := newTestClient(t, a, dir, nil)
+	for want := uint64(1); want <= 3; want++ {
+		c.heartbeat(context.Background())
+		if hb := a.nextHeartbeat(t); hb.Instance == "" || hb.Instance != c.instance || hb.Sequence != want {
+			t.Fatalf("heartbeat %d: instance %q sequence %d, want instance %q sequence %d", want, hb.Instance, hb.Sequence, c.instance, want)
+		}
+	}
+	c.ShuttingDown(context.Background())
+	if hb := a.nextHeartbeat(t); !hb.ShuttingDown || hb.Sequence != 4 {
+		t.Errorf("the shutting-down heartbeat: shutting down %v sequence %d, want sequence 4", hb.ShuttingDown, hb.Sequence)
+	}
+	restarted := newTestClient(t, a, dir, nil)
+	restarted.heartbeat(context.Background())
+	if hb := a.nextHeartbeat(t); hb.Instance == "" || hb.Instance == c.instance || hb.Sequence != 1 {
+		t.Errorf("the restarted client's first heartbeat: instance %q (the old one's %q) sequence %d, want a new instance and sequence 1", hb.Instance, c.instance, hb.Sequence)
+	}
+}

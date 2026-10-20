@@ -14,6 +14,7 @@ package allocclient
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,6 +174,12 @@ type Client struct {
 	// allocator keeps the last heartbeat it hears, so the one ShuttingDown
 	// sends must not be overtaken by one built before it.
 	sending chan struct{}
+	// instance names this process in its heartbeats, and sequence is the
+	// last heartbeat's number (allocapi.Heartbeat): a heartbeat given up
+	// on may still reach the allocator after the next, which then knows
+	// it for an old one.
+	instance string
+	sequence uint64
 	// newTimer starts the wait between two bundle requests; a test makes
 	// it a timer of its own.
 	newTimer func(time.Duration) (<-chan time.Time, func() bool)
@@ -231,6 +238,7 @@ func New(o Options) (*Client, error) {
 	return &Client{
 		o: o, base: base, client: &http.Client{Transport: o.Transport},
 		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1), sending: make(chan struct{}, 1),
+		instance: rand.Text(),
 		newTimer: func(d time.Duration) (<-chan time.Time, func() bool) {
 			t := time.NewTimer(d)
 			return t.C, t.Stop
@@ -400,7 +408,9 @@ func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 	}
 	defer func() { <-c.sending }()
 	c.mu.Lock()
-	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
+	c.sequence++
+	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
 	c.mu.Unlock()
 	body, err := json.Marshal(hb)
 	if err != nil {

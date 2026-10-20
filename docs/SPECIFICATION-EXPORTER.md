@@ -25045,7 +25045,9 @@ that directory begins with `..`, and an entry of more than one path element
 whose first element begins with `..`, with `*`, `?`, `[` or `\`, or with a dot
 and one of those, which on a replica could match the cache directory's own
 names. The allocator MUST NOT expand `${NAME}`
-references. Invalid inputs at the start MUST exit 1. The files MUST be read
+references. Invalid inputs at the start MUST exit 1; files that change while
+the start reads them MUST be read again after a pause of 1 second, up to 5
+reads in all, and exit 1 only then. The files MUST be read
 again every `--config.watch-interval` (`0` reads them once); a change MUST be
 put in force only when all are accepted, the last good inputs staying in
 force otherwise, and one refusal MUST be logged and counted
@@ -25056,7 +25058,16 @@ again at the next check.
 
 **Members.** A member MUST be live while its last heartbeat is younger than
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
-being live at once. A change of the live members MUST take effect when it has
+being live at once. A heartbeat whose `sequence` is not greater than that of
+the last heartbeat applied of its member with the same `instance`, or whose
+`instance` is the one its member's current `instance` replaced, MUST be
+answered as any other and change nothing; a heartbeat of another `instance`
+MUST be applied whatever its `sequence`. A member not live MUST be kept,
+with its `instance` and `sequence`, until its last heartbeat is
+`allocapi.MemberTTL` old, so a heartbeat arriving after the one saying
+`shutting_down` does not make it live again. A refusal a heartbeat reports
+MUST be logged once while the member keeps reporting it, and again when it
+reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
@@ -25076,7 +25087,9 @@ by its target, or with `shard_key: address` by the host and port it reaches
 compared without case; anything else as written). A static target whose
 owner changes while its old owner stays in the member list MUST stay in the
 old owner's share for one of its intervals, its own or the file's, and then
-leave it.
+leave it, whether a change of the member list or a reload of the input
+files changed its owner (its `shard_key` changed, say); a static target a
+reload removes MUST leave every share at once.
 
 **Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
 configuration at `config.yaml` and every collector file at its path
@@ -25089,9 +25102,10 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed; a heartbeat without `member` or a
-`host:port` `advertise` with a host and a decimal port from 1 to 65535 MUST
-be answered `400`, a body over 64 KiB `413`, and one refused for
+before the member list has formed; a heartbeat without `member`, a
+`host:port` `advertise` with a host and a decimal port from 1 to 65535, an
+`instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
+`400`, a body over 64 KiB `413`, and one refused for
 `--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
@@ -25150,8 +25164,11 @@ put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
 when it is an IP address. A heartbeat MUST carry the member, the advertised
 address, the generation in force (empty before the first), the last refused
-generation with its error until a later bundle is put in force, and
-`shutting_down` from the first `SIGTERM` or `SIGINT` on; on that signal the
+generation with its error until a later bundle is put in force,
+`shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
+random name made once at the exporter's start, and the `sequence`, 1 for the
+process's first heartbeat and one more for each heartbeat built after it, so
+that a heartbeat given up on and arriving late is known for an old one; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
 built once the one before is back, so no heartbeat without `shutting_down`

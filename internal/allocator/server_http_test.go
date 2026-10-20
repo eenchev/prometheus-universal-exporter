@@ -193,18 +193,20 @@ func TestTheHeartbeatEndpoint(t *testing.T) {
 	clock := newFakeClock()
 	a := New(mustLoad(t, p), Options{Clock: clock, Logger: testutil.QuietLogger(t)})
 	url := serve(t, a, "")
-	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115"}`)
+	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`)
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"generation":""}` {
 		t.Errorf("before the member list formed: got %s %s", resp.Status, body)
 	}
 	clock.Advance(allocapi.HeartbeatInterval)
-	resp, body = post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","generation":"x"}`)
+	resp, body = post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":2,"generation":"x"}`)
 	var reply allocapi.HeartbeatReply
 	if err := json.Unmarshal([]byte(body), &reply); err != nil || resp.StatusCode != http.StatusOK || reply.Generation != a.Bundle("r1").Generation {
 		t.Errorf("got %s %s, want the bundle's generation %s", resp.Status, body, a.Bundle("r1").Generation)
 	}
-	for _, bad := range []string{"", "[]", `{"member":"","advertise":"a:1"}`, `{"member":"r1","advertise":"nowhere"}`,
-		`{"member":"r1","advertise":"a:http"}`, `{"member":"r1","advertise":"a:0"}`, `{"member":"r1","advertise":"a:99999"}`, `{"member":"r1","advertise":":9115"}`} {
+	for _, bad := range []string{"", "[]", `{"member":"","advertise":"a:1","instance":"i","sequence":3}`, `{"member":"r1","advertise":"nowhere","instance":"i","sequence":3}`,
+		`{"member":"r1","advertise":"a:http","instance":"i","sequence":3}`, `{"member":"r1","advertise":"a:0","instance":"i","sequence":3}`,
+		`{"member":"r1","advertise":"a:99999","instance":"i","sequence":3}`, `{"member":"r1","advertise":":9115","instance":"i","sequence":3}`,
+		`{"member":"r1","advertise":"a:1","sequence":3}`, `{"member":"r1","advertise":"a:1","instance":"i"}`, `{"member":"r1","advertise":"a:1","instance":"i","sequence":-1}`} {
 		if resp, _ = post(t, url+"/v1/heartbeat", bad); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%q: got %s, want 400", bad, resp.Status)
 		}
@@ -224,10 +226,10 @@ func TestAHeartbeatBeyondTheMemberBoundIs429(t *testing.T) {
 	p := writeInputs(t, testConfig, "", "")
 	a := New(mustLoad(t, p), Options{MaxMembers: 1, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
 	url := serve(t, a, "")
-	if resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115"}`); resp.StatusCode != http.StatusOK {
+	if resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("the first member: got %s %s", resp.Status, body)
 	}
-	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r2","advertise":"10.0.0.2:9115"}`)
+	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r2","advertise":"10.0.0.2:9115","instance":"i","sequence":1}`)
 	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "30" || !strings.Contains(body, "--members.max") {
 		t.Errorf("a member beyond the bound: got %s, Retry-After %q, %q; want 429 naming --members.max", resp.Status, resp.Header.Get("Retry-After"), body)
 	}
@@ -245,7 +247,7 @@ func TestServiceDiscoveryAnswersEveryProbeAtItsMember(t *testing.T) {
 	if resp, _ := get(t, url+"/v1/sd/websites"); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("before the member list formed: got %s, want 503", resp.Status)
 	}
-	if _, err := a.Heartbeat(allocapi.Heartbeat{Member: "r1", Advertise: "10.0.0.1:9115"}); err != nil {
+	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "10.0.0.1:9115"})); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(allocapi.HeartbeatInterval)
@@ -300,7 +302,7 @@ func TestAProbeGoesToTheMembersWhoseBundleHasItsCollector(t *testing.T) {
 		t.Errorf("with no member reporting the new bundle, the probes went to %v, want both members", got)
 	}
 	heartbeat := func(member, generation string) {
-		if _, err := a.Heartbeat(allocapi.Heartbeat{Member: member, Advertise: member + ":9115", Generation: generation}); err != nil {
+		if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: member, Advertise: member + ":9115", Generation: generation})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -317,7 +319,7 @@ func TestAProbeGoesToTheMembersWhoseBundleHasItsCollector(t *testing.T) {
 // a probe goes to a live member outside it rather than nowhere.
 func TestAProbeGoesToALiveMemberWhenNoneOfTheListIs(t *testing.T) {
 	a, clock := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, "", testProbes)), "r1")
-	if _, err := a.Heartbeat(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115", ShuttingDown: true}); err != nil {
+	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115", ShuttingDown: true})); err != nil {
 		t.Fatal(err)
 	}
 	beat(t, a, "r2")
@@ -372,10 +374,10 @@ func TestTheTokenGuardsEveryEndpointButHealthAndReadiness(t *testing.T) {
 			t.Errorf("%s with the token: got %s", path, resp.Status)
 		}
 	}
-	if resp, _ := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"a:1"}`); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"a:1","instance":"i","sequence":1}`); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("a heartbeat without the token: got %s, want 401", resp.Status)
 	}
-	if resp, _ := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"a:1"}`, "Authorization", "Bearer s3cret"); resp.StatusCode != http.StatusOK {
+	if resp, _ := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"a:1","instance":"i","sequence":1}`, "Authorization", "Bearer s3cret"); resp.StatusCode != http.StatusOK {
 		t.Errorf("a heartbeat with the token: got %s", resp.Status)
 	}
 	for _, path := range []string{"/healthz", "/ready"} {

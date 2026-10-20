@@ -60,10 +60,11 @@ type Inputs struct {
 	digest string
 }
 
-// errChanged says the input files changed while they were being read: what
+// ErrChanged says the input files changed while they were being read: what
 // was checked may not be what would be served, so the attempt is dropped
-// and the files are read again at the next check. It is no refusal.
-var errChanged = errors.New("the input files changed while they were read; they are read again at the next check")
+// and the files are read again at the next check, or, at the start, after a
+// moment (cmd/pue-allocator). It is no refusal.
+var ErrChanged = errors.New("the input files changed while they were read")
 
 // LoadInputs reads the input files and checks them as the exporter checks
 // its own: the configuration with config.Load, the static target file with
@@ -115,7 +116,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	}
 	after, err := takeSnapshot(p)
 	if err != nil || after.digest != before.digest || !sameFiles(before.read, conf.LoadedCollectorFiles) {
-		return nil, errChanged
+		return nil, ErrChanged
 	}
 	if in.Targets != nil {
 		if in.static, err = readStaticDocument(before.staticTargets, in.Targets); err != nil {

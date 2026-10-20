@@ -50,7 +50,7 @@ func TestALongPollOutlastsTheReadTimeout(t *testing.T) {
 	clock := &aheadClock{}
 	alloc := allocator.New(in, allocator.Options{Clock: clock, Logger: testutil.QuietLogger(t)})
 	clock.ahead.Store(int64(time.Minute))
-	if _, err := alloc.Heartbeat(allocapi.Heartbeat{Member: "r1", Advertise: "127.0.0.1:9115"}); err != nil {
+	if _, err := alloc.Heartbeat(allocapi.Heartbeat{Member: "r1", Advertise: "127.0.0.1:9115", Instance: "i", Sequence: 1}); err != nil {
 		t.Fatal(err)
 	}
 	bundle := alloc.Bundle("r1")

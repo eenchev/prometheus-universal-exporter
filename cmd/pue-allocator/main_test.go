@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -72,6 +76,46 @@ func TestRefusedInputsExit1(t *testing.T) {
 		}
 		if lines := testutil.AssertJSONLines(t, &stderr, 1); !strings.Contains(lines[0]["msg"].(string), c.want) {
 			t.Errorf("%s: logged %q, want %q", name, lines[0]["msg"], c.want)
+		}
+	}
+}
+
+// Input files that change while the start reads them, as a ConfigMap being
+// swapped does, are read again after a pause, up to five times, and only
+// then stop the start; any other error stops it at once.
+func TestTheStartReadsInputsAgainThatChangeWhileRead(t *testing.T) {
+	refused := errors.New("refused")
+	in := &allocator.Inputs{}
+	for name, c := range map[string]struct {
+		answers       []error
+		reads, pauses int
+		want          error
+	}{
+		"changing twice":         {[]error{allocator.ErrChanged, allocator.ErrChanged, nil}, 3, 2, nil},
+		"changing always":        {[]error{allocator.ErrChanged, allocator.ErrChanged, allocator.ErrChanged, allocator.ErrChanged, allocator.ErrChanged, nil}, 5, 4, allocator.ErrChanged},
+		"refused":                {[]error{refused, nil}, 1, 0, refused},
+		"changing, then refused": {[]error{allocator.ErrChanged, refused, nil}, 2, 1, refused},
+	} {
+		reads, pauses := 0, []time.Duration{}
+		load := func(allocator.Paths) (*allocator.Inputs, error) {
+			err := c.answers[reads]
+			reads++
+			if err != nil {
+				return nil, err
+			}
+			return in, nil
+		}
+		got, err := loadStartInputs(load, allocator.Paths{}, func(d time.Duration) { pauses = append(pauses, d) })
+		if reads != c.reads || len(pauses) != c.pauses || !errors.Is(err, c.want) || (err == nil) != (got == in) {
+			t.Errorf("%s: read %d times with pauses %v, got %v, %v; want %d reads, %d pauses and %v", name, reads, pauses, got, err, c.reads, c.pauses, c.want)
+		}
+		for _, d := range pauses {
+			if d != startLoadPause {
+				t.Errorf("%s: paused %s, want %s", name, d, startLoadPause)
+			}
+		}
+		if errors.Is(c.want, allocator.ErrChanged) && !strings.Contains(fmt.Sprint(err), "5 times") {
+			t.Errorf("%s: the error %q does not say how often the files were read", name, err)
 		}
 	}
 }

@@ -23100,6 +23100,97 @@ The exporter's tests and the target allocator's run when a file each needs chang
   of `internal/fetch/requesttype_<name>.go`, and a request type the test has
   no README name for fails it (§ 35).
 
+## 34.150 The allocator's bounds, allocator mode's cache and shutdown, and the allocator's chart values
+
+- A bundle long poll whose wait is longer than the read timeout of the HTTP
+  server pue-allocator builds is answered 304 when its wait runs out, over a
+  real TCP connection, and not cut short with an empty answer.
+- A heartbeat whose advertise has no host or a port that is not a decimal
+  number from 1 to 65535 (a:http, a:0, a:65536, a:99999, a:+80, a:-1, a:0x50,
+  :9115) is refused, 400 over HTTP; a:1, a:65535 and [::1]:9115 are taken.
+- A heartbeat body over 64 KiB is answered 413 saying it is too large.
+- With --members.max members live, the heartbeat of a new member is refused
+  (429 with Retry-After: 30 over HTTP), logged once until a new member is
+  taken again and counted in pue_allocator_members_refused_total; the members
+  held keep heartbeating, a shutting-down stranger is no new member, and a
+  member whose TTL ran out frees its place while still in the member list.
+- pue-allocator exits 2 on --members.max=0, and -h lists --members.max with
+  its default, 1000.
+- A reload that refuses a bundle, whose restore then fails at its first
+  link, leaves the directory `..data` names in place, so `config.yaml` still
+  reads; the bundle counts as a write failure, neither refused nor fetched,
+  and the next try puts the files in force back, reloads them, and then
+  refuses the bundle with only the good generation's directory left
+  (`TestARefusedReloadWhoseRestoreFailsKeepsTheDirectoryInUse`).
+- `CachedGeneration` names a bundle the client installed and nothing else: a
+  plain `config.yaml`, a changed file in the generation's directory, a
+  top-level name not linked, `config.yaml` linked elsewhere, `..data` gone
+  or naming another generation each give none.
+- `Tidy` with an installed bundle keeps it and removes a cut-short
+  generation's directory, `..tmp-link` and a static target file the bundle
+  does not link, leaving other files; without one (a changed generation, or
+  files put there by hand) it removes `..data`, its links, every
+  generation's directory, `config.yaml` and `static-targets.yaml`, leaving
+  other files.
+- A heartbeat on its way when `ShuttingDown` is called is waited for: the
+  allocator, holding it unheard until the next arrives or 100ms pass, hears
+  the shutting-down heartbeat last.
+- With the default bounds a failing bundle request waits 1s, 2s, 4s, 8s,
+  16s, 30s, 30s, read from a stand-in timer.
+- A heartbeat reply naming a new generation does not end a failure backoff
+  early, and does end the wait for `Retry-After`.
+- Two allocator addresses failing at every heartbeat are each logged once,
+  naming the address, over three heartbeats, and every failure is counted.
+- A child whose cache directory holds a plain `config.yaml` is unready with
+  `--config.watch` and the file is removed; `--dry-run` fails such a file as
+  not an installed bundle and leaves it; the resume, the bundle that does
+  not load and the passing `--dry-run` tests use a bundle laid out as the
+  client installs it.
+- Stopping the allocator client does not return while it is putting a
+  bundle in force, and returns once that is done.
+- A probe job of `allocator.probeJobs` without `targets`, with an empty
+  `targets` list, or with a key the allocator does not take (`target`) is
+  refused by the values schema and, with the schema skipped, by the
+  templates; the schema's and the templates' probe job keys are exactly the
+  yaml keys of `allocator.ProbeJob`, the schema refuses any other key and
+  requires `name`, `collector` and at least one target
+  (SPECIFICATION-CHART.md § 33.10c).
+- `allocator.staticTargets.expandEnv` renders `--static-targets.expand-env`
+  on the exporter pods in allocator mode and never on the allocator, and
+  nothing without it; `staticTargets.expandEnv` beside `allocator.enabled`
+  fails rendering with the schema and without (SPECIFICATION-CHART.md
+  § 33.10c).
+- The allocator's pods are scheduled by `allocator.nodeSelector`,
+  `tolerations`, `affinity`, `priorityClassName` and
+  `topologySpreadConstraints`, never the exporter's values; by default one
+  soft spread over `kubernetes.io/hostname` selecting the allocator's pods
+  and not the exporter's; a constraint without a `labelSelector` is given the
+  allocator's selector labels and `[]` renders none; `allocator.podLabels`
+  and `podAnnotations` reach the pods, a pod label the chart sets fails
+  rendering, and `checksum/config` stays the chart's
+  (SPECIFICATION-CHART.md § 33.10c).
+- The allocator Deployment's `minReadySeconds` is `max(settle, 10s)`,
+  rounded up, plus 10 seconds, for an empty, fractional, millisecond and
+  compound `allocator.settle` (SPECIFICATION-CHART.md § 33.10c).
+- `allocator.serviceMonitor.enabled` renders a ServiceMonitor of the
+  allocator's `/metrics` on port `http` selecting the allocator's Service and
+  not the exporter's, with the interval, timeout and labels given, the token
+  as Bearer credentials only with `allocator.tokenSecret`, the self-metrics
+  monitor beside it, nothing by default or without the allocator, and a
+  timeout longer than its interval failing rendering
+  (SPECIFICATION-CHART.md § 33.10c).
+- Every changed-path filter output a step of `ci.yml` runs under matches
+  `ci.yml` itself, so a change to the chart steps alone runs them; the test
+  fails on the chart filter without `.github/workflows/ci.yml`
+  (SPECIFICATION-CHART.md § 42.12).
+- Every value the chart README's tables name, and every key an object's row
+  of its Values table lists, is declared by the values schema; the test
+  fails on the `allocator` row listing `cache` (SPECIFICATION-CHART.md
+  § 33.13).
+- The README's license badge is a static shields.io badge linking `LICENSE`
+  whose message is the SPDX identifier of the license `LICENSE` holds,
+  Apache-2.0, and never the dynamic `github/license` endpoint (§ 35).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

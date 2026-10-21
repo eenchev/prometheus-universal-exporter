@@ -2080,7 +2080,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
-| `retry` | none | See [Target requests](REQUESTS.md#retries). |
+| `retry` | none | `attempts`, `backoff`, `non_idempotent`, and `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set. See [Target requests](REQUESTS.md#retries). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
@@ -2979,8 +2979,8 @@ naming the key, the number and the range, and so is one past what a
 floating-point number holds, such as `1e400`, which the YAML reader the
 exporter uses takes for text, and an editor, reading YAML 1.2, for a number; and a fraction the exporter
 refuses however small, though a schema, handed the floating-point number,
-takes `1.00000000000000000001` for 1. An entry of `request.accept_status` is
-a status written as a number or as text: a number is the status it is
+takes `1.00000000000000000001` for 1. An entry of `request.accept_status`,
+and one of `request.retry.statuses`, is a status written as a number or as text: a number is the status it is
 however it is written — `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and
 `0503` are 503 — to both; text is text, the digits of a status or a class,
 so `"503.0"` is refused by both. In quotes, digits with a sign or leading
@@ -3033,7 +3033,7 @@ YAML 1.2, and the exporter's reader takes a few more spellings for a
 number, `1_000` and `0b101` among them: at a key of text alone the exporter
 refuses those as numbers too, which is all the two differ on there. What is
 not text has no empty form: `""` is no duration and no size, and both refuse it; and both refuse an empty entry of
-`collector_files`, `request.accept_status`, `request.allowed_targets`,
+`collector_files`, `request.accept_status`, `request.retry.statuses`, `request.allowed_targets`,
 `request.denied_targets`, `request.redirect_trusted_hosts`,
 `transform.include`, `transform.exclude` and the Python
 libraries, and an empty key of a `value_map`, of `request.metadata` and of a
@@ -4337,7 +4337,10 @@ The report lists:
   request.redirect_trusted_hosts`. A `grpc` call is listed with its method,
   metadata and status code. A `localfile` read, which sends nothing, is
   listed as the file it reads. A URL longer than 512 bytes is listed by its
-  first 512.
+  first 512. An `http` or `graphite` request that is retried ends the list
+  with how: `Retries: up to 2, 1s apart, on a failed connection and on an
+  answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
+  collector's [`retry`](REQUESTS.md#retries) or the static target's.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4614,10 +4617,11 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes` or `pagination` is listed under `details.request_policies`, by
-name, with those settings as they will be applied — `2XX` as `2xx`,
-`not_found` as `NOT_FOUND`, a `pagination` with its defaults, `max_pages: 10`
-among them — so a list that lets through more or less than meant, or a
+`accept_codes`, `retry.statuses` or `pagination` is listed under
+`details.request_policies`, by name, with those settings as they will be
+applied — `2XX` as `2xx`, `not_found` as `NOT_FOUND`, `retry.statuses` as
+`retry_statuses`, `[]` included, a `pagination` with its defaults,
+`max_pages: 10` among them — so a list that lets through more or less than meant, or a
 pagination that asks the target for more pages than meant, shows before it is
 deployed.
 

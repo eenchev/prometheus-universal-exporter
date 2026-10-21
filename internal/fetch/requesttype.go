@@ -335,7 +335,7 @@ func ValidateRequest(c *model.Collector) error {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
 	}
-	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.NonIdempotent); err != nil {
+	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent); err != nil {
 		return fmt.Errorf("collector %q %w", c.Name, err)
 	}
 	if c.Request.MaxResponseBytes < 0 {
@@ -347,15 +347,21 @@ func ValidateRequest(c *model.Collector) error {
 	if err := validateAcceptStatus(c); err != nil {
 		return err
 	}
+	if err := validateRetryStatuses(c); err != nil {
+		return err
+	}
 	return rt.Validate(c)
 }
 
 // checkRetryKeys refuses the retry key that does not apply to the type:
 // codes, the gRPC status codes a grpc request retries, for the others, and
-// non_idempotent, about HTTP methods, for grpc.
-func checkRetryKeys(rt *RequestType, codes, nonIdempotent bool) error {
+// statuses and non_idempotent, about HTTP answers and methods, for grpc.
+func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent bool) error {
 	if codes && !rt.StatusCodes {
-		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on 408, 425, 429 and 5xx answers", rt.Name)
+		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on the HTTP statuses retry.statuses lists, 408, 425, 429 and 5xx when it is left out", rt.Name)
+	}
+	if statuses && rt.StatusCodes {
+		return fmt.Errorf("sets request.retry.statuses, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
 	}
 	if nonIdempotent && rt.StatusCodes {
 		return fmt.Errorf("sets request.retry.non_idempotent, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
@@ -446,12 +452,15 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 		}
 	}
 	if retry := t.Request.Retry; retry != nil {
-		if err := checkRetryKeys(rt, retry.Codes != nil, retry.NonIdempotent != nil); err != nil {
+		if err := checkRetryKeys(rt, retry.Codes != nil, retry.Statuses != nil, retry.NonIdempotent != nil); err != nil {
 			return fmt.Errorf("target %q %w", t.Name, err)
 		}
 	}
 	if err := checkAcceptStatus(t.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)
+	}
+	if err := checkTargetRetryStatuses(t, c); err != nil {
+		return fmt.Errorf("target %q %w", t.Name, err)
 	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {

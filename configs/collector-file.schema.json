@@ -1721,6 +1721,19 @@
                   "non_idempotent": {
                     "description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
                     "type": "boolean"
+                  },
+                  "statuses": {
+                    "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused.",
+                    "items": {
+                      "maximum": 599,
+                      "minimum": 100,
+                      "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "type": "array"
                   }
                 },
                 "type": "object"

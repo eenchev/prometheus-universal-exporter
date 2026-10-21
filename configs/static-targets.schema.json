@@ -446,6 +446,19 @@
                   "non_idempotent": {
                     "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
                     "type": "boolean"
+                  },
+                  "statuses": {
+                    "description": "http and graphite: replaces the collector's request.retry.statuses for this target.",
+                    "items": {
+                      "maximum": 599,
+                      "minimum": 100,
+                      "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "type": "array"
                   }
                 },
                 "type": "object"

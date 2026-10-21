@@ -737,6 +737,14 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 			fmt.Fprintf(&b, "     not sent: %s — %s\n", strings.Join(req.Withheld, ", "), req.WithheldWhy)
 		}
 	}
+	// Which answers are retried is the setting of the collector that made
+	// the requests, or a static target's, rather than anything the requests
+	// show: it says why an answer was or was not asked for again.
+	if requester := p.slotOf(); requester != nil && len(requests) > 0 {
+		if retries := fetch.RetriesOf(requester, p.overrides); retries != "" {
+			fmt.Fprintf(&b, "  Retries: %s.\n", retries)
+		}
+	}
 
 	b.WriteString("\nResponse\n")
 	if t.response == nil {

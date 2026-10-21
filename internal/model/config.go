@@ -363,6 +363,12 @@ type RetryConfig struct {
 	// Codes are the gRPC status codes a grpc request retries, by name;
 	// UNAVAILABLE alone when unset. Only for the grpc type.
 	Codes []string `yaml:"codes"`
+	// Statuses are the HTTP statuses an http or graphite request retries,
+	// written as accept_status is: 408, 425, 429 and 5xx when unset. A list
+	// replaces that set, and an empty one retries no status, while a
+	// connection that failed is retried still. Not for the grpc type, which
+	// retries by Codes.
+	Statuses []string `yaml:"statuses"`
 }
 
 // BasicAuth is request.basic_auth, credentials written in the configuration.

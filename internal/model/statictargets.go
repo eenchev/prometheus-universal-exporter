@@ -113,6 +113,8 @@ type TargetRetryConfig struct {
 	NonIdempotent *bool     `yaml:"non_idempotent"`
 	// Codes replaces a grpc collector's retry.codes.
 	Codes []string `yaml:"codes"`
+	// Statuses replaces an http or graphite collector's retry.statuses.
+	Statuses []string `yaml:"statuses"`
 }
 
 // Over is the retry a target makes: its own settings over the collector's.
@@ -132,6 +134,9 @@ func (r *TargetRetryConfig) Over(collector RetryConfig) RetryConfig {
 	}
 	if r.Codes != nil {
 		out.Codes = r.Codes
+	}
+	if r.Statuses != nil {
+		out.Statuses = r.Statuses
 	}
 	return out
 }

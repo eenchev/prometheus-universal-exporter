@@ -483,6 +483,45 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.retry.statuses as retry_statuses,
+// normalized, an empty list as [], and none for a collector that leaves it
+// out, whose default set is no policy of its own; and it refuses an entry
+// accept_status accepts whole, as startup does.
+func TestDryRunReportsRetryStatuses(t *testing.T) {
+	config := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: starting
+    request:
+      type: http
+      retry: {attempts: 2, statuses: [404, "5XX", 4.29e2]}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: connections_only
+    request:
+      type: http
+      retry: {attempts: 2, statuses: []}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: default
+    request:
+      type: http
+      retry: {attempts: 2}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	starting, _ := policies["starting"].(map[string]any)
+	connectionsOnly, _ := policies["connections_only"].(map[string]any)
+	if check.code != 0 || len(policies) != 2 || !reflect.DeepEqual(starting["retry_statuses"], []any{"404", "5xx", "429"}) || !reflect.DeepEqual(connectionsOnly["retry_statuses"], []any{}) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	refused := testutil.WriteFile(t, "refused.yaml", "collectors:\n  - name: health\n    request:\n      type: http\n      accept_status: [2xx, 503]\n      retry: {attempts: 1, statuses: [503]}\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	out := runCheckCLI(t, "--config.file="+refused)
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "health" request.retry.statuses entry "503" is never retried: request.accept_status accepts it`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run lists a collector's request.pagination as it will be applied,
 // its defaults filled in, max_pages among them, and refuses one startup
 // refuses, as startup words it.

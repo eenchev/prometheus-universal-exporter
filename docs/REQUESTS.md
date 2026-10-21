@@ -950,8 +950,9 @@ request:
     backoff: 2s   # fixed delay between attempts
 ```
 
-The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. Two
+The exporter retries transport failures and the HTTP statuses `retry.statuses`
+lists, by default the transient ones: `408`, `425`, `429` and `5xx`. Other
+HTTP statuses are returned immediately. Two
 failures are not retried, since the same request would fail the same way: a
 target the collector's lists [refuse](#restricting-targets) and response
 headers over [their bound](#compression-and-the-response-size). An HTTP/2
@@ -997,9 +998,56 @@ connection error, noting that the wait before retrying was cut short.
 A status the collector [accepts](#accepting-other-statuses) is its answer and
 is not retried, even a `503`.
 
+`retry.statuses`, for `http` and `graphite` collectors, says which statuses
+are retried. It is written as [`accept_status`](#accepting-other-statuses) is,
+statuses from 100 to 599 and classes such as `5xx`, and refused in the same
+words when an entry is neither. A list replaces the default set rather than
+adding to it, so write the default's statuses that should stay retried. A
+service that answers `404` while it is still starting, and whose `5xx` are
+retried as before:
+
+```yaml
+request:
+  retry:
+    attempts: 3
+    backoff: 2s
+    statuses: [404, 408, 425, 429, "5xx"]   # 404 added to the default
+```
+
+A target whose `500` and `501` say the request itself is wrong, which
+another attempt cannot change, and whose gateway errors are worth asking
+again:
+
+```yaml
+request:
+  retry:
+    attempts: 2
+    statuses: [429, 502, 503, 504]   # 500 and 501 are no longer retried
+```
+
+An empty list, `statuses: []`, retries no status at all, while a connection
+that failed, or broke while its body was read, is retried still; `attempts:
+0` is what turns retries off altogether. An entry every status of which the
+collector accepts is refused when the configuration loads, since an accepted
+status is the answer and that entry could never be retried: `retry.statuses:
+[503]` with `accept_status: ["2xx", 503]`, and `retry.statuses: [200]` with
+no `accept_status`, which accepts every 2xx. A class of which only some
+statuses are accepted is taken, and the others are retried: with
+`retry.statuses: ["5xx"]` and `accept_status: ["2xx", 503]`, a `503` is the
+answer and any other `5xx` is retried. Any other status may be listed, a 2xx
+that `accept_status` leaves out or a 3xx that is not followed among them.
+`retry.statuses` without `attempts` changes nothing until a static target's
+`retry.attempts`, or the `retry_attempts` probe parameter, sets some, as with
+`backoff`. A [static target](STATIC-TARGETS.md) may replace it with its own
+`retry.statuses`; no probe parameter sets it. `--dry-run` lists a collector's
+`retry.statuses` under `request_policies`, and a [debug
+probe](CONFIGURATION.md#debug-probes) says, below its requests, how often
+and on which statuses its request is retried.
+
 A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
-`[UNAVAILABLE]` by default, and has no `non_idempotent`; `retry.codes` is
-refused for every other type. See [gRPC](GRPC.md#errors-and-retries).
+`[UNAVAILABLE]` by default, and has no `non_idempotent` or `statuses`;
+`retry.codes` is refused for every other type, and `retry.statuses` for
+`grpc`. See [gRPC](GRPC.md#errors-and-retries).
 
 ## Accepting other statuses
 
@@ -1034,7 +1082,7 @@ are to the [schema](CONFIGURATION.md#editor-support). In quotes it is text,
 the digits of a status or a class: `"503"`, and `"0503"` and `"+503"`, which
 are 503 too though the schema flags them, while `"503.0"` is refused, and so are a number
 with a fraction, such as `503.5`, and one outside 100 to 599, such as `6e2`,
-naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries). jq and yq rules read the
+naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries), and an entry of `retry.statuses` that is accepted whole is refused. jq and yq rules read the
 status as `$status` and the headers as `$headers`, an object of lower-case
 header names, each with its values joined by `, `:
 `$headers["retry-after"]`. A Python script has them as `response.status_code`

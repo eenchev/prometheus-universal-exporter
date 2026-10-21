@@ -38,7 +38,7 @@ func TestTheKeysOfOtherTypesDoNotApplyToHTTP(t *testing.T) {
 	t.Run("grpc's retry.codes", func(t *testing.T) {
 		// retry.codes is grpc's alone.
 		h := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, Retry: model.RetryConfig{Codes: []string{"UNAVAILABLE"}}}}
-		if err := ValidateRequest(&h); err == nil || !strings.Contains(err.Error(), "applies only to request.type grpc") {
+		if err := ValidateRequest(&h); err == nil || !strings.Contains(err.Error(), "applies only to request.type grpc; a http request is retried on a failed connection and on the HTTP statuses retry.statuses lists, 408, 425, 429 and 5xx when it is left out") {
 			t.Fatalf("an http collector took retry.codes: %v", err)
 		}
 	})

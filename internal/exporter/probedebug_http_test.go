@@ -335,3 +335,33 @@ func TestAFailedRequestKeepsItsQueryOutOfEveryAnswer(t *testing.T) {
 	assertContains(t, answer.Body.String(), "token=<redacted>", "view=<redacted>")
 	assertContains(t, report.Body.String(), "failed", "token=<redacted>")
 }
+
+// A debug probe's report says, below its requests, how the request is
+// retried, on the collector's retry.statuses: a 404 it lists is asked for
+// again, and the report shows both attempts. A collector that makes no
+// retry says nothing of retries.
+func TestADebugProbeSaysWhichStatusesAreRetried(t *testing.T) {
+	testutil.CaptureLogs(t)
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"up":1,"latency":2}`))
+	}))
+	t.Cleanup(target.Close)
+	retried := modeCollector("starting", model.ErrorModeLog)
+	retried.Request.Retry = model.RetryConfig{Attempts: 2, Statuses: []string{"404", "5xx"}}
+	server := modeServer(t, retried, modeCollector("plain", model.ErrorModeLog))
+	server.SetDebug(DebugFull)
+	body := debugProbeGet(t, server, "collector=starting&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
+	assertContains(t, body, "-> 404 Not Found in", "-> 200 OK in", "\n  Retries: up to 2, 0s apart, on a failed connection and on an answer of 404, 5xx that is not accepted.\n")
+	if hits.Load() != 2 {
+		t.Fatalf("the target was asked %d times", hits.Load())
+	}
+	if body := debugProbeGet(t, server, "collector=plain&debug=true&target="+url.QueryEscape(target.URL)).Body.String(); strings.Contains(body, "Retries:") {
+		t.Fatalf("a collector without retries:\n%s", body)
+	}
+}

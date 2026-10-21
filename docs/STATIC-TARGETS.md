@@ -293,7 +293,12 @@ scrapes that start after it.
 Retries come from the collector's `request.retry`, and each key a target's own
 `request.retry` sets replaces the collector's, as the `retry_attempts` and
 `retry_backoff` probe parameters each replace one: a target setting only
-`attempts: 3` keeps the collector's `backoff` and `non_idempotent`. Scrapes go through the same fetch, decode and
+`attempts: 3` keeps the collector's `backoff` and `non_idempotent`. An
+`http` or `graphite` target's `retry.statuses` replaces the collector's list,
+or the default set, whole, as the collector's own replaces the default
+([Retries](REQUESTS.md#retries)); an entry that the `accept_status` in force
+for the target, its own or else the collector's, accepts whole is refused,
+since it could never be retried. Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A static target scrape and an identical `/probe` request share cache

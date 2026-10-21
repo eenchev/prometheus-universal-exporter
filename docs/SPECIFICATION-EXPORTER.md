@@ -230,8 +230,23 @@ request:
 
 `attempts` counts retries after the initial request and defaults to zero.
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
-retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
+retry transport failures and the HTTP statuses `retry.statuses` lists, which
+are, when it is left out, the transient statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
+`retry.statuses`, for `http` and `graphite`, MUST be written and checked as
+`accept_status` is (§ 5.1, `http`), statuses from 100 to 599 and classes such as
+`5xx`, refused in the same words; a list MUST replace the default set, not add
+to it, and an empty list MUST retry no status while a transport failure is
+still retried. An entry every status of which the collector accepts — the
+`accept_status` in force, or every 2xx without one — MUST be refused when the
+configuration loads, naming the collector, or the static target, and the
+entry, since it could never take effect; a class only some of whose statuses
+are accepted MUST be taken, and an accepted status MUST NOT be retried.
+`retry.statuses` MUST be refused for `grpc`, in a collector and a static
+target, as `retry.codes` is for every other type; a static target's MUST
+replace its collector's whole, and no probe parameter sets it. A debug report
+of an `http` or `graphite` request with retries MUST say, after its requests,
+how often, how far apart and on which statuses it is retried.
 A refused target (§ 26.1) and response headers over their bound (§ 4) MUST
 NOT be retried. An HTTP/2 connection closed for a protocol error before the
 response's headers were read (§ 4) MUST be retried once, as one of
@@ -760,7 +775,7 @@ opt-in types.
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
-| `retry` | none | `attempts` and `backoff`, both non-negative. |
+| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out (§ 3.2a). |
 | `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
@@ -1094,7 +1109,7 @@ keys:
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
-| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` and `statuses` MUST be refused, and `codes` for every other type, in a collector and a static target. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -6969,8 +6984,8 @@ Whatever needs both — a static target scrape above all — MUST read the pair
 once rather than each on its own, and a scrape MUST use the configuration
 its target was read with. Validation MUST NOT write into a configuration or
 a static target file in force, which scrapes are reading: whatever spelling
-it normalizes — a target's `accept_status`, `accept_codes` and
-`retry.codes` — MUST be written once, when the file is loaded and before it
+it normalizes — a target's `accept_status`, `retry.statuses`, `accept_codes`
+and `retry.codes` — MUST be written once, when the file is loaded and before it
 is in force, and the check of the target file against the configuration,
 which a reload repeats on the file in force, MUST only read both. That check
 MUST NOT go through the configuration's collectors for each target, which
@@ -7374,8 +7389,8 @@ integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
 a fraction past the digits of the floating-point number a schema is handed,
 such as `1.00000000000000000001`, stay the exporter's to refuse, the
 documentation of the schemas MUST say so, and a test MUST put such numbers
-through both. An entry of `request.accept_status` written as a number is the
-status it equals to both (§ 5.0), which the tables of keys MUST show of a
+through both. An entry of `request.accept_status`, and of
+`request.retry.statuses`, written as a number is the status it equals to both (§ 5.0), which the tables of keys MUST show of a
 number with a point, an exponent, in hex, in octal, with an underscore, and
 with a sign and leading zeros; the spellings of a number the exporter's
 reader takes beyond YAML 1.2, such as `5_03`, are text that is no status to
@@ -7443,9 +7458,9 @@ exporter requires MUST be refused by both written `""`, as it is left out:
 `transform.type`, `request.type`, a collector's and a label's `name`, and a
 static target's `collector`. A duration and a size have no empty form, and
 MUST be refused by both written `""`; so MUST an empty entry of
-`collector_files`, `request.accept_status`, `request.allowed_targets`,
-`request.denied_targets`, `request.redirect_trusted_hosts`,
-`transform.include`, `transform.exclude`,
+`collector_files`, `request.accept_status`, `request.retry.statuses`,
+`request.allowed_targets`, `request.denied_targets`,
+`request.redirect_trusted_hosts`, `transform.include`, `transform.exclude`,
 `transform.libraries` and `transform.required_libs`, and an empty key of a
 `value_map`, of `request.metadata`, `request.headers` and `request.query`,
 of a static target's `params`, `labels` and `request.headers`, and an empty
@@ -8332,8 +8347,9 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status`, `accept_codes` or `pagination` is listed under
-  `details.request_policies` with those settings as normalised for use, a
+  `accept_status`, `accept_codes`, `retry.statuses` or `pagination` is listed
+  under `details.request_policies` with those settings as normalised for use,
+  `retry.statuses` as `retry_statuses`, an empty list as `[]`, a
   `pagination` with its defaults filled in;
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check;
@@ -25398,7 +25414,7 @@ an entry.
 The presence and the absence of a parameter, a header, or a credential MUST
 produce different keys. Every list the key is built from — a parameter's
 values, a header's values, and a static target's own sections (`targets`,
-`metadata`, `retry_codes`) — MUST be written with its length, so a value that
+`metadata`, `retry_codes`, `retry_statuses`) — MUST be written with its length, so a value that
 reads like the next item cannot move a boundary and make two different
 requests share a key. A probe that supplies no credential, no forwarded
 header, or no TLS override therefore MUST NOT be able to read an entry stored

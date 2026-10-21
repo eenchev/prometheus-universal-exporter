@@ -343,7 +343,7 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 
 // targetOwnRequest is what the target's request sets that no probe can, for
 // its cache key: a graphite collector's targets, a grpc collector's metadata
-// and retry codes, an sshfile collector's account and credential files. Each section names itself and how many values follow, so
+// and retry codes, the retried statuses, an sshfile collector's account and credential files. Each section names itself and how many values follow, so
 // a value that looks like the next section's name cannot move the boundary
 // between two sections, and two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
@@ -359,6 +359,9 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	}
 	if retry := t.Request.Retry; retry != nil && retry.Codes != nil {
 		own = append(append(own, "retry_codes", strconv.Itoa(len(retry.Codes))), retry.Codes...)
+	}
+	if retry := t.Request.Retry; retry != nil && retry.Statuses != nil {
+		own = append(append(own, "retry_statuses", strconv.Itoa(len(retry.Statuses))), retry.Statuses...)
 	}
 	if t.Request.AcceptStatus != nil {
 		own = append(append(own, "accept_status", strconv.Itoa(len(t.Request.AcceptStatus))), t.Request.AcceptStatus...)

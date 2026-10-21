@@ -128,6 +128,12 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 			fmt.Fprintf(&b, "     not sent: %s — %s\n", strings.Join(req.Withheld, ", "), req.WithheldWhy)
 		}
 	}
+	// The line of retries, added since, is no line the bounds cut.
+	if requester := p.slotOf(); requester != nil && len(requests) > 0 {
+		if retries := fetch.RetriesOf(requester, p.overrides); retries != "" {
+			fmt.Fprintf(&b, "  Retries: %s.\n", retries)
+		}
+	}
 
 	b.WriteString("\nResponse\n")
 	if t.response == nil {

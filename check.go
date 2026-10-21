@@ -178,14 +178,18 @@ func checkStartup(in checkInputs) checkReport {
 }
 
 // requestPolicy is what a collector's request lets through: the targets it
-// may and may not reach and the statuses it decodes, as they will be
-// applied, so a list that says less or more than meant shows before it is
-// deployed.
+// may and may not reach, the statuses it decodes and those it retries, as
+// they will be applied, so a list that says less or more than meant shows
+// before it is deployed.
 type requestPolicy struct {
 	AllowedTargets []string `json:"allowed_targets,omitempty"`
 	DeniedTargets  []string `json:"denied_targets,omitempty"`
 	AcceptStatus   []string `json:"accept_status,omitempty"`
 	AcceptCodes    []string `json:"accept_codes,omitempty"`
+	// RetryStatuses is request.retry.statuses when the collector sets it,
+	// which replaces the default set: an empty list, which retries no
+	// status, is shown as [] rather than left out.
+	RetryStatuses *[]string `json:"retry_statuses,omitempty"`
 	// Pagination is request.pagination as it will be applied, its defaults
 	// filled in: max_pages above all, which bounds what one trip asks of
 	// the target.
@@ -198,7 +202,10 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
 		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination}
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil {
+		if retried := c.Request.Retry.Statuses; retried != nil {
+			p.RetryStatuses = &retried
+		}
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil {
 			out[c.Name] = p
 		}
 	}

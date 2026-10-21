@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +138,9 @@ type RequestOverrides struct {
 	Message    *string
 	Metadata   map[string]string
 	RetryCodes []string
+	// RetryStatuses is a static target's retry.statuses, replacing an http
+	// or graphite collector's when not nil; no probe parameter sets it.
+	RetryStatuses []string
 	// AcceptStatus and AcceptCodes are a static target's request.accept_status
 	// and accept_codes, replacing the collector's when not nil; no probe
 	// parameter sets them.
@@ -913,8 +917,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			response.RedirectWithheld = redirectWithheldFrom(requestContext)
 		}
 		// An answer the collector accepts is its answer, not a failure to
-		// retry, even a 503 it asked to read.
-		if retryableStatus(resp.StatusCode) && !AcceptedStatus(c, overrides, resp.StatusCode) && attempt < retryAttempts {
+		// retry, even a 503 it asked to read. The load refuses a
+		// retry.statuses entry that is accepted whole (checkRetryStatuses),
+		// so this matters only where a class is retried and some of its
+		// statuses are accepted, or for the default set.
+		if retriedStatus(c, overrides, resp.StatusCode) && !AcceptedStatus(c, overrides, resp.StatusCode) && attempt < retryAttempts {
 			// A wait the deadline, a shutdown or the caller cut short keeps
 			// what the target answered: the status and body say why the
 			// scrape failed, where the bare context error would only say
@@ -987,8 +994,65 @@ func IdempotentMethod(method string) bool {
 	return false
 }
 
-func retryableStatus(status int) bool {
-	return status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500 && status <= 599
+// DefaultRetryStatuses are the statuses an http or graphite request retries
+// when retry.statuses is left out: those that say the target could not
+// answer now, and may on the next attempt — 408 Request Timeout, 425 Too
+// Early, 429 Too Many Requests and every 5xx.
+var DefaultRetryStatuses = []string{"408", "425", "429", "5xx"}
+
+// RetryStatuses are the statuses a request of c retries: a static target's
+// retry.statuses, else the collector's, else DefaultRetryStatuses. An empty
+// list is no status at all, not the default.
+func RetryStatuses(c *model.Collector, overrides RequestOverrides) []string {
+	retried := c.Request.Retry.Statuses
+	if overrides.RetryStatuses != nil {
+		retried = overrides.RetryStatuses
+	}
+	if retried == nil {
+		retried = DefaultRetryStatuses
+	}
+	return retried
+}
+
+// RetriesOf says how a request of c, with overrides, made over HTTP is
+// retried, for the debug report: at most how often, how far apart and on
+// what. It is "" when no retry is made — attempts is 0, or an http request's
+// method is not idempotent and retry.non_idempotent is unset — and for a
+// type that is not retried by HTTP status: one without request.retry, and
+// grpc, which retries by code.
+func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
+	rt := requestTypeOf(c)
+	if rt == nil || rt.StatusCodes || !slices.Contains(rt.Fields, "retry") {
+		return ""
+	}
+	attempts := c.Request.Retry.Attempts
+	if overrides.RetryAttempts != nil {
+		attempts = *overrides.RetryAttempts
+	}
+	backoff := time.Duration(c.Request.Retry.Backoff)
+	if overrides.RetryBackoff != nil {
+		backoff = *overrides.RetryBackoff
+	}
+	anyMethod := c.Request.Retry.NonIdempotent
+	if overrides.RetryNonIdempotent != nil {
+		anyMethod = *overrides.RetryNonIdempotent
+	}
+	// graphite's method is its own, a GET or a form that only reads, and
+	// is retried as a GET (fetch).
+	if attempts <= 0 || rt.Method == nil && !anyMethod && !IdempotentMethod(requestMethod(c, overrides)) {
+		return ""
+	}
+	statuses := RetryStatuses(c, overrides)
+	if len(statuses) == 0 {
+		return fmt.Sprintf("up to %d, %s apart, on a failed connection alone: retry.statuses is empty", attempts, max(backoff, 0))
+	}
+	return fmt.Sprintf("up to %d, %s apart, on a failed connection and on an answer of %s that is not accepted", attempts, max(backoff, 0), strings.Join(statuses, ", "))
+}
+
+// retriedStatus says whether an answer with status is retried, when it is
+// not accepted and an attempt is left.
+func retriedStatus(c *model.Collector, overrides RequestOverrides, status int) bool {
+	return statusListed(RetryStatuses(c, overrides), status)
 }
 
 func waitRetry(ctx context.Context, backoff time.Duration) error {
@@ -1144,11 +1208,64 @@ func AcceptedStatus(c *model.Collector, overrides RequestOverrides, status int) 
 	if len(accepted) == 0 {
 		return status >= 200 && status < 300
 	}
+	return statusListed(accepted, status)
+}
+
+// statusListed says whether status is one of entries, each a status or a
+// class such as 5xx as canonicalStatus writes it.
+func statusListed(entries []string, status int) bool {
 	code := strconv.Itoa(status)
-	for _, entry := range accepted {
+	for _, entry := range entries {
 		if entry == code || (len(code) == 3 && entry[0] == code[0] && entry[1:] == "xx") {
 			return true
 		}
 	}
 	return false
+}
+
+// validateRetryStatuses checks request.retry.statuses at load, as
+// request.accept_status is checked, after accept_status is normalized.
+func validateRetryStatuses(c *model.Collector) error {
+	if err := normalizeAcceptStatus(c.Request.Retry.Statuses); err != nil {
+		return fmt.Errorf("collector %q request.retry.statuses %w", c.Name, err)
+	}
+	if err := checkRetryStatuses(c.Request.Retry.Statuses, c.Request.AcceptStatus); err != nil {
+		return fmt.Errorf("collector %q %w", c.Name, err)
+	}
+	return nil
+}
+
+// checkRetryStatuses refuses an entry of retry.statuses, normalized, every
+// status of which accepted, normalized, accepts: an accepted status is the
+// answer and is never retried, so the entry could never take effect. A class
+// only some of whose statuses are accepted is kept: the others are retried.
+func checkRetryStatuses(retried, accepted []string) error {
+	// accepts is AcceptedStatus of these lists.
+	accepts := func(status int) bool {
+		if len(accepted) == 0 {
+			return status >= 200 && status < 300
+		}
+		return statusListed(accepted, status)
+	}
+	for _, entry := range retried {
+		var least, most int
+		if code, err := strconv.Atoi(entry); err == nil {
+			least, most = code, code
+		} else {
+			least = int(entry[0]-'0') * 100
+			most = least + 99
+		}
+		whole := true
+		for status := least; status <= most && whole; status++ {
+			whole = accepts(status)
+		}
+		if !whole {
+			continue
+		}
+		if len(accepted) == 0 {
+			return fmt.Errorf("request.retry.statuses entry %q is never retried: it is a 2xx, which a collector without request.accept_status accepts, and an accepted status is the answer, not a failure to retry; take it out of retry.statuses, or set accept_status without it", entry)
+		}
+		return fmt.Errorf("request.retry.statuses entry %q is never retried: request.accept_status accepts it, and an accepted status is the answer, not a failure to retry; take it out of one of the two lists", entry)
+	}
+	return nil
 }

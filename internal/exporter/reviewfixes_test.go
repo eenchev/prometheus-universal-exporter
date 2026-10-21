@@ -167,3 +167,16 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 		}
 	}
 }
+
+// A static target's retry.statuses is part of its cache key, as no probe
+// parameter carries it: targets that retry different statuses, or none, do
+// not share an entry, and one that leaves it out keeps the collector's.
+func TestATargetsRetryStatusesArePartOfItsCacheKey(t *testing.T) {
+	own := func(retry *model.TargetRetryConfig) string {
+		return strings.Join(targetOwnRequest(&model.StaticTarget{Request: model.TargetRequestConfig{Retry: retry}}), "\x00")
+	}
+	listed, empty, unset := own(&model.TargetRetryConfig{Statuses: []string{"404"}}), own(&model.TargetRetryConfig{Statuses: []string{}}), own(nil)
+	if listed == empty || empty == unset || listed == unset || listed != "retry_statuses\x001\x00404" {
+		t.Fatalf("listed %q, empty %q, unset %q", listed, empty, unset)
+	}
+}

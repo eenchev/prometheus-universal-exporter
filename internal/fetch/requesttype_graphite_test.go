@@ -335,3 +335,25 @@ func TestANegativeMaxResponseBytesIsRefusedForAGraphiteCollector(t *testing.T) {
 		t.Errorf("%s: %v", RequestTypeGraphite, err)
 	}
 }
+
+// A graphite request is retried as an http one is, on the statuses
+// retry.statuses lists in place of the default set.
+func TestGraphiteRetriesTheStatusesRetryStatusesLists(t *testing.T) {
+	for status, want := range map[int]int{http.StatusNotFound: 2, http.StatusInternalServerError: 1} {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits++
+			w.WriteHeader(status)
+		}))
+		c := graphiteCollector("a.b")
+		c.Request.Retry = model.RetryConfig{Attempts: 1, Statuses: []string{"404", "503"}}
+		if err := ValidateRequest(&c); err != nil {
+			t.Fatal(err)
+		}
+		_, err := FetchCollector(context.Background(), server.URL, &c, RequestOverrides{}, nil)
+		server.Close()
+		if err != nil || hits != want {
+			t.Errorf("a %d answer was sent %d times, want %d: %v", status, hits, want, err)
+		}
+	}
+}

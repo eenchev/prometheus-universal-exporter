@@ -24729,6 +24729,20 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   beside clusterWide by schema and templates
   (`TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing`).
 
+## 34.163 The generation named is that of the configuration in force
+
+- An exporter in allocator mode, in process, names the first bundle's
+  generation in its self-metrics while the reload that put the bundle in
+  force has not yet returned, held by those it tells, when `/ready` already
+  answers `200`; started again with that bundle in its cache directory, its
+  manager names the generation before the client has asked for anything
+  (§ 42.14e).
+- `ReloadReplacing` stores the generation it is given with the configuration
+  it puts in force, named already to those told of the reload; a refused
+  replacement never names its generation, not even while the unchanged
+  static target file is put in force alone, the restored files are reloaded
+  with theirs, and a reload in place keeps it (§ 42.14e).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

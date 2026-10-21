@@ -630,6 +630,20 @@
             "enabled": {"type": "boolean"}
           }
         },
+        "extraVolumes": {
+          "type": "array",
+          "description": "Volumes of the allocator's pods only, as extraVolumes are the exporter's: the files of a file_sd source, or an http_sd source's token and TLS files.",
+          "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "description": "Mounts of the allocator's pods only, as extraVolumeMounts are the exporter's; none at or inside a directory the allocator's pod mounts already.",
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "mountPath": {"type": "string", "not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}, "readOnly": {"type": "boolean"}, "subPath": {"type": "string"}},
+            "required": ["name", "mountPath"]
+          }
+        },
         "podLabels": {"$ref": "#/$defs/stringMap"},
         "podAnnotations": {"$ref": "#/$defs/stringMap"},
         "priorityClassName": {"type": "string"},

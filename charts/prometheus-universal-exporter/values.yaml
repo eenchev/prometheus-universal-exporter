@@ -796,6 +796,30 @@ allocator:
   # A PodDisruptionBudget of maxUnavailable: 1 for the allocator.
   pdb:
     enabled: true
+  # Extra volumes and mounts of the allocator's pods only, in the shapes of
+  # extraVolumes and extraVolumeMounts, which mount into the exporter's pods
+  # and never the allocator's. This is how a file_sd source's files, or an
+  # http_sd source's bearer_token_file and tls files, reach the allocator:
+  #
+  #   extraVolumes:
+  #     - name: file-sd
+  #       configMap:
+  #         name: websites-sd
+  #   extraVolumeMounts:
+  #     - name: file-sd
+  #       mountPath: /etc/pue-sd
+  #       readOnly: true
+  #
+  # and a source of files: [/etc/pue-sd/*.json]. A mount path the
+  # allocator's pod already uses is rejected while rendering, and so is one
+  # inside it, since those are read-only volumes in which no mount point can
+  # be created: the configuration directory, the static target and probe
+  # targets directories while the allocator reads those files, the token's
+  # directory with tokenSecret, and the service account token's directory,
+  # /var/run/secrets/kubernetes.io/serviceaccount, while that token is
+  # mounted. So is a path two entries share.
+  extraVolumes: []
+  extraVolumeMounts: []
   # Labels and annotations of the allocator's pods only, over defaultLabels
   # and defaultAnnotations, as podLabels and podAnnotations are for the
   # exporter's: a label the chart sets itself fails rendering, and

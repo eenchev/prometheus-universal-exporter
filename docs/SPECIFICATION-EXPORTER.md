@@ -7332,7 +7332,8 @@ begin with the modeline pointing at it.
 
 The schemas and the example configurations MUST live together in `configs/`,
 not at the repository root, and the schemas' published addresses MUST be under
-it. `make schemas` MUST regenerate all three.
+it. `make schemas` MUST regenerate all three, and the target allocator's two
+(§ 42.14d).
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads free text, since YAML reads `expression: 1`
@@ -26387,6 +26388,26 @@ MUST carry its source's labels but those starting with `__`, `job`,
 find MUST be put in force as a reload is (handover, removal at once, a
 bundle changing only with its share), and a reload MUST keep a source whose
 owner and settings it leaves alone, with what it found.
+
+**Schemas.** The repository MUST publish the JSON Schemas of the
+allocator's own files in `configs/`, generated from the structs the
+allocator decodes with rules by path, as the exporter's are (§ 24.3):
+`configs/allocator-static-targets.schema.json`, the exporter's static target
+file schema with `discovered_targets`, its entries declaring a static
+target's keys but `target`, with `name` (required), `discovery` (required,
+not empty), `target_template` and `shard_key` (only `address`), and the
+static target file then valid with `targets` empty or left out; and
+`configs/probe-targets.schema.json`, the probe targets file's. A discovery
+source MUST declare exactly the keys of the allocator's `DiscoveryConfig`,
+with each kind's own, and require one kind. `pue-allocator
+--static-targets-file-schema` and `--probe-targets-file-schema` MUST print
+them and exit 0, and `make schemas` MUST write them. The exporter's
+`configs/static-targets.schema.json` MUST keep refusing `discovered_targets`.
+A test MUST fail when a committed file differs from what the code generates,
+when a schema's keys differ from the keys the allocator decodes, the probe
+job's of the chart's values schema included (SPECIFICATION-CHART.md
+§ 33.10c), when an example of `docs/ALLOCATOR.md` does not validate against
+its schema, and when a schema accepts any of a set of invalid files.
 
 **Members.** A member MUST be live while its last heartbeat is younger than
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop

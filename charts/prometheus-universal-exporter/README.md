@@ -986,7 +986,7 @@ extraArgs:
   - --some.new-flag=value
 ```
 
-`extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
+`extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. They mount into the exporter's pods; the [target allocator](#target-allocator)'s pods take `allocator.extraVolumes` and `allocator.extraVolumeMounts` instead. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
 
 Three mistakes are rejected while rendering, because each fails in a way that points somewhere other than the values file:
 
@@ -1167,8 +1167,47 @@ default, the chart lets it `get`, `list` and `watch` EndpointSlices: a Role
 and a RoleBinding in each namespace a source lists, the release's for a source
 that lists none, and a ClusterRole and a ClusterRoleBinding
 `<namespace>-<fullname>-allocator` for a source with `all_namespaces`.
-Without a `kubernetes` source none of this is rendered. A `file_sd` source
-reads files the allocator mounts, which the chart does not provide.
+Without a `kubernetes` source none of this is rendered.
+
+A `file_sd` source reads files in the allocator's pod, and an `http_sd`
+source's `bearer_token_file` and `tls` files are read there too. The
+exporter's `extraVolumes` and `extraVolumeMounts` mount into the exporter's
+pods only; `allocator.extraVolumes` and `allocator.extraVolumeMounts`, in the
+same shapes, mount into the allocator's pods only. A ConfigMap of file_sd
+files, say:
+
+```yaml
+allocator:
+  enabled: true
+  extraVolumes:
+    - name: file-sd
+      configMap:
+        name: websites-sd
+  extraVolumeMounts:
+    - name: file-sd
+      mountPath: /etc/pue-sd
+      readOnly: true
+  probeJobs:
+    - name: websites
+      collector: html_status
+      target_template: https://{{address}}/health
+      discovery:
+        - file_sd:
+            files: [/etc/pue-sd/*.json]
+```
+
+A ConfigMap volume is updated in place when the ConfigMap changes, and the
+source reads its files again every `refresh_interval`, so a change to them
+needs no rollout; a `subPath` mount is never updated. As for the exporter, a
+`mountPath` the allocator's pod already mounts fails rendering, and so does
+one inside it, since those are read-only volumes: the configuration
+directory, `/etc/prometheus-universal-exporter-static-targets` with
+`allocator.staticTargets.data`, `/etc/prometheus-universal-exporter-probe-targets`
+with `allocator.probeJobs`, the token's directory with
+`allocator.tokenSecret.name`, and the service account token's,
+`/var/run/secrets/kubernetes.io/serviceaccount`, while it is mounted, with a
+`kubernetes` source or `serviceAccount.automount`; and so does a path two
+entries share.
 
 `allocator.staticTargets.expandEnv` renders `--static-targets.expand-env` on
 the exporter pods, which then expand `${NAME}` references in their share of
@@ -1194,6 +1233,7 @@ allocator refuses.
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
 | `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |
 | `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them. |
+| `allocator.extraVolumes` / `extraVolumeMounts` | `[]` | Volumes and mounts of the allocator's pods only, as `extraVolumes` and `extraVolumeMounts` are the exporter's: a `file_sd` source's files, an `http_sd` source's token and TLS files. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
@@ -1271,7 +1311,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |

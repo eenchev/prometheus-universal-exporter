@@ -143,6 +143,10 @@ spec:
               mountPath: {{ include "prometheus-universal-exporter.allocatorTokenDir" . }}
               readOnly: true
             {{- end }}
+            {{- include "prometheus-universal-exporter.validateAllocatorMounts" . }}
+            {{- with $allocator.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -165,5 +169,8 @@ spec:
             items:
               - key: {{ $allocator.tokenSecret.key | default "token" | quote }}
                 path: token
+        {{- end }}
+        {{- with $allocator.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}

@@ -137,6 +137,8 @@ schemas:
 	go run . --config.schema > configs/config.schema.json
 	go run . --config.collector-file-schema > configs/collector-file.schema.json
 	go run . --static-targets-file-schema > configs/static-targets.schema.json
+	go run ./cmd/pue-allocator --static-targets-file-schema > configs/allocator-static-targets.schema.json
+	go run ./cmd/pue-allocator --probe-targets-file-schema > configs/probe-targets.schema.json
 
 vet:
 	go vet ./...

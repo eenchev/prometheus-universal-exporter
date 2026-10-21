@@ -790,8 +790,11 @@ final line end — and a test checks that each still is. A file added to
 [collector files](CONFIGURATION.md#collector-files) and
 `configs/static-targets.schema.json` for the
 [static target file](STATIC-TARGETS.md) are generated from the
-configuration structs. After adding or changing a key, regenerate all three, or
-the test suite fails:
+configuration structs, and the target allocator's
+`configs/allocator-static-targets.schema.json` and
+`configs/probe-targets.schema.json` from the structs it decodes, with their
+rules in `internal/allocator/schema.go`. After adding or changing a key,
+regenerate them all, or the test suite fails:
 
 ```sh
 make schemas

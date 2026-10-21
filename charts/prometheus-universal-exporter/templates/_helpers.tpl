@@ -141,6 +141,52 @@
 {{- end -}}
 {{- end -}}
 {{- end }}
+{{- /* The allocator's pod is held to what validateMounts holds the
+       exporter's to, over the directories it mounts itself: the
+       configuration directory always, the static target and the probe
+       targets directories while it reads those files, the token's directory
+       with a token, and the service account token's directory while its
+       token is mounted, a kubernetes discovery source's or
+       serviceAccount.automount's. Every one of them is a ConfigMap, Secret
+       or projected volume, which the kubelet mounts read-only, so no
+       allocator.extraVolumeMounts entry may be at one of them or below
+       one, nor two entries at one path; one at the service account token's
+       directory would, moreover, hide the token a kubernetes source lists
+       EndpointSlices with. */ -}}
+{{- define "prometheus-universal-exporter.validateAllocatorMounts" -}}
+{{- $allocator := .Values.allocator -}}
+{{- $readOnly := list (dict "path" "/etc/prometheus-universal-exporter" "what" "the configuration directory /etc/prometheus-universal-exporter" "kind" "ConfigMap" "hint" "; to add a file to it, add the file to config.data instead") -}}
+{{- if include "prometheus-universal-exporter.allocatorStaticTargets" . -}}
+{{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-static-targets" "what" "the static target directory /etc/prometheus-universal-exporter-static-targets" "kind" "ConfigMap" "hint" "") -}}
+{{- end -}}
+{{- if $allocator.probeJobs -}}
+{{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-probe-targets" "what" "the probe targets directory /etc/prometheus-universal-exporter-probe-targets" "kind" "ConfigMap" "hint" "") -}}
+{{- end -}}
+{{- if $allocator.tokenSecret.name -}}
+{{- $readOnly = append $readOnly (dict "path" (include "prometheus-universal-exporter.allocatorTokenDir" .) "what" (printf "the allocator token directory %s" (include "prometheus-universal-exporter.allocatorTokenDir" .)) "kind" "Secret" "hint" "") -}}
+{{- end -}}
+{{- if or (include "prometheus-universal-exporter.allocatorUsesKubernetes" .) .Values.serviceAccount.automount -}}
+{{- $readOnly = append $readOnly (dict "path" "/var/run/secrets/kubernetes.io/serviceaccount" "what" "the service account token directory /var/run/secrets/kubernetes.io/serviceaccount" "kind" "projected" "hint" "") -}}
+{{- end -}}
+{{- $extra := dict -}}
+{{- range $mount := $allocator.extraVolumeMounts -}}
+{{- $path := $mount.mountPath | toString | clean -}}
+{{- range $taken := $readOnly -}}
+{{- if eq $path $taken.path -}}
+{{- fail (printf "allocator.extraVolumeMounts uses mountPath %q, which the chart already mounts as %s; choose another path" (toString $mount.mountPath) $taken.what) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey $extra $path -}}
+{{- fail (printf "allocator.extraVolumeMounts uses mountPath %q twice, and a pod cannot mount two volumes at one path; give each entry a path of its own" (toString $mount.mountPath)) -}}
+{{- end -}}
+{{- $_ := set $extra $path true -}}
+{{- range $outer := $readOnly -}}
+{{- if hasPrefix (printf "%s/" (trimSuffix "/" $outer.path)) $path -}}
+{{- fail (printf "allocator.extraVolumeMounts uses mountPath %q, which is inside %s, a read-only %s volume in which the mount point cannot be created, so the container would never start; mount it outside %s%s" (toString $mount.mountPath) $outer.what $outer.kind $outer.path $outer.hint) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 {{- /* sshAuth mounts what an sshfile collector reads: a Secret's private
        key, its passphrase and a password, and the known_hosts lines. Each
        mistake below would otherwise render a pod Kubernetes refuses, as it

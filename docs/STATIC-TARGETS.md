@@ -229,7 +229,10 @@ The exporter discovers no targets: a file with the allocator's
 `discovered_targets` key ([Discovering targets](ALLOCATOR.md#discovering-targets))
 is refused, naming the allocator, since the exporter alone would scrape none
 of what it describes. The allocator writes each discovered target out as a
-target of its own before it hands a replica its share.
+target of its own before it hands a replica its share. The file's schema,
+`configs/static-targets.schema.json`, refuses the key too; the allocator's
+file has a schema of its own that takes it,
+[`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json).
 
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`

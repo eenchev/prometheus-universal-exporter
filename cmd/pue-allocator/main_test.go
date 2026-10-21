@@ -48,13 +48,32 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-version"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}
 	}
 	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") {
 		t.Errorf("-h does not give the defaults of the listen address, the settle time and the member bound:\n%s", stdout.String())
+	}
+}
+
+// --static-targets-file-schema and --probe-targets-file-schema print the
+// schemas of the allocator's own files, for editors, and exit 0 without
+// reading a file.
+func TestSchemaFlagsPrintTheSchemas(t *testing.T) {
+	for flag, render := range map[string]func() ([]byte, error){
+		"--static-targets-file-schema": allocator.StaticTargetsSchemaJSON,
+		"--probe-targets-file-schema":  allocator.ProbeTargetsSchemaJSON,
+	} {
+		want, err := render()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{flag, "--config.file=/nonexistent/config.yaml"}, &stdout, &stderr); code != 0 || stdout.String() != string(want) || stderr.Len() != 0 {
+			t.Errorf("%s: exited %d, stderr %q, stdout starts %.80q", flag, code, stderr.String(), stdout.String())
+		}
 	}
 }
 

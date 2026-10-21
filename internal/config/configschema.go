@@ -103,6 +103,57 @@ func StaticTargetsSchemaJSON() ([]byte, error) {
 	return renderSchema(staticTargetsSchema())
 }
 
+// The target allocator (internal/allocator) reads files of its own beside
+// the exporter's, a static target file with discovered_targets and a probe
+// targets file, and describes them with what follows, so its schemas are
+// made, rendered and published as the exporter's are.
+
+// SchemaID is where the published schema of file, in configs, lives.
+func SchemaID(file string) string {
+	return schemaBaseURL + file
+}
+
+// SchemaOf describes t as the exporter's schemas describe their types, with
+// rules adding, by path, what the type cannot say.
+func SchemaOf(t reflect.Type, rules map[string]map[string]any) map[string]any {
+	return schemaFor(t, "", rules)
+}
+
+// StaticTargetsSchema is the static target file's schema, made anew at each
+// call, so the caller may change it.
+func StaticTargetsSchema() map[string]any {
+	return staticTargetsSchema()
+}
+
+// AllowExtensionKeys lets a document's top level hold x- keys of its own,
+// as every file of the exporter's may.
+func AllowExtensionKeys(schema map[string]any) {
+	allowExtensionKeys(schema)
+}
+
+// RenderSchema renders a schema as the exporter's are rendered.
+func RenderSchema(schema map[string]any) ([]byte, error) {
+	return renderSchema(schema)
+}
+
+// OptionalPattern is the pattern of a key that may also be written "", the
+// key left out (optionalPattern).
+func OptionalPattern(pattern string) string {
+	return optionalPattern(pattern)
+}
+
+// OptionalEnum is the values of a key that may also be written "", the key
+// left out (optionalEnum).
+func OptionalEnum(values []string) []string {
+	return optionalEnum(values)
+}
+
+// Caseless is a regular expression of text matched without regard to case,
+// read alike by Go and JavaScript (caseless).
+func Caseless(text string) string {
+	return caseless(text)
+}
+
 // allowExtensionKeys lets a document's top level hold x- keys of its own, for
 // YAML anchors (yamlerrors.go), whatever they contain.
 func allowExtensionKeys(schema map[string]any) {

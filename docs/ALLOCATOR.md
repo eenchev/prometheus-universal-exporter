@@ -49,6 +49,8 @@ pue-allocator \
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
+| `--static-targets-file-schema` | | Print the JSON Schema of the static target file, with `discovered_targets`, for editors, and exit. |
+| `--probe-targets-file-schema` | | Print the JSON Schema of the probe targets file, for editors, and exit. |
 
 Input files that are refused at the start stop the allocator with exit
 status 1, and a malformed command line with 2. Files that change while the
@@ -149,6 +151,19 @@ Beside `targets`, the allocator's static target file may have
 source finds ([Discovering targets](#discovering-targets)); `targets` may
 then be left out.
 
+The exporter's schema of the file, `configs/static-targets.schema.json`,
+refuses `discovered_targets`, as the exporter does. The allocator's file has
+a schema of its own, [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json),
+printed by `pue-allocator --static-targets-file-schema`: the exporter's,
+with `discovered_targets`. Start the file with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/allocator-static-targets.schema.json
+```
+
+and an editor with the YAML language server completes and checks it as it
+does the exporter's files ([Editor support](CONFIGURATION.md#editor-support)).
+
 ### Probe targets
 
 `--probe-targets-file` lists probe jobs: targets probed with one collector,
@@ -197,7 +212,17 @@ probe_jobs:
   written.
 
 The file may keep YAML anchors under top-level `x-` keys, as the exporter's
-files may.
+files may. Its schema, [`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json),
+printed by `pue-allocator --probe-targets-file-schema`, is for editors:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/probe-targets.schema.json
+```
+
+Both of the allocator's schemas are generated from the structs it decodes,
+as the exporter's are, and regenerated with `make schemas`; the allocator's
+checks at load remain the last word, checking too what no schema can, such
+as that a collector is one of the configuration's.
 
 ## Discovering targets
 
@@ -561,6 +586,38 @@ becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A
 the allocator a ServiceAccount of its own, with its token mounted, and a
 Role in each namespace it lists, or a ClusterRole for `all_namespaces`,
 allowing `get`, `list` and `watch` on EndpointSlices.
+
+The files a `file_sd` source reads, and an `http_sd` source's
+`bearer_token_file` and `tls` files, must be in the allocator's pod:
+`allocator.extraVolumes` and `allocator.extraVolumeMounts` mount them there,
+as `extraVolumes` and `extraVolumeMounts` mount files into the exporter's.
+With the file_sd files in a ConfigMap `websites-sd`:
+
+```yaml
+allocator:
+  enabled: true
+  extraVolumes:
+    - name: file-sd
+      configMap:
+        name: websites-sd
+  extraVolumeMounts:
+    - name: file-sd
+      mountPath: /etc/pue-sd
+      readOnly: true
+  probeJobs:
+    - name: websites
+      collector: html_status
+      target_template: https://{{address}}/health
+      discovery:
+        - file_sd:
+            files: [/etc/pue-sd/*.json]
+```
+
+The paths are absolute: a relative one is taken against the directory of the
+file that names it, which in the chart is a ConfigMap of the chart's own. The
+kubelet updates a ConfigMap volume in place, not one mounted with `subPath`,
+and the source reads the files again every `refresh_interval`, so a change to
+the ConfigMap reaches the allocator without a rollout.
 
 Since each replica scrapes only its share of the static targets, adding
 replicas spreads them thinner, and the chart's `autoscaling` can scale the

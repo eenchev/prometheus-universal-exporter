@@ -2903,9 +2903,14 @@ it; the ones under `examples/` do not.
 
 The [static target file](STATIC-TARGETS.md) has a schema of its own,
 [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
-`configs/static-targets.example.yaml` points editors at the same way. All three
-schemas — this one, the [collector file](#collector-files) one and the static
-target file one — are in `configs/` with the examples, and are regenerated with
+`configs/static-targets.example.yaml` points editors at the same way. The
+[target allocator](ALLOCATOR.md)'s files have schemas of their own:
+[`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json),
+its static target file, which may have `discovered_targets`, and
+[`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json),
+its probe targets file. All of them — this one, the
+[collector file](#collector-files) one, the static target file one and the
+allocator's two — are in `configs/` with the examples, and are regenerated with
 `make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary

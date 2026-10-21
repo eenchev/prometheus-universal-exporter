@@ -55,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
+	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
+	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			flags.SetOutput(stdout)
@@ -89,6 +91,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *showVersion {
 		b := exporter.BuildVersion()
 		_, _ = fmt.Fprintf(stdout, "pue-allocator version %s (revision %s, %s, request types %s)\n", b.Version, b.Revision, b.GoVersion, strings.Join(b.RequestTypes, ","))
+		return 0
+	}
+	if *printStaticTargetsSchema || *printProbeTargetsSchema {
+		render := allocator.StaticTargetsSchemaJSON
+		if *printProbeTargetsSchema {
+			render = allocator.ProbeTargetsSchemaJSON
+		}
+		schema, err := render()
+		if err != nil {
+			slog.New(slog.NewJSONHandler(stderr, nil)).Error("rendering the schema failed", "error", err.Error())
+			return 1
+		}
+		_, _ = stdout.Write(schema)
 		return 0
 	}
 

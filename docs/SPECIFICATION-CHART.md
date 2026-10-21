@@ -815,6 +815,25 @@ values schema MUST declare exactly those keys, and of each discovery source
 exactly the allocator's (`name`, `labels`, `max_targets` and one of
 `file_sd`, `http_sd` and `kubernetes`, each with its own keys).
 
+`allocator.extraVolumes` and `allocator.extraVolumeMounts`, empty by default,
+MUST be passed through unchanged into the allocator's pods, appended after the
+volumes and mounts the chart gives them, and never into the exporter's; the
+exporter's `extraVolumes` and `extraVolumeMounts` MUST NOT reach the
+allocator's pods. They are what mounts a `file_sd` source's files, and an
+`http_sd` source's token and TLS files, into the allocator. The values schema
+MUST take them in the shapes of `extraVolumes` and `extraVolumeMounts`, with
+the same pattern refusing a mount path inside the configuration directory. An
+`allocator.extraVolumeMounts` entry MUST fail rendering, naming the value and
+the directory, at or inside a directory the allocator's pod mounts, every one
+a read-only volume: the configuration directory always, the static target
+directory while `allocator.staticTargets.data` is not empty, the probe
+targets directory while `allocator.probeJobs` is not empty, the token's
+directory with `allocator.tokenSecret.name`, and
+`/var/run/secrets/kubernetes.io/serviceaccount` while the service account
+token is mounted, with a `kubernetes` source or `serviceAccount.automount`;
+and so MUST two entries of one `mountPath`. The paths MUST be compared
+cleaned, as for the exporter's (§ 33.10a).
+
 While a probe job or a `discovered_targets` entry of
 `allocator.staticTargets.data` has a `kubernetes` discovery source, the chart
 MUST render a ServiceAccount `<fullname>-allocator` with

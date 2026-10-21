@@ -1134,10 +1134,41 @@ allocator:
   the allocator's NetworkPolicy admits the `allocator.networkPolicy.prometheus`
   peers, so list your Prometheus there.
 
-A probe job takes `name`, `collector`, `targets`, `params`, `labels` and
-`shard_key`, the keys of the allocator's probe targets file, which the
-allocator decodes strictly: any other key, such as `target`, and a job without
-a target fail rendering rather than stop the allocator at start.
+A probe job takes `name`, `collector`, `targets`, `params`, `labels`,
+`shard_key`, `discovery` and `target_template`, the keys of the allocator's
+probe targets file, which the allocator decodes strictly: any other key, such
+as `target`, and a job with neither a target nor a discovery source fail
+rendering rather than stop the allocator at start.
+
+A large fleet need not be listed: a probe job's `discovery`, and the
+`discovered_targets` of `allocator.staticTargets.data`, name `file_sd`,
+`http_sd` or `kubernetes` sources whose targets the allocator allocates as
+written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
+
+```yaml
+allocator:
+  enabled: true
+  probeJobs:
+    - name: databases
+      collector: pg_health
+      discovery:
+        - kubernetes:
+            namespaces: [db]
+            label_selector: app.kubernetes.io/name=postgres
+            port: metrics
+          labels:
+            namespace: __meta_kubernetes_namespace
+```
+
+A `kubernetes` source runs the allocator as a ServiceAccount
+`<fullname>-allocator` of its own, with its token mounted, while the
+exporter's keeps `serviceAccount.automount`. With `allocator.rbac.create`, the
+default, the chart lets it `get`, `list` and `watch` EndpointSlices: a Role
+and a RoleBinding in each namespace a source lists, the release's for a source
+that lists none, and a ClusterRole and a ClusterRoleBinding
+`<namespace>-<fullname>-allocator` for a source with `all_namespaces`.
+Without a `kubernetes` source none of this is rendered. A `file_sd` source
+reads files the allocator mounts, which the chart does not provide.
 
 `allocator.staticTargets.expandEnv` renders `--static-targets.expand-env` on
 the exporter pods, which then expand `${NAME}` references in their share of
@@ -1161,7 +1192,8 @@ allocator refuses.
 | `allocator.tokenSecret.name` / `key` | `""` / `token` | A Secret holding a shared bearer token: the allocator requires it, the exporter pods send it and the ScrapeConfigs present it. |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
-| `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one, and optionally `params`, `labels` and `shard_key` (`target` or `address`); no other key. |
+| `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |
+| `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
@@ -1239,7 +1271,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |

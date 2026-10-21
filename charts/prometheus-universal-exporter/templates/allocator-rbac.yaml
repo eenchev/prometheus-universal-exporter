@@ -1,0 +1,97 @@
+{{- /* What a kubernetes discovery source needs: a ServiceAccount of the
+       allocator's own, so the exporter's keeps no token and no permission,
+       and, with allocator.rbac.create, the right to read EndpointSlices
+       where the sources list them. A source without namespaces lists the
+       allocator's own; one with all_namespaces lists the cluster's, which
+       takes a ClusterRole. */ -}}
+{{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
+{{- $name := include "prometheus-universal-exporter.allocatorFullname" . }}
+{{- $namespace := include "prometheus-universal-exporter.namespace" . }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+automountServiceAccountToken: true
+{{- if (.Values.allocator.rbac | default dict).create }}
+{{- $cluster := false }}
+{{- $namespaces := list }}
+{{- range $source := (include "prometheus-universal-exporter.allocatorKubernetesSources" . | fromJson).sources }}
+{{- if get $source "all_namespaces" }}
+{{- $cluster = true }}
+{{- else if get $source "namespaces" }}
+{{- range $ns := get $source "namespaces" }}{{ $namespaces = append $namespaces (toString $ns) }}{{ end }}
+{{- else }}
+{{- $namespaces = append $namespaces $namespace }}
+{{- end }}
+{{- end }}
+{{- $rule := dict "apiGroups" (list "discovery.k8s.io") "resources" (list "endpointslices") "verbs" (list "get" "list" "watch") }}
+{{- if $cluster }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+rules:
+  {{- toYaml (list $rule) | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $namespace }}
+{{- end }}
+{{- range $ns := $namespaces | uniq | sortAlpha }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list $) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $) | nindent 4 }}
+rules:
+  {{- toYaml (list $rule) | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "prometheus-universal-exporter.allocatorLabels" (list $) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

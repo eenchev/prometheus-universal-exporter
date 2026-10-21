@@ -916,6 +916,44 @@ true
 {{- end }}
 {{- /* The target allocator's objects are named <fullname>-allocator, cut so
        the name stays a DNS label, as a Service's must. */ -}}
+{{- /* The kubernetes discovery sources of the allocator's inputs: those of
+       the probe jobs and of the static target document's
+       discovered_targets entries, each the source's kubernetes block, as
+       JSON under "sources". A document that is no YAML has none here; the
+       allocator says what is wrong with it. */ -}}
+{{- define "prometheus-universal-exporter.allocatorKubernetesSources" -}}
+{{- $sources := list -}}
+{{- $owners := list -}}
+{{- $allocator := .Values.allocator | default dict -}}
+{{- range $job := $allocator.probeJobs | default list -}}
+{{- if kindIs "map" $job -}}{{- $owners = append $owners $job -}}{{- end -}}
+{{- end -}}
+{{- $static := (($allocator.staticTargets | default dict).data | default "" | toString | fromYaml) | default dict -}}
+{{- $entries := get $static "discovered_targets" -}}
+{{- if kindIs "slice" $entries -}}
+{{- range $entry := $entries -}}
+{{- if kindIs "map" $entry -}}{{- $owners = append $owners $entry -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $owner := $owners -}}
+{{- $list := get $owner "discovery" -}}
+{{- if kindIs "slice" $list -}}
+{{- range $source := $list -}}
+{{- if and (kindIs "map" $source) (hasKey $source "kubernetes") -}}
+{{- $sources = append $sources ((get $source "kubernetes") | default dict) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson (dict "sources" $sources) -}}
+{{- end }}
+{{- /* Whether the allocator lists EndpointSlices, and so runs as a
+       ServiceAccount of its own with its token mounted. */ -}}
+{{- define "prometheus-universal-exporter.allocatorUsesKubernetes" -}}
+{{- if and .Values.allocator .Values.allocator.enabled (include "prometheus-universal-exporter.allocatorKubernetesSources" . | fromJson).sources -}}
+true
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.allocatorFullname" -}}
 {{- printf "%s-allocator" (include "prometheus-universal-exporter.fullname" . | trunc 53 | trimSuffix "-") -}}
 {{- end }}
@@ -1044,13 +1082,14 @@ true
 {{- /* The allocator decodes the file strictly and refuses a job without
        targets, so either would stop it at start. */ -}}
 {{- range $key, $_ := $job -}}
-{{- if not (has $key (list "name" "collector" "targets" "params" "labels" "shard_key")) -}}
-{{- fail (printf "allocator.probeJobs entry %s has the key %s, which the allocator refuses; a probe job takes name, collector, targets, params, labels and shard_key" $name $key) -}}
+{{- if not (has $key (list "name" "collector" "targets" "params" "labels" "shard_key" "discovery" "target_template")) -}}
+{{- fail (printf "allocator.probeJobs entry %s has the key %s, which the allocator refuses; a probe job takes name, collector, targets, params, labels, shard_key, discovery and target_template" $name $key) -}}
 {{- end -}}
 {{- end -}}
 {{- $targets := get $job "targets" -}}
-{{- if or (not (kindIs "slice" $targets)) (not $targets) -}}
-{{- fail (printf "allocator.probeJobs entry %s lists no targets; the allocator refuses a probe job without targets, so give it at least one" $name) -}}
+{{- $discovery := get $job "discovery" -}}
+{{- if and (or (not (kindIs "slice" $targets)) (not $targets)) (or (not (kindIs "slice" $discovery)) (not $discovery)) -}}
+{{- fail (printf "allocator.probeJobs entry %s lists no targets and no discovery; the allocator refuses a probe job without either, so give it a target or a discovery source" $name) -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.staticTargets.expandEnv -}}

@@ -808,9 +808,26 @@ the configuration directory; `allocator.staticTargets.data` and
 ConfigMaps of their own, mounted into the allocator only, outside the
 configuration directory. The allocator's pods MUST roll when any of the three
 changes. A probe job MUST hold only the keys the allocator's probe targets
-file takes, `name`, `collector`, `targets`, `params`, `labels` and
-`shard_key`, since the allocator decodes it strictly, and MUST list at least
-one target; the values schema MUST declare exactly those keys.
+file takes, `name`, `collector`, `targets`, `params`, `labels`,
+`shard_key`, `discovery` and `target_template`, since the allocator decodes
+it strictly, and MUST list at least one target or one discovery source; the
+values schema MUST declare exactly those keys, and of each discovery source
+exactly the allocator's (`name`, `labels`, `max_targets` and one of
+`file_sd`, `http_sd` and `kubernetes`, each with its own keys).
+
+While a probe job or a `discovered_targets` entry of
+`allocator.staticTargets.data` has a `kubernetes` discovery source, the chart
+MUST render a ServiceAccount `<fullname>-allocator` with
+`automountServiceAccountToken: true`, and the allocator's pods MUST run as it
+with `automountServiceAccountToken: true`; with `allocator.rbac.create`, true
+by default, it MUST render, allowing `get`, `list` and `watch` on
+`endpointslices` of the API group `discovery.k8s.io` to that ServiceAccount,
+a Role and a RoleBinding `<fullname>-allocator` in each namespace a source
+lists, in the release's namespace for a source that lists none, and a
+ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>-allocator` for a
+source with `all_namespaces`. Without such a source none of them MUST be
+rendered, and the allocator's pods MUST run as the exporter's ServiceAccount
+with `serviceAccount.automount`.
 
 `allocator.staticTargets.expandEnv`, off by default, MUST render
 `--static-targets.expand-env` on the exporter pods in allocator mode, which

@@ -743,9 +743,11 @@ allocator:
   # The probe jobs, rendered as the allocator's probe targets file
   # (probe_jobs). Each entry: name, a DNS-1123 label, which also names its
   # ScrapeConfig <fullname>-<name>; collector, one the configuration defines;
-  # targets, at least one; and optionally params, labels and shard_key
-  # (target or address). These are the keys the allocator's file takes, and
-  # any other key fails rendering, as the allocator would refuse it.
+  # targets, at least one unless discovery finds them; and optionally params,
+  # labels, shard_key (target or address), discovery (file_sd, http_sd or
+  # kubernetes sources, see "Discovering targets" in docs/ALLOCATOR.md) and
+  # target_template. These are the keys the allocator's file takes, and any
+  # other key fails rendering, as the allocator would refuse it.
   #
   #   probeJobs:
   #     - name: websites
@@ -757,7 +759,26 @@ allocator:
   #       targets:
   #         - https://shop.example
   #         - https://docs.example
+  #     - name: databases
+  #       collector: pg_health
+  #       discovery:
+  #         - kubernetes:
+  #             namespaces: [db]
+  #             label_selector: app.kubernetes.io/name=postgres
+  #             port: metrics
+  #           labels:
+  #             namespace: __meta_kubernetes_namespace
   probeJobs: []
+  # A kubernetes discovery source, in probeJobs or in the
+  # discovered_targets of staticTargets.data, runs the allocator as a
+  # ServiceAccount <fullname>-allocator of its own, with its token mounted.
+  # With create, the chart also lets it get, list and watch EndpointSlices: a
+  # Role and RoleBinding in each namespace a source lists (the release's when
+  # it lists none), and a ClusterRole and ClusterRoleBinding for a source
+  # with all_namespaces. Without, bind the ServiceAccount yourself. Nothing
+  # is rendered while no source is a kubernetes one.
+  rbac:
+    create: true
   # A NetworkPolicy for the allocator: ingress on its port only from this
   # release's exporter pods and from the peers in prometheus, the Prometheus
   # pods that fetch the probe targets. The default peer is a pod labelled

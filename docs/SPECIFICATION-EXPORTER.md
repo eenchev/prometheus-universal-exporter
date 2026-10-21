@@ -24283,6 +24283,89 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   target's, is a row of the schema key tables: left out, written "",
   written well and badly.
 
+## 34.158 Target discovery for the allocator
+
+- Target groups are read from JSON and YAML as Prometheus reads them, and an
+  unknown key, a label that is no label name, an empty target, an answer
+  that is no list and text after the list are refused
+  (`TestTargetGroupsAreReadStrictly`).
+- A discovery source's `labels` mapping sets a label from one of the
+  source's own, and a mapping whose source label is missing sets nothing
+  (`TestTheLabelsMappingSetsLabelsFromTheSources`).
+- A discovery list is checked at load: exactly one kind per source, names
+  and their defaults, `labels` mappings, `max_targets`, URLs, TLS for `http`,
+  label selectors, ports, namespaces, timeouts against refresh intervals,
+  file patterns and extensions, and relative paths taken from the file's
+  directory (`TestDiscoveryIsCheckedAtLoad`).
+- `file_sd` reads its files again at every refresh, a change is what it
+  finds next, a broken file keeps the last good targets, and one failure is
+  counted once while it stays the same (`TestFileSDReadsItsFilesAgain`).
+- `http_sd` sends the bearer token of its file, read again at every refresh,
+  and `X-Prometheus-Refresh-Interval-Seconds`; a `500`, an answer that is no
+  JSON, one over `max_targets` and one over 16 MiB each keep the last good
+  targets and count a failure (`TestHTTPSDKeepsItsLastGoodAnswer`).
+- A source that has never answered adds no targets
+  (`TestASourceThatNeverAnsweredHasNoTargets`).
+- The kubernetes source lists the EndpointSlices of its namespace with its
+  label selector and `limit=500`, follows the continue token, takes the
+  ready endpoints (and those whose readiness is unknown) at the named port,
+  sorted, with the meta labels and the mapping, skips a slice without the
+  port, and with a numbered port and `include_not_ready` takes every
+  endpoint (`TestKubernetesFindsReadyEndpointsAtTheNamedPort`).
+- The kubernetes source reads the service account token again at every
+  listing, so a rotated token is sent (`TestKubernetesReadsTheTokenAgain`).
+- The kubernetes source asks each listed namespace and, with
+  `all_namespaces`, the cluster-wide path, refuses more targets than
+  `max_targets`, and fails against an API server whose certificate the
+  service account's CA did not sign (`TestKubernetesVerifiesTheAPIServer`);
+  outside a pod it fails naming `KUBERNETES_SERVICE_HOST`
+  (`TestKubernetesOutsideAPod`).
+- A probe job's discovered targets are served after its written ones, made
+  by `target_template`, each once, a target the collector refuses left out,
+  with the source's labels under the job's, a job label written `""`
+  removing one, `__meta_` labels passed and `job`, `instance` and other `__`
+  labels dropped (`TestDiscoveredProbeTargetsAreServed`).
+- A `discovered_targets` entry is written out as a static target per
+  discovered address, named `<entry>_<address>` with a digest of the
+  address when two names collide, loaded by the replica's own loader from
+  the shares, with the entry's labels over the discovered ones and no `__`
+  label; the per-source metrics show the targets, refreshes and last
+  success (`TestDiscoveredStaticTargetsAreShared`).
+- A discovery change changes only the bundle whose share changes, a target
+  no longer found leaves at once, and a reload setting `shard_key: address`
+  hands moved discovered targets over for one interval while the source
+  keeps what it found (`TestDiscoveryChangesAreAppliedAsAReload`).
+- A source that never answered leaves the written targets served, and an
+  answer over `--discovery.max-targets` is refused
+  (`TestAFailingSourceLeavesTheRest`).
+- A probe job and a `discovered_targets` entry are checked at load: a job
+  without targets or discovery, a template without `{{address}}` or without
+  discovery, unknown source keys; an entry without a name or discovery, with
+  `target`, a `shard_key` other than `address`, an `http` collector without a
+  URL template, an unknown key or collector, twice, and `discovered_targets`
+  that is no list; a file of `discovered_targets` alone serves no share
+  until a target is found (`TestDiscoveredInputsAreCheckedAtLoad`).
+- `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
+  stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
+- The exporter refuses a static target file with `discovered_targets`,
+  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`).
+- `--discovery.max-targets=0` exits 2, and `-h` lists the flag with its
+  default, 10000 (`TestAMalformedCommandLineExits2`, `TestVersionAndHelp`).
+- The chart renders no allocator ServiceAccount or RBAC without a
+  kubernetes source; with one, a ServiceAccount the allocator runs as with
+  its token, and a Role and RoleBinding (`get`, `list`, `watch` on
+  `discovery.k8s.io` `endpointslices`) in each listed namespace and the
+  release's; a `discovered_targets` source of every namespace renders a
+  ClusterRole and ClusterRoleBinding; `allocator.rbac.create: false` renders
+  the ServiceAccount alone
+  (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
+- The values schema takes a probe job of discovery alone and refuses a
+  source of two kinds, an unknown key, a file_sd file of no format, a
+  kubernetes source without a port, a template without `{{address}}` and an
+  empty discovery list (`TestChartSchemaChecksProbeJobDiscovery`); the
+  schema requires a name, a collector and targets or discovery
+  (`TestChartProbeJobKeysAreTheAllocatorsKeys`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

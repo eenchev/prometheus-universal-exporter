@@ -24623,6 +24623,112 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   holds longer, its intermediate's, not the other intermediate's earlier
   one.
 
+## 34.162 Virtual hosts for logins and pages, the helm version, the flag reference and the kubernetes type
+
+- A relative `login.url` is posted with the request's `Host` override, the
+  collector's `request.headers` `Host` or a static target's, json and oauth2
+  alike, and the debug trace shows that `Host` on the login; two virtual
+  hosts on one address log in once each and neither is sent the other's
+  token; an absolute `login.url` is sent with its own host, not the
+  target's `Host` (`TestARelativeLoginIsSentWithTheHostOverride`).
+- With a `Host` override, the collector's or a static target's, a next page
+  of `request.pagination` on the `Host`'s virtual host — the first page's
+  scheme, the `Host` in any case, the `Host`'s port or the scheme's — is
+  fetched from the target's address with the same `Host` and the target's
+  credentials, and the pages are merged; a next page on another port or
+  scheme of the virtual host, on another host, or on a collector's `Host` a
+  static target's replaced, fails the trip as not on the target's origin
+  (`TestPaginationFollowsTheHostOverridesVirtualHost`).
+- `make helm-version`, with `HELM_VERSION` set on the command line and a
+  stand-in helm, accepts `v4.3` and `v4.3+g<commit>` for `v4.3.0`, and the
+  pinned version, and refuses `v4.3` for `v4.3.1`, `v4.3.1`, `v4.3.01`,
+  `v4.4`, `v4.30`, `v4` and `v3.16.4` for `v4.3.0`
+  (`TestMakeHelmVersionAcceptsOnlyThePinnedRelease`).
+- The flag table of `docs/FLAGS.md` lists exactly the flags of the exporter's
+  `--help`, so a flag missing from the page, or a row for a flag the exporter
+  does not have, fails the test; and the README has no flag rows, so the table
+  cannot grow back there as a second copy (§ 34.49, § 35).
+- `docs/ENDPOINTS.md` and `docs/FLAGS.md`, like every page under `docs/`, are
+  linked from the README's index, and the README stays within its line limit
+  (§ 35).
+## 34.x The kubernetes request type and internal/kubeapi
+
+- A listing of internal/kubeapi asks for pages of its page size, follows
+  each continue token to the last page, sends the token, both selectors
+  and an Accept of JSON, and tells of each request and its status; without
+  a page size it asks for 100 and sends no selector
+  (`TestAListingFollowsEveryPage`).
+- An answer other than 200 is a StatusError with its status and the start
+  of the Status object, a page over the bound is ErrPageTooLarge, and a
+  listing without a token sends no Authorization
+  (`TestAListingsFailuresSayWhat`).
+- The in-cluster server is the environment's, none outside a pod, and the
+  namespace and token are read from the service account's files, an empty
+  one refused (`TestTheInClusterConfigurationIsReadFromThePod`).
+- A kubernetes collector lists its resource in the exporter's own namespace
+  from the service account's namespace file, in pages of 100 with the
+  continue tokens, its selectors and the service account's token, and
+  answers kind, api_version, count and the objects, each without its
+  managed fields (`TestAKubernetesCollectorListsEveryPageAsADocument`).
+- Listed namespaces are listed at their own paths in the order named,
+  all_namespaces at the cluster's path, a cluster-scoped resource with it,
+  the core group under /api, and an empty listing is a document of no
+  objects (`TestAKubernetesCollectorListsTheNamespacesItNames`).
+- The token is read again at every scrape
+  (`TestAKubernetesCollectorReadsTheTokenAgain`).
+- More objects than max_objects, 10000 by default, a page over the response
+  limit and objects that come to more than it without their managed fields
+  fail the scrape as a limit; objects under it without their managed fields
+  are taken (`TestAKubernetesListingIsBounded`).
+- A 403 names the permission to grant and kubernetesAccess.rules, a 404 how
+  to name a resource, a 401 that the token is not taken, never showing the
+  token; no namespace file and no pod environment fail saying so
+  (`TestAKubernetesListingsFailuresSayWhatToDo`).
+- With api_server, tls.ca_file and bearer_token_file the collector lists
+  another API server, traced for a debug probe with the token masked by the
+  report, labelled with the server's URL and the path, LIST and the
+  kubernetes stage, and --dry-run warns of missing token and CA files
+  (`TestAKubernetesCollectorReachesTheAPIServerItNames`).
+- A probe's and a static target's target are refused, and none is required
+  (`TestAKubernetesCollectorTakesNoTarget`).
+- Load refuses a missing resource, a subresource, a kind, group core, a bad
+  group or version, the core group's secrets, namespaces with
+  all_namespaces, a bad or repeated namespace, a blank selector, a negative
+  max_objects, tls or bearer_token_file without api_server, an http,
+  user-bearing or query-bearing api_server, api_server without a
+  credential or with insecure_skip_verify, a lone cert_file, and other
+  types' keys (`TestAKubernetesCollectorsKeysAreCheckedAtLoad`).
+- A kubernetes collector's decoder is json and its transform one that reads
+  JSON (`TestKubernetesDecoderAndTransform`), and a configuration listing
+  secrets is refused (`TestAKubernetesCollectorOfSecretsIsRefusedAtLoad`).
+- Probes of a Deployment and a Pod collector give the replicas and the
+  phase counts their jq rules read, with LIST and the listing's URL as the
+  verbose labels (`TestAKubernetesCollectorProbe`); a debug probe shows
+  each page and the document without the token, a probe with a target is
+  answered 400 and a forbidden listing names kubernetesAccess.rules
+  (`TestADebugProbeOfAKubernetesCollector`); label values take param_
+  parameters and a python transform reads the document
+  (`TestAKubernetesCollectorsLabelValuesAndPython`).
+- --dry-run warns of a missing bearer_token_file of a collector with
+  api_server, passing the check
+  (`TestDryRunWarnsOfTheTokenFileOfAKubernetesCollector`).
+- The schema and the exporter agree on resource, group, version, each
+  namespace, the selectors, api_server and tls.insecure_skip_verify left
+  out, written "", well and badly
+  (`TestSchemaAndExporterAgreeOnKubernetesKeysWrittenEmpty`).
+- The examples of docs/KUBERNETES.md give their series against a stand-in
+  API server, and its static target loads
+  (`TestKubernetesDocumentationExamples`).
+- The chart grants the exporter's ServiceAccount list on the rules'
+  resources by Role and RoleBinding per namespace, the release's by
+  default, or ClusterRole and ClusterRoleBinding with clusterWide, mounts
+  the token on the pods and the account, binds the account the pods run
+  as, and refuses an extra mount at the token's directory
+  (`TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed`); it
+  refuses no rules, wildcards, the core group's secrets and namespaces
+  beside clusterWide by schema and templates
+  (`TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

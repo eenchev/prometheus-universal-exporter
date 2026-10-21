@@ -545,9 +545,17 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The target allocator: a Deployment of pue-allocator serving config.data, its static targets and its probe jobs, with the exporter pods in allocator mode. Not with staticTargets.enabled nor with an enabled monitors entry.",
+      "if": {
+        "required": ["enabled", "probeJobs"],
+        "properties": {
+          "enabled": {"const": true},
+          "probeJobs": {"contains": {"type": "object", "required": ["discovery"], "properties": {"discovery": {"minItems": 1}}}}
+        }
+      },
+      "then": {"properties": {"replicas": {"maximum": 1, "description": "A probe job has a discovery source, so the allocator runs as one copy: copies would each ask the sources on their own timer and serve different targets."}}},
       "properties": {
         "enabled": {"type": "boolean"},
-        "replicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "replicas": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647, "description": "Allocator pods; empty is 2, or 1 with a discovery source, beside which it may not be above 1."},
         "image": {
           "type": "object",
           "additionalProperties": false,
@@ -612,7 +620,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "create": {"type": "boolean", "description": "With a kubernetes discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them."}
+            "create": {"type": "boolean", "description": "With a kubernetes discovery source, let the allocator's ServiceAccount list EndpointSlices where the sources list them."}
           }
         },
         "networkPolicy": {
@@ -747,6 +755,7 @@
             "label_selector": {"type": "string"},
             "port": {"anyOf": [{"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}, {"type": "integer", "minimum": 1, "maximum": 65535}]},
             "include_not_ready": {"type": "boolean"},
+            "address_type": {"enum": ["IPv4", "IPv6", "any"], "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, FQDN slices included."},
             "refresh_interval": {"type": "string"},
             "timeout": {"type": "string"}
           }

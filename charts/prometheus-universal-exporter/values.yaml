@@ -690,9 +690,15 @@ sqlAuth:
 # through the ScrapeConfig below); both fail rendering.
 allocator:
   enabled: false
-  # Allocator replicas. They keep no state and need no leader: every exporter
-  # pod heartbeats to each of them, so two give availability.
-  replicas: 2
+  # Allocator replicas; empty is 2, or 1 with a discovery source. They keep
+  # no state and need no leader: every exporter pod heartbeats to each of
+  # them, so two give availability. With a discovery source (a probe job's
+  # discovery, or discovered_targets in staticTargets.data) the allocator
+  # runs as one pod, rolled out with the Recreate strategy, and a value above
+  # 1 fails rendering: each copy would ask its sources on its own timer and
+  # serve different targets. One is enough, since it is back within seconds
+  # and the exporter pods and Prometheus keep what they have meanwhile.
+  replicas:
   # Empty fields take the exporter's image values above: the allocator binary
   # is in the same image.
   image:
@@ -772,7 +778,7 @@ allocator:
   # A kubernetes discovery source, in probeJobs or in the
   # discovered_targets of staticTargets.data, runs the allocator as a
   # ServiceAccount <fullname>-allocator of its own, with its token mounted.
-  # With create, the chart also lets it get, list and watch EndpointSlices: a
+  # With create, the chart also lets it list EndpointSlices, all it does: a
   # Role and RoleBinding in each namespace a source lists (the release's when
   # it lists none), and a ClusterRole and ClusterRoleBinding for a source
   # with all_namespaces. Without, bind the ServiceAccount yourself. Nothing

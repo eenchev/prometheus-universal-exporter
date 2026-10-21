@@ -218,6 +218,7 @@ func discoverySchemaRules() map[string]map[string]any {
 			"description": "The endpoint port the targets are at: its name, as the Service names it, or its number.",
 		},
 		"[].kubernetes.include_not_ready": {"description": "Take the endpoints that are not ready too."},
+		"[].kubernetes.address_type":      {"enum": []string{"IPv4", "IPv6", "any"}, "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family."},
 		"[].kubernetes.refresh_interval":  {"description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
 		"[].kubernetes.timeout":           {"description": "How long a listing may take, no longer than refresh_interval. Defaults to 10s."},
 	}

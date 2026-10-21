@@ -11,7 +11,22 @@ metadata:
   annotations:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 spec:
-  replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "allocator.replicas" $allocator.replicas 1 2147483647) }}
+  {{- $replicas := include "prometheus-universal-exporter.wholeNumber" (list "allocator.replicas" $allocator.replicas 1 2147483647) }}
+  {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
+  {{- /* One copy with a discovery source: copies ask their sources each on
+         its own timer and would serve different targets. Recreate stops
+         the old pod before the new one starts; a RollingUpdate of maxSurge
+         0 does not wait for the old pod to finish terminating, so both
+         would serve during its grace period. */}}
+  {{- if and $replicas (gt (int64 $replicas) 1) }}
+  {{- fail (printf "allocator.replicas is %s, but the allocator has a discovery source, and copies of it each ask their sources on their own timer, so they would serve the exporter pods and Prometheus different targets; leave allocator.replicas unset or 1 (see \"One copy with discovery\" in docs/ALLOCATOR.md)" $replicas) }}
+  {{- end }}
+  replicas: 1
+  strategy:
+    type: Recreate
+  {{- else }}
+  replicas: {{ $replicas | default 2 }}
+  {{- end }}
   {{- /* /ready holds before the new pod allocates anything; see the
          helper. */}}
   minReadySeconds: {{ include "prometheus-universal-exporter.allocatorMinReadySeconds" . }}

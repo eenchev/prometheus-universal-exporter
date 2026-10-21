@@ -252,6 +252,15 @@
                     ]
                   },
                   "properties": {
+                    "address_type": {
+                      "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family.",
+                      "enum": [
+                        "IPv4",
+                        "IPv6",
+                        "any"
+                      ],
+                      "type": "string"
+                    },
                     "all_namespaces": {
                       "description": "List the EndpointSlices of every namespace, which needs a ClusterRole.",
                       "type": "boolean"

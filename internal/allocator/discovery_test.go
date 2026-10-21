@@ -116,6 +116,7 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 		"both namespace ways":  {func(d *DiscoveryConfig) { d.Kubernetes.Namespaces, d.Kubernetes.AllNamespaces = []string{"a"}, true }, "all_namespaces"},
 		"a long timeout":       {func(d *DiscoveryConfig) { d.Kubernetes.Timeout = 31e9 }, "longer than its refresh_interval"},
 		"a short refresh":      {func(d *DiscoveryConfig) { d.Kubernetes.RefreshInterval = 1e8 }, "under the least"},
+		"an address type":      {func(d *DiscoveryConfig) { d.Kubernetes.AddressType = "ipv4" }, "address_type"},
 		"a relative URL": {func(d *DiscoveryConfig) {
 			d.Kubernetes, d.HTTPSD = nil, &HTTPSDConfig{URL: "/sd"}
 		}, "absolute http or https URL"},
@@ -353,6 +354,41 @@ func TestKubernetesFindsReadyEndpointsAtTheNamedPort(t *testing.T) {
 	}
 	if s.found[2].Labels["__meta_kubernetes_endpoint_ready"] != "false" {
 		t.Errorf("an endpoint not ready has the labels %v", s.found[2].Labels)
+	}
+}
+
+// A dual-stack Service has an EndpointSlice of each address family, the
+// same pods in both: a source takes the IPv4 slices by default, the IPv6
+// ones with address_type IPv6, and every slice, FQDN ones included, with
+// any, each target telling its slice's family in a meta label.
+func TestKubernetesTakesTheSlicesOfItsAddressType(t *testing.T) {
+	k := newKubeAPI(t)
+	path := "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices"
+	ipv6 := strings.Replace(slice("postgres-v6", `{"addresses":["fd00::2"],"targetRef":{"kind":"Pod","name":"pg-0"}}`), `"IPv4"`, `"IPv6"`, 1)
+	fqdn := strings.Replace(slice("postgres-dns", `{"addresses":["pg.example"]}`), `"IPv4"`, `"FQDN"`, 1)
+	k.pages[path+"?"] = `{"metadata":{},"items":[` + slice("postgres-v4", `{"addresses":["10.0.0.2"],"targetRef":{"kind":"Pod","name":"pg-0"}}`) + "," + ipv6 + "," + fqdn + `]}`
+	for addressType, want := range map[string][]string{
+		"":     {"10.0.0.2:9187"},
+		"IPv4": {"10.0.0.2:9187"},
+		"IPv6": {"[fd00::2]:9187"},
+		"any":  {"10.0.0.2:9187", "[fd00::2]:9187", "pg.example:9187"},
+	} {
+		a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", AddressType: addressType}}, 10)
+		if !a.refreshSource(context.Background(), s) {
+			t.Fatalf("address_type %q: nothing found: %s", addressType, s.lastErr)
+		}
+		if got := addresses(s.found); !slices.Equal(got, want) {
+			t.Errorf("address_type %q found %v, want %v", addressType, got, want)
+		}
+	}
+	a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", AddressType: "any"}, Labels: map[string]string{"family": "__meta_kubernetes_endpointslice_address_type"}}, 10)
+	a.refreshSource(context.Background(), s)
+	var families []string
+	for _, d := range s.found {
+		families = append(families, d.Labels["family"])
+	}
+	if want := []string{"IPv4", "IPv6", "FQDN"}; !slices.Equal(families, want) {
+		t.Errorf("the targets' slices are of the families %v, want %v", families, want)
 	}
 }
 

@@ -379,3 +379,88 @@ func (a *Allocator) refreshDiscovery(ctx context.Context) {
 		a.applyDiscovery()
 	}
 }
+
+// A reload that changes a source's settings, its refresh_interval say,
+// replaces it with a source of the new settings, which starts with what the
+// old one found: the targets stay in the bundles until the new source
+// answers, rather than leaving every share and coming back a refresh later.
+// A first failure of the new source keeps them too, and is counted.
+func TestAChangedSourceKeepsItsTargetsUntilItAnswers(t *testing.T) {
+	p := writeInputs(t, testConfig, discoveredStatic, "")
+	dir := filepath.Dir(p.StaticTargets)
+	testutil.WriteIn(t, dir, "nodes.yaml", discoveredNodes)
+	members := []string{"r1", "r2"}
+	a, _ := settledAllocator(t, mustLoad(t, p), members...)
+	ctx := context.Background()
+	a.refreshDiscovery(ctx)
+	names := func() []string {
+		var out []string
+		for name := range allTargets(t, a, members...) {
+			out = append(out, name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	before := names()
+	if len(before) != 4 {
+		t.Fatalf("the shares hold %v, want the written target and three discovered ones", before)
+	}
+
+	testutil.WriteIn(t, dir, "targets.yaml", strings.Replace(discoveredStatic, "files: [nodes.yaml]", "files: [nodes.yaml]\n          refresh_interval: 2m", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if got := names(); !slices.Equal(got, before) {
+		t.Fatalf("after the reload the shares hold %v, want %v until the source answers", got, before)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "not: [a list")
+	a.refreshDiscovery(ctx)
+	if got := names(); !slices.Equal(got, before) {
+		t.Errorf("after the new source's first failure the shares hold %v, want %v", got, before)
+	}
+	if m := a.sourceMetrics(); len(m) != 1 || m[0].failures != 1 || m[0].successes != 1 || m[0].found != 3 {
+		t.Errorf("the source's metrics are %+v, want the old source's success and the new one's failure, with its 3 targets", m)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "- targets: [d.example:9100]\n")
+	a.refreshDiscovery(ctx)
+	if got := names(); !slices.Equal(got, []string{"legacy", "node_d_example_9100"}) {
+		t.Errorf("once the new source answers the shares hold %v", got)
+	}
+
+	// A probe job's kubernetes source whose label_selector changes keeps
+	// its targets in the service discovery answer the same way.
+	k := newKubeAPI(t)
+	k.pages["/apis/discovery.k8s.io/v1/namespaces/db/endpointslices?"] = `{"metadata":{},"items":[` + slice("postgres", `{"addresses":["10.0.0.2"]}`) + `]}`
+	probes := "probe_jobs:\n  - name: databases\n    collector: demo\n    target_template: https://{{address}}/\n    discovery:\n      - kubernetes: {port: metrics, label_selector: app=pg}\n"
+	p = writeInputs(t, testConfig, "", probes)
+	a, _ = settledAllocator(t, mustLoad(t, p), members...)
+	a.refreshDiscovery(ctx)
+	served := func() int {
+		groups, _ := a.SD("databases")
+		return len(groups)
+	}
+	if served() != 1 {
+		t.Fatalf("the job serves %d targets, want the one discovered", served())
+	}
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "probes.yaml", strings.Replace(probes, "app=pg", "app in (pg)", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if served() != 1 {
+		t.Errorf("after a reload changing the label_selector the job serves %d targets, want 1 until the new source answers", served())
+	}
+	testutil.WriteIn(t, k.dir, "token", "a-revoked-token\n")
+	a.refreshDiscovery(ctx)
+	if served() != 1 {
+		t.Errorf("after the new source's first failure the job serves %d targets, want 1", served())
+	}
+
+	// A source of another name is another source, and starts with nothing.
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "probes.yaml", strings.Replace(probes, "      - kubernetes:", "      - name: pg\n        kubernetes:", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if served() != 0 {
+		t.Errorf("a source of another name serves %d targets before it answers, want none", served())
+	}
+}

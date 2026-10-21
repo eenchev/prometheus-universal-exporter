@@ -43,7 +43,8 @@ type endpointSlice struct {
 		Namespace string            `json:"namespace"`
 		Labels    map[string]string `json:"labels"`
 	} `json:"metadata"`
-	Endpoints []struct {
+	AddressType string `json:"addressType"`
+	Endpoints   []struct {
 		Addresses  []string `json:"addresses"`
 		Conditions struct {
 			Ready *bool `json:"ready"`
@@ -108,6 +109,9 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 				return nil, err
 			}
 			for i := range list.Items {
+				if !k.takes(list.Items[i].AddressType) {
+					continue
+				}
 				for _, d := range sliceTargets(&list.Items[i], portName, portNumber, k.IncludeNotReady) {
 					if seen[d.Address] {
 						continue
@@ -185,6 +189,9 @@ func sliceTargets(s *endpointSlice, portName string, portNumber int, includeNotR
 		"__meta_kubernetes_namespace":          s.Metadata.Namespace,
 		"__meta_kubernetes_endpointslice_name": s.Metadata.Name,
 		"__meta_kubernetes_endpoint_port_name": portName,
+	}
+	if s.AddressType != "" {
+		base["__meta_kubernetes_endpointslice_address_type"] = s.AddressType
 	}
 	if service := s.Metadata.Labels[serviceNameLabel]; service != "" {
 		base["__meta_kubernetes_service_name"] = service

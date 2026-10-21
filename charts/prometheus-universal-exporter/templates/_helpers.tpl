@@ -962,12 +962,11 @@ true
 {{- end }}
 {{- /* The target allocator's objects are named <fullname>-allocator, cut so
        the name stays a DNS label, as a Service's must. */ -}}
-{{- /* The kubernetes discovery sources of the allocator's inputs: those of
-       the probe jobs and of the static target document's
-       discovered_targets entries, each the source's kubernetes block, as
-       JSON under "sources". A document that is no YAML has none here; the
-       allocator says what is wrong with it. */ -}}
-{{- define "prometheus-universal-exporter.allocatorKubernetesSources" -}}
+{{- /* The discovery sources of the allocator's inputs: those of the probe
+       jobs and of the static target document's discovered_targets entries,
+       each as written, as JSON under "sources". A document that is no YAML
+       has none here; the allocator says what is wrong with it. */ -}}
+{{- define "prometheus-universal-exporter.allocatorDiscoverySources" -}}
 {{- $sources := list -}}
 {{- $owners := list -}}
 {{- $allocator := .Values.allocator | default dict -}}
@@ -985,13 +984,33 @@ true
 {{- $list := get $owner "discovery" -}}
 {{- if kindIs "slice" $list -}}
 {{- range $source := $list -}}
-{{- if and (kindIs "map" $source) (hasKey $source "kubernetes") -}}
-{{- $sources = append $sources ((get $source "kubernetes") | default dict) -}}
+{{- if kindIs "map" $source -}}
+{{- $sources = append $sources $source -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- toJson (dict "sources" $sources) -}}
+{{- end }}
+{{- /* The kubernetes discovery sources of the allocator's inputs, each the
+       source's kubernetes block, as JSON under "sources". */ -}}
+{{- define "prometheus-universal-exporter.allocatorKubernetesSources" -}}
+{{- $sources := list -}}
+{{- range $source := (include "prometheus-universal-exporter.allocatorDiscoverySources" . | fromJson).sources -}}
+{{- if hasKey $source "kubernetes" -}}
+{{- $sources = append $sources ((get $source "kubernetes") | default dict) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson (dict "sources" $sources) -}}
+{{- end }}
+{{- /* Whether the allocator has a discovery source, and so runs as one
+       copy: each copy asks its sources on its own timer, so two could hold
+       different targets, and the exporter pods, which heartbeat and fetch
+       from every copy, would flip between their bundles. */ -}}
+{{- define "prometheus-universal-exporter.allocatorDiscovers" -}}
+{{- if and .Values.allocator .Values.allocator.enabled (include "prometheus-universal-exporter.allocatorDiscoverySources" . | fromJson).sources -}}
+true
+{{- end -}}
 {{- end }}
 {{- /* Whether the allocator lists EndpointSlices, and so runs as a
        ServiceAccount of its own with its token mounted. */ -}}

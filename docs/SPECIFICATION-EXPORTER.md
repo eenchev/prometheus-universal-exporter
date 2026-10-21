@@ -26349,7 +26349,10 @@ allocator mode their configuration and their share of the static targets,
 and Prometheus the probe targets of its probe targets file, each pointed at a
 replica. What the two sides exchange MUST be the types, paths, timings and
 functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
-files and heartbeats MUST give the same bundles and answers.
+files and heartbeats MUST give the same bundles and answers. What discovery
+sources find is input too, asked by each copy on its own timer, so
+`docs/ALLOCATOR.md` MUST say that an allocator with a discovery source runs
+as one copy, and the chart MUST run it so (SPECIFICATION-CHART.md § 33.10c).
 
 **Inputs.** `--config.file` MUST be loaded and checked with the exporter's
 configuration loader, `--static-targets-file` with the static target file's
@@ -26412,10 +26415,13 @@ EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
 with its token read again at every listing, in pages of 500, in each of
 `namespaces` (DNS-1123 labels; none lists the namespace of the service
 account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
-`label_selector` (checked at load); its targets MUST be each address of each
+`label_selector` (checked at load), taking only the slices whose
+`addressType` is `address_type`'s, `IPv4` by default or `IPv6`, or every
+slice with `any`, any other value refused at load; its targets MUST be each address of each
 endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
-`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists. An
+`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
+`__meta_kubernetes_endpointslice_address_type` among them. An
 answer larger than 16 MiB, with more targets than its bound or that cannot
 be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be
@@ -26442,7 +26448,12 @@ MUST carry its source's labels but those starting with `__`, `job`,
 `instance` and `static_target`, under the entry's labels. What the sources
 find MUST be put in force as a reload is (handover, removal at once, a
 bundle changing only with its share), and a reload MUST keep a source whose
-owner and settings it leaves alone, with what it found.
+owner and settings it leaves alone, with what it found. A source a reload
+replaces with one of the same owner's kind, owner, source kind and name but
+other settings MUST hand the new one what it found and its counts, so its
+targets stay in force until the new source first answers, a failure before
+then keeping them and being counted; a source of a new name or kind MUST
+start with nothing found.
 
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the

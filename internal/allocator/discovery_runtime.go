@@ -51,8 +51,12 @@ func (s *sourceState) fetch(ctx context.Context) ([]discovered, error) {
 
 // syncSources makes the sources run those of in: a source whose owner and
 // configuration stay keeps running, with what it found; one in no longer
-// stops, and a new one starts, with nothing found yet. Called under
-// reloadMu.
+// stops, and a new one starts. A new source that replaces one of the same
+// kinds, owner and name, a source whose settings a reload changed, starts
+// with what the old one found, and with its counts, so its targets stay in
+// force until it answers itself rather than leaving every share and coming
+// back a refresh later; any other new source starts with nothing found.
+// Called under reloadMu.
 func (a *Allocator) syncSources(in *Inputs) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
@@ -60,12 +64,14 @@ func (a *Allocator) syncSources(in *Inputs) {
 	for _, spec := range in.sources {
 		want[spec.key] = true
 	}
+	replaced := map[string]*sourceState{}
 	for key, s := range a.sources {
 		if !want[key] {
 			if s.cancel != nil {
 				s.cancel()
 			}
 			delete(a.sources, key)
+			replaced[s.spec.identity()] = s
 		}
 	}
 	for _, spec := range in.sources {
@@ -77,11 +83,23 @@ func (a *Allocator) syncSources(in *Inputs) {
 			limit = a.maxDiscovered
 		}
 		s := &sourceState{spec: spec, limit: limit}
+		if old := replaced[spec.identity()]; old != nil {
+			// The failure text is left behind: the new settings' first
+			// failure is logged and counted, even one of the same text.
+			s.found, s.ok = old.found, old.ok
+			s.successes, s.failures, s.lastGood = old.successes, old.failures, old.lastGood
+		}
 		a.sources[spec.key] = s
 		if a.discovering {
 			a.startSource(s)
 		}
 	}
+}
+
+// identity is what stays of a source whose settings change: the kind of
+// its owner, the owner, its own kind and its name.
+func (s sourceSpec) identity() string {
+	return s.kind + "/" + s.owner + "/" + s.cfg.kind() + "/" + s.cfg.Name
 }
 
 // StartDiscovery starts a refresh loop for every discovery source, and for

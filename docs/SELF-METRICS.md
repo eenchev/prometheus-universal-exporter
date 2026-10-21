@@ -224,7 +224,9 @@ In allocator mode `http_exporter_static_targets` is the replica's share of
 the static targets, those it keeps draining included, and the allocator's
 `pue_allocator_targets{kind="static"}` and
 `pue_allocator_targets_per_member{kind="static"}` are the count across
-replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)).
+replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)). Every
+allocator copy reports them, one series each, so a query takes their `max`:
+a `sum`, or the series as they are, would count the targets once per copy.
 
 ### Pods metrics from prometheus-adapter
 
@@ -289,10 +291,43 @@ window, five minutes, outlasts that, and a shorter one in
 `behavior.scaleDown` should too.
 
 The allocator's own count can be an External metric instead, which does not
-depend on the replicas having caught up with the allocator: served by a rule
-like the second, on `pue_allocator_targets{kind="static"}` with no `pod`
-resource, under `autoscaling.metrics` with `target.type: AverageValue`, which
-the autoscaler divides by the replica count itself.
+depend on the replicas having caught up with the allocator. This rule, in the
+prometheus-adapter chart's `rules.external`, serves it as
+`allocator_static_targets`, one series per namespace however many
+allocator copies report it, since it takes their `max`:
+
+```yaml
+rules:
+  external:
+    - seriesQuery: 'pue_allocator_targets{namespace!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+      name:
+        matches: "^.*$"
+        as: allocator_static_targets
+      metricsQuery: max by (<<.GroupBy>>) (<<.Series>>{<<.LabelMatchers>>,kind="static"})
+```
+
+Put it under `autoscaling.metrics` with `target.type: AverageValue`, which
+the autoscaler divides by the replica count itself; with several releases in
+a namespace, its `selector` picks the release's allocator by its `service`
+label, which the matchers then carry:
+
+```yaml
+autoscaling:
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: allocator_static_targets
+          selector:
+            matchLabels:
+              service: exporter-prometheus-universal-exporter-allocator
+        target:
+          type: AverageValue
+          averageValue: "200"
+```
 
 ### KEDA
 
@@ -323,9 +358,19 @@ spec:
 ```
 
 The query is the load of every pod together, which KEDA divides by the
-target to find the replica count. With the allocator, a second trigger with
-the query `pue_allocator_targets{kind="static"}` and the threshold `"200"`
-does what `targetStaticTargetsPerPod` does.
+target to find the replica count. With the allocator, a second trigger does
+what `targetStaticTargetsPerPod` does. Its query takes the `max` of the
+allocator copies' series: KEDA wants one value, and fails on a query that
+answers one series per copy.
+
+```yaml
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        query: |
+          max(pue_allocator_targets{kind="static",namespace="monitoring",service="exporter-prometheus-universal-exporter-allocator"})
+        threshold: "200"
+```
 
 ## Shared probes
 

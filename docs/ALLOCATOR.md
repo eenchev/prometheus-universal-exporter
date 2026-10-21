@@ -16,7 +16,12 @@ discovery answer.
 
 It keeps nothing on disk. The same input files and the same heartbeats give
 the same bundles and the same answers, so a restarted allocator, or a second
-copy beside the first, answers as the first did.
+copy beside the first, answers as the first did. That holds while the inputs
+are files alone: a [discovery source](#discovering-targets) is asked by each
+copy on its own timer, and two copies can find different targets for a
+refresh interval or, when one cannot reach the source, for as long as that
+lasts, so an allocator that discovers runs as one copy
+([One copy with discovery](#one-copy-with-discovery)).
 
 ## Running it
 
@@ -334,16 +339,22 @@ which needs a ClusterRole. `label_selector` is a Kubernetes label selector,
 checked at load. `port` is the endpoint port the targets are at, by name, as
 the Service names it, or by number. Each ready endpoint's address at that
 port is a target, and with `include_not_ready: true` every endpoint's;
-a slice without the port has none. `timeout` is as `http_sd`'s. Each target
+a slice without the port has none. `address_type` is the `addressType` of
+the slices taken: `IPv4`, the default, `IPv6`, or `any`, which takes every
+slice, `FQDN` ones included. A dual-stack Service has a slice of each family
+holding the same pods, so taking both would probe each pod twice. `timeout`
+is as `http_sd`'s. Each target
 has the meta labels `__meta_kubernetes_namespace`,
-`__meta_kubernetes_endpointslice_name`, `__meta_kubernetes_service_name`
+`__meta_kubernetes_endpointslice_name`,
+`__meta_kubernetes_endpointslice_address_type`, `__meta_kubernetes_service_name`
 (from the slice's `kubernetes.io/service-name` label),
 `__meta_kubernetes_pod_name`, `__meta_kubernetes_node_name`,
 `__meta_kubernetes_endpoint_hostname`, `__meta_kubernetes_endpoint_port_name`,
 `__meta_kubernetes_endpoint_ready` and
 `__meta_kubernetes_endpointslice_label_<name>` for each label of the slice,
-when they have a value. The allocator needs `get`, `list` and `watch` on
-`endpointslices` in the API group `discovery.k8s.io`; the chart grants them
+when they have a value. The allocator needs only `list` on
+`endpointslices` in the API group `discovery.k8s.io`, since it neither gets
+one slice nor watches; the chart grants that alone
 ([On Kubernetes](#on-kubernetes)).
 
 There is no `relabel_configs`: the `labels` mapping takes the place of the
@@ -379,7 +390,30 @@ when its share does, a static target no longer found leaves every share at
 once, and one whose owner changes is handed over. A reload of the input
 files keeps every source whose owner and settings it leaves alone running,
 with what it found, so a changed `shard_key` moves discovered targets with
-[handover](#members-and-allocation) rather than dropping them.
+[handover](#members-and-allocation) rather than dropping them. A source whose
+settings change, its `refresh_interval` or its `label_selector` say, is
+replaced by one of the new settings, which starts with what the old one found
+when it is of the same kind, has the same owner and keeps its name: the old
+targets stay in force until the new source first answers, and a failure
+before then keeps them, as any failure does, and is counted. A source
+renamed, or of another kind, starts with no targets.
+
+### One copy with discovery
+
+Each allocator copy asks its sources on its own timer, so two copies can hold
+different targets, and so different bundles and service discovery answers,
+for up to a refresh interval, and for as long as one of them cannot reach a
+source. An exporter replica heartbeats every copy and fetches its bundle from
+whichever answers, and Prometheus asks whichever its request reaches, so with
+two copies a replica's bundle and a job's targets would flip between them.
+An allocator with a discovery source therefore runs as one copy. It keeps no
+state and is back within seconds of a restart, while the replicas keep their
+bundle in force and Prometheus its last service discovery answer, so one
+copy loses nothing but changes made while it is away. The chart runs one
+when a source is configured ([On Kubernetes](#on-kubernetes)); without the
+chart, run one. An allocator of input files alone may run as several copies.
+A copy being stopped stops taking requests at `SIGTERM`, so a replacement
+started meanwhile, as one is for an evicted pod, does not serve beside it.
 
 ## Members and allocation
 
@@ -495,7 +529,9 @@ A bundle is a tree of files, keyed by path:
   target), and so for a replica that is not yet in the member list, which
   gets the configuration alone and can answer probes while it waits.
 - `generation` is the digest of the files: the same files give the same
-  generation, on every allocator.
+  generation, on every allocator. Discovered targets are part of the files,
+  so allocators that discover agree only on what they have found alike
+  ([One copy with discovery](#one-copy-with-discovery)).
 
 The answer carries the generation as its `ETag`, quoted. A request whose
 `If-None-Match` names the generation the replica has is answered `304` when
@@ -569,7 +605,12 @@ exporter, and switches the replicas to allocator mode; see
 in the chart README. It runs `allocator.replicas` allocators, two by default,
 from the exporter's image, behind a headless Service on port 9116: they need
 no leader, since each hears every heartbeat, a replica heartbeating to every
-address the Service's name resolves to. The configuration (`config.data`)
+address the Service's name resolves to. With a discovery source, in a probe
+job or in the static targets, it runs one allocator, and refuses
+`allocator.replicas` above 1, rolling it out with the `Recreate` strategy so
+the old pod is gone before the new one starts
+([One copy with discovery](#one-copy-with-discovery)); its disruption budget
+of `maxUnavailable: 1` still lets a node drain evict it. The configuration (`config.data`)
 and `allocator.staticTargets.data` and `allocator.probeJobs`, the static
 targets and the probe jobs, are mounted into the allocator only; a change to
 them rolls the allocator, and reaches the replicas as a new bundle without a
@@ -585,7 +626,7 @@ becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A
 `kubernetes` discovery source, in a probe job or in the static targets, gives
 the allocator a ServiceAccount of its own, with its token mounted, and a
 Role in each namespace it lists, or a ClusterRole for `all_namespaces`,
-allowing `get`, `list` and `watch` on EndpointSlices.
+allowing `list` on EndpointSlices.
 
 The files a `file_sd` source reads, and an `http_sd` source's
 `bearer_token_file` and `tls` files, must be in the allocator's pod:
@@ -627,7 +668,8 @@ or on how busy they are, `autoscaling.targetBusy`
 
 ## Without Kubernetes
 
-Run `pue-allocator` on one or two hosts, start each exporter with
+Run `pue-allocator` on one or two hosts, one with a discovery source
+([One copy with discovery](#one-copy-with-discovery)), start each exporter with
 `--allocator.url=http://allocator.internal:9116`, and point Prometheus's
 `http_sd_configs` at the same address, one scrape configuration per probe
 job. systemd units, Compose and plain VMs need nothing else.

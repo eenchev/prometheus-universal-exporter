@@ -1090,7 +1090,7 @@ allocator:
 `allocator.enabled` renders:
 
 * the allocator, a Deployment `<fullname>-allocator` of `allocator.replicas`
-  pods (2), with a headless Service of the same name on port 9116, a
+  pods (2, or 1 with a discovery source, below), with a headless Service of the same name on port 9116, a
   PodDisruptionBudget (`allocator.pdb.enabled`) and a NetworkPolicy
   (`allocator.networkPolicy.enabled`). Its pods are scheduled by
   `allocator`'s own `nodeSelector`, `tolerations`, `affinity`,
@@ -1163,11 +1163,28 @@ allocator:
 A `kubernetes` source runs the allocator as a ServiceAccount
 `<fullname>-allocator` of its own, with its token mounted, while the
 exporter's keeps `serviceAccount.automount`. With `allocator.rbac.create`, the
-default, the chart lets it `get`, `list` and `watch` EndpointSlices: a Role
-and a RoleBinding in each namespace a source lists, the release's for a source
-that lists none, and a ClusterRole and a ClusterRoleBinding
+default, the chart lets it `list` EndpointSlices, all the allocator does
+with them: a Role and a RoleBinding in each namespace a source lists, the
+release's for a source that lists none, and a ClusterRole and a ClusterRoleBinding
 `<namespace>-<fullname>-allocator` for a source with `all_namespaces`.
 Without a `kubernetes` source none of this is rendered.
+
+With any discovery source, in a probe job or in the `discovered_targets` of
+`allocator.staticTargets.data`, the allocator runs as one pod. Each copy
+asks its sources on its own timer, so two copies could hold different
+targets for a refresh interval, or for as long as one cannot reach a source,
+and the exporter pods, which heartbeat every copy and fetch their bundle from
+whichever answers, would flip between them, as would Prometheus's service
+discovery answers. One allocator is enough: it keeps no state and is back
+within seconds, and the exporter pods keep their bundle and Prometheus its
+targets meanwhile. Its Deployment then has `replicas: 1` and the `Recreate`
+strategy, which stops the old pod before starting the new one, where a
+rolling update would run both while the old one terminates.
+`allocator.replicas` above 1 fails rendering, refused by the values schema
+for a probe job's source; leave it empty or set it to 1. The disruption
+budget of `maxUnavailable: 1` lets a node drain evict the one pod, which is
+replaced at once. See
+[One copy with discovery](../../docs/ALLOCATOR.md#one-copy-with-discovery).
 
 A `file_sd` source reads files in the allocator's pod, and an `http_sd`
 source's `bearer_token_file` and `tls` files are read there too. The
@@ -1222,7 +1239,7 @@ allocator refuses.
 | Value | Default | Purpose |
 | --- | --- | --- |
 | `allocator.enabled` | `false` | Deploy the allocator and run the exporter in allocator mode. |
-| `allocator.replicas` | `2` | Allocator pods, from 1. They keep no state and need no leader. |
+| `allocator.replicas` | empty: `2`, or `1` with a discovery source | Allocator pods, from 1. They keep no state and need no leader. With a discovery source, above 1 fails rendering: copies would serve different targets. |
 | `allocator.image` | the exporter's | `repository`, `tag`, `pullPolicy`; each empty field takes `image`'s. |
 | `allocator.resources` | 50m/64Mi, 500m/256Mi | The allocator's requests and limits. |
 | `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 10s)` plus 10 seconds. |
@@ -1232,7 +1249,7 @@ allocator refuses.
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
 | `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |
-| `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them. |
+| `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount list EndpointSlices where the sources list them. |
 | `allocator.extraVolumes` / `extraVolumeMounts` | `[]` | Volumes and mounts of the allocator's pods only, as `extraVolumes` and `extraVolumeMounts` are the exporter's: a `file_sd` source's files, an `http_sd` source's token and TLS files. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |

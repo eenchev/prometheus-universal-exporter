@@ -25,6 +25,7 @@
   "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.enable-probe-debug" "set server.probeDebug instead"
+  "--web.enable-playground" "set server.enablePlayground instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead"
   "--allocator.url" "set allocator.enabled instead, which points the exporter at the chart's allocator"

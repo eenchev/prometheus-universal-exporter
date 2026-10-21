@@ -4315,6 +4315,76 @@ Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it, so turn the flag on
 while a collector is being written or fixed, not for good.
 
+## Playground
+
+With `--web.enable-playground` (the Helm chart's `server.enablePlayground`),
+`/playground` is a page for writing a collector. Its editor takes the YAML of
+one collector, as it is written under `collectors:` — a mapping that starts
+with `name`, without the dash — and each run shows the series a probe would
+answer, the stages, what was logged and, folded away, the run's
+[debug report](#debugging-a-probe). It runs when *Run* is pressed and, with
+*Run as you type* on, a moment after each edit. The landing page and
+`/collectors` link it. Without the flag the page is not there (`404`).
+
+The collector is read as a configuration's collectors are: the same keys,
+the same checks, and a mistake is reported in the words a load would use,
+with line numbers counted from the collector's first line. It is never put
+in force: a run reads and fills no cache, counts in no collector's
+self-metrics, and logs one `playground run served` line at `info`. Runs are
+counted in `http_exporter_playground_runs_total`
+([Self-metrics](SELF-METRICS.md#playground-runs)). `${NAME}` references are
+left as they are written, whatever `--config.expand-env` says.
+
+A run reads one of two responses:
+
+- **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
+  200 unless given, and other headers. No request is made. The status must
+  be one the collector's `request.accept_status` accepts, and the body is
+  held to its response limit, as a fetched response would be.
+- **A target**, with `--web.enable-probe-debug` as well (the answer shows the
+  target's response, as a debug report does): fetched through a collector of
+  the configuration in force, chosen on the page, exactly as
+  `/probe?debug=true` fetches it through that collector — its request block,
+  [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
+  credentials, `accept_status` and
+  [`max_concurrent_probes`](#limiting-concurrent-probes), with the probe
+  parameters entered on the page. The collector being written decodes and
+  transforms what comes back; its own request block makes no request. Only
+  an `http` collector can be chosen.
+
+What a run may do is limited to the response, since what it is given runs
+on the server:
+
+- **Python is never run.** A collector with `transform.type: python` or a
+  `pre_script` is refused; try a script with a debug probe of a configured
+  collector instead.
+- **Only `http` collectors**, since the other request types read files,
+  hosts and databases with the server's own credentials, and **no file of
+  the server's**: `request.basic_auth_file`, `request.bearer_token_file` and
+  the `request.tls` files are refused. A pasted response needs no
+  credential, and a fetched target gets the configured collector's.
+
+A run takes as long as a probe may — the timeout on the page, sent as
+Prometheus's scrape timeout, within `--probe.default-timeout` — and at most
+4 runs are in progress at once. The page is behind `web.basic_auth` when
+that is configured; [The playground](AUTHENTICATION.md#the-playground)
+says how a run is kept from being sent by another site.
+
+The page posts each run to `POST /playground/run` as JSON, which a script
+can do too:
+
+```sh
+curl -s http://exporter:8080/playground/run \
+  -H 'Content-Type: application/json' -H 'X-Playground: run' \
+  -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
+```
+
+It answers `200` with `ok`, `verdict` (what a probe would have answered),
+`series` (Prometheus text), `stages`, `notes` and `report`; a fetch sends
+`request_from`, `target` and `params` in place of `body`, `content_type`,
+`status` and `headers`. A collector refused is answered `422` with `error`,
+a malformed run `400`, one too large `413`.
+
 ## Readiness
 
 `/health` answers `200` for as long as the process runs. `/ready` answers `200`

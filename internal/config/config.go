@@ -57,8 +57,8 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		// A problem with a collector that a collector file defines names
 		// that file, which is the one to edit.
 		file := collectorFileOf(c, x.Name)
-		if !namePattern.MatchString(x.Name) {
-			errs = append(errs, inCollectorFile(file, fmt.Errorf("collector %q has invalid name", x.Name)))
+		if err := checkCollectorName(x); err != nil {
+			errs = append(errs, inCollectorFile(file, err))
 		}
 		if seen[x.Name] {
 			errs = append(errs, fmt.Errorf("duplicate collector %q", x.Name))
@@ -77,6 +77,15 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 	// Every expression compiled once, and each stays compiled as long as the
 	// configuration is in force, however many it has.
 	expr.ReserveExpressions(expressionCount(c))
+	return nil
+}
+
+// checkCollectorName refuses a collector whose name is not one a probe can
+// ask for, and Prometheus label values and metric names can carry.
+func checkCollectorName(x *model.Collector) error {
+	if !namePattern.MatchString(x.Name) {
+		return fmt.Errorf("collector %q has invalid name", x.Name)
+	}
 	return nil
 }
 

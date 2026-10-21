@@ -47,6 +47,8 @@ type collectorsPage struct {
 	// ProbeDebug adds a switch to each form that asks for a debug report,
 	// --web.enable-probe-debug (probedebug.go).
 	ProbeDebug bool
+	// Playground links /playground, --web.enable-playground.
+	Playground bool
 	Docs       string
 }
 
@@ -106,7 +108,7 @@ func targetHint(c *model.Collector, required bool) string {
 
 func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.manager.Get()
-	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, ProbeDebug: s.probeDebug, Docs: landingDocs}
+	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, ProbeDebug: s.probeDebug, Playground: s.playground, Docs: landingDocs}
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
@@ -164,7 +166,7 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 </head>
 <body>
 <main>
-<nav><a href="./">← Prometheus Universal Exporter</a></nav>
+<nav><a href="./">← Prometheus Universal Exporter</a>{{if .Playground}} · <a href="playground">Playground</a>{{end}}</nav>
 <h1>Collectors</h1>
 <p class="meta">Probe a target through a collector, as Prometheus would. The answer is what Prometheus would scrape.</p>
 {{- if .ProbeDebug}}

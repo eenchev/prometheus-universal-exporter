@@ -88,7 +88,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 	}{
 		"defaults": {
 			want:  []string{"replicas: 1\n", "runAsUser: 65532", `"--runtime.memory-limit-ratio=0.8"`, "timeoutSeconds: 3", "failureThreshold: 5", "failureThreshold: 3"},
-			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.enable-probe-debug", "kind: ServiceMonitor", "kind: NetworkPolicy"},
+			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.enable-probe-debug", "--web.enable-playground", "kind: ServiceMonitor", "kind: NetworkPolicy"},
 		},
 		"limits": {
 			args: []string{"--set", "server.probeMaxConcurrent=64", "--set", "server.pythonMaxWorkers=8", "--set", "goMemLimit.ratio=0.6"},
@@ -179,6 +179,10 @@ func TestChartRendersItsOptions(t *testing.T) {
 		"probe debug": {
 			args: []string{"--set", "server.probeDebug=true"},
 			want: []string{"- --web.enable-probe-debug\n"},
+		},
+		"playground": {
+			args: []string{"--set", "server.enablePlayground=true"},
+			want: []string{"- --web.enable-playground\n"},
 		},
 		"session affinity": {
 			args: []string{"--set", "service.sessionAffinity=ClientIP"},
@@ -311,6 +315,7 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"a zero watch interval":                        {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0s"}, "watchConfigInterval"},
 		"a zero compound watch interval":               {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
 		"probe debug as an extra":                      {[]string{"--set", "extraArgs[0]=--web.enable-probe-debug"}, "server.probeDebug"},
+		"the playground as an extra":                   {[]string{"--set", "extraArgs[0]=--web.enable-playground"}, "server.enablePlayground"},
 		"a pod label the chart sets":                   {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
 		"a spread without a topology key":              {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
 		// The chart renders the collector and target parameters itself; a

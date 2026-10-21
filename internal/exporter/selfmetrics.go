@@ -217,6 +217,7 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_static_targets_scrape_seconds_total":        "Seconds spent on static target scrapes, from the start of each to its end, waiting for a slot included; its rate is the average number of static target scrapes in progress.",
 	"http_exporter_probes_seconds_total":                       "Seconds spent serving probes, from the start of each to its answer being ready, cache hits and shared probes included; its rate is the average number of probes in progress.",
+	"http_exporter_playground_runs_total":                      "Collectors run in the playground (--web.enable-playground), by result: success, failure (a stage failed, or the trip was refused) or invalid (the collector was refused before it ran); present only with the playground on.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
 	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, rejected by an export it accepted (partialSuccess), the oldest waiting past otlp.max_pending_points, or those of the last export before exiting when it failed.",
@@ -431,6 +432,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, countingSince(s.allocatorStatusMetrics(), started)...)
+	out = append(out, countingSince(s.playgroundRunMetrics(), started)...)
 	out = append(out, requestFamilies...)
 	out = append(out, s.verboseCollectorMetrics(stats)...)
 	out = append(out, countingSince(s.runtimeMetrics(), started)...)

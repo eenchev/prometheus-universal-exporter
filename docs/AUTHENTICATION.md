@@ -168,6 +168,35 @@ browser sends the same credential with each probe. Since exporter Basic Auth
 and `forward_authorization` cannot be combined, the `Authorization` header is
 never asked to carry both.
 
+### The playground
+
+With `--web.enable-playground`, [`/playground`](CONFIGURATION.md#playground)
+runs a collector written in the browser, and is behind the exporter's Basic
+Auth like the other pages. It is for whoever may already change the
+exporter's configuration, and it is kept from reaching further than that:
+
+- **Another site's page.** A browser sends the exporter's Basic Auth
+  credential with any request to the exporter, one a page of another site
+  makes included. Each run therefore carries an `X-Playground` header and a
+  JSON body, neither of which such a page can send without first asking the
+  exporter (a CORS preflight), which the exporter never allows; a run without
+  the header is answered `403`, and one the browser marks as coming from
+  another site (`Sec-Fetch-Site`) too. The page cannot be framed.
+- **The server's files and credentials.** A collector that names a file —
+  `basic_auth_file`, `bearer_token_file`, a TLS file — is refused, and so is
+  any request type but `http`, since the others read files, hosts and
+  databases with the server's keys. `${NAME}` references are not expanded, so
+  the environment stays unseen. A pasted response makes no request at all.
+- **Requests to anywhere.** A target is only fetched through a collector of
+  the configuration in force, with its target policy and its credentials, as
+  a debug probe of it would be — nothing a probe could not already reach —
+  and only with `--web.enable-probe-debug`, since the answer shows the
+  target's response. Nothing of the browser's request, its `Authorization`
+  or cookies, is forwarded.
+- **Code.** Python is never run. An expression of the other transforms runs
+  on the server against the response, bounded by the probe's deadline, the
+  collector's limits and 4 runs at a time.
+
 ## Credentials from a Kubernetes Secret
 
 To use exporter Basic Auth and a Kubernetes Secret for target credentials at the same time, disable the bridge and configure a mounted credential file. `targetAuth.enabled` is `false` by default; for basic auth:

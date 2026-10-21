@@ -69,11 +69,13 @@ type landingPage struct {
 	// SelfMetricsHref and StaticTargetsHref are the paths as relative links.
 	SelfMetricsHref, StaticTargetsHref string
 	Lifecycle                          bool
-	Collectors                         int
-	StaticTargetsPath                  string
-	StaticTargets                      int
-	StaticTargetsViaOTLP               int
-	Docs                               string
+	// Playground links /playground, --web.enable-playground.
+	Playground           bool
+	Collectors           int
+	StaticTargetsPath    string
+	StaticTargets        int
+	StaticTargetsViaOTLP int
+	Docs                 string
 }
 
 var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE html>
@@ -90,7 +92,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <p class="meta">Version {{.Version}}, revision {{.Revision}}, {{.GoVersion}}</p>
 
 <h2>Collectors</h2>
-<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="collectors">Probe a target through one</a>, with the parameters and credentials it takes.</p>
+<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="collectors">Probe a target through one</a>, with the parameters and credentials it takes.{{if .Playground}} Write a new one in the <a href="playground">playground</a>.{{end}}</p>
 {{- if .StaticTargets}}
 
 <h2>Static targets</h2>
@@ -100,6 +102,9 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <h2>Endpoints</h2>
 <ul class="links">
 <li><a href="collectors">/collectors</a> — the collectors, and a form to probe through each</li>
+{{- if .Playground}}
+<li><a href="playground">/playground</a> — write a collector and see the series it gives</li>
+{{- end}}
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
 <li><a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
 <li><a href="{{.SelfMetricsHref}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
@@ -125,6 +130,7 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 		SelfMetricsHref:   relativeLink(s.selfMetricsEndpoint()),
 		StaticTargetsHref: relativeLink(s.staticTargetsEndpoint()),
 		Lifecycle:         s.lifecycle,
+		Playground:        s.playground,
 		Collectors:        len(cfg.Collectors),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
 		Docs:              landingDocs,

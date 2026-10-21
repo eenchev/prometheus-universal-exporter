@@ -207,7 +207,9 @@ func textOnlyKeys(t reflect.Type) map[string][]string {
 // The keys the load holds to text alone are the ones the schemas hold to
 // it, read from the schemas and not listed in the code: a key with allowed
 // values or a pattern, which the schemas make text alone, and the few they
-// say are text themselves. They are named here, so that a key that comes to
+// say are text themselves. One collector on its own, as the playground
+// reads it (ParseCollector), is held to what an entry of the collectors list
+// is. They are named here, so that a key that comes to
 // be among them, or to leave them, is a change someone has seen: a number
 // or a boolean written there was taken as its text, and is refused.
 func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
@@ -227,6 +229,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	}{
 		"the configuration":      {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]"}, ofCollectors...)},
 		"a collector file":       {reflect.TypeOf(collectorFile{}), ofCollectors},
+		"one collector":          {reflect.TypeOf(model.Collector{}), slices.Clone(collector)},
 		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check", "targets[].request.method", "targets[].request.retry.codes[]"}},
 	} {
 		got := model.SortedKeys(textOnlyKeys(tc.file))
@@ -235,7 +238,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 			t.Errorf("%s holds to text alone\n%q\nwant\n%q", name, got, tc.want)
 		}
 	}
-	if got := textOnlyKeys(reflect.TypeOf(model.Collector{})); len(got) != 0 {
+	if got := textOnlyKeys(reflect.TypeOf(model.MetricRule{})); len(got) != 0 {
 		t.Errorf("a type that is no file's holds %v to text", got)
 	}
 }

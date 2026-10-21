@@ -32,11 +32,17 @@ type Server struct {
 	staticTargetsPath string
 	// probeDebug allows debug probes, --web.enable-probe-debug
 	// (probedebug.go).
-	probeDebug        bool
-	staticMu          sync.Mutex
-	staticResults     map[string]model.MetricSet
-	staticFetched     map[string]time.Time
-	staticLastSuccess map[string]time.Time
+	probeDebug bool
+	// playground serves /playground and /playground/run,
+	// --web.enable-playground; playgroundSlots bounds the runs in progress,
+	// and playgroundRunCounts counts them (playground.go).
+	playground          bool
+	playgroundSlots     chan struct{}
+	playgroundRunCounts playgroundRuns
+	staticMu            sync.Mutex
+	staticResults       map[string]model.MetricSet
+	staticFetched       map[string]time.Time
+	staticLastSuccess   map[string]time.Time
 	// staticGeneration counts the results published, under staticMu, and
 	// staticView is the endpoint's merge of them, rebuilt when a result is
 	// published or the targets change (statictargetsendpoint.go).
@@ -166,7 +172,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload":
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", playgroundPath, playgroundRunPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -240,8 +246,8 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
-// targets path,
-// /health, /ready and /-/reload. Whatever answers, its client has
+// targets path, /health, /ready and /-/reload, and with the playground on
+// /playground and /playground/run. Whatever answers, its client has
 // AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -259,6 +265,12 @@ func (s *Server) Handler() http.Handler {
 	// Only / itself: any other unknown path is still a 404.
 	mux.HandleFunc("GET /{$}", protected(s.landingHandler))
 	mux.HandleFunc("GET /collectors", protected(s.collectorsHandler))
+	// Without --web.enable-playground the playground's paths are not found,
+	// as any other path the exporter does not serve.
+	if s.playground {
+		mux.HandleFunc("GET "+playgroundPath, protected(s.playgroundPageHandler))
+		mux.HandleFunc(playgroundRunPath, protected(s.playgroundRunHandler))
+	}
 	return s.writeBounded(mux)
 }
 

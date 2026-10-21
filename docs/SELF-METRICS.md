@@ -339,6 +339,17 @@ once. It belongs to none of the probes sharing it: in the
 on the request whichever probe started it, also when that probe's caller went
 away and the trip answered the others.
 
+## Playground runs
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_playground_runs_total` | counter | Collectors run in the [playground](CONFIGURATION.md#playground), by `result`: `success`, `failure` (it ran, and a stage failed or carried on) or `invalid` (the collector was refused before it ran). Present only with `--web.enable-playground`. |
+
+A run counts in nothing else here, in no collector's families, though a run
+that fetches a target holds a trip slot of the collector it fetches through
+while it runs, as a [debug probe](CONFIGURATION.md#debugging-a-probe) does,
+which `http_exporter_probes_in_flight` and `http_exporter_trips_in_flight` show.
+
 ## Resource metrics
 
 The exporter can publish the familiar `go_` and `process_` series describing its

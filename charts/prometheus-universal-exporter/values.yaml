@@ -105,6 +105,13 @@ server:
   # behind web.basic_auth when that is configured. Also enables
   # /static-targets?debug=<name>, the same report for one static target.
   probeDebug: false
+  # Enable /playground (--web.enable-playground), a page for writing a
+  # collector: its YAML is run against a pasted response, or with probeDebug
+  # a target fetched through a configured collector, and answered with the
+  # series a probe would serve. Python and collectors naming files of the
+  # pod are refused. Off by default; behind web.basic_auth when that is
+  # configured.
+  enablePlayground: false
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
   # on top of each collector's max_concurrent_probes. Each holds a response

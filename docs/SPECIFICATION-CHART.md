@@ -539,6 +539,7 @@ values schema:
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.probeDebug` | `--web.enable-probe-debug`, rendered only when `true`; default `false` |
+| `server.enablePlayground` | `--web.enable-playground`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -1198,9 +1199,12 @@ are skipped and the text checks of the templates still run:
    `defaultLabels` and `defaultAnnotations`; a `podLabels` key the chart sets
    itself MUST fail rendering, and a `podAnnotations` `checksum/config` MUST
    be replaced by the chart's.
-19. Debug probes: `server.probeDebug: true` MUST render
+19. Debug probes and the playground: `server.probeDebug: true` MUST render
    `--web.enable-probe-debug`, the default MUST NOT, and the flag in
-   `extraArgs` MUST fail rendering, naming `server.probeDebug`.
+   `extraArgs` MUST fail rendering, naming `server.probeDebug`;
+   `server.enablePlayground: true` MUST render `--web.enable-playground`,
+   the default MUST NOT, and the flag in `extraArgs` MUST fail rendering,
+   naming `server.enablePlayground`.
 20. Names, network policy, monitors and scheduling: releases `blue` and
    `green` MUST get objects of their own names, a release named after the
    chart the chart's name, and `fullnameOverride` its own; the network policy

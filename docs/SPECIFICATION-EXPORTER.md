@@ -5704,6 +5704,8 @@ http_exporter_otlp_export_retries_total
 http_exporter_otlp_points_dropped_total
 http_exporter_otlp_export_duration_seconds
 http_exporter_otlp_last_export_success_timestamp_seconds
+
+http_exporter_playground_runs_total
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
@@ -6211,6 +6213,7 @@ Implement:
 ```text
 /
 /collectors
+/playground
 /health
 /ready
 /self-metrics
@@ -6244,7 +6247,11 @@ Recommended behavior:
   (§ 42.17) with or without the page's script; the page MUST then show the
   status the probe would have answered, from the report, rather than the
   report's own `200`.
-- Both pages MUST be protected like `/probe` when the exporter's Basic
+- `/playground`, with `--web.enable-playground` only, and `/playground/run`,
+  which its runs post to: § 42.17a. With the flag, `/` and `/collectors` MUST
+  link the page; without it, neither path is served (`404`) and neither page
+  links it.
+- Both pages, and the playground's, MUST be protected like `/probe` when the exporter's Basic
   Authentication is on (§ 42.5), since they list the collectors, MUST escape
   what they show, MUST NOT be cached, MUST NOT be framed by another site
   (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
@@ -23753,7 +23760,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/playground`, `/playground/run`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -24213,7 +24220,8 @@ checks on its own endpoints MUST be compared the same way.
 
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
-endpoint, the landing page at `/` and the collectors page at `/collectors`. The
+endpoint, the landing page at `/`, the collectors page at `/collectors` and,
+when enabled, `/playground` and `/playground/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -26188,3 +26196,81 @@ quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value
 masked, wherever the error is shown: a log line, a probe's answer or a debug
 report. The error MUST still unwrap to what it was.
+
+### 42.17a The playground
+
+With `--web.enable-playground`, off by default, the exporter MUST serve
+`/playground`, a page for writing a collector, and take its runs at `POST
+/playground/run`; without the flag both MUST answer `404`. Both MUST be
+authenticated like a probe (§ 42.5). The page MUST be one document whose
+style and script are inline, loading nothing from anywhere, with the
+headers, escaping and layout of the other pages (§ 23), and MUST post its
+runs relative to itself, so it works under a proxy's path prefix. It MUST
+run a collector on demand and a moment after an edit, a run cancelling the
+one before it.
+
+A run MUST be a JSON object of `collector`, the YAML of one collector as it
+is written under `collectors:`, and either a pasted response — `body`, with
+`content_type`, `status` (200 when left out, else 100 to 599) and `headers`
+— or `request_from`, a collector of the configuration in force, and
+`target`; `params` are probe parameters, as `/probe` takes them, without
+`target`, `collector` or `debug`. A run that is not that object, or sends
+both or neither response, MUST be answered `400`; a request over 2 MiB, a
+collector over 256 KiB or a body over 1 MiB, `413`; a method other than
+`POST`, `405`. Every refusal MUST be a JSON object with `error`.
+
+A run MUST carry the `X-Playground` header and `Content-Type:
+application/json`, which a page of another site cannot send without a CORS
+preflight the exporter never allows: without the header, or with a
+`Sec-Fetch-Site` other than `same-origin` or `none`, it MUST be answered
+`403`, and with another content type `415`, before the collector is read.
+
+The collector MUST be read as the loader reads an entry of the collectors
+list — the same decoding, the same checks of each value's kind against the
+schema, the same validation — and a collector the loader would refuse MUST
+be answered `422` with the loader's message, its line numbers counted from
+the collector's first line. `${NAME}` references MUST NOT be expanded,
+whatever `--config.expand-env` says, and reading it MUST NOT size the
+expression caches, which are the configuration in force's. Before it is
+checked, the playground MUST refuse with `422`, saying why: a collector that
+runs Python (`transform.type: python` or `transform.pre_script`), which
+MUST NOT be run; one whose `request.type` is not `http`; and one that sets
+`request.basic_auth_file`, `request.bearer_token_file` or a
+`request.tls` file. Nothing a file holds MUST reach the answer.
+
+A pasted response MUST NOT make any request. It MUST go through the trip a
+probe makes (§ 42.17): the collector's `accept_status`, its response limit,
+which a body over fails as a fetched one does, the decode, the transform and
+the validation under the collector's limits. A fetch MUST need
+`--web.enable-probe-debug` as well, since the answer shows the target's
+response, and be answered `403` naming it otherwise. It MUST be made
+exactly as a debug probe of `request_from` would make it, which MUST be an
+`http` collector (`400` otherwise, and for one the configuration does not
+have, a target missing or a parameter wrong, as `/probe` answers them):
+through that collector's request block, target policy (§ 26.1),
+credentials, `accept_status`, forwarded `header_<name>` parameters and trip
+limits (§ 42.13b), and with nothing of the browser's request — its
+`Authorization`, cookies or other headers — forwarded. The playground
+collector's own request block MUST make no request; it decodes, transforms
+and validates what was fetched.
+
+A run MUST be bounded by the probe's deadline (§ 3.2a), and by
+`--probe.default-timeout`'s default when that is `0`; at most 4 runs MUST be
+in progress at once, a run past them answered `503`. A run MUST be answered
+`200` with a JSON object of `ok`, true when every stage succeeded and none
+carried on; `verdict`, what a probe would have answered, as a debug report
+says it; `series`, the exposition a probe would have served, to the byte;
+`stages` and `notes`, the stages and the warnings the load would give with
+every line the run logged; and `report`, the run's debug report (§ 42.17),
+whose first line names it a playground run and what it read.
+
+The collector MUST NOT be put in force. A run MUST NOT read or fill the
+response cache, share a trip, reach the failure log or the exporter's log
+but for one `info` line per run, be queued for OTLP, or be counted in any
+collector's self-metrics or in `http_exporter_probes_seconds_total`. It MUST
+be counted in `http_exporter_playground_runs_total{result}`, from 0, with
+`success`, `failure` (it ran and did not go through whole) and `invalid`
+(the collector was refused before it ran), which MUST be present with the
+playground on and absent without it. A run that panics MUST be reported as
+`500: probe failed: internal error: <panic>` and logged with its stack, and
+a fetch MUST give back its trip slot however it ends.

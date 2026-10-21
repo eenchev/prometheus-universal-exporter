@@ -81,6 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	enableProbeDebug := flags.Bool("web.enable-probe-debug", false, "Enable /probe?debug=true, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, what was logged and what the probe would have answered, and /static-targets?debug=<name>, the same for one static target's scrape. The report shows the target's response")
+	enablePlayground := flags.Bool("web.enable-playground", false, "Enable /playground, a page for writing a collector: its YAML is run against a pasted response, or with --web.enable-probe-debug a target fetched through a configured collector, and answered with the series a probe would serve and a debug report. Python and collectors naming server files are refused")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
@@ -307,6 +308,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetProbeDebug(*enableProbeDebug)
+	server.SetPlayground(*enablePlayground)
 	if alloc != nil {
 		server.SetAwaitingReason(alloc.awaitingSentence())
 	}

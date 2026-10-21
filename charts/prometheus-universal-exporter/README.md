@@ -553,6 +553,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.probeDebug` | `--web.enable-probe-debug` | off |
+| `server.enablePlayground` | `--web.enable-playground` | off |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
@@ -596,6 +597,8 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 `server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
 `server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, a *Debug report* switch on each form of `/collectors`, and `/static-targets?debug=<name>` for one static target — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
+
+`server.enablePlayground` enables `/playground`, a page where a collector is written and run against a pasted response — or, with `server.probeDebug` as well, a target fetched through a configured collector — showing the series a probe would serve and a debug report of the run, with nothing put in force — see [Playground](../../docs/CONFIGURATION.md#playground). Python and collectors that name files of the pod are refused. Off by default; rendered only when `true`.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -1203,7 +1206,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `probeDebug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `probeDebug`, `enablePlayground`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

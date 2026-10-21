@@ -122,6 +122,7 @@
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
         "probeDebug": {"type": "boolean", "description": "Rendered as --web.enable-probe-debug when true: enables /probe?debug=true."},
+        "enablePlayground": {"type": "boolean", "description": "Rendered as --web.enable-playground when true: enables /playground."},
         "probeTimeoutOffset": {
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",

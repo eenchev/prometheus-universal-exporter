@@ -46,6 +46,16 @@ type collectJob struct {
 	// trip counts in no statistics itself, rec's, as a debug probe does not
 	// (pythonstats.go).
 	python *transform.PythonStats
+	// pasted is the response a playground run decodes instead of fetching
+	// one (playground.go): no request is made, and the body is held to the
+	// collector's response limit as a fetched one is.
+	pasted *fetch.HTTPResponse
+	// requester, when set, is the collector whose request block fetches the
+	// target — with its target policy, credentials and accept_status — while
+	// collector decodes and transforms the response: a playground run that
+	// fetches from a target sets it to the configured collector it names. For
+	// every other trip it is nil, and collector makes the request.
+	requester *model.Collector
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
@@ -202,11 +212,21 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		return reported(stage, boundedTripFailure(err), policy, extra...)
 	}
 
-	response, err := fetch.FetchCollector(ctx, j.target, c, j.overrides, j.headers)
+	requester := c
+	if j.requester != nil {
+		requester = j.requester
+	}
+	var response *fetch.HTTPResponse
+	var err error
+	if j.pasted != nil {
+		response, err = pastedResponse(c, j.pasted)
+	} else {
+		response, err = fetch.FetchCollector(ctx, j.target, requester, j.overrides, j.headers)
+	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
 	trace.record(func(t *probeTrace) { t.response = sentResponse(response) })
-	grpcCode, grpc := fetch.GRPCStatusCode(c, err)
+	grpcCode, grpc := fetch.GRPCStatusCode(requester, err)
 	if err != nil {
 		rec.update(func(x *serverStats) {
 			// No response arrived.
@@ -230,14 +250,14 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.As(err, &status) {
 			extra = []any{"grpc_code", status.CodeName}
 		}
-		failure := stageFailed(fetch.FetchErrorStage(c, err), err, c.ErrorHandling.OnFetchError, extra...)
+		failure := stageFailed(fetch.FetchErrorStage(requester, err), err, c.ErrorHandling.OnFetchError, extra...)
 		failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
 		return failure
 	}
 	if response.GRPCCode != nil {
 		grpcCode = *response.GRPCCode
 	}
-	trace.step(fetch.FetchStage(c), "ok", time.Since(mark), fetchedNote(response))
+	trace.step(fetch.FetchStage(requester), "ok", time.Since(mark), fetchedNote(response, j.pasted != nil))
 	rec.update(func(x *serverStats) {
 		x.lastStatus = response.StatusCode
 		x.lastBytes = int64(len(response.Body))
@@ -245,8 +265,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			x.grpcCode, x.grpcCalled = grpcCode, true
 		}
 	})
-	accepted := fetch.AcceptedStatus(c, j.overrides, response.StatusCode)
-	s.notePages(ctx, response, accepted, c, rec, j.display, j.target)
+	accepted := fetch.AcceptedStatus(requester, j.overrides, response.StatusCode)
+	s.notePages(ctx, response, accepted, requester, rec, j.display, j.target)
 	if !accepted {
 		// The target's own explanation is usually in the body; the start of
 		// it goes to the log, not to the answer, which Prometheus may keep.
@@ -570,9 +590,12 @@ func (n *sharedRuleNames) telling(attrs []any, c *model.Collector, name, express
 	return attrs
 }
 
-// fetchedNote is a response as a debug probe's stages show it.
-func fetchedNote(r *fetch.HTTPResponse) string {
+// fetchedNote is a response as a debug probe's stages show it; pasted is a
+// playground run's response, which was not fetched.
+func fetchedNote(r *fetch.HTTPResponse, pasted bool) string {
 	switch {
+	case pasted:
+		return fmt.Sprintf("pasted, status %d, %d bytes; nothing was sent", r.StatusCode, len(r.Body))
 	case r.Directory != nil:
 		return fmt.Sprintf("directory %s, %d files", r.Directory.Path, len(r.Directory.Files))
 	case r.GRPCCode != nil:

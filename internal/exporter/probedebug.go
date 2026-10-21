@@ -330,10 +330,17 @@ type debugProbe struct {
 	// which says whose the worker statistics are that the probe's scripts
 	// count in (pythonStatsSince).
 	generation uint64
+	// playground, for a playground run (playground.go), says what the run
+	// read: a pasted response, or a target fetched through a configured
+	// collector. Empty for a debug probe or scrape.
+	playground string
 }
 
 // whose is what a report is of, in its first line.
 func (p debugProbe) whose() string {
+	if p.playground != "" {
+		return fmt.Sprintf("Playground run of collector %q, on %s", p.collector.Name, p.playground)
+	}
 	if p.static != nil {
 		return fmt.Sprintf("Debug scrape of static target %q, collector %q, target %s", p.static.Name, p.collector.Name, orNone(p.logTarget))
 	}
@@ -582,10 +589,14 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	c := p.collector
 	b.WriteString(p.whose())
 	b.WriteString("\n")
-	if p.static != nil {
+	switch {
+	case p.playground != "":
+		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
+		b.WriteString("A playground run puts nothing in force, skips the response cache, shares no trip, records no self-metric but http_exporter_playground_runs_total and exports nothing over OTLP.\n")
+	case p.static != nil:
 		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
 		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric and exports nothing over OTLP.\n")
-	} else {
+	default:
 		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
 		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.\n")
 	}

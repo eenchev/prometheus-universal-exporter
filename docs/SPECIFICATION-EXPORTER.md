@@ -23502,6 +23502,123 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   of `0m` or `lots`, and `targetBusy` with an empty `busyMetric`
   (`make helm-test` and ci.yml render and refuse the same).
 
+## 34.153 NDJSON, logfmt, TOML and INI decoders, and the playground
+
+- An NDJSON body is the list of the values of its lines, each made as the
+  json decoder makes a document, big whole numbers included; blank lines and
+  carriage returns are passed over, and a body of no value is the empty list
+  (§ 6.0a).
+- A line that is no JSON value, one that goes on after its value, and one
+  that ends inside it fail the decode naming the line, and the column,
+  counted in the whole body; the same mistake on another line is the same
+  failure (§ 6.0a).
+- A line's value nests `MaxDepth - 1` deep and decodes, and one level more
+  is refused, the list counting as the outermost level (§ 6.0a).
+- A logfmt body is the list of the records of its lines: quoted values with
+  their escapes and surrogate pairs, a key written alone null, `key=` the
+  empty string, of a key written twice the later; a bare value holding `=` is
+  refused at its column (§ 6.0a).
+- What is no logfmt — a key starting with `=` or holding `"`, a bare value
+  holding `"`, text after a quoted value, an unclosed quote, an invalid
+  escape, a short `\u`, a raw control character — fails naming the line, the
+  column and the byte, and quotes no more of a 64 KiB value (§ 6.0a).
+- A TOML body decodes into the values of JSON: tables, arrays of tables,
+  ints, floats with nan and inf, and the four kinds of date and time as their
+  text; a body of comments is the empty table (§ 6.0a).
+- A TOML error is the library's message after its line, without the last
+  key; one quoting a 64 KiB token is cut past 256 bytes with its length, and
+  the same mistake elsewhere and shorter is the same failure (§ 6.0a).
+- A TOML body whose arrays and inline tables nest past 10,000, a megabyte of
+  `[` among them, or with a value named by more than 16 parts through its
+  header, its key and the inline tables around it, a key of 10,000 parts
+  among them, is refused within a second naming the line, before the library
+  parses it; 16 parts, arrays 9,000 deep in a table, and brackets, dots and
+  quotes in strings and comments decode; arrays 9,999 deep under a header of
+  three parts are refused as nested past 10,000 (§ 6.0a).
+- An INI body is a mapping of its sections, and of the keys before the first,
+  with comments as whole lines, `=` and `:`, dotted names as one name, a
+  section written twice merged, the later of a key written twice, and values
+  as written (§ 6.0a).
+- What is no INI — an unclosed section name, text after it, an empty name, a
+  line without `=` or `:`, an empty key, a section named as a key before the
+  first section — fails naming the line, quoting no more than 64 bytes of a
+  64 KiB name (§ 6.0a).
+- `application/x-ndjson` and `application/jsonl` select `ndjson`, and
+  `application/toml` `toml`, in any case and with parameters; a local file
+  ending in `.ndjson` or `.jsonl` is given `application/x-ndjson`, one ending
+  in `.toml` `application/toml`, and `.ini` and `.logfmt` none (§ 6).
+- Every decoder `model.DecoderTypes` lists has a sample the decoder reads,
+  the four new ones included, and the errors each new decoder makes of a
+  short mistaken body are its own once bounded (§ 6).
+- A collector naming `ndjson`, `logfmt`, `toml` or `ini` with a `regex`,
+  `csv`, `xpath` or `prometheus` transform is refused at load naming what that
+  transform reads and that jq, yq or python read the decoder, and the jq
+  refusal of other decoders names the four (§ 6).
+- Through a probe, a jq transform reads each of the four: items over NDJSON
+  and logfmt records, `has()` of a key written alone, paths into TOML tables
+  and arrays of tables and into INI sections; NDJSON and TOML left to the
+  response are chosen by their Content-Type, and a debug probe names the
+  decoder (§ 6).
+- A collector run in the playground on a pasted response answers, as its
+  series, what `/probe` answers for the same collector and response to the
+  byte, with the stages, the verdict and a report naming it a playground run
+  that sent no request; the test fails when the run does not go through the
+  probe's trip.
+- A pasted response the collector's `accept_status` does not accept fails at
+  `http_status`, and one over its response limit fails as a fetched one
+  does; the test fails when a pasted body skips either.
+- A playground collector the loader would refuse is answered `422` with the
+  loader's message — an unknown key at its line, a bad value, a bad
+  expression, a list entry, a whole configuration, an empty document, a
+  second document — and nothing runs.
+- `config.ParseCollector` reports each mistake — an unknown key, a number
+  where the schema takes text, a fraction, a bad expression, a bad name — in
+  the words, and at the line one further down, the loader reports for the
+  same collector under `collectors:`; the test fails when the collector is
+  not held to the schema's kinds.
+- Neither `ParseCollector` nor a playground run expands `${NAME}`, and
+  `ParseCollector` returns the refusal it was given before checking the
+  collector.
+- The playground refuses with `422` a python transform and a `pre_script`
+  (with an interpreter that would fail any script), a `localfile`
+  collector, and `bearer_token_file`, `basic_auth_file` and `tls` files,
+  and no answer shows what such a file holds; the test fails when Python is
+  let through.
+- A body over 1 MiB, a collector over 256 KiB and a request over 2 MiB are
+  answered `413`; both responses, neither, a status that is no status, a bad
+  header name, an unknown key and a `target` parameter `400`.
+- Without `--web.enable-playground` `/playground` and `/playground/run`
+  answer `404` and neither `/` nor `/collectors` links the playground; with
+  it both link it.
+- With `web.basic_auth` the page and a run answer `401` without the
+  credential and run with it.
+- A run without `X-Playground`, or marked `Sec-Fetch-Site` `cross-site` or
+  `same-site`, is answered `403`, one with a form or text body `415`, a
+  `GET` `405`; one without `Sec-Fetch-Site` runs.
+- A fetch needs `--web.enable-probe-debug` (`403` naming it), goes through
+  the configured collector named in `request_from` with its bearer token —
+  not the playground collector's — and the forwarded `header_<name>`, sends
+  the target neither the browser's cookie nor `X-Playground`, is refused by
+  that collector's `allowed_targets` without reaching the target, and
+  answers `400` for an unknown collector and a missing target; the test
+  fails when the playground collector makes the request.
+- Playground runs count in `http_exporter_playground_runs_total` by
+  `success`, `failure` and `invalid`, and in none of the collector's
+  families nor `http_exporter_probes_seconds_total`; without the flag the
+  family is absent.
+- A run past the 4 in progress is answered `503`, and runs once a slot is
+  free.
+- The page names no URL but the documentation and a placeholder, has no
+  `<link>`, `src=`, `@import`, `url(` or absolute link, posts its runs to
+  `playground/run` relative to itself with `X-Playground`, and offers the
+  fetch, with the http collectors, only with `--web.enable-probe-debug`.
+- `/playground` and `/playground/run` are refused as `--web.self-metrics-path`.
+- A run's notes give the load's warning, a decoder left to each response,
+  before the line the run logged for a rule under `error_mode: log`.
+- The chart renders `--web.enable-playground` with
+  `server.enablePlayground: true` and not by default, and fails rendering
+  for the flag in `extraArgs`, naming `server.enablePlayground`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -25,8 +26,19 @@ import (
 var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 // kubernetesPageSize is how many EndpointSlices one listing request asks
-// for; the rest follow with the answer's continue token.
-const kubernetesPageSize = 500
+// for; the rest follow with the answer's continue token. A page must fit in
+// maxDiscoveryAnswerBytes, 16 MiB, or the listing fails at every refresh.
+// The API server sends whole slices: the EndpointSlice controller puts up
+// to 100 endpoints in one (its --max-endpoints-per-slice default), and an
+// endpoint with names of their longest, a 253-byte pod and node name, a
+// 63-byte namespace and hostname, an IPv6 address, its uid, zone, hints and
+// conditions, is about 1 KiB of JSON, so a full slice with its metadata,
+// copied Service labels and managed fields is about 100 KiB. 100 of them are
+// about 10 MiB, which fits with room to spare; 500 were about 50 MiB, which
+// a large cluster's listing reached. TestAKubernetesPageOfTheWorstCaseFits
+// builds such a page. A cluster that raises --max-endpoints-per-slice makes
+// larger slices than this allows for.
+const kubernetesPageSize = 100
 
 // endpointSliceList is the part of a discovery.k8s.io/v1 EndpointSliceList
 // the allocator reads.
@@ -43,7 +55,8 @@ type endpointSlice struct {
 		Namespace string            `json:"namespace"`
 		Labels    map[string]string `json:"labels"`
 	} `json:"metadata"`
-	Endpoints []struct {
+	AddressType string `json:"addressType"`
+	Endpoints   []struct {
 		Addresses  []string `json:"addresses"`
 		Conditions struct {
 			Ready *bool `json:"ready"`
@@ -67,8 +80,13 @@ const serviceNameLabel = "kubernetes.io/service-name"
 // refreshKubernetes lists the EndpointSlices k selects from the API server
 // of the cluster the allocator runs in, with the pod's service account: its
 // token, read again at every listing so a rotated one is used, and the
-// cluster's CA, which the API server's certificate must be signed by.
-func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[string]string, limit int) ([]discovered, error) {
+// cluster's CA, which the API server's certificate must be signed by. The
+// whole listing, every page of every namespace, takes at most timeout.
+func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[string]string, limit int, timeout time.Duration) ([]discovered, error) {
+	// The client's own timeout bounds one request alone; a listing of many
+	// pages could take many times it.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
 	if host == "" || port == "" {
 		return nil, errors.New("KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set: the allocator does not run in a Kubernetes pod, so it cannot reach the API server")
@@ -85,7 +103,7 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 		}
 		namespaces = []string{strings.TrimSpace(string(raw))}
 	}
-	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: model.TLSConfig{CAFile: filepath.Join(serviceAccountDir, "ca.crt")}}, false, timeout(k.Timeout))
+	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: model.TLSConfig{CAFile: filepath.Join(serviceAccountDir, "ca.crt")}}, false, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("the cluster's CA: %w", err)
 	}
@@ -105,9 +123,15 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 		for {
 			list, err := listEndpointSlices(ctx, client, server+path, k.LabelSelector, next, token)
 			if err != nil {
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return nil, fmt.Errorf("listing the EndpointSlices took longer than the timeout, %s: %w", timeout, err)
+				}
 				return nil, err
 			}
 			for i := range list.Items {
+				if !k.takes(list.Items[i].AddressType) {
+					continue
+				}
 				for _, d := range sliceTargets(&list.Items[i], portName, portNumber, k.IncludeNotReady) {
 					if seen[d.Address] {
 						continue
@@ -185,6 +209,9 @@ func sliceTargets(s *endpointSlice, portName string, portNumber int, includeNotR
 		"__meta_kubernetes_namespace":          s.Metadata.Namespace,
 		"__meta_kubernetes_endpointslice_name": s.Metadata.Name,
 		"__meta_kubernetes_endpoint_port_name": portName,
+	}
+	if s.AddressType != "" {
+		base["__meta_kubernetes_endpointslice_address_type"] = s.AddressType
 	}
 	if service := s.Metadata.Labels[serviceNameLabel]; service != "" {
 		base["__meta_kubernetes_service_name"] = service

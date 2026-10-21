@@ -1,9 +1,10 @@
 {{- /* What a kubernetes discovery source needs: a ServiceAccount of the
        allocator's own, so the exporter's keeps no token and no permission,
-       and, with allocator.rbac.create, the right to read EndpointSlices
-       where the sources list them. A source without namespaces lists the
-       allocator's own; one with all_namespaces lists the cluster's, which
-       takes a ClusterRole. */ -}}
+       and, with allocator.rbac.create, the right to list EndpointSlices
+       where the sources list them, and no more: the allocator polls with
+       list requests, never getting one slice nor watching. A source
+       without namespaces lists the allocator's own; one with all_namespaces
+       lists the cluster's, which takes a ClusterRole. */ -}}
 {{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
 {{- $name := include "prometheus-universal-exporter.allocatorFullname" . }}
 {{- $namespace := include "prometheus-universal-exporter.namespace" . }}
@@ -30,7 +31,7 @@ automountServiceAccountToken: true
 {{- $namespaces = append $namespaces $namespace }}
 {{- end }}
 {{- end }}
-{{- $rule := dict "apiGroups" (list "discovery.k8s.io") "resources" (list "endpointslices") "verbs" (list "get" "list" "watch") }}
+{{- $rule := dict "apiGroups" (list "discovery.k8s.io") "resources" (list "endpointslices") "verbs" (list "list") }}
 {{- if $cluster }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

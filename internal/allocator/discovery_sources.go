@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -168,9 +169,9 @@ func readFileSD(path string) ([]TargetGroup, error) {
 	return parseGroupsYAML(raw)
 }
 
-// refreshHTTPSD asks h's URL for its target groups.
-func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string) ([]TargetGroup, error) {
-	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: h.TLS}, false, timeout(h.Timeout))
+// refreshHTTPSD asks h's URL for its target groups, within timeout.
+func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string, timeout time.Duration) ([]TargetGroup, error) {
+	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: h.TLS}, false, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("http_sd.tls: %w", err)
 	}

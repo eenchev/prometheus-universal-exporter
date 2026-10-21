@@ -1749,8 +1749,8 @@ of objects, one a row, of its columns by name. Its keys:
 
 A `dns` collector resolves the probe's `target`, a DNS name, and hands its
 records to the transforms as a JSON document. The lookup MUST be Go's own
-resolver (`net.Resolver` with `PreferGo`), so the type needs no library. Its
-keys:
+resolver (`net.Resolver` with `PreferGo`), so the type needs no library,
+but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -1776,20 +1776,29 @@ keys:
   dot), `record_type`, `server` (`host:port`, `""` for the system's
   resolver), `transport`, `not_found`, `count`, `duration_seconds` and
   `answers`, one object a record with the fields of its type alone:
-  `address` (A, AAAA); `target` (CNAME, the canonical name, present only
-  when it differs from the name); `host` and `preference` (MX); `host` (NS);
+  `address` (A, AAAA); `target` (CNAME, the name the CNAME record of the
+  name points to); `host` and `preference` (MX); `host` (NS);
   `text`, the record's strings joined (TXT); `target`, `port`, `priority`
   and `weight` (SRV); `name` (PTR). Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
 - A name that does not exist, or has no records of the type, MUST be an
-  answer: `not_found` true, `answers` empty and `count` 0. A server failure,
+  answer: `not_found` true, `answers` empty and `count` 0. For `CNAME` that
+  MUST be every name without a CNAME record, whatever other records it has. A server failure,
   a refusal, a malformed answer and a server that does not answer MUST fail
   the scrape in the `dns` stage, naming the record type, the name and the
   server asked, not the system's; a lookup cut short by the scrape's
   deadline MUST wrap the context's error. TTLs and response codes are not
   given by the resolver and MUST NOT be invented.
+- A `CNAME` lookup MUST send one question of type `CNAME` and no other,
+  over the transport as above (UDP sent again while no answer comes, TCP
+  for an answer marked truncated), to `server`, or without it to the
+  `nameserver` lines of `/etc/resolv.conf` in order, port 53, `127.0.0.1`
+  and `::1` when there are none, the next asked when one fails or does not
+  answer within 5 seconds. `/etc/hosts` and the file's other lines MUST NOT
+  be read for it. A response code other than `NOERROR` and `NXDOMAIN` MUST
+  fail the scrape, naming the code.
 - The target lists MUST be matched against the name by name alone, never
   by what it resolves to: a denied name, and with `allowed_targets` one that
   matches none of its names, MUST be refused with `403` before the server is
@@ -1835,13 +1844,24 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   `tls_version` and `cipher_suite` as the handshake settled them,
   `verified`, `verify_error`, `duration_seconds`, the first certificate's
   `not_after` and `seconds_until_expiry`, `chain` (`length`,
-  `earliest_not_after`, `seconds_until_earliest_expiry`) and
-  `certificates`, the chain as presented, each with `subject_cn`,
+  `earliest_not_after`, `seconds_until_earliest_expiry`, `earliest_from`)
+  and `certificates`, the chain as presented, each with `subject_cn`,
   `subject`, `issuer_cn`, `issuer`, `serial` (lower-case hexadecimal),
   `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
   `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
   `seconds_until_expiry` (negative once expired), `is_ca`,
   `signature_algorithm` and `sha256_fingerprint`.
+- `chain.length` MUST be the number of certificates presented. When the
+  chain verifies, `chain.earliest_not_after` MUST be, over the chains the
+  verification built from the server's certificate to a trusted root, the
+  latest of each chain's earliest `not_after`, its root included, and
+  `earliest_from` MUST be `verified`; a presented certificate on none of
+  those chains, such as an expired cross-signed root, MUST NOT count. When
+  it does not verify, `earliest_not_after` MUST be the earliest `not_after`
+  of the presented certificates and `earliest_from` MUST be `presented`.
+  `seconds_until_earliest_expiry` MUST be `earliest_not_after` less the
+  time of the scrape. `verified`, `verify_error` and `certificates` MUST be
+  of the presented chain either way.
 - STARTTLS is not supported: the handshake MUST start at the connection's
   first byte.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
@@ -24308,7 +24328,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - A source that has never answered adds no targets
   (`TestASourceThatNeverAnsweredHasNoTargets`).
 - The kubernetes source lists the EndpointSlices of its namespace with its
-  label selector and `limit=500`, follows the continue token, takes the
+  label selector and `limit=100`, follows the continue token, takes the
   ready endpoints (and those whose readiness is unknown) at the named port,
   sorted, with the meta labels and the mapping, skips a slice without the
   port, and with a numbered port and `include_not_ready` takes every
@@ -24327,8 +24347,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   removing one, `__meta_` labels passed and `job`, `instance` and other `__`
   labels dropped (`TestDiscoveredProbeTargetsAreServed`).
 - A `discovered_targets` entry is written out as a static target per
-  discovered address, named `<entry>_<address>` with a digest of the
-  address when two names collide, loaded by the replica's own loader from
+  discovered address, named `<entry>_<address>` with the address escaped,
+  so `a-b.example` and `a.b.example` keep apart, loaded by the replica's own loader from
   the shares, with the entry's labels over the discovered ones and no `__`
   label; the per-source metrics show the targets, refreshes and last
   success (`TestDiscoveredStaticTargetsAreShared`).
@@ -24343,8 +24363,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   without targets or discovery, a template without `{{address}}` or without
   discovery, unknown source keys; an entry without a name or discovery, with
   `target`, a `shard_key` other than `address`, an `http` collector without a
-  URL template, an unknown key or collector, twice, and `discovered_targets`
-  that is no list; a file of `discovered_targets` alone serves no share
+  URL template, an unknown key or collector, twice, named as another entry's
+  name followed by `_`, and `discovered_targets` that is no list; a file of `discovered_targets` alone serves no share
   until a target is found (`TestDiscoveredInputsAreCheckedAtLoad`).
 - `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
   stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
@@ -24421,6 +24441,95 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `--probe-targets-file-schema` print the schemas and exit 0 without
   reading a file, and `-h` lists them (TestSchemaFlagsPrintTheSchemas,
   TestVersionAndHelp).
+
+## 34.160 One allocator with discovery, kept targets, logins and CNAME lookups
+
+- A kubernetes source takes the IPv4 EndpointSlices by default and with
+  `address_type: IPv4`, the IPv6 ones with `IPv6`, and every slice, FQDN
+  ones included, with `any`, so a dual-stack Service gives each pod once;
+  each target has `__meta_kubernetes_endpointslice_address_type`, and
+  another `address_type` is refused at load
+  (`TestKubernetesTakesTheSlicesOfItsAddressType`,
+  `TestDiscoveryIsCheckedAtLoad`).
+- A reload changing only a source's `refresh_interval`, or a kubernetes
+  source's `label_selector`, keeps its targets in the bundles and the service
+  discovery answer until the new source answers; a first failure of the new
+  source keeps them and is counted beside the old source's counts, its
+  answer then replaces them, and a source given another name starts with
+  none (`TestAChangedSourceKeepsItsTargetsUntilItAnswers`).
+- A shared login outlives the request that began it: a request with a
+  100 ms deadline begins a login the target answers in 300 ms, a request
+  with 5 s waits for it and gets the token, the first fails at its own
+  deadline, and one login is counted, none failed
+  (TestASharedLoginOutlivesTheRequestThatBeganIt).
+- A relative login.url is a path from the root on the target's scheme,
+  host and port: three paths of one target make one login and keep one
+  token, and login, ./login, ../login and ?x=1 are refused at load as
+  relative to the target's path (TestARelativeLoginURLKeepsOnlyTheTargetsOrigin);
+  the committed schema refuses login and ../login and takes /, as the
+  exporter does (TestSchemaAndExporterAgreeOnALogin).
+- A 401 from another origin a followed redirect led to, without the token,
+  is the answer, and makes no second login
+  (TestA401FromARedirectWithoutTheTokenMakesNoNewLogin).
+- A debug run's login, made or failed, is counted in neither
+  http_exporter_logins_total nor http_exporter_login_failures_total, and the
+  token it fetched serves the collector's next request without a login
+  (TestADebugRunsLoginIsNotCounted).
+- A dns CNAME collector asks the CNAME question alone, of the stand-in
+  server: an alias answers its record's target; a name with an A record, one
+  with a TXT record alone and one that does not exist are not_found with no
+  records; transport tcp asks over TCP; an answer marked truncated over UDP
+  is asked again over TCP; SERVFAIL fails naming the server and the code; a
+  server that never answers fails at the deadline
+  (TestADNSCNAMELookupAsksForTheCNAMERecordAlone).
+- The nameservers of a resolv.conf are read as host:port on port 53, an
+  IPv6 one in brackets, and 127.0.0.1 and ::1 when it names none
+  (TestTheSystemsNameserversAreReadForACNAMELookup).
+
+## 34.161 Discovery pages, names and timeouts, and a verified chain's expiry
+
+- The kubernetes source asks for EndpointSlices with `limit=100` from an API
+  server that refuses any other page size, and follows the `continue`
+  tokens through four pages, one request each
+  (`TestKubernetesListsInPagesOf100`).
+- A page of `kubernetesPageSize` EndpointSlices as the API server sends
+  them, each of the controller's 100 endpoints with every name at its
+  longest, fits in the 16 MiB an answer may hold and reads back, while 500
+  such slices would not (`TestAKubernetesPageOfTheWorstCaseFits`).
+- A `timeout` left out is `10s`, or the `refresh_interval` when that is
+  shorter, for `http_sd` and `kubernetes`, and is accepted; a written one is
+  taken as it is; an `http_sd` source asked every second with no timeout
+  gives up on an answer that takes 3s
+  (`TestAnUnsetTimeoutIsCutToTheRefreshInterval`).
+- A kubernetes listing of four pages of 400ms each fails with a 1s timeout:
+  the timeout bounds the whole listing, not each request
+  (`TestAKubernetesListingIsBoundedWhole`).
+- A discovered target's name is the entry's and the address escaped
+  (`10.0.0.5:9100` as `10_0_0_5_3A9100`, IPv6 in brackets, host names with
+  `-`), and an address with an upper-case letter, `_`, `/` or longer than
+  the bound is cut and followed by `_X` and 16 hex digits of its SHA-256;
+  every name is a static target's name (`TestDiscoveredNames`).
+- Every address of up to 5 characters of `a9.:-[]`, and 100000 random
+  longer ones, is escaped to a name that reads back to the address, and no
+  two share one (`TestEscapedAddressesReadBack`).
+- No two different addresses share a discovered name, `a.b` against `a-b`
+  and `a_b`, `[::1]:80` against `::1:80`, case and length included, and
+  every name is a static target's name
+  (`FuzzDiscoveredNamesAreInjective`).
+- A discovered target is not renamed when another that looked like it
+  (`a-b.example` beside `a.b.example`) goes away, and one whose name the
+  file gives a written target takes the `_X` digest form and keeps it
+  (`TestADiscoveredTargetKeepsItsName`).
+- A tlscert server sending a leaf, its intermediate and an expired
+  cross-sign of the root gives, with the root trusted, the chain's earliest
+  expiry from the verified chain, the root's, which expires before the
+  leaf, earliest_from verified; untrusted, from the presented
+  certificates, the cross-sign's and negative, earliest_from presented;
+  the three certificates are listed either way.
+- A tlscert chain that verifies by two chains, an intermediate signed by
+  two trusted roots, gives the chain's earliest expiry of the chain that
+  holds longer, its intermediate's, not the other intermediate's earlier
+  one.
 
 # 35. Documentation requirements
 
@@ -25259,10 +25368,13 @@ no login made for that request.
 
 Where a login goes MUST be the configuration's alone. `url` MUST be an
 absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
-reference resolved against the target, its scheme, host and port, without
-the target's credentials, query or fragment; it MUST hold no credentials,
-fragment or placeholder, and a reference naming a host without a scheme
-(`//host/...`) MUST be refused. The login request MUST be held to the
+path from the root (starting with `/`), with a query if need be, resolved
+against the target's scheme, host and port alone: the target's path, query,
+credentials and fragment MUST NOT play a part in where the login goes or in
+which token is kept. A relative reference that does not start with `/`
+(`login`, `../login`, `?x`) MUST be refused at load, and in the schema. It
+MUST hold no credentials, fragment or placeholder, and a reference naming a
+host without a scheme (`//host/...`) MUST be refused. The login request MUST be held to the
 collector's `allowed_targets` and `denied_targets` (§ 26.1), and a login URL
 they refuse MUST fail the trip as a failed login, not as a refused target. A
 login MUST NOT follow a redirect. It MUST be made with `login.tls` when set,
@@ -25277,9 +25389,12 @@ but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own
 deadline, and the login MUST NOT be cut short by the request that began it
-going away. A login that fails while the token kept has not expired MUST
+going away or reaching its deadline: it MUST run within a bound of its own,
+30 seconds, and a request that stops waiting MUST NOT fail it. A login that fails while the token kept has not expired MUST
 leave that token in use, counted as a failure. A target that answers `401`
-MUST have the token it was sent dropped, unless a newer one replaced it
+to a request that carried the token — the last request of a followed
+redirect, which MUST NOT be taken for a refusal of the token when a hop to
+another origin left it behind — MUST have the token it was sent dropped, unless a newer one replaced it
 meanwhile, and the request MUST be sent once more with the token of a new
 login, whatever its method; that request MUST NOT be one of
 `retry.attempts`, and MUST be made within the trip's deadline. At most 1000
@@ -25295,6 +25410,10 @@ shown anywhere: not its body, a file's content or the token. An error of a
 `token` or `expires_in` expression MUST say the kind of value it gave and
 never the value. A debug report MUST list a login request, marked as one,
 with its headers redacted as every request's are and without its body. A
+debug run (§ 42.17) MUST use the token kept and keep the one its login
+gives, the collector's, but its logins MUST NOT be counted in
+`http_exporter_logins_total` or `http_exporter_login_failures_total`, unless
+a request that is no debug run's waited for the same login. A
 static target's `login` MUST be part of its cache key, and the debug page
 MUST refuse a collector written on it that sets `login`.
 
@@ -26349,7 +26468,10 @@ allocator mode their configuration and their share of the static targets,
 and Prometheus the probe targets of its probe targets file, each pointed at a
 replica. What the two sides exchange MUST be the types, paths, timings and
 functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
-files and heartbeats MUST give the same bundles and answers.
+files and heartbeats MUST give the same bundles and answers. What discovery
+sources find is input too, asked by each copy on its own timer, so
+`docs/ALLOCATOR.md` MUST say that an allocator with a discovery source runs
+as one copy, and the chart MUST run it so (SPECIFICATION-CHART.md § 33.10c).
 
 **Inputs.** `--config.file` MUST be loaded and checked with the exporter's
 configuration loader, `--static-targets-file` with the static target file's
@@ -26397,8 +26519,9 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`, and
-a `timeout` (default `10s`) MUST NOT be longer than it. `file_sd.files` MUST
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`; a
+`timeout` written longer than it MUST be refused, and one left out MUST be
+`10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
 from the directory of the file naming them, read again at every refresh.
 `http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
@@ -26409,13 +26532,18 @@ optional `bearer_token_file` read again at every refresh and a `tls` block
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
-with its token read again at every listing, in pages of 500, in each of
+with its token read again at every listing, in pages of 100 (`limit=100`,
+following each `continue` token), the whole listing, every page of every
+namespace, bounded by its `timeout`, in each of
 `namespaces` (DNS-1123 labels; none lists the namespace of the service
 account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
-`label_selector` (checked at load); its targets MUST be each address of each
+`label_selector` (checked at load), taking only the slices whose
+`addressType` is `address_type`'s, `IPv4` by default or `IPv6`, or every
+slice with `any`, any other value refused at load; its targets MUST be each address of each
 endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
-`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists. An
+`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
+`__meta_kubernetes_endpointslice_address_type` among them. An
 answer larger than 16 MiB, with more targets than its bound or that cannot
 be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be
@@ -26428,11 +26556,18 @@ be left out. A `discovered_targets` entry MUST have a `name` of a static
 target's name and `discovery`, MAY have `target_template` and `shard_key`
 (only `address`), MUST NOT have `target`, and MUST be checked at load as a
 static target of the file with `192.0.2.1:9100` for the address; each
-discovered address MUST make a static target named `<name>_<address>`, each
-character outside `[A-Za-z0-9_]` written `_`, followed by `_` and the first 8
-hex digits of the address's SHA-256 when another target has that name,
-whose `target` is made as a probe job's is, whose other keys are the entry's
-and whose shard key is its name, or its address with `shard_key: address`; one
+discovered address MUST make a static target named `<name>_<address>`, the
+address made only of `[a-z0-9.:\-\[\]]` and escaped to at most 128
+characters written with each letter and digit as itself, `.` as `_` and
+`:`, `-`, `[`, `]` as `_3A`, `_2D`, `_5B`, `_5D`, and any other address, or
+one whose name a written target of the file has, written as its first 48
+bytes lower-cased with each character but a letter or digit as `_`, then
+`_X` and the first 16 hex digits of its SHA-256; the name MUST depend on the
+entry, the address and the file alone, never on the other discovered
+targets, and an entry whose `name` is another entry's followed by `_` MUST
+be refused at load. The target's `target` MUST be made as a probe job's is,
+its other keys MUST be the entry's and its shard key its name, or its
+address with `shard_key: address`; one
 the checks refuse MUST be left out, and what is left out logged once while
 it stays the same. A `discovered_targets` file MAY leave `targets` out.
 A discovered probe target's group MUST carry its source's labels that are
@@ -26442,7 +26577,12 @@ MUST carry its source's labels but those starting with `__`, `job`,
 `instance` and `static_target`, under the entry's labels. What the sources
 find MUST be put in force as a reload is (handover, removal at once, a
 bundle changing only with its share), and a reload MUST keep a source whose
-owner and settings it leaves alone, with what it found.
+owner and settings it leaves alone, with what it found. A source a reload
+replaces with one of the same owner's kind, owner, source kind and name but
+other settings MUST hand the new one what it found and its counts, so its
+targets stay in force until the new source first answers, a failure before
+then keeping them and being counted; a source of a new name or kind MUST
+start with nothing found.
 
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the

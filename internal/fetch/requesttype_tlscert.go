@@ -166,15 +166,30 @@ type tlsCertDocument struct {
 	Chain              *tlsCertChainInfo `json:"chain"`
 }
 
-// tlsCertChainInfo is what is true of the chain presented as a whole.
+// tlsCertChainInfo is what is true of the chain as a whole.
 type tlsCertChainInfo struct {
 	// Length is the number of certificates presented.
 	Length int `json:"length"`
-	// EarliestNotAfter and SecondsUntilEarliestExpiry are of the
-	// certificate of the chain that expires first.
+	// EarliestNotAfter and SecondsUntilEarliestExpiry are when the chain
+	// stops verifying: of a chain that verifies, the latest of the chains
+	// it verifies by, each ending when the first of its certificates, its
+	// root included, expires, since a client trusts the server while any
+	// of them holds; of one that does not, the first of the presented
+	// certificates to expire. A certificate the server still sends but no
+	// client needs, such as an expired cross-signed root, would otherwise
+	// hold the expiry in the past for good.
 	EarliestNotAfter           int64 `json:"earliest_not_after"`
 	SecondsUntilEarliestExpiry int64 `json:"seconds_until_earliest_expiry"`
+	// EarliestFrom is which certificates EarliestNotAfter is of:
+	// "verified", the chains the chain verifies by, or "presented".
+	EarliestFrom string `json:"earliest_from"`
 }
+
+// The values of tlsCertChainInfo.EarliestFrom.
+const (
+	tlsCertEarliestFromVerified  = "verified"
+	tlsCertEarliestFromPresented = "presented"
+)
 
 // tlsCertificate is one certificate of the chain.
 type tlsCertificate struct {
@@ -267,7 +282,8 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		TLSVersion: tls.VersionName(state.Version), Cipher: tls.CipherSuiteName(state.CipherSuite),
 		Certificates: make([]tlsCertificate, 0, len(state.PeerCertificates)),
 	}
-	if err := verifyTLSCertChain(state.PeerCertificates, roots, serverName, now); err != nil {
+	verifiedChains, err := verifyTLSCertChain(state.PeerCertificates, roots, serverName, now)
+	if err != nil {
 		doc.VerifyError = err.Error()
 	} else {
 		doc.Verified = true
@@ -277,9 +293,11 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	}
 	if len(doc.Certificates) > 0 {
 		doc.NotAfter, doc.SecondsUntilExpiry = doc.Certificates[0].NotAfter, doc.Certificates[0].SecondsUntilExpiry
-		chain := &tlsCertChainInfo{Length: len(doc.Certificates), EarliestNotAfter: doc.NotAfter}
-		for _, cert := range doc.Certificates {
-			chain.EarliestNotAfter = min(chain.EarliestNotAfter, cert.NotAfter)
+		chain := &tlsCertChainInfo{Length: len(doc.Certificates)}
+		if len(verifiedChains) > 0 {
+			chain.EarliestNotAfter, chain.EarliestFrom = verifiedChainsExpiry(verifiedChains).Unix(), tlsCertEarliestFromVerified
+		} else {
+			chain.EarliestNotAfter, chain.EarliestFrom = firstExpiry(state.PeerCertificates).Unix(), tlsCertEarliestFromPresented
 		}
 		chain.SecondsUntilEarliestExpiry = chain.EarliestNotAfter - now.Unix()
 		doc.Chain = chain
@@ -311,17 +329,41 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 
 // verifyTLSCertChain verifies the chain the server presented, as a TLS
 // client would: the first certificate against serverName, the others as
-// intermediates, up to roots, the system's when nil, at now.
-func verifyTLSCertChain(certs []*x509.Certificate, roots *x509.CertPool, serverName string, now time.Time) error {
+// intermediates, up to roots, the system's when nil, at now. It returns
+// the chains it verifies by, each from the server's certificate to a root.
+func verifyTLSCertChain(certs []*x509.Certificate, roots *x509.CertPool, serverName string, now time.Time) ([][]*x509.Certificate, error) {
 	if len(certs) == 0 {
-		return errors.New("the server presented no certificate")
+		return nil, errors.New("the server presented no certificate")
 	}
 	intermediates := x509.NewCertPool()
 	for _, cert := range certs[1:] {
 		intermediates.AddCert(cert)
 	}
-	_, err := certs[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: serverName, CurrentTime: now})
-	return err
+	return certs[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: serverName, CurrentTime: now})
+}
+
+// verifiedChainsExpiry is when the last of chains stops verifying, each
+// at the expiry of the first of its certificates, its root included: a
+// client trusts the server while any one of them holds.
+func verifiedChainsExpiry(chains [][]*x509.Certificate) time.Time {
+	var latest time.Time
+	for _, chain := range chains {
+		if end := firstExpiry(chain); end.After(latest) {
+			latest = end
+		}
+	}
+	return latest
+}
+
+// firstExpiry is the not_after of the first of certs to expire.
+func firstExpiry(certs []*x509.Certificate) time.Time {
+	first := certs[0].NotAfter
+	for _, cert := range certs[1:] {
+		if cert.NotAfter.Before(first) {
+			first = cert.NotAfter
+		}
+	}
+	return first
 }
 
 // describeCertificate is cert as the document shows it, its expiry

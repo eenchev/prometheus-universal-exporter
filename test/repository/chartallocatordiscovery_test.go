@@ -34,10 +34,10 @@ func allocatorRBAC(t *testing.T, helm string, args ...string) []string {
 
 // A kubernetes discovery source, in a probe job or in the static target
 // document's discovered_targets, runs the allocator as a ServiceAccount of
-// its own, with its token mounted, allowed to get, list and watch
-// EndpointSlices in each namespace a source lists, the release's for one
-// that lists none, and cluster-wide for one with all_namespaces; without
-// one, nothing of it is rendered and the allocator keeps the exporter's
+// its own, with its token mounted, allowed only to list EndpointSlices,
+// all the allocator does, in each namespace a source lists, the release's
+// for one that lists none, and cluster-wide for one with all_namespaces;
+// without one, nothing of it is rendered and the allocator keeps the exporter's
 // ServiceAccount without a token.
 func TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery(t *testing.T) {
 	helm := requireHelm(t)
@@ -88,7 +88,7 @@ func TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery(t *testing.
 		}
 	}
 	rule := path(role, "rules", "0")
-	if !slices.Equal(scalars(path(rule, "apiGroups")), []string{"discovery.k8s.io"}) || !slices.Equal(scalars(path(rule, "resources")), []string{"endpointslices"}) || !slices.Equal(scalars(path(rule, "verbs")), []string{"get", "list", "watch"}) {
+	if !slices.Equal(scalars(path(rule, "apiGroups")), []string{"discovery.k8s.io"}) || !slices.Equal(scalars(path(rule, "resources")), []string{"endpointslices"}) || !slices.Equal(scalars(path(rule, "verbs")), []string{"list"}) {
 		t.Errorf("the Role allows %v", rule)
 	}
 	probeTargets := text(path(manifest(t, docs, "ConfigMap/test-prometheus-universal-exporter-allocator-probe-targets"), "data", "probe-targets.yaml"))
@@ -141,6 +141,71 @@ func TestChartSchemaChecksProbeJobDiscovery(t *testing.T) {
 		"empty discovery":     {`[{"name":"w","collector":"example","discovery":[]}]`, "allocator.probeJobs.0"},
 	} {
 		if out, ok := helmTemplate(t, helm, chartDir, "--set", "allocator.enabled=true", "--set-json", "allocator.probeJobs="+c.jobs); ok || !namesInHelmError(out, c.want) {
+			t.Errorf("%s: ok=%v, want an error naming %q:\n%s", what, ok, c.want, out)
+		}
+	}
+}
+
+// An allocator with a discovery source, in a probe job or in the static
+// target document's discovered_targets, runs as one pod, rolled out with
+// the Recreate strategy so two never serve at once: copies ask their
+// sources each on its own timer, and the exporter pods, which heartbeat and
+// fetch from every copy, would flip between their bundles. allocator.replicas
+// above 1 beside one fails rendering, by the schema for a probe job and by
+// the template with the schema skipped or for the static targets, and the
+// disruption budget of maxUnavailable 1 still lets a drain evict the one
+// pod. An allocator of files alone keeps two pods, rolled as before.
+func TestChartRunsOneAllocatorWithDiscovery(t *testing.T) {
+	helm := requireHelm(t)
+	const name = "Deployment/test-prometheus-universal-exporter-allocator"
+	deployment := func(args ...string) (replicas, strategy string) {
+		spec := path(manifest(t, manifests(t, helm, args...), name), "spec")
+		return text(path(spec, "replicas")), text(path(spec, "strategy", "type"))
+	}
+	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
+	static := valuesFile(t, `allocator:
+  enabled: true
+  staticTargets:
+    data: |
+      interval: 1m
+      discovered_targets:
+        - name: node
+          collector: example
+          target_template: http://{{address}}/
+          discovery:
+            - file_sd: {files: [/etc/pue-sd/nodes.json]}
+`)
+	for what, args := range map[string][]string{
+		"a probe job's source":         {"--set", "allocator.enabled=true", "--set-json", discoveryJob},
+		"a static target entry's":      {"-f", static},
+		"a probe job's, replicas 1":    {"--set", "allocator.enabled=true", "--set", "allocator.replicas=1", "--set-json", discoveryJob},
+		"a static target entry's, nil": {"-f", static, "--set", "allocator.replicas=null"},
+	} {
+		if replicas, strategy := deployment(args...); replicas != "1" || strategy != "Recreate" {
+			t.Errorf("with %s the allocator has %s replicas and the strategy %q, want 1 and Recreate", what, replicas, strategy)
+		}
+	}
+	if replicas, strategy := deployment("--set", "allocator.enabled=true", "--set-json", allocatorProbeJobs); replicas != "2" || strategy != "" {
+		t.Errorf("without discovery the allocator has %s replicas and the strategy %q, want 2 and the default", replicas, strategy)
+	}
+	if replicas, _ := deployment("--set", "allocator.enabled=true", "--set", "allocator.replicas=3", "--set-json", allocatorProbeJobs); replicas != "3" {
+		t.Errorf("without discovery allocator.replicas 3 renders %s replicas", replicas)
+	}
+	pdb := path(manifest(t, manifests(t, helm, "--set", "allocator.enabled=true", "--set-json", discoveryJob), "PodDisruptionBudget/test-prometheus-universal-exporter-allocator"), "spec")
+	if text(path(pdb, "maxUnavailable")) != "1" || path(pdb, "minAvailable") != nil {
+		t.Errorf("the one allocator's disruption budget is %v, want maxUnavailable 1 alone, which lets a drain evict it", pdb)
+	}
+
+	for what, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"schema, a probe job": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.replicas=2", "--set-json", discoveryJob}, "allocator.replicas"},
+		"template, a probe job": {[]string{"--skip-schema-validation", "--set", "allocator.enabled=true", "--set", "allocator.replicas=2", "--set-json", discoveryJob},
+			"allocator.replicas is 2, but the allocator has a discovery source"},
+		"template, a static target entry": {[]string{"-f", static, "--set", "allocator.replicas=2"}, "allocator.replicas is 2, but the allocator has a discovery source"},
+	} {
+		if out, ok := helmTemplate(t, helm, chartDir, c.args...); ok || !namesInHelmError(out, c.want) {
 			t.Errorf("%s: ok=%v, want an error naming %q:\n%s", what, ok, c.want, out)
 		}
 	}

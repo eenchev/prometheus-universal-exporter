@@ -1,15 +1,20 @@
 package allocator
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -116,6 +122,7 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 		"both namespace ways":  {func(d *DiscoveryConfig) { d.Kubernetes.Namespaces, d.Kubernetes.AllNamespaces = []string{"a"}, true }, "all_namespaces"},
 		"a long timeout":       {func(d *DiscoveryConfig) { d.Kubernetes.Timeout = 31e9 }, "longer than its refresh_interval"},
 		"a short refresh":      {func(d *DiscoveryConfig) { d.Kubernetes.RefreshInterval = 1e8 }, "under the least"},
+		"an address type":      {func(d *DiscoveryConfig) { d.Kubernetes.AddressType = "ipv4" }, "address_type"},
 		"a relative URL": {func(d *DiscoveryConfig) {
 			d.Kubernetes, d.HTTPSD = nil, &HTTPSDConfig{URL: "/sd"}
 		}, "absolute http or https URL"},
@@ -259,6 +266,11 @@ type kubeAPI struct {
 	mu       sync.Mutex
 	requests []*http.Request
 	pages    map[string]string
+	// limit, when set, is the only page size answered, as an API server
+	// whose answers could not be larger would; delay is how long each
+	// answer takes.
+	limit string
+	delay time.Duration
 }
 
 func newKubeAPI(t *testing.T) *kubeAPI {
@@ -268,6 +280,17 @@ func newKubeAPI(t *testing.T) *kubeAPI {
 		k.mu.Lock()
 		defer k.mu.Unlock()
 		k.requests = append(k.requests, r)
+		if k.limit != "" && r.URL.Query().Get("limit") != k.limit {
+			http.Error(w, `{"kind":"Status","code":400,"message":"pages of `+k.limit+` only"}`, http.StatusBadRequest)
+			return
+		}
+		if k.delay > 0 {
+			select {
+			case <-time.After(k.delay):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if r.Header.Get("Authorization") != "Bearer "+strings.TrimSpace(readFile(t, filepath.Join(k.dir, "token"))) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -341,7 +364,7 @@ func TestKubernetesFindsReadyEndpointsAtTheNamedPort(t *testing.T) {
 		t.Errorf("an endpoint whose readiness is unknown, taken as ready, has the labels %v", s.found[0].Labels)
 	}
 	first := k.requests[0].URL.Query()
-	if first.Get("labelSelector") != "app.kubernetes.io/name=pg" || first.Get("limit") != "500" {
+	if first.Get("labelSelector") != "app.kubernetes.io/name=pg" || first.Get("limit") != "100" {
 		t.Errorf("the listing asked %v", first)
 	}
 
@@ -353,6 +376,41 @@ func TestKubernetesFindsReadyEndpointsAtTheNamedPort(t *testing.T) {
 	}
 	if s.found[2].Labels["__meta_kubernetes_endpoint_ready"] != "false" {
 		t.Errorf("an endpoint not ready has the labels %v", s.found[2].Labels)
+	}
+}
+
+// A dual-stack Service has an EndpointSlice of each address family, the
+// same pods in both: a source takes the IPv4 slices by default, the IPv6
+// ones with address_type IPv6, and every slice, FQDN ones included, with
+// any, each target telling its slice's family in a meta label.
+func TestKubernetesTakesTheSlicesOfItsAddressType(t *testing.T) {
+	k := newKubeAPI(t)
+	path := "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices"
+	ipv6 := strings.Replace(slice("postgres-v6", `{"addresses":["fd00::2"],"targetRef":{"kind":"Pod","name":"pg-0"}}`), `"IPv4"`, `"IPv6"`, 1)
+	fqdn := strings.Replace(slice("postgres-dns", `{"addresses":["pg.example"]}`), `"IPv4"`, `"FQDN"`, 1)
+	k.pages[path+"?"] = `{"metadata":{},"items":[` + slice("postgres-v4", `{"addresses":["10.0.0.2"],"targetRef":{"kind":"Pod","name":"pg-0"}}`) + "," + ipv6 + "," + fqdn + `]}`
+	for addressType, want := range map[string][]string{
+		"":     {"10.0.0.2:9187"},
+		"IPv4": {"10.0.0.2:9187"},
+		"IPv6": {"[fd00::2]:9187"},
+		"any":  {"10.0.0.2:9187", "[fd00::2]:9187", "pg.example:9187"},
+	} {
+		a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", AddressType: addressType}}, 10)
+		if !a.refreshSource(context.Background(), s) {
+			t.Fatalf("address_type %q: nothing found: %s", addressType, s.lastErr)
+		}
+		if got := addresses(s.found); !slices.Equal(got, want) {
+			t.Errorf("address_type %q found %v, want %v", addressType, got, want)
+		}
+	}
+	a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", AddressType: "any"}, Labels: map[string]string{"family": "__meta_kubernetes_endpointslice_address_type"}}, 10)
+	a.refreshSource(context.Background(), s)
+	var families []string
+	for _, d := range s.found {
+		families = append(families, d.Labels["family"])
+	}
+	if want := []string{"IPv4", "IPv6", "FQDN"}; !slices.Equal(families, want) {
+		t.Errorf("the targets' slices are of the families %v, want %v", families, want)
 	}
 }
 
@@ -426,4 +484,294 @@ func TestKubernetesOutsideAPod(t *testing.T) {
 	if a.refreshSource(context.Background(), s) || !strings.Contains(s.lastErr, "KUBERNETES_SERVICE_HOST") {
 		t.Errorf("got %q", s.lastErr)
 	}
+}
+
+// The kubernetes source asks for pages of 100 EndpointSlices, which an API
+// server answering no other size serves, and follows the continue tokens
+// through every page.
+func TestKubernetesListsInPagesOf100(t *testing.T) {
+	k := newKubeAPI(t)
+	k.limit = "100"
+	path := "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices"
+	tokens := []string{"", "p2", "p3", "p4"}
+	for i, token := range tokens {
+		next := ""
+		if i+1 < len(tokens) {
+			next = tokens[i+1]
+		}
+		k.pages[path+"?"+token] = `{"metadata":{"continue":"` + next + `"},"items":[` + slice(fmt.Sprintf("postgres-%d", i), fmt.Sprintf(`{"addresses":["10.0.0.%d"]}`, i+1)) + `]}`
+	}
+	a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics"}}, 10)
+	if !a.refreshSource(context.Background(), s) {
+		t.Fatalf("nothing found: %s", s.lastErr)
+	}
+	if got := addresses(s.found); !slices.Equal(got, []string{"10.0.0.1:9187", "10.0.0.2:9187", "10.0.0.3:9187", "10.0.0.4:9187"}) {
+		t.Errorf("found %v, want the endpoint of each of the 4 pages", got)
+	}
+	if len(k.requests) != len(tokens) {
+		t.Errorf("the listing took %d requests, want one per page, %d", len(k.requests), len(tokens))
+	}
+}
+
+// worstCaseSlice is an EndpointSlice as the API server sends it, whole,
+// with the EndpointSlice controller's 100 endpoints and every name at its
+// longest: what a page of a large cluster's listing is made of.
+func worstCaseSlice(i int) map[string]any {
+	name := func(prefix string, n int) string { return prefix + strings.Repeat("x", n-len(prefix)) }
+	labels := map[string]string{
+		"kubernetes.io/service-name":             name("svc", 63),
+		"endpointslice.kubernetes.io/managed-by": "endpointslice-controller.k8s.io",
+	}
+	// The controller copies the Service's labels onto its slices.
+	for j := range 8 {
+		labels[name(fmt.Sprintf("example.com/label-%d", j), 63)] = name("value", 63)
+	}
+	endpoints := make([]map[string]any, 100)
+	for j := range endpoints {
+		endpoints[j] = map[string]any{
+			"addresses":  []string{fmt.Sprintf("fd00:1234:5678:9abc:def0:%04x:%04x:%04x", i, j, i+j)},
+			"conditions": map[string]bool{"ready": true, "serving": true, "terminating": false},
+			"hostname":   name(fmt.Sprintf("host-%d-%d", i, j), 63),
+			"nodeName":   name(fmt.Sprintf("node-%d-%d", i, j), 253),
+			"zone":       "europe-west1-b-zone-name",
+			"hints":      map[string]any{"forZones": []map[string]string{{"name": "europe-west1-b-zone-name"}}},
+			"targetRef": map[string]string{
+				"kind": "Pod", "namespace": name("ns", 63), "name": name(fmt.Sprintf("pod-%d-%d", i, j), 253),
+				"uid": "0f6e9c7a-6a5f-4e3c-9b8d-2a1c0e4f5b6d", "resourceVersion": "123456789012",
+			},
+		}
+	}
+	return map[string]any{
+		"metadata": map[string]any{
+			"name": name(fmt.Sprintf("slice-%d-", i), 253), "namespace": name("ns", 63), "generateName": name("svc-", 63),
+			"uid": "0f6e9c7a-6a5f-4e3c-9b8d-2a1c0e4f5b6d", "resourceVersion": "123456789012", "generation": 1234,
+			"creationTimestamp": "2026-10-21T12:00:00Z", "labels": labels,
+			"annotations":     map[string]string{"endpoints.kubernetes.io/last-change-trigger-time": "2026-10-21T12:00:00Z"},
+			"ownerReferences": []map[string]any{{"apiVersion": "v1", "kind": "Service", "name": name("svc", 63), "uid": "0f6e9c7a-6a5f-4e3c-9b8d-2a1c0e4f5b6d", "controller": true, "blockOwnerDeletion": true}},
+			"managedFields": []map[string]any{{
+				"manager": "kube-controller-manager", "operation": "Update", "apiVersion": "discovery.k8s.io/v1", "time": "2026-10-21T12:00:00Z", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]any{"f:addressType": map[string]any{}, "f:endpoints": map[string]any{}, "f:metadata": map[string]any{"f:labels": map[string]any{".": map[string]any{}}, "f:ownerReferences": map[string]any{}}, "f:ports": map[string]any{}},
+			}},
+		},
+		"addressType": "IPv6",
+		"ports":       []map[string]any{{"name": "metrics", "port": 9100, "protocol": "TCP"}, {"name": "http", "port": 8080, "protocol": "TCP"}},
+		"endpoints":   endpoints,
+	}
+}
+
+// A page of the kubernetes source's size, of slices of the controller's
+// 100 endpoints with every name at its longest, fits in the 16 MiB an
+// answer may hold, so a large cluster's listing does not fail at every
+// refresh as one of pages of 500 did.
+func TestAKubernetesPageOfTheWorstCaseFits(t *testing.T) {
+	items := make([]map[string]any, kubernetesPageSize)
+	for i := range items {
+		items[i] = worstCaseSlice(i)
+	}
+	raw, err := json.Marshal(map[string]any{"kind": "EndpointSliceList", "apiVersion": "discovery.k8s.io/v1", "metadata": map[string]string{"resourceVersion": "123456789012", "continue": strings.Repeat("c", 200)}, "items": items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("a page of %d slices is %d bytes, %d per slice", kubernetesPageSize, len(raw), len(raw)/kubernetesPageSize)
+	if len(raw) > maxDiscoveryAnswerBytes {
+		t.Fatalf("a page of %d slices is %d bytes, more than the %d an answer may hold", kubernetesPageSize, len(raw), maxDiscoveryAnswerBytes)
+	}
+	page, err := readBounded(bytes.NewReader(raw), "a page of EndpointSlices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list endpointSliceList
+	if err := json.Unmarshal(page, &list); err != nil || len(list.Items) != kubernetesPageSize || len(list.Items[0].Endpoints) != 100 {
+		t.Fatalf("the page reads as %d slices: %v", len(list.Items), err)
+	}
+	if per := len(raw) / kubernetesPageSize; 500*per <= maxDiscoveryAnswerBytes {
+		t.Errorf("a slice is %d bytes, so 500 of them would fit too: the case is not the worst a page of 500 met", per)
+	}
+}
+
+// A timeout left out is the default, 10s, or the refresh_interval when that
+// is shorter, so a source asked every 5s is never asked again while an
+// earlier ask still runs; a timeout written is taken as it is.
+func TestAnUnsetTimeoutIsCutToTheRefreshInterval(t *testing.T) {
+	for _, c := range []struct {
+		refresh, timeout model.Duration
+		want             time.Duration
+	}{
+		{0, 0, DefaultDiscoveryTimeout},
+		{model.Duration(time.Minute), 0, DefaultDiscoveryTimeout},
+		{model.Duration(5 * time.Second), 0, 5 * time.Second},
+		{model.Duration(5 * time.Second), model.Duration(3 * time.Second), 3 * time.Second},
+	} {
+		for _, d := range []DiscoveryConfig{
+			{HTTPSD: &HTTPSDConfig{URL: "https://cmdb.example/sd", RefreshInterval: c.refresh, Timeout: c.timeout}},
+			{Kubernetes: &KubernetesConfig{Port: "metrics", RefreshInterval: c.refresh, Timeout: c.timeout}},
+		} {
+			if err := checkDiscovery([]DiscoveryConfig{d}, "/"); err != nil {
+				t.Errorf("%s every %s with the timeout %s: refused, %v", d.kind(), time.Duration(c.refresh), time.Duration(c.timeout), err)
+			}
+			if got := d.timeout(); got != c.want {
+				t.Errorf("%s every %s with the timeout %s: the timeout is %s, want %s", d.kind(), time.Duration(c.refresh), time.Duration(c.timeout), got, c.want)
+			}
+		}
+	}
+
+	// An http_sd source asked every second, its timeout left out, gives up
+	// on an answer that takes longer.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(3 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write([]byte(`[{"targets":["a:1"]}]`))
+	}))
+	defer server.Close()
+	a, s := testSource(t, DiscoveryConfig{HTTPSD: &HTTPSDConfig{URL: server.URL + "/sd", RefreshInterval: model.Duration(time.Second)}}, 3)
+	start := time.Now()
+	if a.refreshSource(context.Background(), s) || s.failures != 1 {
+		t.Errorf("an answer later than the refresh interval was taken")
+	}
+	if took := time.Since(start); took > 2500*time.Millisecond {
+		t.Errorf("the ask took %s, want it given up after the 1s refresh interval", took)
+	}
+}
+
+// The kubernetes timeout bounds the whole listing, every page of it, not
+// each request alone: a listing of pages each well within the timeout but
+// together longer fails.
+func TestAKubernetesListingIsBoundedWhole(t *testing.T) {
+	k := newKubeAPI(t)
+	k.delay = 400 * time.Millisecond
+	path := "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices"
+	k.pages[path+"?"] = `{"metadata":{"continue":"p2"},"items":[]}`
+	k.pages[path+"?p2"] = `{"metadata":{"continue":"p3"},"items":[]}`
+	k.pages[path+"?p3"] = `{"metadata":{"continue":"p4"},"items":[]}`
+	k.pages[path+"?p4"] = `{"metadata":{},"items":[` + slice("postgres", `{"addresses":["10.0.0.1"]}`) + `]}`
+	a, s := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", RefreshInterval: model.Duration(time.Second)}}, 10)
+	if a.refreshSource(context.Background(), s) || !strings.Contains(s.lastErr, "took longer than the timeout, 1s") {
+		t.Errorf("a listing of 4 pages of 400ms each with a 1s timeout found %v, failing with %q", addresses(s.found), s.lastErr)
+	}
+}
+
+// unescapeAddress reads back what escapeAddress wrote, left to right: _
+// followed by a digit and an upper-case letter is an escaped byte, any
+// other _ a dot. That it exists is what makes escapeAddress injective.
+func unescapeAddress(t *testing.T, escaped string) string {
+	t.Helper()
+	var b strings.Builder
+	for i := 0; i < len(escaped); i++ {
+		c := escaped[i]
+		switch {
+		case c != '_':
+			b.WriteByte(c)
+		case i+2 < len(escaped) && escaped[i+1] >= '0' && escaped[i+1] <= '9' && escaped[i+2] >= 'A' && escaped[i+2] <= 'F':
+			var v byte
+			if _, err := fmt.Sscanf(escaped[i+1:i+3], "%02X", &v); err != nil {
+				t.Fatalf("%q: %v", escaped, err)
+			}
+			b.WriteByte(v)
+			i += 2
+		default:
+			b.WriteByte('.')
+		}
+	}
+	return b.String()
+}
+
+// A discovered target's name is <entry>_ and its address escaped, readably
+// for IPv4 and IPv6 addresses and lower-case host names, or, for any other
+// address or a long one, the address cut and followed by _X and a digest.
+func TestDiscoveredNames(t *testing.T) {
+	for address, want := range map[string]string{
+		"10.0.0.5:9100":          "node_10_0_0_5_3A9100",
+		"[fd00::1]:9100":         "node__5Bfd00_3A_3A1_5D_3A9100",
+		"node-1.example.com:443": "node_node_2D1_example_com_3A443",
+		"a.b.example:9100":       "node_a_b_example_3A9100",
+		"a-b.example:9100":       "node_a_2Db_example_3A9100",
+		"Host.example:9100":      "node_host_example_9100_X" + hashHex("Host.example:9100"),
+		"a_b.example:9100":       "node_a_b_example_9100_X" + hashHex("a_b.example:9100"),
+		"https://a.example/x":    "node_https___a_example_x_X" + hashHex("https://a.example/x"),
+		strings.Repeat("a", 129): "node_" + strings.Repeat("a", hashedAddressPrefix) + "_X" + hashHex(strings.Repeat("a", 129)),
+	} {
+		got := discoveredName("node", address)
+		if got != want {
+			t.Errorf("%q is named %q, want %q", address, got, want)
+		}
+		if !targetName.MatchString(got) {
+			t.Errorf("%q is named %q, which is no target's name", address, got)
+		}
+	}
+}
+
+func hashHex(address string) string {
+	sum := sha256.Sum256([]byte(address))
+	return hex.EncodeToString(sum[:8])
+}
+
+// escapeAddress is read back whole for every address of its characters it
+// takes, so no two of them share a name; checked over every address of up
+// to 5 of those characters, and random longer ones.
+func TestEscapedAddressesReadBack(t *testing.T) {
+	const alphabet = "a9.:-[]"
+	names := map[string]string{}
+	check := func(address string) {
+		escaped, ok := escapeAddress(address)
+		if !ok {
+			return
+		}
+		if back := unescapeAddress(t, escaped); back != address {
+			t.Fatalf("%q is escaped %q, read back as %q", address, escaped, back)
+		}
+		if other, seen := names[escaped]; seen && other != address {
+			t.Fatalf("%q and %q are both escaped %q", other, address, escaped)
+		}
+		names[escaped] = address
+	}
+	var all func(prefix string, n int)
+	all = func(prefix string, n int) {
+		check(prefix)
+		if n == 0 {
+			return
+		}
+		for i := range len(alphabet) {
+			all(prefix+alphabet[i:i+1], n-1)
+		}
+	}
+	all("", 5)
+	r := mrand.New(mrand.NewPCG(1, 2))
+	for range 100000 {
+		b := make([]byte, 6+r.IntN(40))
+		for i := range b {
+			b[i] = alphabet[r.IntN(len(alphabet))]
+		}
+		check(string(b))
+	}
+}
+
+// No two addresses an entry finds share a name, whatever they are.
+func FuzzDiscoveredNamesAreInjective(f *testing.F) {
+	for _, pair := range [][2]string{
+		{"a.b.example:9100", "a-b.example:9100"},
+		{"a.b.example:9100", "a_b.example:9100"},
+		{"a..b", "a._b"},
+		{"[::1]:80", "::1:80"},
+		{"10.0.0.5:9100", "10.0.0.5.9100"},
+		{"x", "X"},
+		{strings.Repeat("a", 200), strings.Repeat("a", 201)},
+		{"a.3a", "a:"},
+	} {
+		f.Add(pair[0], pair[1])
+	}
+	f.Fuzz(func(t *testing.T, a, b string) {
+		x, y := discoveredName("node", a), discoveredName("node", b)
+		if !targetName.MatchString(x) {
+			t.Fatalf("%q is named %q, which is no target's name", a, x)
+		}
+		if a != b && x == y {
+			t.Fatalf("%q and %q are both named %q", a, b, x)
+		}
+		if a == b && x != y {
+			t.Fatalf("%q is named both %q and %q", a, x, y)
+		}
+	})
 }

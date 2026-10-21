@@ -123,8 +123,8 @@ func allTargets(t *testing.T, a *Allocator, members ...string) map[string]model.
 }
 
 // A discovered_targets entry is written out as a static target for every
-// target its discovery finds, named <entry>_<address>, a name two targets
-// would share followed by a digest of the address, and handed to the
+// target its discovery finds, named <entry>_<address> with the address
+// escaped, so a-b.example and a.b.example keep apart, and handed to the
 // replicas in their shares as a written target is, with the entry's labels
 // over the discovered ones and no label starting with __.
 func TestDiscoveredStaticTargetsAreShared(t *testing.T) {
@@ -142,11 +142,11 @@ func TestDiscoveredStaticTargetsAreShared(t *testing.T) {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	want := []string{"legacy", "node_a_b_example_9100_2e9f86bf", "node_a_b_example_9100_78ad07bd", "node_c_example_9100"}
+	want := []string{"legacy", "node_a_2Db_example_3A9100", "node_a_b_example_3A9100", "node_c_example_3A9100"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("the shares hold %v, want %v", names, want)
 	}
-	c := got["node_c_example_9100"]
+	c := got["node_c_example_3A9100"]
 	if c.Target != "http://c.example:9100/metrics" || time.Duration(c.Interval) != time.Minute {
 		t.Errorf("got the target %q every %s", c.Target, time.Duration(c.Interval))
 	}
@@ -204,7 +204,7 @@ func TestDiscoveryChangesAreAppliedAsAReload(t *testing.T) {
 	a.refreshDiscovery(ctx)
 	owner := ""
 	for _, m := range members {
-		if slices.Contains(share(t, a, m), "node_new_example_9100") {
+		if slices.Contains(share(t, a, m), "node_new_example_3A9100") {
 			owner = m
 		}
 	}
@@ -218,9 +218,9 @@ func TestDiscoveryChangesAreAppliedAsAReload(t *testing.T) {
 	// A target no longer found leaves at once.
 	write(targets[1:])
 	a.refreshDiscovery(ctx)
-	gone := "node_" + sanitizeLabelName(targets[0])
+	gone := discoveredName("node", targets[0])
 	for _, m := range members {
-		if slices.Contains(share(t, a, m), gone) || slices.Contains(share(t, a, m), "node_new_example_9100") {
+		if slices.Contains(share(t, a, m), gone) || slices.Contains(share(t, a, m), "node_new_example_3A9100") {
 			t.Errorf("%s keeps a target discovery no longer finds", m)
 		}
 	}
@@ -320,6 +320,7 @@ func TestDiscoveredInputsAreCheckedAtLoad(t *testing.T) {
 		"an unknown key":       {entry(good + "    bogus: 1\n"), "bogus"},
 		"an unknown collector": {"interval: 30s\ndiscovered_targets:\n  - name: node\n    collector: nope\n" + good, "nope"},
 		"twice":                {entry(good) + "  - name: node\n    collector: demo\n" + good, "defined twice"},
+		"a name's prefix":      {entry(good) + "  - name: node_eu\n    collector: demo\n" + good, `entry "node_eu" begins with entry "node"'s name and _`},
 		"no list":              {"interval: 30s\ndiscovered_targets: {}\n", "must be a list"},
 		"neither":              {"interval: 30s\n", "targets must not be empty"},
 	} {
@@ -337,6 +338,45 @@ func TestDiscoveredInputsAreCheckedAtLoad(t *testing.T) {
 	a, _ := settledAllocator(t, in, "r1")
 	if b := a.Bundle("r1"); b == nil || b.Files["static-targets.yaml"] != "" {
 		t.Errorf("a share of no target was served: %v", b)
+	}
+}
+
+// A discovered target's name depends on its entry, its address and the
+// file alone: it is not renamed when another target that looked like it
+// comes or goes, and one named as a target the file writes takes the
+// digest form, which stays while the file does.
+func TestADiscoveredTargetKeepsItsName(t *testing.T) {
+	static := strings.Replace(discoveredStatic, "  - name: legacy\n", "  - name: node_c_example_3A9100\n", 1)
+	p := writeInputs(t, testConfig, static, "")
+	dir := filepath.Dir(p.StaticTargets)
+	testutil.WriteIn(t, dir, "nodes.yaml", discoveredNodes)
+	members := []string{"r1", "r2"}
+	a, _ := settledAllocator(t, mustLoad(t, p), members...)
+	ctx := context.Background()
+	names := func() []string {
+		var out []string
+		for name := range allTargets(t, a, members...) {
+			out = append(out, name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	a.refreshDiscovery(ctx)
+	hashed := "node_" + hashedAddress("c.example:9100")
+	want := []string{"node_a_2Db_example_3A9100", "node_a_b_example_3A9100", "node_c_example_3A9100", hashed}
+	slices.Sort(want)
+	if got := names(); !slices.Equal(got, want) {
+		t.Fatalf("the shares hold %v, want %v", got, want)
+	}
+	if got := allTargets(t, a, members...)[hashed].Target; got != "http://c.example:9100/metrics" {
+		t.Errorf("%s is the target %q", hashed, got)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "- targets: [a.b.example:9100, c.example:9100]\n")
+	a.refreshDiscovery(ctx)
+	want = []string{"node_a_b_example_3A9100", "node_c_example_3A9100", hashed}
+	slices.Sort(want)
+	if got := names(); !slices.Equal(got, want) {
+		t.Errorf("once a-b.example is gone the shares hold %v, want %v: no target renamed", got, want)
 	}
 }
 
@@ -377,5 +417,90 @@ func (a *Allocator) refreshDiscovery(ctx context.Context) {
 	}
 	if changed {
 		a.applyDiscovery()
+	}
+}
+
+// A reload that changes a source's settings, its refresh_interval say,
+// replaces it with a source of the new settings, which starts with what the
+// old one found: the targets stay in the bundles until the new source
+// answers, rather than leaving every share and coming back a refresh later.
+// A first failure of the new source keeps them too, and is counted.
+func TestAChangedSourceKeepsItsTargetsUntilItAnswers(t *testing.T) {
+	p := writeInputs(t, testConfig, discoveredStatic, "")
+	dir := filepath.Dir(p.StaticTargets)
+	testutil.WriteIn(t, dir, "nodes.yaml", discoveredNodes)
+	members := []string{"r1", "r2"}
+	a, _ := settledAllocator(t, mustLoad(t, p), members...)
+	ctx := context.Background()
+	a.refreshDiscovery(ctx)
+	names := func() []string {
+		var out []string
+		for name := range allTargets(t, a, members...) {
+			out = append(out, name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	before := names()
+	if len(before) != 4 {
+		t.Fatalf("the shares hold %v, want the written target and three discovered ones", before)
+	}
+
+	testutil.WriteIn(t, dir, "targets.yaml", strings.Replace(discoveredStatic, "files: [nodes.yaml]", "files: [nodes.yaml]\n          refresh_interval: 2m", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if got := names(); !slices.Equal(got, before) {
+		t.Fatalf("after the reload the shares hold %v, want %v until the source answers", got, before)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "not: [a list")
+	a.refreshDiscovery(ctx)
+	if got := names(); !slices.Equal(got, before) {
+		t.Errorf("after the new source's first failure the shares hold %v, want %v", got, before)
+	}
+	if m := a.sourceMetrics(); len(m) != 1 || m[0].failures != 1 || m[0].successes != 1 || m[0].found != 3 {
+		t.Errorf("the source's metrics are %+v, want the old source's success and the new one's failure, with its 3 targets", m)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "- targets: [d.example:9100]\n")
+	a.refreshDiscovery(ctx)
+	if got := names(); !slices.Equal(got, []string{"legacy", "node_d_example_3A9100"}) {
+		t.Errorf("once the new source answers the shares hold %v", got)
+	}
+
+	// A probe job's kubernetes source whose label_selector changes keeps
+	// its targets in the service discovery answer the same way.
+	k := newKubeAPI(t)
+	k.pages["/apis/discovery.k8s.io/v1/namespaces/db/endpointslices?"] = `{"metadata":{},"items":[` + slice("postgres", `{"addresses":["10.0.0.2"]}`) + `]}`
+	probes := "probe_jobs:\n  - name: databases\n    collector: demo\n    target_template: https://{{address}}/\n    discovery:\n      - kubernetes: {port: metrics, label_selector: app=pg}\n"
+	p = writeInputs(t, testConfig, "", probes)
+	a, _ = settledAllocator(t, mustLoad(t, p), members...)
+	a.refreshDiscovery(ctx)
+	served := func() int {
+		groups, _ := a.SD("databases")
+		return len(groups)
+	}
+	if served() != 1 {
+		t.Fatalf("the job serves %d targets, want the one discovered", served())
+	}
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "probes.yaml", strings.Replace(probes, "app=pg", "app in (pg)", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if served() != 1 {
+		t.Errorf("after a reload changing the label_selector the job serves %d targets, want 1 until the new source answers", served())
+	}
+	testutil.WriteIn(t, k.dir, "token", "a-revoked-token\n")
+	a.refreshDiscovery(ctx)
+	if served() != 1 {
+		t.Errorf("after the new source's first failure the job serves %d targets, want 1", served())
+	}
+
+	// A source of another name is another source, and starts with nothing.
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "probes.yaml", strings.Replace(probes, "      - kubernetes:", "      - name: pg\n        kubernetes:", 1))
+	if !a.Reload(p) {
+		t.Fatal("the reload changed nothing")
+	}
+	if served() != 0 {
+		t.Errorf("a source of another name serves %d targets before it answers, want none", served())
 	}
 }

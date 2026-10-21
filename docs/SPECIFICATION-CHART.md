@@ -236,7 +236,10 @@ since without the allocator every pod scrapes every static target and their
 number per pod does not fall as pods are added. Either target with its metric
 name empty MUST fail rendering. The chart README MUST say that a metrics
 adapter serves the two metrics, and link the self-metrics documentation's
-prometheus-adapter rules and KEDA example.
+prometheus-adapter rules and KEDA example. Every example query of an
+allocator metric there, and every prometheus-adapter rule over one, MUST take
+the `max` of the series, which every allocator copy reports, so the targets
+are not counted once per copy and KEDA gets one series.
 
 Without the allocator every replica scrapes every static target, so the chart MUST document running
 static targets with one replica and without autoscaling: each added replica
@@ -763,10 +766,17 @@ is optional today stays optional.
 
 `allocator.enabled`, off by default, MUST deploy the target allocator beside
 the exporter and switch the exporter pods to allocator mode. The allocator
-MUST run as a `Deployment` of `allocator.replicas` pods, 2 by default, a whole
-number from 1 to 2147483647, from the exporter's image unless `allocator.image`
-names another, running `/bin/pue-allocator`, the binary beside the exporter's
-in the image, with `--web.listen-address=:9116`, `--config.file` naming the
+MUST run as a `Deployment` of `allocator.replicas` pods, a whole number from 1
+to 2147483647, 2 when it is empty, the default, from the exporter's image
+unless `allocator.image` names another, running `/bin/pue-allocator`, the
+binary beside the exporter's in the image. While a probe job or a `discovered_targets` entry of
+`allocator.staticTargets.data` has a discovery source, the Deployment MUST
+have one replica and the `Recreate` strategy, and `allocator.replicas` above
+1 MUST fail rendering, naming the value, and be refused by the values schema
+for a probe job's source: each copy asks its sources on its own timer, so two
+would serve the exporter pods and Prometheus different targets, and a
+rolling update would run the old pod beside the new one while it terminates.
+The allocator MUST be run with `--web.listen-address=:9116`, `--config.file` naming the
 configuration's `config.yaml`, `--static-targets-file` while
 `allocator.staticTargets.data` is not empty, `--probe-targets-file` while
 `allocator.probeJobs` is not empty, `--web.token-file` naming the token's
@@ -794,7 +804,8 @@ its Service, its monitors, its disruption budget and NetworkPolicy — selects
 them. The chart MUST render a headless Service `<fullname>-allocator` with
 the port `http`, 9116, over the allocator's pods, so the exporter pods reach
 every allocator at its name; a `PodDisruptionBudget` of `maxUnavailable: 1`
-while `allocator.pdb.enabled`, the default; and a NetworkPolicy while
+while `allocator.pdb.enabled`, the default, which lets a node drain evict the
+one allocator of a release with discovery; and a NetworkPolicy while
 `allocator.networkPolicy.enabled`, the default, admitting ingress to the
 allocator's `http` port only from the release's exporter pods and from the
 peers of `allocator.networkPolicy.prometheus`, which defaults to pods labelled
@@ -839,7 +850,7 @@ While a probe job or a `discovered_targets` entry of
 MUST render a ServiceAccount `<fullname>-allocator` with
 `automountServiceAccountToken: true`, and the allocator's pods MUST run as it
 with `automountServiceAccountToken: true`; with `allocator.rbac.create`, true
-by default, it MUST render, allowing `get`, `list` and `watch` on
+by default, it MUST render, allowing only `list` on
 `endpointslices` of the API group `discovery.k8s.io` to that ServiceAccount,
 a Role and a RoleBinding `<fullname>-allocator` in each namespace a source
 lists, in the release's namespace for a source that lists none, and a
@@ -1756,6 +1767,20 @@ are skipped and the text checks of the templates still run:
      `--allocator.*` flag in `extraArgs`, `staticTargets.monitor.targets`
      beside the allocator, a mount over the cache or token directory, and a
      ScrapeConfig timeout longer than its interval.
+   - With a discovery source, of a probe job or of a `discovered_targets`
+     entry, the allocator's Deployment has one replica and the `Recreate`
+     strategy, an empty or 1 `allocator.replicas` included, and its
+     disruption budget stays `maxUnavailable: 1`; `allocator.replicas: 2`
+     fails rendering, through the schema for a probe job and through the
+     template with the schema skipped or for a static target entry; without
+     discovery the allocator keeps 2 replicas, or `allocator.replicas`, and
+     the default strategy (`TestChartRunsOneAllocatorWithDiscovery`).
+   - The allocator's Role allows only `list` on EndpointSlices
+     (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
+   - Every example query of an allocator metric in `docs/*.md` and the chart
+     README, and every prometheus-adapter rule over one, takes the `max` of
+     the allocator copies' series
+     (`TestExampleQueriesOfAllocatorMetricsTakeTheirMax`).
    - The chart's renders without the allocator are unchanged: `make helm-test`
      and the CI chart steps also render allocator mode and reject the allocator
      beside static targets and a probe monitor beside the allocator.

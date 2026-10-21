@@ -36,10 +36,11 @@ import (
 // The lookup is Go's own resolver (net.Resolver with PreferGo), which needs
 // no library: it gives the records' data and tells a name that does not
 // exist, or has no records of the type, from a failure, but gives neither
-// the records' TTLs nor the answer's response code. A name not found is an
-// answer, with no records and not_found true, so that a collector can say
-// a record is missing; a timeout, a refusal or a server failure fails the
-// scrape.
+// the records' TTLs nor the answer's response code. It has no lookup of
+// CNAME records alone, so that question the exporter sends itself
+// (dnscname.go). A name not found is an answer, with no records and
+// not_found true, so that a collector can say a record is missing; a
+// timeout, a refusal or a server failure fails the scrape.
 //
 // This file imports nothing outside the standard library.
 
@@ -278,7 +279,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	// values of a URL's query, where the url label has it.
 	uri, _, _ := strings.Cut(dnsURI(c, name), "?")
 	traceRequest(ctx, dnsMethod, uri, http.Header{"Dns-Type": {doc.RecordType}, "Dns-Server": {cmp.Or(doc.Server, "system")}, "Dns-Transport": {doc.Transport}}, "", false)
-	answers, err := dnsLookup(ctx, dnsResolver(c), doc.RecordType, name)
+	answers, err := dnsLookup(ctx, c, doc.RecordType, name)
 	doc.DurationSeconds = time.Since(start).Seconds()
 	var dnsErr *net.DNSError
 	switch {
@@ -342,7 +343,13 @@ func dnsFailure(ctx context.Context, recordType, name, server string, err error)
 // dnsLookup asks resolver for the records of recordType of name. The name
 // is asked as an absolute one, with a trailing dot, so that the search
 // domains of the system's configuration are never appended to it.
-func dnsLookup(ctx context.Context, resolver *net.Resolver, recordType, name string) ([]dnsAnswer, error) {
+func dnsLookup(ctx context.Context, c *model.Collector, recordType, name string) ([]dnsAnswer, error) {
+	if recordType == "CNAME" {
+		// Go's resolver has no lookup of CNAME records alone
+		// (dnscname.go).
+		return lookupCNAME(ctx, c, name)
+	}
+	resolver := dnsResolver(c)
 	absolute := name + "."
 	var answers []dnsAnswer
 	switch recordType {
@@ -354,14 +361,6 @@ func dnsLookup(ctx context.Context, resolver *net.Resolver, recordType, name str
 		addrs, err := resolver.LookupNetIP(ctx, network, absolute)
 		for _, addr := range addrs {
 			answers = append(answers, dnsAnswer{Address: addr.Unmap().String()})
-		}
-		return answers, err
-	case "CNAME":
-		cname, err := resolver.LookupCNAME(ctx, absolute)
-		// The resolver answers the name itself for a name that is no alias:
-		// it has no CNAME record to show.
-		if cname = dnsName(cname); err == nil && cname != name {
-			answers = append(answers, dnsAnswer{Target: cname})
 		}
 		return answers, err
 	case "MX":

@@ -122,7 +122,7 @@
                       ]
                     },
                     "timeout": {
-                      "description": "How long a request may take, no longer than refresh_interval. Defaults to 10s.",
+                      "description": "How long a request may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
                       "maximum": 0,
                       "minimum": 0,
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -252,6 +252,15 @@
                     ]
                   },
                   "properties": {
+                    "address_type": {
+                      "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family.",
+                      "enum": [
+                        "IPv4",
+                        "IPv6",
+                        "any"
+                      ],
+                      "type": "string"
+                    },
                     "all_namespaces": {
                       "description": "List the EndpointSlices of every namespace, which needs a ClusterRole.",
                       "type": "boolean"
@@ -304,7 +313,7 @@
                       ]
                     },
                     "timeout": {
-                      "description": "How long a listing may take, no longer than refresh_interval. Defaults to 10s.",
+                      "description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
                       "maximum": 0,
                       "minimum": 0,
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -396,7 +405,7 @@
             "type": "object"
           },
           "name": {
-            "description": "The entry's name, which each target it makes is named after: \u003cname\u003e_\u003caddress\u003e, every character a name cannot hold written _. Required, and unique among the entries.",
+            "description": "The entry's name, which each target it makes is named after: \u003cname\u003e_\u003caddress\u003e, the address escaped (10.0.0.5:9100 is 10_0_0_5_3A9100) or, when it holds other characters or is long, cut and followed by _X and 16 hex digits of its SHA-256. Required, unique among the entries, and not another entry's name followed by _.",
             "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
             "type": "string"
           },
@@ -1167,12 +1176,9 @@
                     "type": "string"
                   },
                   "url": {
-                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path such as /api/login resolved against the target, so each target is logged in to. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
-                    "type": [
-                      "string",
-                      "number",
-                      "boolean"
-                    ]
+                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
+                    "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                    "type": "string"
                   }
                 },
                 "type": "object"
@@ -2234,12 +2240,9 @@
                     "type": "string"
                   },
                   "url": {
-                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path such as /api/login resolved against the target, so each target is logged in to. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
-                    "type": [
-                      "string",
-                      "number",
-                      "boolean"
-                    ]
+                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
+                    "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                    "type": "string"
                   }
                 },
                 "type": "object"

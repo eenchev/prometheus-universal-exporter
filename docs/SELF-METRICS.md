@@ -27,7 +27,7 @@ configured:
 | `http_exporter_decoder_lines_skipped_total` | counter | Lines a decoder left out and read on: carbon lines the `graphite` decoder could not read, under [`response.graphite.invalid_lines: skip`](GRAPHITE.md#carbon-lines-from-a-file), and sample lines the `prometheus` decoder found to be [no part of their histogram or summary family](CONFIGURATION.md#collectors), such as Micrometer's `x{quantile="0.95"}` under `# TYPE x histogram`. |
 | `http_exporter_pages_fetched_total` | counter | `http` collectors only, `0` for one without [`request.pagination`](REQUESTS.md#pagination): the pages its pagination fetched, the first page of each trip included, in trips that ended with an answer — merged, or a page whose status failed the trip. Divided by `http_exporter_scrapes_total` less the cache hits, the pages a trip takes. |
 | `http_exporter_pagination_max_pages_reached_total` | counter | `http` collectors only: the trips that stopped at `request.pagination.max_pages` with another page to come, answered with the pages they fetched, whose series then describe part of what the target holds. Each is logged at warn level, once and then sparingly while it repeats. |
-| `http_exporter_logins_total` | counter | `http` and `graphite` collectors only, `0` for one without [`request.login`](AUTHENTICATION.md#logging-in-to-a-target): the logins its login, or a static target's own, made for a token — the first, each made again before the token expired, and each after the target refused a token with `401`. A token kept answers the probes between them, so the rate is far below that of the scrapes; one near it is a token not kept, its lifetime too short or the target refusing it. |
+| `http_exporter_logins_total` | counter | `http` and `graphite` collectors only, `0` for one without [`request.login`](AUTHENTICATION.md#logging-in-to-a-target): the logins its login, or a static target's own, made for a token — the first, each made again before the token expired, and each after the target refused a token with `401` — but not those of a debug run. A token kept answers the probes between them, so the rate is far below that of the scrapes; one near it is a token not kept, its lifetime too short or the target refusing it. |
 | `http_exporter_login_failures_total` | counter | `http` and `graphite` collectors only: those logins that failed. A scrape that needed the token failed in the `login` stage, unless the token kept had not expired and was used instead. |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups: a probe answered from the cache is a hit, including one that found it filled while it waited to start; a probe that went to the target is a miss. A probe that [shared](#shared-probes) another's trip is neither, and is counted in `http_exporter_probes_coalesced_total`; nor is one that [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) or `--probe.max-concurrent` turned away, which is counted only as rejected, in `http_exporter_probes_rejected_total` or `http_exporter_probes_rejected_exporter_limit_total`. |
@@ -224,7 +224,9 @@ In allocator mode `http_exporter_static_targets` is the replica's share of
 the static targets, those it keeps draining included, and the allocator's
 `pue_allocator_targets{kind="static"}` and
 `pue_allocator_targets_per_member{kind="static"}` are the count across
-replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)).
+replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)). Every
+allocator copy reports them, one series each, so a query takes their `max`:
+a `sum`, or the series as they are, would count the targets once per copy.
 
 ### Pods metrics from prometheus-adapter
 
@@ -289,10 +291,43 @@ window, five minutes, outlasts that, and a shorter one in
 `behavior.scaleDown` should too.
 
 The allocator's own count can be an External metric instead, which does not
-depend on the replicas having caught up with the allocator: served by a rule
-like the second, on `pue_allocator_targets{kind="static"}` with no `pod`
-resource, under `autoscaling.metrics` with `target.type: AverageValue`, which
-the autoscaler divides by the replica count itself.
+depend on the replicas having caught up with the allocator. This rule, in the
+prometheus-adapter chart's `rules.external`, serves it as
+`allocator_static_targets`, one series per namespace however many
+allocator copies report it, since it takes their `max`:
+
+```yaml
+rules:
+  external:
+    - seriesQuery: 'pue_allocator_targets{namespace!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+      name:
+        matches: "^.*$"
+        as: allocator_static_targets
+      metricsQuery: max by (<<.GroupBy>>) (<<.Series>>{<<.LabelMatchers>>,kind="static"})
+```
+
+Put it under `autoscaling.metrics` with `target.type: AverageValue`, which
+the autoscaler divides by the replica count itself; with several releases in
+a namespace, its `selector` picks the release's allocator by its `service`
+label, which the matchers then carry:
+
+```yaml
+autoscaling:
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: allocator_static_targets
+          selector:
+            matchLabels:
+              service: exporter-prometheus-universal-exporter-allocator
+        target:
+          type: AverageValue
+          averageValue: "200"
+```
 
 ### KEDA
 
@@ -323,9 +358,19 @@ spec:
 ```
 
 The query is the load of every pod together, which KEDA divides by the
-target to find the replica count. With the allocator, a second trigger with
-the query `pue_allocator_targets{kind="static"}` and the threshold `"200"`
-does what `targetStaticTargetsPerPod` does.
+target to find the replica count. With the allocator, a second trigger does
+what `targetStaticTargetsPerPod` does. Its query takes the `max` of the
+allocator copies' series: KEDA wants one value, and fails on a query that
+answers one series per copy.
+
+```yaml
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        query: |
+          max(pue_allocator_targets{kind="static",namespace="monitoring",service="exporter-prometheus-universal-exporter-allocator"})
+        threshold: "200"
+```
 
 ## Shared probes
 

@@ -78,7 +78,7 @@ func discoveredEntrySchema(target map[string]any) map[string]any {
 	properties["name"] = map[string]any{
 		"type":        "string",
 		"pattern":     targetName.String(),
-		"description": "The entry's name, which each target it makes is named after: <name>_<address>, every character a name cannot hold written _. Required, and unique among the entries.",
+		"description": "The entry's name, which each target it makes is named after: <name>_<address>, the address escaped (10.0.0.5:9100 is 10_0_0_5_3A9100) or, when it holds other characters or is long, cut and followed by _X and 16 hex digits of its SHA-256. Required, unique among the entries, and not another entry's name followed by _.",
 	}
 	discovery := discoveryListSchema()
 	discovery["minItems"] = 1
@@ -194,7 +194,7 @@ func discoverySchemaRules() map[string]map[string]any {
 		"[].http_sd":                   {"required": []string{"url"}, "description": "A URL asked for target groups as Prometheus's HTTP service discovery asks it."},
 		"[].http_sd.url":               {"pattern": "^" + config.Caseless("http") + "[sS]?://[^/?#@]+([/?#]|$)", "description": "An absolute http or https URL, without credentials."},
 		"[].http_sd.refresh_interval":  {"description": "How often the URL is asked, at least 1s. Defaults to 1m."},
-		"[].http_sd.timeout":           {"description": "How long a request may take, no longer than refresh_interval. Defaults to 10s."},
+		"[].http_sd.timeout":           {"description": "How long a request may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 		"[].http_sd.bearer_token_file": {"description": "A file holding a token sent as Authorization: Bearer, read again at every refresh. Relative to the directory of the file that names it."},
 		"[].http_sd.tls": {"allOf": []any{
 			map[string]any{"if": written("cert_file"), "then": written("key_file")},
@@ -218,7 +218,8 @@ func discoverySchemaRules() map[string]map[string]any {
 			"description": "The endpoint port the targets are at: its name, as the Service names it, or its number.",
 		},
 		"[].kubernetes.include_not_ready": {"description": "Take the endpoints that are not ready too."},
+		"[].kubernetes.address_type":      {"enum": []string{"IPv4", "IPv6", "any"}, "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family."},
 		"[].kubernetes.refresh_interval":  {"description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
-		"[].kubernetes.timeout":           {"description": "How long a listing may take, no longer than refresh_interval. Defaults to 10s."},
+		"[].kubernetes.timeout":           {"description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 	}
 }

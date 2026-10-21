@@ -68,7 +68,12 @@ type KubernetesConfig struct {
 	// Port is the endpoint port each target is at, by its name or number.
 	Port string `yaml:"port"`
 	// IncludeNotReady takes the endpoints that are not ready too.
-	IncludeNotReady bool           `yaml:"include_not_ready"`
+	IncludeNotReady bool `yaml:"include_not_ready"`
+	// AddressType is the addressType of the EndpointSlices taken: IPv4,
+	// the default, IPv6, or any, which takes FQDN slices too. A dual-stack
+	// Service has a slice of each family, so taking both would give each
+	// pod twice.
+	AddressType     string         `yaml:"address_type"`
 	RefreshInterval model.Duration `yaml:"refresh_interval"`
 	Timeout         model.Duration `yaml:"timeout"`
 }
@@ -85,8 +90,11 @@ const (
 	// DefaultKubernetesRefresh is how often EndpointSlices are listed.
 	DefaultKubernetesRefresh = 30 * time.Second
 	// DefaultDiscoveryTimeout bounds an http_sd request or a Kubernetes
-	// listing.
+	// listing, or the source's refresh_interval when that is shorter.
 	DefaultDiscoveryTimeout = 10 * time.Second
+	// DefaultAddressType is the addressType of the EndpointSlices a
+	// kubernetes source takes by default.
+	DefaultAddressType = "IPv4"
 	// minDiscoveryRefresh is the shortest refresh_interval taken.
 	minDiscoveryRefresh = time.Second
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
@@ -271,6 +279,11 @@ func (k *KubernetesConfig) check(refresh time.Duration) error {
 	if _, _, err := k.port(); err != nil {
 		return err
 	}
+	switch k.AddressType {
+	case "", "IPv4", "IPv6", "any":
+	default:
+		return fmt.Errorf("kubernetes.address_type %q must be IPv4, IPv6 or any", k.AddressType)
+	}
 	return checkTimeout("kubernetes", k.Timeout, refresh)
 }
 
@@ -288,20 +301,42 @@ func (k *KubernetesConfig) port() (name string, number int, err error) {
 	return k.Port, 0, nil
 }
 
-// timeout is a source's timeout, its default when unset.
-func timeout(set model.Duration) time.Duration {
-	if set == 0 {
-		return DefaultDiscoveryTimeout
+// takes reports whether the source takes an EndpointSlice of addressType:
+// every one with any, and otherwise the one family it names, IPv4 unless
+// address_type says otherwise.
+func (k *KubernetesConfig) takes(addressType string) bool {
+	want := k.AddressType
+	if want == "" {
+		want = DefaultAddressType
 	}
-	return time.Duration(set)
+	return want == "any" || addressType == want
+}
+
+// timeout is how long one ask of the source may take: its timeout, or
+// when that is unset DefaultDiscoveryTimeout, cut to its refresh_interval
+// when that is shorter, so an ask never outlasts the interval to the next
+// one. Only a timeout written longer than the interval is refused, as a
+// mistake; a short interval alone needs no timeout written beside it.
+func (d *DiscoveryConfig) timeout() time.Duration {
+	var set model.Duration
+	switch {
+	case d.HTTPSD != nil:
+		set = d.HTTPSD.Timeout
+	case d.Kubernetes != nil:
+		set = d.Kubernetes.Timeout
+	}
+	if set != 0 {
+		return time.Duration(set)
+	}
+	return min(DefaultDiscoveryTimeout, d.refresh())
 }
 
 func checkTimeout(kind string, set model.Duration, refresh time.Duration) error {
-	switch t := timeout(set); {
+	switch {
 	case set < 0:
 		return fmt.Errorf("%s.timeout must not be negative", kind)
-	case set != 0 && t > refresh:
-		return fmt.Errorf("%s.timeout %s is longer than its refresh_interval %s", kind, t, refresh)
+	case time.Duration(set) > refresh:
+		return fmt.Errorf("%s.timeout %s is longer than its refresh_interval %s", kind, time.Duration(set), refresh)
 	}
 	return nil
 }

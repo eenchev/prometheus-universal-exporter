@@ -277,6 +277,7 @@ func httpSchemaKeys() []schemaKey {
 		mark := in("# login\n")
 		return []schemaKey{
 			{key: prefix + ".login.type", document: json, at: in("type: json\n"), setting: in("type: %s\n"), valid: "json", invalid: "form"},
+			{key: prefix + ".login.url", document: json, at: in("url: /login\n"), setting: in("url: %s\n"), valid: "/api/login", invalid: "login"},
 			{key: prefix + ".login.token_header", document: json, at: in("token: .t\n"), setting: in("token_header: %s\n"), valid: "X-Subject-Token", invalid: `"X Token"`},
 			{key: prefix + ".login.token_cookie", document: json, at: in("token: .t\n"), setting: in("token_cookie: %s\n"), valid: "JSESSIONID", invalid: `"S ID"`},
 			{key: prefix + ".login.header", document: json, at: mark, setting: in("header: %s\n"), valid: "X-Auth-Token", invalid: `"X Token"`, absent: true, empty: true, emptyWas: refused},

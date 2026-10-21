@@ -37,7 +37,7 @@ collectors:
         description: Whether the chain verifies against the trusted roots
         expression: if .verified then 1 else 0 end
       - name: tls_chain_earliest_expiry_timestamp_seconds
-        description: When the first certificate of the chain to expire does
+        description: When the chain stops verifying, or its first certificate expires
         expression: .chain.earliest_not_after
       - name: tls_certificate_info
         description: The server's certificate, by its subject and issuer
@@ -108,7 +108,7 @@ version fails the handshake.
   "duration_seconds": 0.031,
   "not_after": 1767225599,
   "seconds_until_expiry": 6220800,
-  "chain": {"length": 2, "earliest_not_after": 1767225599, "seconds_until_earliest_expiry": 6220800},
+  "chain": {"length": 2, "earliest_not_after": 1767225599, "seconds_until_earliest_expiry": 6220800, "earliest_from": "verified"},
   "certificates": [
     {
       "subject_cn": "www.example.com",
@@ -140,9 +140,20 @@ version fails the handshake.
   beside them; `seconds_until_expiry` is `not_after` less the time of the
   scrape, negative once the certificate has expired.
 - `not_after` and `seconds_until_expiry` at the top are the first
-  certificate's, the server's own, for the rule that wants nothing else;
-  `chain` says how many certificates were presented and when the first of
-  them to expire does.
+  certificate's, the server's own, for the rule that wants nothing else.
+- `chain.length` is how many certificates were presented.
+  `chain.earliest_not_after` and `seconds_until_earliest_expiry` are when
+  the chain stops verifying. Of a chain that verifies, they are of the
+  chains it verifies by, each from the server's certificate to a trusted
+  root and ending when the first of its certificates expires, the root
+  included: a client trusts the server while any one of them holds, so it
+  is the latest of those ends. A certificate the server sends that no
+  client needs is left out, such as an expired cross-signed root (Let's
+  Encrypt's servers sent DST Root CA X3 long after it expired), which would
+  otherwise hold the expiry in the past and an alert on it firing for good.
+  Of a chain that does not verify, they are of the first of the presented
+  certificates to expire. `chain.earliest_from` says which: `verified` or
+  `presented`. `certificates` is the presented chain either way.
 - `verified` says whether the chain verifies as a TLS client would verify
   it: the server's certificate for `server_name`, or the target's host, the
   others as intermediates, up to the system's roots and those of

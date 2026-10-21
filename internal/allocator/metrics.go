@@ -108,6 +108,28 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 
 	family("pue_allocator_members_refused_total", "counter", "Heartbeats of new members refused because as many members as --members.max allows were live.")
 	fmt.Fprintf(&b, "pue_allocator_members_refused_total %d\n", a.membersRefused)
+
+	sources := a.sourceMetrics()
+	labels := func(m sourceMetric) string {
+		return fmt.Sprintf("kind=\"%s\",owner=\"%s\",source=\"%s\"", m.kind, escape(m.owner), escape(m.name))
+	}
+	family("pue_allocator_discovered_targets", "gauge", "Targets in the last good answer of each discovery source, by kind (probe or static), owner (the probe job or the discovered_targets entry) and source; 0 for a source that has never answered.")
+	for _, m := range sources {
+		fmt.Fprintf(&b, "pue_allocator_discovered_targets{%s} %d\n", labels(m), m.found)
+	}
+	family("pue_allocator_discovery_refreshes_total", "counter", "Refreshes of each discovery source, by result: success for every answer taken, failure once for a failure while its text stays the same.")
+	for _, m := range sources {
+		fmt.Fprintf(&b, "pue_allocator_discovery_refreshes_total{%s,result=\"failure\"} %d\n", labels(m), m.failures)
+		fmt.Fprintf(&b, "pue_allocator_discovery_refreshes_total{%s,result=\"success\"} %d\n", labels(m), m.successes)
+	}
+	family("pue_allocator_discovery_last_success_timestamp_seconds", "gauge", "When each discovery source last answered, in seconds since the Unix epoch; 0 for a source that has never answered.")
+	for _, m := range sources {
+		at := 0.0
+		if !m.lastGood.IsZero() {
+			at = float64(m.lastGood.UnixNano()) / 1e9
+		}
+		fmt.Fprintf(&b, "pue_allocator_discovery_last_success_timestamp_seconds{%s} %s\n", labels(m), strconv.FormatFloat(at, 'f', -1, 64))
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
 }

@@ -58,10 +58,19 @@ func (a *Allocator) SD(job string) ([]SDGroup, error) {
 	groups := make([]SDGroup, 0, len(j.Targets))
 	for _, target := range j.Targets {
 		owner, _ := allocapi.Owner(pool, shardKeyOf(j, target))
-		labels := make(map[string]string, len(j.Labels)+len(j.Params)+5)
+		found := j.labelsOf[target]
+		labels := make(map[string]string, len(found)+len(j.Labels)+len(j.Params)+5)
+		// A discovered target's labels give way to the job's, and a job
+		// label written "" takes one away; the labels set below, which
+		// make the probe, give way to none.
+		for name, value := range found {
+			labels[name] = value
+		}
 		for name, value := range j.Labels {
 			if value != "" {
 				labels[name] = value
+			} else {
+				delete(labels, name)
 			}
 		}
 		for name, value := range j.Params {

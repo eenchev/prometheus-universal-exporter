@@ -56,8 +56,13 @@ type Inputs struct {
 	// targetIndex their places by name.
 	shardKeys   []string
 	targetIndex map[string]int
-	// digest identifies the files as read (snapshot.digest).
+	// digest identifies the files as read (snapshot.digest) and, once
+	// discovered targets are added (expand), what was discovered.
 	digest string
+	// entries are the static target file's discovered_targets, and
+	// sources every discovery source of them and of the probe jobs.
+	entries []*discoveredEntry
+	sources []sourceSpec
 }
 
 // ErrChanged says the input files changed while they were being read: what
@@ -88,9 +93,14 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	for i := range conf.Collectors {
 		in.collectors[conf.Collectors[i].Name] = true
 	}
+	var stripped []byte
+	var entries *yaml.Node
 	if p.StaticTargets != "" {
-		targets, err := config.LoadStaticTargets(p.StaticTargets)
-		if err == nil {
+		stripped, entries = splitDiscovered(before.staticTargets)
+		targets, err := config.ParseStaticTargets(p.StaticTargets, stripped)
+		if err == nil && entries != nil {
+			err = config.ValidateDiscoveringStaticTargets(targets)
+		} else if err == nil {
 			err = config.ValidateStaticTargets(targets)
 		}
 		if err == nil {
@@ -104,7 +114,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	if p.ProbeTargets != "" {
 		probes, err := parseProbeFile(p.ProbeTargets, before.probeTargets)
 		if err == nil {
-			err = checkProbeFile(probes, conf)
+			err = checkProbeFile(probes, conf, filepath.Dir(p.ProbeTargets))
 			if err != nil {
 				err = fmt.Errorf("probe targets file %s: %w", p.ProbeTargets, err)
 			}
@@ -119,8 +129,13 @@ func LoadInputs(p Paths) (*Inputs, error) {
 		return nil, ErrChanged
 	}
 	if in.Targets != nil {
-		if in.static, err = readStaticDocument(before.staticTargets, in.Targets); err != nil {
+		if in.static, err = readStaticDocument(stripped, in.Targets); err != nil {
 			return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
+		}
+		if entries != nil {
+			if in.entries, err = readDiscoveredEntries(entries, in.static.head, conf, filepath.Dir(p.StaticTargets)); err != nil {
+				return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
+			}
 		}
 		in.targetIndex = make(map[string]int, len(in.Targets.Targets))
 		for i := range in.Targets.Targets {
@@ -133,6 +148,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 			in.targetIndex[t.Name] = i
 		}
 	}
+	in.sources = in.discoverySources()
 	return in, nil
 }
 
@@ -330,6 +346,10 @@ func readStaticDocument(raw []byte, f *model.StaticTargetFile) (*staticDocument,
 		default:
 			d.head = append(d.head, resolved(key), resolved(value))
 		}
+	}
+	if len(f.Targets) == 0 {
+		// A file of discovered_targets alone.
+		return d, nil
 	}
 	if targets == nil || targets.Kind != yaml.SequenceNode || len(targets.Content) != len(f.Targets) {
 		return nil, errors.New("its targets could not be told apart for the replicas' shares")

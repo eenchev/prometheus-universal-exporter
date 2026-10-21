@@ -25921,7 +25921,9 @@ targets:
 ```
 
 `interval` and `targets` MUST be required, and `targets` MUST NOT be empty; a
-document without either MUST be refused. `--static-targets-file-schema` MUST
+document without either MUST be refused. A document with the target
+allocator's `discovered_targets` (§ 42.14d) MUST be refused, naming the
+allocator, since the exporter discovers no targets. `--static-targets-file-schema` MUST
 print the document's JSON Schema, and the committed
 `configs/static-targets.schema.json` MUST be that output (§ 24.3). Every
 target MUST name a configured collector; an unknown collector MUST be rejected
@@ -26215,8 +26217,9 @@ configuration loader, `--static-targets-file` with the static target file's
 loader and checks, against the configuration, and `--probe-targets-file` MUST
 be a document of one key, `probe_jobs`, besides `x-` keys, whose jobs each
 have a `name` (unique, `[A-Za-z0-9_][A-Za-z0-9_.-]*`), a `collector` of the
-configuration, `targets` (not empty, each once, each checked as a static
-target's `target` is for the collector), and MAY have `params` (probe
+configuration, `targets` (not empty unless the job has `discovery`, each
+once, each checked as a static target's `target` is for the collector), and
+MAY have `discovery` and `target_template` (below), `params` (probe
 parameters, checked as a probe checks them; `target`, `collector`, `debug`
 and a name that makes no label name MUST be refused), `labels` (a label name,
 not `instance` nor starting with `__`; `""` leaves the label out) and
@@ -26246,6 +26249,61 @@ force otherwise, and one refusal MUST be logged and counted
 (`model.SameFailureText`) stays the same. What is served MUST be the text
 that was checked: files that change while they are checked MUST be read
 again at the next check.
+
+**Discovery.** A probe job's `discovery`, and an entry of the static target
+file's `discovered_targets`, MUST be a list of sources each setting exactly
+one of `file_sd`, `http_sd` and `kubernetes`, decoded strictly, with an
+optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
+`<kind>_<index>`), `labels` (a label name, not starting with `__` nor `job`,
+`instance` or `static_target`, set to the value of the source label it
+names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
+default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`, and
+a `timeout` (default `10s`) MUST NOT be longer than it. `file_sd.files` MUST
+be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
+from the directory of the file naming them, read again at every refresh.
+`http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
+asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
+optional `bearer_token_file` read again at every refresh and a `tls` block
+(only for `https`), without following redirects. Both MUST read a list of
+`{targets, labels}` groups strictly, refusing an empty target and a label
+that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
+EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
+with its token read again at every listing, in pages of 500, in each of
+`namespaces` (DNS-1123 labels; none lists the namespace of the service
+account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
+`label_selector` (checked at load); its targets MUST be each address of each
+endpoint whose `ready` condition is true or unknown (every endpoint with
+`include_not_ready`) at the slice's port named or numbered `port`, as
+`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists. An
+answer larger than 16 MiB, with more targets than its bound or that cannot
+be read MUST be a failure; a failing source MUST keep the targets of its last
+good answer, one that never answered MUST add none, and a failure MUST be
+logged and counted (`pue_allocator_discovery_refreshes_total{result="failure"}`)
+once while its text stays the same. A probe job's discovered target MUST be
+its `target_template` (which MUST hold `{{address}}`, and MUST NOT be set
+without `discovery`) with the address in place of `{{address}}`, or the
+address without one; one listed already or that the collector refuses MUST
+be left out. A `discovered_targets` entry MUST have a `name` of a static
+target's name and `discovery`, MAY have `target_template` and `shard_key`
+(only `address`), MUST NOT have `target`, and MUST be checked at load as a
+static target of the file with `192.0.2.1:9100` for the address; each
+discovered address MUST make a static target named `<name>_<address>`, each
+character outside `[A-Za-z0-9_]` written `_`, followed by `_` and the first 8
+hex digits of the address's SHA-256 when another target has that name,
+whose `target` is made as a probe job's is, whose other keys are the entry's
+and whose shard key is its name, or its address with `shard_key: address`; one
+the checks refuse MUST be left out, and what is left out logged once while
+it stays the same. A `discovered_targets` file MAY leave `targets` out.
+A discovered probe target's group MUST carry its source's labels that are
+`__meta_` labels or label names but `job` and `instance`, under the job's
+labels, a job label written `""` removing one; a discovered static target
+MUST carry its source's labels but those starting with `__`, `job`,
+`instance` and `static_target`, under the entry's labels. What the sources
+find MUST be put in force as a reload is (handover, removal at once, a
+bundle changing only with its share), and a reload MUST keep a source whose
+owner and settings it leaves alone, with what it found.
 
 **Members.** A member MUST be live while its last heartbeat is younger than
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
@@ -26329,8 +26387,11 @@ only.
 members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
-`pue_allocator_member_changes_total` and
-`pue_allocator_members_refused_total`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_member_changes_total`,
+`pue_allocator_members_refused_total`, and for each discovery source, by
+`kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
+`pue_allocator_discovery_refreshes_total{result}` and
+`pue_allocator_discovery_last_success_timestamp_seconds`. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 

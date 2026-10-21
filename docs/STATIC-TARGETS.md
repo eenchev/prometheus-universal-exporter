@@ -225,6 +225,12 @@ A target may also set `shard_key`, which the exporter ignores: it is for the
 the target's name to choose the replica that scrapes the target, so targets
 that share a key share a replica.
 
+The exporter discovers no targets: a file with the allocator's
+`discovered_targets` key ([Discovering targets](ALLOCATOR.md#discovering-targets))
+is refused, naming the allocator, since the exporter alone would scrape none
+of what it describes. The allocator writes each discovered target out as a
+target of its own before it hands a replica its share.
+
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
 reports whether each would load, including whether every target names a

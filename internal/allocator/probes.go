@@ -38,6 +38,15 @@ type ProbeJob struct {
 	// ShardKey is what a target is allocated by: ShardKeyTarget, the
 	// default, or ShardKeyAddress.
 	ShardKey string `yaml:"shard_key"`
+	// Discovery are sources whose targets are probed besides Targets.
+	Discovery []DiscoveryConfig `yaml:"discovery"`
+	// TargetTemplate makes a discovered address a target, {{address}}
+	// standing for it, such as https://{{address}}/health; the address as
+	// it is without one.
+	TargetTemplate string `yaml:"target_template"`
+	// labelsOf are the labels each discovered target brings from its
+	// source, by target; nil for a job as the file wrote it.
+	labelsOf map[string]map[string]string
 }
 
 // The values of a probe job's shard_key.
@@ -94,7 +103,7 @@ var (
 // be probed with: each names a collector it has, each target is one that
 // collector's request type takes, and each parameter one a probe of that
 // collector may be sent.
-func checkProbeFile(f *ProbeFile, c *model.Config) error {
+func checkProbeFile(f *ProbeFile, c *model.Config, base string) error {
 	if len(f.Jobs) == 0 {
 		return errors.New("probe_jobs must not be empty")
 	}
@@ -108,14 +117,14 @@ func checkProbeFile(f *ProbeFile, c *model.Config) error {
 			return fmt.Errorf("probe job %q is defined twice; give each job its own name", job.Name)
 		}
 		seen[job.Name] = true
-		if err := checkProbeJob(job, c); err != nil {
+		if err := checkProbeJob(job, c, base); err != nil {
 			return fmt.Errorf("probe job %q: %w", job.Name, err)
 		}
 	}
 	return nil
 }
 
-func checkProbeJob(job *ProbeJob, c *model.Config) error {
+func checkProbeJob(job *ProbeJob, c *model.Config, base string) error {
 	collector := model.CollectorByName(c, job.Collector)
 	if strings.TrimSpace(job.Collector) == "" {
 		return errors.New("collector is required: the collector of the configuration that probes the job's targets")
@@ -128,8 +137,17 @@ func checkProbeJob(job *ProbeJob, c *model.Config) error {
 	default:
 		return fmt.Errorf("shard_key %q is neither %s nor %s", job.ShardKey, ShardKeyTarget, ShardKeyAddress)
 	}
-	if len(job.Targets) == 0 {
-		return errors.New("targets must not be empty")
+	if len(job.Targets) == 0 && len(job.Discovery) == 0 {
+		return errors.New("targets must not be empty, unless discovery finds them")
+	}
+	if err := checkDiscovery(job.Discovery, base); err != nil {
+		return err
+	}
+	if err := checkTargetTemplate(job.TargetTemplate); err != nil {
+		return err
+	}
+	if job.TargetTemplate != "" && len(job.Discovery) == 0 {
+		return errors.New("target_template is set without discovery, whose targets it makes")
 	}
 	targets := map[string]bool{}
 	for _, target := range job.Targets {

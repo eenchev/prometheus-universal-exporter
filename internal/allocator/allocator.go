@@ -49,6 +49,10 @@ type Options struct {
 	// Clock is the allocator's time; the wall clock when nil. Tests give
 	// one of their own.
 	Clock Clock
+	// MaxDiscoveredTargets bounds the targets of one discovery source's
+	// answer, for a source that sets no max_targets; 0 takes
+	// DefaultMaxDiscoveredTargets.
+	MaxDiscoveredTargets int
 }
 
 // Allocator holds the inputs in force, the members, the member list that
@@ -109,6 +113,21 @@ type Allocator struct {
 	// same refusal at every check is logged and counted once.
 	reloadMu    sync.Mutex
 	lastRefusal string
+	// base are the input files in force, as read; inputs are base with
+	// the discovered targets added (Inputs.expand). checked are the
+	// discovered static targets last checked, and lastSkipped what the
+	// last expansion left out, logged once while it stays the same. All
+	// three change under reloadMu.
+	base        *Inputs
+	checked     map[string]checkedTarget
+	lastSkipped string
+	// dmu guards the discovery sources and what they found; it is taken
+	// after mu or reloadMu, never before.
+	dmu              sync.Mutex
+	sources          map[string]*sourceState
+	maxDiscovered    int
+	discovering      bool
+	discoveryStopped bool
 }
 
 type member struct {
@@ -127,18 +146,21 @@ type drainKey struct{ target, member string }
 // New returns an allocator serving in.
 func New(in *Inputs, opts Options) *Allocator {
 	a := &Allocator{
-		clock:        opts.Clock,
-		logger:       opts.Logger,
-		settle:       opts.Settle,
-		maxMembers:   opts.MaxMembers,
-		inputs:       in,
-		members:      map[string]*member{},
-		draining:     map[drainKey]time.Time{},
-		bundles:      map[string]*allocapi.Bundle{},
-		collectorsOf: map[string]map[string]bool{},
-		changed:      make(chan struct{}),
-		stopping:     make(chan struct{}),
-		refusals:     map[string]string{},
+		clock:         opts.Clock,
+		logger:        opts.Logger,
+		settle:        opts.Settle,
+		maxMembers:    opts.MaxMembers,
+		inputs:        in,
+		members:       map[string]*member{},
+		draining:      map[drainKey]time.Time{},
+		bundles:       map[string]*allocapi.Bundle{},
+		collectorsOf:  map[string]map[string]bool{},
+		changed:       make(chan struct{}),
+		stopping:      make(chan struct{}),
+		refusals:      map[string]string{},
+		sources:       map[string]*sourceState{},
+		base:          in,
+		maxDiscovered: opts.MaxDiscoveredTargets,
 	}
 	if a.clock == nil {
 		a.clock = realClock{}
@@ -149,8 +171,15 @@ func New(in *Inputs, opts Options) *Allocator {
 	if a.maxMembers <= 0 {
 		a.maxMembers = DefaultMaxMembers
 	}
+	if a.maxDiscovered <= 0 {
+		a.maxDiscovered = DefaultMaxDiscoveredTargets
+	}
 	a.started = a.clock.Now()
 	a.proposedAt = a.started
+	if in != nil {
+		a.syncSources(in)
+		a.inputs, _, a.checked = in.expand(nil, nil)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.rebuild()
@@ -275,6 +304,7 @@ func (a *Allocator) BeginShutdown() {
 		return
 	}
 	a.stopped = true
+	a.stopDiscovery()
 	close(a.stopping)
 	if a.timer != nil {
 		a.timer.Stop()
@@ -607,13 +637,8 @@ func (a *Allocator) isHeld(generation string) bool {
 func (a *Allocator) Reload(p Paths) bool {
 	a.reloadMu.Lock()
 	defer a.reloadMu.Unlock()
-	if s, err := takeSnapshot(p); err == nil && a.lastRefusal == "" {
-		a.mu.Lock()
-		same := a.inputs != nil && a.inputs.digest == s.digest
-		a.mu.Unlock()
-		if same {
-			return false
-		}
+	if s, err := takeSnapshot(p); err == nil && a.lastRefusal == "" && a.base != nil && a.base.digest == s.digest {
+		return false
 	}
 	in, err := LoadInputs(p)
 	if errors.Is(err, ErrChanged) {
@@ -631,18 +656,18 @@ func (a *Allocator) Reload(p Paths) bool {
 		return false
 	}
 	a.lastRefusal = ""
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.inputs != nil && a.inputs.digest == in.digest {
+	if a.base != nil && a.base.digest == in.digest {
 		return false
 	}
-	old := a.inputs
-	a.inputs = in
+	a.base = in
+	// What was checked was checked against the files in force before.
+	a.checked = nil
+	a.syncSources(in)
+	a.putInForce(in)
+	a.mu.Lock()
 	a.reloadsOK++
-	a.handOver(old, a.clock.Now())
-	a.rebuild()
-	a.schedule()
-	a.logger.Info("input files reloaded", in.logAttrs()...)
+	a.mu.Unlock()
+	a.logger.Info("input files reloaded", a.currentInputs().logAttrs()...)
 	return true
 }
 

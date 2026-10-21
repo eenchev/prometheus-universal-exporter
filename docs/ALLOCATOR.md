@@ -46,6 +46,7 @@ pue-allocator \
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
+| `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
 
@@ -143,6 +144,11 @@ default name, `<collector>_<index>`, keeps the name the whole file gives it.
 Aliases and merge keys are written out as what they stand for, and the
 file's `x-` keys stay behind.
 
+Beside `targets`, the allocator's static target file may have
+`discovered_targets`, entries written once for every target a discovery
+source finds ([Discovering targets](#discovering-targets)); `targets` may
+then be left out.
+
 ### Probe targets
 
 `--probe-targets-file` lists probe jobs: targets probed with one collector,
@@ -170,9 +176,13 @@ probe_jobs:
 - `name` is required and unique, letters, digits, `_`, `.` and `-`: it is the
   job's path, `/v1/sd/<name>`.
 - `collector` must be a collector of the configuration.
-- `targets` must not be empty, each listed once, and each is checked as a
-  static target's `target` is for the collector's request type: an `http`
-  target is an absolute URL with a port that can be used.
+- `targets` must not be empty, unless the job has `discovery`, each listed
+  once, and each is checked as a static target's `target` is for the
+  collector's request type: an `http` target is an absolute URL with a port
+  that can be used.
+- `discovery` lists sources whose targets are probed besides `targets`, and
+  `target_template` makes a target of each address they find
+  ([Discovering targets](#discovering-targets)).
 - `params` are probe parameters (`timeout`, `path`, `param_<name>` and the
   others the collector's request type takes), checked as a probe checks
   them; a parameter of another request type, a malformed one, `target`,
@@ -188,6 +198,163 @@ probe_jobs:
 
 The file may keep YAML anchors under top-level `x-` keys, as the exporter's
 files may.
+
+## Discovering targets
+
+A large fleet need not be listed by hand. A probe job, or an entry of the
+static target file's `discovered_targets`, may name discovery sources, and
+the targets they find are allocated as written ones are: by the same
+rendezvous hashing, into the same bundles and service discovery answers.
+
+```yaml
+probe_jobs:
+  - name: websites
+    collector: html_status
+    labels:
+      team: web
+    targets:
+      - https://shop.example         # written targets stay
+    target_template: https://{{address}}/health
+    discovery:
+      - name: cmdb
+        http_sd:
+          url: https://cmdb.internal/prometheus/websites
+          bearer_token_file: /etc/pue/cmdb-token
+      - file_sd:
+          files: [sd/websites-*.json]
+```
+
+```yaml
+interval: 1m
+targets:
+  - name: legacy
+    collector: node
+    target: http://legacy.internal:9100/metrics
+discovered_targets:
+  - name: node                       # targets are named node_<address>
+    collector: node
+    target_template: http://{{address}}/metrics
+    interval: 30s
+    shard_key: address               # optional: allocate by the address
+    labels:
+      team: infra
+    discovery:
+      - kubernetes:
+          namespaces: [monitoring]
+          label_selector: app.kubernetes.io/name=node-exporter
+          port: metrics
+        labels:
+          node: __meta_kubernetes_node_name
+```
+
+A `discovered_targets` entry is a static target without `target` and with
+`name`, `discovery`, and optionally `target_template` and `shard_key`; every
+other key (`collector`, `interval`, `request`, `labels`, `params`,
+`export_via_otlp`, `otlp`) is the static target's own, written into every
+target the entry makes. It is checked at load as such a target, with the
+address `192.0.2.1:9100` in place of a discovered one, so an `http` collector
+without a `target_template` making a URL is refused then. Each target it
+makes is named `<name>_<address>`, every character a name cannot hold
+written `_`; when two targets would get one name, each is followed by `_`
+and the first 8 hex digits of its address's SHA-256, so a target keeps its
+name from one discovery to the next. `shard_key` may only be `address`, which
+allocates each target by its address, so the targets of several entries at
+one address share a replica; left out, a target is allocated by its name.
+The exporter refuses `discovered_targets` ([Static targets](STATIC-TARGETS.md)):
+only the allocator discovers.
+
+`target_template` makes the target from the address a source found,
+`{{address}}` standing for it; without one the address is the target. A
+discovered target is checked as a written one is; one that is refused, or
+that is listed already, is left out, and what is left out is logged once
+while it stays the same.
+
+### Sources
+
+Each source sets exactly one of `file_sd`, `http_sd` and `kubernetes`, and
+may set:
+
+- `name`, letters, digits, `_`, `.` and `-`, unique in its list; by default
+  its kind and its place, such as `file_sd_1`. It names the source in the
+  metrics and the logs.
+- `labels`, labels set from the source's own: `zone: __meta_zone` gives each
+  target the label `zone` with the value of its `__meta_zone`. A name
+  starting with `__`, `job`, `instance` and `static_target` are refused.
+- `max_targets`, how many targets one answer may hold, `--discovery.max-targets`
+  by default.
+
+**`file_sd`** reads Prometheus file_sd files, JSON (`.json`) or YAML (`.yml`,
+`.yaml`) lists of `{targets: [...], labels: {...}}`, from `files`, paths or
+patterns relative to the directory of the file that names them. They are
+read again every `refresh_interval`, `1m` by default.
+
+**`http_sd`** asks `url`, an `http` or `https` URL without credentials, every
+`refresh_interval`, `1m` by default, for the same JSON list, as Prometheus's
+HTTP service discovery does, sending `X-Prometheus-Refresh-Interval-Seconds`.
+`timeout`, `10s` by default and no longer than the refresh interval, bounds
+the request; `bearer_token_file` holds a token sent as `Authorization:
+Bearer`, read again at every refresh; `tls` is the exporter's `tls` block
+(`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`).
+Redirects are not followed, and an answer that is not `200` fails.
+
+**`kubernetes`** lists the `discovery.k8s.io/v1` EndpointSlices of the
+cluster the allocator runs in, every `refresh_interval`, `30s` by default,
+with plain HTTPS requests to the API server: at `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`, and
+with its token, read again at every listing so a rotated token is used. It
+polls rather than watches, which keeps it small and is enough for targets
+that move at the pace of a rollout. `namespaces` lists the namespaces to
+list, by default the allocator's own; `all_namespaces: true` lists them all,
+which needs a ClusterRole. `label_selector` is a Kubernetes label selector,
+checked at load. `port` is the endpoint port the targets are at, by name, as
+the Service names it, or by number. Each ready endpoint's address at that
+port is a target, and with `include_not_ready: true` every endpoint's;
+a slice without the port has none. `timeout` is as `http_sd`'s. Each target
+has the meta labels `__meta_kubernetes_namespace`,
+`__meta_kubernetes_endpointslice_name`, `__meta_kubernetes_service_name`
+(from the slice's `kubernetes.io/service-name` label),
+`__meta_kubernetes_pod_name`, `__meta_kubernetes_node_name`,
+`__meta_kubernetes_endpoint_hostname`, `__meta_kubernetes_endpoint_port_name`,
+`__meta_kubernetes_endpoint_ready` and
+`__meta_kubernetes_endpointslice_label_<name>` for each label of the slice,
+when they have a value. The allocator needs `get`, `list` and `watch` on
+`endpointslices` in the API group `discovery.k8s.io`; the chart grants them
+([On Kubernetes](#on-kubernetes)).
+
+There is no `relabel_configs`: the `labels` mapping takes the place of the
+relabeling that would copy a meta label to a target label, and a probe
+job's service discovery answer carries the `__meta_` labels for
+Prometheus's own relabeling.
+
+### Labels
+
+A probe target's group in the [service discovery answer](#service-discovery)
+has, besides the labels the allocator sets, those its source gave it: the
+`__meta_` labels, which Prometheus drops after relabeling, and those of a
+label name but `job` and `instance`; never another label starting with `__`,
+which would steer the probe itself. The job's `labels` win over them, and
+one the job writes `""` takes a discovered label away.
+
+A static target an entry makes has the labels its source gave it but every
+one starting with `__`, and `job`, `instance` and `static_target`; the
+entry's `labels` win over them.
+
+### Failures and changes
+
+Each source answers on its own. A source that fails keeps the targets of
+its last good answer; one that has never answered adds none, and the
+allocator forms its member list and serves the rest meanwhile. An answer
+with more targets than the bound, larger than 16 MiB, or that is not a list
+of target groups is a failure. A failure is logged, and counted in
+`pue_allocator_discovery_refreshes_total{result="failure"}`, once while its
+text stays the same.
+
+What a source finds is put in force as a reload is: a bundle changes only
+when its share does, a static target no longer found leaves every share at
+once, and one whose owner changes is handed over. A reload of the input
+files keeps every source whose owner and settings it leaves alone running,
+with what it found, so a changed `shard_key` moves discovered targets with
+[handover](#members-and-allocation) rather than dropping them.
 
 ## Members and allocation
 
@@ -365,6 +532,9 @@ scrape_configs:
 | `pue_allocator_reloads_total{result}` | counter | Changed input files put in force (`success`) or refused (`failure`). |
 | `pue_allocator_member_changes_total` | counter | Changes of the member list after the first. |
 | `pue_allocator_members_refused_total` | counter | Heartbeats of new members refused because `--members.max` members were live. |
+| `pue_allocator_discovered_targets{kind,owner,source}` | gauge | Targets of each discovery source's last good answer, by `kind` (`probe` or `static`), `owner` (the probe job or the `discovered_targets` entry) and `source` (its name); `0` before it answers. |
+| `pue_allocator_discovery_refreshes_total{kind,owner,source,result}` | counter | Answers of each discovery source taken (`success`), and its failures (`failure`), one counted once while its text stays the same. |
+| `pue_allocator_discovery_last_success_timestamp_seconds{kind,owner,source}` | gauge | When each discovery source last answered, in Unix seconds; `0` before it does. |
 
 ## On Kubernetes
 
@@ -386,7 +556,11 @@ replacement: a new pod starts with no bundle, not ready, and waits for the
 allocator. A restarted container starts with the bundle its exporter
 installed there, and with nothing else: a `config.yaml` put into the
 directory by other means is removed. Each probe job
-becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`.
+becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A
+`kubernetes` discovery source, in a probe job or in the static targets, gives
+the allocator a ServiceAccount of its own, with its token mounted, and a
+Role in each namespace it lists, or a ClusterRole for `all_namespaces`,
+allowing `get`, `list` and `watch` on EndpointSlices.
 
 Since each replica scrapes only its share of the static targets, adding
 replicas spreads them thinner, and the chart's `autoscaling` can scale the

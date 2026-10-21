@@ -92,26 +92,53 @@ type targetsError struct {
 func (e *targetsError) Error() string { return "static target file " + e.path + ": " + e.err.Error() }
 func (e *targetsError) Unwrap() error { return e.err }
 
+// Generation returns the generation of the allocator's bundle the
+// configuration in force was read from, "" outside allocator mode and before
+// the first bundle. It is stored with the configuration, in the same step
+// that puts it in force: from the moment a bundle's configuration answers
+// probes its generation is the one named, and a bundle refused never is.
+func (m *Manager) Generation() string { return m.current.Load().generation }
+
+// SetGeneration says the files at the manager's paths are generation of the
+// allocator's bundles, and the configuration in force was read from them:
+// an exporter in allocator mode that starts with the bundle in its cache
+// directory. Call it before the manager is used.
+func (m *Manager) SetGeneration(generation string) {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	m.generation = generation
+	pair := *m.current.Load()
+	pair.generation = generation
+	m.current.Store(&pair)
+}
+
 // ReloadReplacing replaces the files in force with replace and reloads them,
 // both under the lock every reload takes: a reload triggered meanwhile, by
 // the watch, SIGHUP or POST /-/reload, reads either the files as they were
 // or as replace left them, never some of each, however long reading them
-// takes. When replace fails nothing is reloaded and its error is returned.
-// When the reload of the new files is refused, restore, when replace returned
-// one, puts the old files back and they are reloaded, so the pair in force is
+// takes. The files replace puts in place are generation of the allocator's
+// bundles: what the reload puts in force carries it (Generation), and so
+// does what any later reload reads from them. When replace fails nothing is
+// reloaded and its error is returned. When the reload of the new files is
+// refused, restore, when replace returned one, puts the old files back and
+// they are reloaded with the generation they had, so the pair in force is
 // again the old one, read from the files in place; the refusal is returned.
-func (m *Manager) ReloadReplacing(trigger string, replace func() (restore func() error, err error)) error {
+// Without restore the new files stay in place, and so does their generation.
+func (m *Manager) ReloadReplacing(trigger, generation string, replace func() (restore func() error, err error)) error {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	restore, err := replace()
 	if err != nil {
 		return err
 	}
+	previous := m.generation
+	m.generation = generation
 	doTargets := m.targetPath != ""
 	refused := m.apply(trigger, true, doTargets)
 	if refused == nil || restore == nil {
 		return refused
 	}
+	m.generation = previous
 	if err := restore(); err != nil {
 		return errors.Join(refused, err)
 	}

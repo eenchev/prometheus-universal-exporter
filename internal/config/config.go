@@ -1274,6 +1274,11 @@ type Manager struct {
 	// without targets rather than a file that cannot be read
 	// (AllowAbsentTargets).
 	absentTargets bool
+	// generation is the generation of the allocator's bundle the files at
+	// the manager's paths are, "" outside allocator mode or for none: what a
+	// reload puts in force carries it (install). It changes with the files,
+	// under reloadMu (ReloadReplacing, SetGeneration).
+	generation string
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -1286,6 +1291,11 @@ type Manager struct {
 type inForce struct {
 	config  *model.Config
 	targets *model.StaticTargetFile
+	// generation is the generation of the allocator's bundle the two were
+	// read from, "" for none (Manager.Generation). It is stored with them,
+	// so what reports the generation in force never names one whose
+	// configuration is not, or is no longer, in force.
+	generation string
 }
 
 // DefaultWatchInterval is how often an enabled watch re-stats the configuration
@@ -1890,6 +1900,11 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	}
 	if f != nil {
 		pair.targets = f
+	}
+	// The generation is the configuration's: a static target file put in
+	// force alone leaves it as it was.
+	if c != nil {
+		pair.generation = m.generation
 	}
 	for _, prepare := range m.prepared {
 		prepare(pair.config, pair.targets)

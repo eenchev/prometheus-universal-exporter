@@ -41,12 +41,14 @@ func (s *Server) awaitingConfiguration(w http.ResponseWriter) bool {
 const awaitingReadyReason = "no configuration yet: waiting for the allocator"
 
 // AllocatorStatus is how an exporter in allocator mode is keeping up with
-// the allocator, for the self-metrics: the generation of the bundle in
-// force, empty before the first; when it last heard which bundle is its
-// own; its sync errors by stage, each stage listed from zero; and the
-// bundles it refused.
+// the allocator, for the self-metrics: when it last heard which bundle is
+// its own; its sync errors by stage, each stage listed from zero; and the
+// bundles it refused. The generation in force is not part of it: it is the
+// manager's (config.Manager.Generation), stored with the configuration in
+// force, so the self-metrics never name a generation other than that of the
+// configuration the probes are answered from, as the client, which learns
+// of it once the reload has returned, could.
 type AllocatorStatus struct {
-	Generation string
 	LastSync   time.Time
 	SyncErrors map[string]uint64
 	Refused    uint64
@@ -63,12 +65,13 @@ func (s *Server) allocatorStatusMetrics() []model.Metric {
 		return nil
 	}
 	st := s.allocatorStatus()
+	generation := s.manager.Generation()
 	metric := func(name string, typ model.MetricType, value float64, labels map[string]string) model.Metric {
 		return model.Metric{Name: name, Help: exporterMetricHelp[name], Type: typ, Value: value, Labels: labels}
 	}
 	var out []model.Metric
-	if st.Generation != "" {
-		out = append(out, metric("http_exporter_allocator_generation_info", model.GaugeMetricType, 1, map[string]string{"generation": st.Generation}))
+	if generation != "" {
+		out = append(out, metric("http_exporter_allocator_generation_info", model.GaugeMetricType, 1, map[string]string{"generation": generation}))
 	}
 	out = append(out, metric("http_exporter_allocator_last_sync_timestamp_seconds", model.GaugeMetricType, model.ScrapeTimestamp(st.LastSync), nil))
 	stages := make([]string, 0, len(st.SyncErrors))

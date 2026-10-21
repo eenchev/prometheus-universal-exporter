@@ -27032,8 +27032,15 @@ http_exporter_allocator_sync_errors_total{stage}        counter
 http_exporter_allocator_bundle_refused_total            counter
 ```
 
-`generation_info` MUST be 1 for the generation in force, absent before the
-first; the timestamp MUST be the last answer to a bundle request, 0 before
+`generation_info` MUST be 1 for the generation of the bundle whose
+configuration is in force, absent before the first: the generation MUST be
+stored with the configuration, in the same step that puts it in force, so
+from the moment a bundle's configuration answers probes and makes the
+exporter ready the series names its generation, a refused bundle's never,
+and a bundle put in force at startup from the cache directory names its
+generation from the start. A heartbeat names the generation the client
+knows to be in force, which it learns once the reload has returned; the
+heartbeat sent at once after it names the new one. The timestamp MUST be the last answer to a bundle request, 0 before
 one; `stage` MUST be `heartbeat` (one per address a heartbeat failed for),
 `fetch` or `write`, each from zero. An exporter outside allocator mode MUST
 have none of them.

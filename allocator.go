@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocclient"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -176,6 +177,7 @@ func (a *allocatorMode) startManager(logger *slog.Logger, pythonPath string, loa
 	} else if conf, targets, stamp, err := loadCached(configFile, targetsFile, pythonPath, loadOptions, staticTargetsLoadOptions, watch); err == nil {
 		config.LogNotices(logger, configFile, conf)
 		manager = config.NewManager(conf, configFile, logger)
+		manager.SetGeneration(generation)
 		manager.UseStamp(stamp)
 		manager.SetTargets(targetsFile, targets)
 		logger.Info("starting with the bundle in the allocator's cache directory", "cache_dir", a.cacheDir, "generation", generation)
@@ -261,6 +263,15 @@ func (a *allocatorMode) startClient(manager allocclient.Reloader, generation str
 		cancel()
 		<-done
 	}, nil
+}
+
+// allocatorStatus is the source of the allocator self-metrics: how client
+// keeps up with the allocator. The generation in force is the manager's.
+func allocatorStatus(client *allocclient.Client) func() exporter.AllocatorStatus {
+	return func() exporter.AllocatorStatus {
+		st := client.Status()
+		return exporter.AllocatorStatus{LastSync: st.LastSync, SyncErrors: st.SyncErrors, Refused: st.Refused}
+	}
 }
 
 // shutdownHeartbeatTimeout bounds the heartbeat that tells the allocator the

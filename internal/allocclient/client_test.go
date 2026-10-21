@@ -208,7 +208,7 @@ func (f *fakeManager) CheckReplacement(configPath, _ string) error {
 	return nil
 }
 
-func (f *fakeManager) ReloadReplacing(trigger string, replace func() (func() error, error)) error {
+func (f *fakeManager) ReloadReplacing(trigger, _ string, replace func() (func() error, error)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	restore, err := replace()

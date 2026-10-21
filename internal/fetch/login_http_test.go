@@ -804,3 +804,89 @@ func TestADebugRunsLoginIsNotCounted(t *testing.T) {
 		t.Errorf("counted %d logins and %d failures of a debug run's failed login, want none", made, failed)
 	}
 }
+
+// A relative login URL is sent with the request's Host override, the
+// collector's or a static target's, so a target reached by its address logs
+// in at the virtual host the request asks for, json and oauth2 alike, and
+// the trace shows that Host; two virtual hosts on one address log in apart,
+// neither sent the other's token. An absolute login URL keeps its own host.
+func TestARelativeLoginIsSentWithTheHostOverride(t *testing.T) {
+	freshLogins(t)
+	var mu sync.Mutex
+	var loginHosts []string
+	var n atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login", "/token":
+			mu.Lock()
+			loginHosts = append(loginHosts, r.Host)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"access_token": "%s-%d", "token_type": "Bearer"}`, r.Host, n.Add(1))
+		default:
+			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "+r.Host+"-") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, "value=1")
+		}
+	}))
+	t.Cleanup(server.Close)
+	address := strings.TrimPrefix(server.URL, "http://")
+	fetchAs := func(t *testing.T, c *model.Collector, forwarded http.Header) {
+		t.Helper()
+		response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, forwarded)
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("fetch: %v, %+v", err, response)
+		}
+	}
+	reset := func() {
+		logins.reset()
+		mu.Lock()
+		loginHosts = nil
+		mu.Unlock()
+	}
+	password := secretFiles(t, map[string]string{"password": "p"})
+
+	t.Run("json", func(t *testing.T) {
+		reset()
+		c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: password})
+		c.Request.Headers = map[string]string{"Host": "a.example"}
+		ctx, trace := WithRequestTrace(context.Background())
+		if _, err := FetchCollector(ctx, server.URL+"/data", c, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		fetchAs(t, c, http.Header{"Host": {"b.example"}})
+		fetchAs(t, c, nil)
+		fetchAs(t, c, http.Header{"Host": {"b.example"}})
+		if want := []string{"a.example", "b.example"}; fmt.Sprint(loginHosts) != fmt.Sprint(want) {
+			t.Errorf("logged in at %v, want %v: once at each virtual host", loginHosts, want)
+		}
+		if requests := trace.Requests(); len(requests) != 2 || !requests[0].Login || requests[0].Header.Get("Host") != "a.example" {
+			t.Errorf("traced %+v, want the login with Host: a.example", requests)
+		}
+	})
+	t.Run("oauth2", func(t *testing.T) {
+		reset()
+		c := loginCollector(t, model.LoginConfig{Type: "oauth2", URL: "/token", ClientID: "exporter", ClientSecretFile: password["password"]})
+		c.Request.Headers = map[string]string{"Host": "a.example"}
+		fetchAs(t, c, nil)
+		if want := []string{"a.example"}; fmt.Sprint(loginHosts) != fmt.Sprint(want) {
+			t.Errorf("logged in at %v, want %v", loginHosts, want)
+		}
+	})
+	t.Run("absolute", func(t *testing.T) {
+		reset()
+		c := loginCollector(t, model.LoginConfig{Type: "json", URL: server.URL + "/login", Token: ".access_token", FieldFiles: password})
+		c.Request.Headers = map[string]string{"Host": "a.example"}
+		// The token is the address's, which the virtual host refuses with
+		// a 401, so the login is made twice; both are at the address.
+		response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil)
+		if err != nil || response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("fetch: %v, %+v; want the virtual host's 401", err, response)
+		}
+		if want := []string{address, address}; fmt.Sprint(loginHosts) != fmt.Sprint(want) {
+			t.Errorf("logged in at %v, want %v: the absolute URL's own host", loginHosts, want)
+		}
+	})
+}

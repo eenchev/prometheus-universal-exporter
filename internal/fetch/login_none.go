@@ -15,7 +15,7 @@ import (
 
 type requestLogin struct{}
 
-func startLogin(context.Context, string, *model.Collector, RequestOverrides, []http.Header) (*requestLogin, error) {
+func startLogin(context.Context, string, *model.Collector, RequestOverrides, []http.Header, string) (*requestLogin, error) {
 	return nil, nil
 }
 

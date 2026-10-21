@@ -855,7 +855,13 @@ checked on each page's connections. A next page whose scheme, host or port
 — a port left out being its scheme's — is not the first page's MUST fail the
 trip before it is asked for, since it would be sent the target's
 credentials, and so MUST a next page whose URL a page of the trip already
-had. The probe's `timeout` and the trip's deadline MUST cover every page
+had. The one exception is the virtual host of the request's `Host` override,
+a collector's `request.headers` `Host` or a static target's, the latter
+replacing the former: a next page with the first page's scheme, the
+`Host`'s host (in any case) and the `Host`'s port, its scheme's when the
+`Host` names none, MUST be fetched from the first page's host and port, with
+the same `Host`, and MUST NOT be fetched by looking the virtual host up; a
+next page on another port or scheme of it MUST still fail the trip. The probe's `timeout` and the trip's deadline MUST cover every page
 together. The response limit (§ 20) MUST hold each page, the pages' bodies
 added up, failing the trip after the page that takes them past it, and the
 merged document, each failure a limit failure (`ErrLimitExceeded`).
@@ -25371,7 +25377,10 @@ absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
 path from the root (starting with `/`), with a query if need be, resolved
 against the target's scheme, host and port alone: the target's path, query,
 credentials and fragment MUST NOT play a part in where the login goes or in
-which token is kept. A relative reference that does not start with `/`
+which token is kept. A login whose `url` is a path MUST be sent with the
+request's `Host` override, a collector's `request.headers` `Host` or a
+static target's, the latter replacing the former, and one whose `url` is
+absolute MUST NOT. A relative reference that does not start with `/`
 (`login`, `../login`, `?x`) MUST be refused at load, and in the schema. It
 MUST hold no credentials, fragment or placeholder, and a reference naming a
 host without a scheme (`//host/...`) MUST be refused. The login request MUST be held to the
@@ -25382,9 +25391,9 @@ and otherwise with the collector's `request.tls`, never with an
 `insecure_skip_verify` a probe parameter or a static target sets for the
 target.
 
-A token MUST be kept, by the collector, the login block and the URL the
-login was sent to, and sent on every request until it is due to be fetched
-again: when a tenth of its life is left or 30 seconds, whichever is more,
+A token MUST be kept, by the collector, the login block, the URL the
+login was sent to and the `Host` it was sent with, and sent on every request
+until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own

@@ -44,16 +44,18 @@ import (
 // Where a login goes is the configuration's alone, never a probe's: login.url
 // is absolute, fixed for the collector, or a path from the root resolved
 // against the target's scheme, host and port, the only part of it a probe
-// chooses. Either way the login request
-// is held to the collector's allowed_schemes, allowed_targets and
+// chooses. A relative login.url is sent with the request's Host override
+// too (hostOverride), the virtual host a target reached by its IP address
+// is asked for, which an absolute one, naming its own host, is not. Either
+// way the login request is held to the collector's allowed_schemes, allowed_targets and
 // denied_targets as the request is, follows no redirect, and is sent with
 // login.tls, or the collector's request.tls, never with what a probe
 // parameter or a static target's request.insecure_skip_verify changes of it.
 // The secrets are read from their files at each login, so a rotated one is
 // used by the next.
 //
-// A token is kept (loginCache), by the collector, the login and the URL it
-// was sent to, until shortly before it expires: refreshed when a tenth of
+// A token is kept (loginCache), by the collector, the login, the URL it
+// was sent to and the Host it was sent with, until shortly before it expires: refreshed when a tenth of
 // its life is left, or 30 seconds, whichever comes first, and never later
 // than half way through it. A token whose answer says no lifetime is kept
 // for login.ttl, or, without it, until the target refuses it. Probes that
@@ -369,6 +371,13 @@ func loginURL(l *model.LoginConfig, target string) (*url.URL, error) {
 	return (&url.URL{Scheme: base.Scheme, Host: base.Host}).ResolveReference(ref), nil
 }
 
+// relativeLoginURL says whether login.url is a path resolved against the
+// target (loginURL) rather than an absolute URL.
+func relativeLoginURL(l *model.LoginConfig) bool {
+	ref, err := url.Parse(l.URL)
+	return err == nil && !ref.IsAbs()
+}
+
 // loginFingerprint identifies a login block: two that differ in anything
 // keep tokens apart.
 func loginFingerprint(l *model.LoginConfig) string {
@@ -404,8 +413,10 @@ type requestLogin struct {
 // the cache or fetched: nil when the request makes none — the collector and
 // the static target set no login, or a header the request carries from the
 // static target or the probe is the one the login would send, which is
-// sent instead.
-func startLogin(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded []http.Header) (*requestLogin, error) {
+// sent instead. host is the request's Host override (hostOverride), sent on
+// a login whose URL is relative: that login goes to the target's address,
+// where the virtual host the request asks for is the one that logs it in.
+func startLogin(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded []http.Header, host string) (*requestLogin, error) {
 	l := loginOf(c, overrides)
 	if l == nil {
 		return nil, nil
@@ -420,10 +431,16 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 	if err != nil {
 		return nil, &StageError{Stage: loginStage, Err: err}
 	}
+	if !relativeLoginURL(l) {
+		// An absolute login.url names the host it logs in at.
+		host = ""
+	}
 	fingerprint := loginFingerprint(l)
-	key := c.Name + "\x00" + fingerprint + "\x00" + u.String()
+	// The Host is part of the key: two virtual hosts on one address are
+	// two logins, and neither is sent the other's token.
+	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host
 	login := func(ctx context.Context) (loginToken, error) {
-		return logIn(ctx, c, l, u)
+		return logIn(ctx, c, l, u, host)
 	}
 	shown := RedactURL(u, MaskQueryValues)
 	get := func(ctx context.Context) (string, error) {
@@ -506,8 +523,9 @@ type loginToken struct {
 	expires time.Time
 }
 
-// logIn makes one login of l at u for a request of c.
-func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL) (loginToken, error) {
+// logIn makes one login of l at u for a request of c, sent with the Host
+// host when it is not "".
+func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, host string) (loginToken, error) {
 	tlsSettings := c.Request.TLS
 	if l.TLS != nil {
 		tlsSettings = *l.TLS
@@ -527,7 +545,7 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 		return loginToken{}, err
 	}
 	traced := *client
-	traced.Transport = loginTracer{next: client.Transport}
+	traced.Transport = loginTracer{next: client.Transport, host: host}
 	start := loginNow()
 	var token loginToken
 	switch l.Type {
@@ -549,13 +567,23 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	return token, nil
 }
 
-// loginTracer records each login request in a debug probe's trace, marked
-// as a login: its headers as any request's are, by the rules that withhold
-// a credential's value when it is shown, and never its body.
-type loginTracer struct{ next http.RoundTripper }
+// loginTracer sends each login request with the Host host, when it is not
+// "", and records it in a debug probe's trace, marked as a login: its
+// headers as any request's are, by the rules that withhold a credential's
+// value when it is shown, and never its body. The Host is set here, where
+// the json and the oauth2 login's requests alike pass; a login follows no
+// redirect, so every request it makes is to the URL the Host belongs with.
+type loginTracer struct {
+	next http.RoundTripper
+	host string
+}
 
 func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
-	traceLogin(req.Context(), req.Method, req.URL.String(), req.Header)
+	if t.host != "" {
+		req = req.Clone(req.Context())
+		req.Host = t.host
+	}
+	traceLogin(req.Context(), req.Method, req.URL, req.Header, req.Host)
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
 		traceOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())
@@ -567,14 +595,22 @@ func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // traceLogin records a login request about to be sent in a debug probe's
 // trace (requesttrace.go).
-func traceLogin(ctx context.Context, method, url string, header http.Header) {
+func traceLogin(ctx context.Context, method string, u *url.URL, header http.Header, host string) {
 	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
 	if !ok {
 		return
 	}
+	header = header.Clone()
+	if header == nil {
+		header = http.Header{}
+	}
+	// Host is shown when it is not the URL's own, as traceRequest shows it.
+	if host != "" && host != u.Host {
+		header.Set("Host", host)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header.Clone(), Login: true, started: time.Now()})
+	t.requests = append(t.requests, TracedRequest{Method: method, URL: u.String(), Header: header, Login: true, started: time.Now()})
 }
 
 // jsonLogin posts the fields of l to u and reads the token from the answer.

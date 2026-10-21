@@ -23833,6 +23833,209 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `server.enablePlayground: true` and not by default, and fails rendering
   for the flag in `extraArgs`, naming `server.enablePlayground`.
 
+## 34.154 The dns, tlscert and opt-in s3file request types
+
+- A dns collector asks the configured server for each record type — A,
+  AAAA, CNAME (an alias and a name that is none), MX, NS, TXT, SRV and PTR —
+  against an in-process DNS server written by hand in the test, and answers
+  a document whose records have the fields of their type, names without
+  their trailing dot, in an order of their own; the record type is matched
+  in any case and with blanks around it, the name in any case and without a
+  trailing dot, and every question is asked as an absolute name.
+- A dns name that does not exist, and one without records of the type, are
+  answers with not_found true and no records; SERVFAIL and REFUSED fail the
+  scrape naming the server asked, and a server that never answers fails it
+  at the deadline, wrapping context.DeadlineExceeded.
+- transport tcp asks over TCP alone, udp and the default over UDP, as the
+  server sees them.
+- A dns collector's record_type, server and transport are refused at load
+  when they are no record type, a server with a scheme, a bad port or blanks
+  alone, or a transport other than udp and tcp, in capitals too, and so is a
+  key of another type; host, host:port, [v6], [v6]:port, a bare IPv6
+  address and a name are taken as servers.
+- A dns target is refused when it is a URL, has a port, a path or a user, is
+  an IP address for a record type other than PTR, a name too long or with an
+  empty or 64-character label, holds a blank or a character outside ASCII;
+  a PTR target that is no address, or has a zone, is refused; the url label
+  is dns:name?type=A and dns://host:port/name?type=PTR, http_method QUERY,
+  the stage dns, and a target with credentials is shown as <invalid target>.
+- A dns collector's allowed_targets and denied_targets match the name by
+  name: a denied glob and a name allowed_targets does not list are refused
+  before the server is asked, a network in allowed_targets allows no name, a
+  denied network does not refuse a name resolving into it, and a PTR
+  target is matched as an address.
+- A debug probe's request section shows a dns lookup as QUERY with the DNS
+  URI without its query, Dns-Type, Dns-Server, Dns-Transport and the number
+  of records.
+- A tlscert collector answers the chain of two a server presents, signed by
+  the root of ca_file, as a document: subject, issuer, serial in
+  hexadecimal, DNS and IP SANs, validity in Unix seconds and RFC 3339,
+  seconds until expiry from a fixed now, the leaf's expiry and the chain's
+  earliest at the top, verified true for server_name, TLS 1.3 and a cipher.
+- A tlscert chain that does not verify is answered with verified false and
+  the reason — untrusted, expired, not yet valid, another name, the
+  intermediate left out — with the seconds until expiry, negative for an
+  expired certificate; one name of several SANs and an IP SAN for the
+  target's address verify.
+- A tlscert collector presents the tls block's client certificate to a
+  server that requires one, which sees its subject.
+- A tlscert scrape fails when nothing listens, naming the address, when a
+  server never answers within the deadline, wrapping
+  context.DeadlineExceeded, and when the server speaks no TLS.
+- A tlscert collector refuses insecure_skip_verify, a lone cert_file or
+  key_file, a server_name that is no host and a key of another type at
+  load; a target with a scheme, a path, a user, port 0 or a named port is
+  refused; host alone is port 443; the url label is tls://host:port,
+  http_method HANDSHAKE, the stage tls.
+- A tlscert collector's denied network, and an allowed_targets that does not
+  list the server's address, refuse the handshake before the server sees
+  one; an allowed network lets it through.
+- A debug probe's request section shows a handshake as HANDSHAKE
+  tls://host:port with Tls-Server-Name, Tls-Client-Certificate and the
+  version, the certificate count and verified; --dry-run warns of a missing
+  ca_file, through the fetch package and the CLI.
+- A dns and a tlscert collector's decoder is json, left out or written, with
+  no warning of an undecided decoder; another decoder and a transform that
+  does not read JSON are refused, naming the type.
+- A probe of a dns collector through the exporter gives the count of
+  records, one series an address and whether the name exists, against an
+  in-process UDP responder, a name not found giving count 0; the verbose
+  self-metrics carry the DNS URI and QUERY; the debug report shows the
+  document; a target that is no name is answered 400; the collectors page
+  says the target is the name to resolve.
+- A probe of a tlscert collector through the exporter gives the days to
+  expiry, the 14-day flag and verified 1 with ca_file, verified 0 without;
+  the verbose self-metrics carry tls://host:port and HANDSHAKE; the debug
+  report shows the handshake; a target with a scheme is answered 400 and
+  the metadata address 403.
+- The examples of docs/DNS.md load as written, with their static target;
+  those of docs/TLSCERT.md run against a TLS server, verified and not within
+  14 days of expiry, with their static target.
+- The schema and the exporter agree on a dns collector's record_type (in
+  another case, with blanks), server and transport, left out, written "",
+  written well and badly.
+- Builds of dns and of tlscert alone, and of the two together, link none of
+  the gRPC, SSH, SFTP and SQL driver modules.
+- The README's tagline names a DNS name and a TLS certificate, and its
+  sources paragraph DNS records and TLS certificates (§ 35).
+- A dns and a tlscert collector's label values take a probe's
+  param_<name>, its default when the probe gives none; a python transform
+  reads a dns and a tlscert collector's document as data.
+- The schema and the exporter agree on a tlscert collector's
+  allowed_targets and denied_targets entries and on its
+  tls.insecure_skip_verify: false taken by both, true refused by both,
+  which the schema took before.
+- An s3file collector reads an object as a file: its body with no status,
+  Content-Length, Last-Modified and ETag headers from the object, a
+  HeadObject and a GetObject of the key root's prefix and path make, sent
+  path-style to the endpoint and signed with SigV4 by the credential files'
+  access key for the region; the url label is the object's s3:// URL, the
+  method READ and the stage s3 (TestS3FileReadsAnObjectAsAFile).
+- The credential files are read at every request: a key rotated on disk
+  signs the next request, an emptied file fails the scrape naming it, and
+  --dry-run warns of it (TestS3FileReadsItsCredentialFilesAtEveryRequest).
+- Without credential files the SDK's default chain signs, with the
+  environment's key and region where the collector sets none, and --dry-run
+  warns of nothing (TestS3FileTakesTheSDKsDefaultCredentialsAndRegion).
+- A collector with files reads the matching objects directly under the
+  prefix, each with its modification time, leaving out a key in a
+  subdirectory, the prefix's own marker and a name that does not match; the
+  listing is paged and asks no HeadObject; the url label is the prefix's,
+  and a path parameter is refused (TestS3FileReadsTheMatchingObjectsUnderAPrefix).
+- An object replaced between the listing and its read is read again after a
+  HeadObject, and the new object answered
+  (TestS3FileReadsAgainAnObjectReplacedSinceTheListing).
+- A missing object, a missing bucket and a bucket answered 403 fail the
+  scrape saying so, naming the key and the bucket
+  (TestS3FileFailuresNameTheObjectAndTheBucket).
+- An object over the response limit fails with the limit's error, and one
+  older than max_age is refused for its age
+  (TestS3FileHoldsAnObjectToTheResponseLimitAndMaxAge).
+- A path parameter names the object, a value with / is refused, and the url
+  label keeps the placeholder (TestS3FilePathParametersNameTheObject).
+- A store that does not answer is given up at the probe's deadline
+  (TestS3FileReturnsAtTheProbesDeadline).
+- A target is a bucket, as written or after s3://; a key, a query, a user,
+  another scheme, upper case, a name too short, .. and a leading hyphen are
+  refused and shown as <invalid target>, and no target is required
+  (TestS3FileTargetIsABucket).
+- allowed_targets and denied_targets name buckets: a refused bucket is
+  refused before anything is sent, and an address in the lists is refused at
+  load (TestS3FileTargetListsNameBuckets).
+- The keys of an s3file collector are held to their rules at load, root /
+  among those taken (TestS3FileValidation); a static target's path is held
+  to a file's rules (TestS3FileStaticTargetRequest).
+- A reload that leaves no collector with a client's settings drops the
+  client, and one that keeps them keeps it
+  (TestS3FileClientsFollowTheConfiguration).
+- optInRequestKeys lists exactly the keys s3file accepts that no other type
+  does (TestTheOptInRequestKeysAreTheTypesOwn), and the default build counts
+  them as claimed (TestEveryRequestKeyBelongsToAType).
+- The refusal of an unused probe parameter of an s3file collector names its
+  request.path and label values alone
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+- requesttype_s3file.go and its tests are built under request_type_s3file
+  alone; a default build compiles every type but s3file, its tag adds it to
+  a default and to a selective build, and the guard names it
+  (TestEveryRequestTypeFileHasItsSelectionConstraint,
+  TestBuildTagsSelectTheRequestTypeFiles, TestTheGuardNamesEveryRequestType,
+  TestRequestTypeTestFilesCarryTheirTypesConstraint,
+  TestADefaultBuildRegistersEveryRequestType).
+- A build without s3file refuses an s3file collector at load, saying it is
+  an opt-in type the default build and the published image leave out and
+  naming OPT_IN_REQUEST_TYPES=s3file and request_type_s3file
+  (TestABuildWithoutS3FileRefusesAnS3FileCollector).
+- Through the exporter, an s3file probe answers the object's series, its
+  verbose series carry the s3:// URL and READ, it has a refused-targets
+  series, and a debug probe shows READ and the URL and no secret
+  (TestAnS3FileCollectorProbe); a missing or malformed target is answered
+  400 and a denied bucket 403 with no request sent (TestS3FileProbeTargets);
+  label values take probe parameters and a prefix answers each object's
+  series with file labels and localfile's series
+  (TestAnS3FileCollectorsLabelsTakeAProbeParameter); a Python transform sees
+  no status, the extension's type, the length and the ETag
+  (TestAnS3FileCollectorWithPython); static targets name the bucket and a
+  path of their own (TestS3FileStaticTargets).
+- tools/request-type-tags.sh turns a third list into the opt-in types'
+  tags, alone or beside REQUEST_TYPES and SQL_DRIVERS, and refuses a type of
+  every build and one that does not exist; REQUEST_TYPES may name s3file
+  (TestRequestTypeTagsScript); the Dockerfile passes OPT_IN_REQUEST_TYPES
+  (TestDockerfileBuildsTheSelectedRequestTypes) and make build does
+  (TestMakeBuildKeepsTheExportersBinary).
+- No build of one default type, and not the default build, links the AWS
+  SDK; a build of s3file alone links it, and a default build with s3file
+  links its S3 client and configuration
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- CI and make ci vet, build, test and lint the build with every opt-in
+  request type, their lists naming every opt-in type of the tree, ci.yml's
+  lint step with the tags the script makes of them
+  (TestCIBuildsEveryOptInRequestType); CI's and the Makefile's loops over
+  the request types and the test matrix name s3file
+  (TestCIBuildsEveryRequestTypeOnItsOwn, TestCIAndMakeTestEveryRequestTypeOnItsOwn).
+- The committed schemas are compared in a build without any opt-in type
+  (TestTheCommittedSchemaComparisonsRunInTheDefaultBuild); s3file's region,
+  endpoint and credential files get one verdict from the schema the binary
+  generates and the exporter (TestSchemaAndExporterAgreeOnS3FileKeysWrittenEmpty),
+  each constrained key being in a table (TestEveryConstrainedKeyOfTheSchemasIsInATable),
+  and region and endpoint are held to text alone
+  (TestTheKeysHeldToTextAloneAreTheSchemas).
+- The README names s3file in its tagline and sources paragraph
+  (TestReadmeOpeningNamesEveryRequestType), and docs/DEPENDENCIES.md each
+  direct AWS module (TestDependenciesNamesEveryDirectDependencyOfTheExporter).
+- The check of a target file against a configuration says what going
+  through the collectors said in a build of s3file alone, whose targets of
+  an s3file collector mostly name a bucket
+  (TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid).
+- The examples of docs/S3FILE.md load as written in a build with the type,
+  and its static targets against them (TestS3FileDocumentationExamples);
+  its Static targets section names every key a target may set
+  (TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet).
+- An s3file collector without decoder.type is warned at load that it
+  decodes by the extension of each file
+  (TestAnS3FileCollectorWithoutADecoderIsWarnedOfTheExtension).
+- The collectors page hints an s3file collector's target as the bucket, or
+  s3://bucket, and required (TestTheCollectorsPageHintsAnS3FileTarget).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

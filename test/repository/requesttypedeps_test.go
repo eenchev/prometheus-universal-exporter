@@ -69,13 +69,14 @@ var sshfileOnlyModules = []string{
 // Each request type's own modules are linked by a build that carries the
 // type and by no other: every build of one type, as REQUEST_TYPES names
 // it, links the gRPC and protobuf modules only when the type is grpc, and
-// the SSH and SFTP modules only when it is sshfile; a build of the other
-// four together links neither, and the default build, of every type, links
-// both. go list is asked of the main package, the exporter as it ships;
+// the SSH and SFTP modules only when it is sshfile; a build of graphite,
+// http and localfile together links neither, nor does one of dns and
+// tlscert, which need nothing outside the standard library; and the
+// default build, of every type, links both. go list is asked of the main package, the exporter as it ships;
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range []string{"graphite", "grpc", "http", "localfile", "sql", "sshfile", "graphite,http,localfile"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "localfile", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,tlscert"} {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestType string

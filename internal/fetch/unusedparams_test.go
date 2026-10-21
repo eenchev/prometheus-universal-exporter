@@ -19,6 +19,8 @@ var unusedRefusals = map[string]string{
 	RequestTypeLocalFile: `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 	RequestTypeSSHFile:   `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 	RequestTypeSQL:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.database, its args or its label values names them`,
+	RequestTypeDNS:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeTLSCert:   `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -96,7 +98,13 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 			continue
 		}
 		filled := TemplatedFields(&c)
-		if len(filled) < 2 {
+		// A dns or tlscert collector has no placeholder in its request, and
+		// fills its label values alone.
+		least := 2
+		if name == RequestTypeDNS || name == RequestTypeTLSCert {
+			least = 1
+		}
+		if len(filled) < least {
 			t.Errorf("%s: the places filled are %v", name, filled)
 		}
 		for _, place := range placeWords {

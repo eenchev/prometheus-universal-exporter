@@ -578,7 +578,8 @@ number and which the exporter MUST refuse.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql` are implemented;
+data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns` and
+`tlscert` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -651,7 +652,9 @@ type.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver.
+  that driver. `dns` and `tlscert` MUST import nothing outside the standard library,
+  and the test MUST find none of the other types' modules in a build of
+  either.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -1694,6 +1697,113 @@ of objects, one a row, of its columns by name. Its keys:
   outcome MUST name the rows and the columns. The verbose `url` label MUST
   be that URL, with the database's placeholders as written, and
   `http_method` MUST be `QUERY`.
+
+#### `dns`
+
+A `dns` collector resolves the probe's `target`, a DNS name, and hands its
+records to the transforms as a JSON document. The lookup MUST be Go's own
+resolver (`net.Resolver` with `PreferGo`), so the type needs no library. Its
+keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
+| `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
+| `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
+
+- The record type, server and transport MUST be the collector's alone: no
+  probe parameter or static target key may change them. A probe MUST take
+  `timeout` and `param_<name>` parameters, and a static target's request
+  block `timeout`.
+- A target MUST be a name of letters, digits, `.`, `-` and `_`, at most 253
+  characters, each label from 1 to 63, matched without regard to case and a
+  trailing dot; for `PTR` it MUST instead be an IPv4 or IPv6 address, without
+  a zone. A URL, a name with a port, path, query or user, an IP address for
+  any other record type, and an address for `PTR` that is none MUST be
+  refused, a probe's with `400` before anything is asked and a static
+  target's at load.
+- The name MUST be asked as an absolute name, so that no search domain of
+  the system's configuration is appended to it.
+- The answer MUST be a JSON document of `name` (lower case, no trailing
+  dot), `record_type`, `server` (`host:port`, `""` for the system's
+  resolver), `transport`, `not_found`, `count`, `duration_seconds` and
+  `answers`, one object a record with the fields of its type alone:
+  `address` (A, AAAA); `target` (CNAME, the canonical name, present only
+  when it differs from the name); `host` and `preference` (MX); `host` (NS);
+  `text`, the record's strings joined (TXT); `target`, `port`, `priority`
+  and `weight` (SRV); `name` (PTR). Names MUST be given without their
+  trailing dot, and the records MUST be in an order of their own — by
+  preference or priority first, then by their data — so that two lookups of
+  the same records give the same document.
+- A name that does not exist, or has no records of the type, MUST be an
+  answer: `not_found` true, `answers` empty and `count` 0. A server failure,
+  a refusal, a malformed answer and a server that does not answer MUST fail
+  the scrape in the `dns` stage, naming the record type, the name and the
+  server asked, not the system's; a lookup cut short by the scrape's
+  deadline MUST wrap the context's error. TTLs and response codes are not
+  given by the resolver and MUST NOT be invented.
+- The target lists MUST be matched against the name by name alone, never
+  by what it resolves to: a denied name, and with `allowed_targets` one that
+  matches none of its names, MUST be refused with `403` before the server is
+  asked, so a network in `allowed_targets` allows no name. A `PTR` target
+  MUST be matched as an address, the cloud metadata addresses refused unless
+  `allowed_targets` lists them. The server is not held to the lists.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `QUERY`, the DNS URI without
+  its query, and the record type, server and transport, with the number of
+  records, `not found` or the error as its outcome. The verbose `url` label
+  MUST be the DNS URI of RFC 4501, `dns:name?type=T` with the system's
+  resolver and `dns://host:port/name?type=T` with `server`, and
+  `http_method` MUST be `QUERY`.
+
+#### `tlscert`
+
+A `tlscert` collector makes a TLS handshake with the probe's `target` and
+hands the certificates the server presented to the transforms as a JSON
+document. Nothing MUST be sent over the connection, which MUST be closed
+after the handshake. Its keys are `tls` and `allowed_targets` /
+`denied_targets`:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` MUST be refused at load. The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
+| `allowed_targets`, `denied_targets` | none | As for `http`: the host's name before the connection, and the address the connection is made to. |
+
+- A target MUST be `host`, `host:port` or `[v6]:port`, port 443 when left
+  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  refused, a probe's with `400` before anything is dialed and a static
+  target's at load. A probe MUST take `timeout` and `param_<name>`
+  parameters, and a static target's request block `timeout`.
+- The handshake MUST take whatever chain the server presents, and the
+  chain MUST then be verified as a TLS client would: the first certificate
+  for `server_name`, the others as intermediates, up to the system's roots
+  and `ca_file`'s, at the time of the scrape. A chain that does not verify
+  MUST NOT fail the scrape: the document MUST say `verified` false with the
+  error's text as `verify_error`. A connection that fails, a handshake that
+  fails and a deadline that comes first MUST fail the scrape in the `tls`
+  stage, naming `host:port`.
+- The answer MUST be a JSON document of `host`, `port`, `server_name`,
+  `tls_version` and `cipher_suite` as the handshake settled them,
+  `verified`, `verify_error`, `duration_seconds`, the first certificate's
+  `not_after` and `seconds_until_expiry`, `chain` (`length`,
+  `earliest_not_after`, `seconds_until_earliest_expiry`) and
+  `certificates`, the chain as presented, each with `subject_cn`,
+  `subject`, `issuer_cn`, `issuer`, `serial` (lower-case hexadecimal),
+  `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
+  `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
+  `seconds_until_expiry` (negative once expired), `is_ca`,
+  `signature_algorithm` and `sha256_fingerprint`.
+- STARTTLS is not supported: the handshake MUST start at the connection's
+  first byte.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `HANDSHAKE`, `tls://host:port`,
+  the name sent as SNI and whether a client certificate is presented, with
+  the version, the number of certificates and whether the chain verified,
+  or the error, as its outcome. The verbose `url` label MUST be
+  `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -6956,7 +7066,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile, sql, sshfile`. A
+  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —

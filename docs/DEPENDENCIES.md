@@ -171,6 +171,11 @@ for every type but `sql` against 17.9 MB for
 `REQUEST_TYPES=http,localfile,graphite,sshfile`.
 Dependabot's Go group and `govulncheck` cover them with no change.
 
+The [`dns`](DNS.md) and [`tlscert`](TLSCERT.md) request types have no
+dependency of their own: the first asks Go's own resolver (`net`), the second
+makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
+same test finds none of the other types' modules in a build of either.
+
 The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
 own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a
 host's key against a known_hosts file (`ssh/knownhosts`), and

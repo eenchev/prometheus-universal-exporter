@@ -20,7 +20,8 @@ import (
 // asks a URL, localfile reads a file from the exporter's own filesystem,
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
-// statement on a database. The
+// statement on a database, dns resolves a name, tlscert reads the
+// certificates of a TLS handshake. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -46,13 +47,15 @@ const (
 	RequestTypeGRPC      = "grpc"
 	RequestTypeSSHFile   = "sshfile"
 	RequestTypeSQL       = "sql"
+	RequestTypeDNS       = "dns"
+	RequestTypeTLSCert   = "tlscert"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them

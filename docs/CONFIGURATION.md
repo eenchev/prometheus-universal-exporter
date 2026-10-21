@@ -2052,12 +2052,14 @@ request:
   path: /api/status
 ```
 
-There are six types: `http` asks a URL, `localfile` reads a file from the
+There are eight types: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 `grpc` calls a unary gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-and `sql` runs a statement on a database — see [Databases over SQL](SQL.md).
+`sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
+`dns` resolves a name — see [DNS](DNS.md) — and `tlscert` reads the
+certificates of a TLS handshake — see [TLS certificates](TLSCERT.md).
 A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
@@ -2135,7 +2137,9 @@ and `from` and `until`, which no other type accepts. `grpc` accepts
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
 `sshfile` accepts `path`, `timeout` and `param_<name>`, as `localfile` does,
 and requires a `target`, the host. `sql` accepts `timeout` and
-`param_<name>`, and requires a `target`, the database server.
+`param_<name>`, and requires a `target`, the database server. `dns` and
+`tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
+name to resolve and the server, `host:port`.
 
 `target`, `collector` and each of these parameters is given once. A second
 value gets a `400` naming the parameter rather than one of the two being
@@ -2185,12 +2189,13 @@ only a left-out type accepts is one no request type knows, ignored rather
 than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
-An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile` and
-`sql` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile`,
+`sql`, `dns` and `tlscert` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
 HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
-database drivers, about 6 MB for the three built in by default. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+database drivers, about 6 MB for the three built in by default; `dns` and
+`tlscert` need nothing outside the standard library. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2589,7 +2594,7 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile, sql, sshfile`. And a boolean is `true` or
+  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. And a boolean is `true` or
   `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label

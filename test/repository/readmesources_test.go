@@ -21,6 +21,8 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"localfile": {"a file", "local files"},
 	"sshfile":   {"another host", "over SSH"},
 	"sql":       {"SQL database", "SQL databases"},
+	"dns":       {"DNS name", "DNS records"},
+	"tlscert":   {"TLS certificate", "TLS certificates"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

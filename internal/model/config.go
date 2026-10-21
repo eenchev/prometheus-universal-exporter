@@ -260,7 +260,17 @@ type RequestConfig struct {
 	ServiceName string            `yaml:"service_name,omitempty"`
 	MaxRows     int               `yaml:"max_rows,omitempty"`
 	Connections *SQLConnections   `yaml:"connections,omitempty"`
+	// RecordType, Server and Transport belong to the dns type: the record
+	// type asked for, A when left out; the server asked, host:port, the
+	// system's resolver when left out; and udp or tcp (fetch/requesttype_dns.go).
+	// Left out of a collector written as YAML when empty, as the sql keys.
+	RecordType string `yaml:"record_type,omitempty"`
+	Server     string `yaml:"server,omitempty"`
+	Transport  string `yaml:"transport,omitempty"`
 }
+
+// DNSRecordTypes are the values of a dns collector's request.record_type.
+var DNSRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how

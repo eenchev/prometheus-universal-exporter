@@ -258,6 +258,11 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
+// jsonAnswerTypes are the request types whose answer is a JSON document the
+// exporter makes, so their decoder is json and their transform one that
+// reads JSON.
+var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert}
+
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
 // unknown transform and an unknown decoder, and infers the decoder a transform
 // implies.
@@ -285,18 +290,19 @@ func normalizeFormats(x *model.Collector) error {
 		// json reads the answer as it came.
 		x.Decoder.Type = "graphite"
 	}
-	if x.Request.Type == fetch.RequestTypeGRPC {
-		// A call is answered as JSON, whatever else its decoder could be.
+	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
+		// A grpc call, a dns lookup and a tlscert handshake are answered as
+		// JSON, whatever else their decoder could be.
 		switch x.Decoder.Type {
 		case "auto", "json":
 			x.Decoder.Type = "json"
 		default:
-			return fmt.Errorf("collector %q decodes with %s, but a grpc collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type)
+			return fmt.Errorf("collector %q decodes with %s, but a %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, x.Request.Type)
 		}
 		switch x.Transform.Type {
 		case "jq", "yq", "python":
 		default:
-			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a grpc call is answered with; use jq, yq or python", x.Name, x.Transform.Type)
+			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, x.Request.Type)
 		}
 	}
 	if x.Request.Pagination != nil {

@@ -99,6 +99,13 @@ func targetHint(c *model.Collector, required bool) string {
 		if c.Request.Driver == fetch.SQLDriverSnowflake {
 			hint = "the Snowflake account identifier"
 		}
+	case fetch.RequestTypeDNS:
+		hint = "the name to resolve"
+		if c.Request.RecordType == "PTR" {
+			hint = "the IP address to resolve"
+		}
+	case fetch.RequestTypeTLSCert:
+		hint = "host or host:port"
 	}
 	if !required {
 		hint += " (optional)"

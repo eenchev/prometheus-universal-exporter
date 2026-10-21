@@ -764,7 +764,9 @@ rather than silently changing behaviour.
 Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
-`graphite`, `grpc`, [`sshfile`](SSHFILE.md) and [`sql`](SQL.md#the-target) collectors:
+`graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target) and
+[`tlscert`](TLSCERT.md) collectors, and which names a [`dns`](DNS.md#target-lists)
+collector may resolve, matched by name alone:
 
 ```yaml
 request:
@@ -780,7 +782,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile` and `sql` collector refuses the cloud metadata
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
 and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
 credentials of the machine the exporter runs on, to whoever can name it as a
@@ -1205,6 +1207,10 @@ refused.
 A client certificate needs both `cert_file` and `key_file`; one without the
 other stops the exporter at startup. The files themselves are read at the first
 request, and again when they change, so a Secret mounted later is picked up.
+
+A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
+code, but for `insecure_skip_verify`: it reports a chain that does not
+verify rather than refusing it.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

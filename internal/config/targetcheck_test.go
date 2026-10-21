@@ -183,7 +183,8 @@ func checkCorpusFile(r *rand.Rand, cfg *model.Config) *model.StaticTargetFile {
 		case pick < 10 && len(cfg.Collectors) > 0:
 			t.Collector = cfg.Collectors[r.IntN(len(cfg.Collectors))].Name
 		}
-		t.Target = oneOf(r, "http://target.invalid:8080", "http://target.invalid:8080", "target.invalid:9090", "target.invalid:9090", "/srv/metrics/a.txt", "", "::")
+		// A name alone is the only target of these a dns collector takes.
+		t.Target = oneOf(r, "http://target.invalid:8080", "http://target.invalid:8080", "target.invalid:9090", "target.invalid:9090", "target.invalid", "target.invalid", "/srv/metrics/a.txt", "", "::")
 		if r.IntN(8) == 0 {
 			t.Request.Method = "POST"
 		}

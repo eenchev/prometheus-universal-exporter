@@ -991,7 +991,7 @@
                 }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile and docs/SQL.md for sql.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns and docs/TLSCERT.md for tlscert.",
             "properties": {
               "accept_codes": {
                 "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
@@ -1024,7 +1024,7 @@
                 "type": "array"
               },
               "allowed_targets": {
-                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile and sql.",
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql and tlscert; dns matches its names by name alone, and a PTR target by address.",
                 "items": {
                   "minLength": 1,
                   "not": {
@@ -1658,6 +1658,11 @@
                 },
                 "type": "object"
               },
+              "record_type": {
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "type": "string"
+              },
               "redirect_trusted_hosts": {
                 "description": "http and graphite: the hosts, besides the origin the request is made to, that a followed redirect may carry the collector's headers, credentials and request body to, and present its TLS client certificate to: host names, globs such as *.example.com, whose star matches dots too, and single IP addresses, each trusted on every port; \"*\" trusts every host. Matched against the host the redirect names as it is written there, which is never looked up: a final dot is part of the name, and an internationalised name is listed, and matched, in its xn-- form. No probe parameter sets it.",
                 "items": {
@@ -1711,6 +1716,18 @@
                 "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md.",
                 "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
+              },
+              "server": {
+                "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               },
               "service_name": {
                 "description": "sql, required for the oracle driver and for no other: the service of the database.",
@@ -1786,15 +1803,26 @@
                 },
                 "type": "object"
               },
+              "transport": {
+                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone.",
+                "enum": [
+                  "udp",
+                  "tcp",
+                  ""
+                ],
+                "type": "string"
+              },
               "type": {
                 "description": "Required. How the collector reaches its data.",
                 "enum": [
+                  "dns",
                   "graphite",
                   "grpc",
                   "http",
                   "localfile",
                   "sql",
-                  "sshfile"
+                  "sshfile",
+                  "tlscert"
                 ],
                 "type": "string"
               },

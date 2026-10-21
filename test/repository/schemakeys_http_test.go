@@ -265,7 +265,9 @@ func httpSchemaKeys() []schemaKey {
 		logged := func(lines ...string) string {
 			var block strings.Builder
 			for _, line := range lines {
-				block.WriteString(indent + line + "\n")
+				block.WriteString(indent)
+				block.WriteString(line)
+				block.WriteByte('\n')
 			}
 			return strings.Replace(document, at, block.String(), 1)
 		}

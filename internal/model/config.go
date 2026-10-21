@@ -569,7 +569,7 @@ func (l LabelRule) Static() bool { return l.Expression == "" }
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite"}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini"}
 
 // TransformTypes are the values of transform.type, which a collector must set.
 // Validation and the JSON Schema both read this list, and a test keeps the

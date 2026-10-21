@@ -1733,6 +1733,10 @@ html
 prometheus
 text
 graphite
+ndjson
+logfmt
+toml
+ini
 auto
 ```
 
@@ -1786,8 +1790,8 @@ return a clear transform error. An explicit decoder remains available for
 ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
-by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml` and
-`graphite`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
+`graphite`, `ndjson`, `logfmt`, `toml` and `ini`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -1821,7 +1825,13 @@ taken for JSON when it is one JSON value none of whose numbers lies beyond a
 taken for JSON MUST be read once, the decoder returning what the detection
 made of it rather than reading the body a second time. A local file ending
 in `.graphite` or `.carbon` MUST be given the Content-Type `text/x-graphite`,
-which MUST select the `graphite` decoder. Such a
+which MUST select the `graphite` decoder; one ending in `.ndjson` or `.jsonl`
+MUST be given `application/x-ndjson`, and one ending in `.toml`
+`application/toml`. `application/x-ndjson` and `application/jsonl` MUST
+select the `ndjson` decoder and `application/toml` the `toml` decoder. No
+content MUST be taken for NDJSON, logfmt, TOML or INI, and no Content-Type or
+extension for logfmt or INI: those two MUST be read only by an explicit
+`decoder.type`. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1834,6 +1844,69 @@ headerless response. Omitting response configuration MUST NOT weaken validation:
 decode failures and transform/input incompatibilities remain collector-level
 errors controlled by `error_handling`; `metric.error_mode` applies after a
 response has been decoded and an individual metric is being extracted.
+
+### 6.0a NDJSON, logfmt, TOML and INI
+
+The `ndjson`, `logfmt`, `toml` and `ini` decoders MUST make the values the
+`json` decoder makes — mappings with text keys, lists, text, whole numbers,
+floats, booleans and null — so that `jq` and `yq` read them as JSON, and a
+Python script is handed them as it is handed JSON (§ 16). Each MUST fail the
+decode over what it cannot read, naming the line, as a position that is no
+part of what the failure is recognised by, and MUST quote no more of a value
+of the body than its first 64 bytes and its length, as every decoder's error
+does (§ 6.1a).
+
+- `ndjson`: the document MUST be the list of the values of the body's lines,
+  in their order, a line being what lies between two line feeds. A line of
+  nothing but JSON whitespace MUST be passed over, and a body of no value
+  MUST be the empty list. Each other line MUST be one value read as the
+  `json` decoder reads a body, its numbers made alike, with nothing but
+  whitespace after it on the line; a line that is no value, that goes on
+  after its value, or that ends inside it MUST fail the decode naming the
+  line, and the column where there is one, counted in the whole body. The
+  list MUST count as the outermost level, so a line's value nests
+  `MaxDepth - 1` deep at most.
+- `logfmt`: the document MUST be the list of the records, one for each line
+  that holds a pair, in their order. A line MUST be read as
+  `github.com/go-logfmt/logfmt` reads one: pairs separated by bytes up to and
+  including the space; a key a run of bytes above the space other than `=`
+  and `"`; a value a run of the same bytes, or a double-quoted string with the
+  escapes of a JSON string and no raw control character. A record MUST map
+  each key to its value as text, a key written without `=` to null and a key
+  written with `=` and nothing after it to the empty string. Of a key written
+  twice on one line the later MUST be kept. A line of nothing but blanks and
+  control characters MUST be passed over; any other mistake MUST fail the
+  decode naming the line, the column and the byte, and no more of the body.
+  The exporter MUST NOT depend on a logfmt module for this.
+- `toml`: the document MUST be read with `github.com/BurntSushi/toml`:
+  tables as mappings, arrays and arrays of tables as lists, integers as whole
+  numbers, floats as floats, `nan` and `inf` included, and a date or time as
+  its text — an offset date-time in RFC 3339 with the fraction it was written
+  with, a local date-time as `YYYY-MM-DDTHH:MM:SS` with its fraction, a local
+  date as `YYYY-MM-DD`, a local time as `HH:MM:SS` with its fraction. Before
+  the library reads the body, a body whose arrays and inline tables nest
+  deeper than `MaxDepth`, or one with a value named by more than 16 parts,
+  counting those of its table header, of its dotted key and of the keys of
+  the inline tables around it, MUST be refused naming the line: the library
+  parses nested brackets by recursion and costs the square of a key's parts
+  for each key. A document whose tables and arrays together nest deeper than
+  `MaxDepth` MUST be refused too. An error of the library MUST be its message
+  after the line it names, without the last key it read, and a message past
+  256 bytes MUST be cut there with its length.
+- `ini`: the document MUST be a mapping of each section's name to the mapping
+  of its keys to their values, as text, and of each key written before the
+  first section to its value. A line MUST be read without the spaces, tabs
+  and carriage returns around it; an empty line and one starting with `;` or
+  `#` MUST be passed over, a comment being only a whole line. `[name]` MUST
+  start a section, may be followed by a comment and nothing else, and MUST
+  name it by the text between the brackets without the blanks around it,
+  which MUST NOT be empty; a dotted name MUST be one name. A section written
+  twice MUST be one section. Any other line MUST be a key and its value split
+  at the first `=` or `:`, each without the blanks around it; the key MUST NOT
+  be empty, and the value MUST be taken as written, quotes included. Of a key
+  written twice in one section the later MUST be kept. A key before the first
+  section and a section of the same name MUST fail the decode naming both
+  lines, and so MUST any line that is none of these.
 
 ### 6.1 Auto detection
 
@@ -1856,6 +1929,9 @@ text/html                 -> html
 text/plain                -> text
 text/plain; version=0.0.4 -> potentially prometheus
 application/openmetrics-text -> prometheus, read as OpenMetrics (§ 14.1)
+application/x-ndjson      -> ndjson
+application/jsonl         -> ndjson
+application/toml          -> toml
 ```
 
 The type MUST be compared without its parameters and in any case; a type
@@ -3426,8 +3502,8 @@ exposes them.
 any case, joined by `, `, as jq's `$headers` has them, and `default` when the
 response has none.
 
-`data` MUST be the decoded response: the document for JSON, YAML and
-graphite; the rows for CSV, dicts by header or lists without one; the body as
+`data` MUST be the decoded response: the document for JSON, YAML,
+graphite, NDJSON, logfmt, TOML and INI; the rows for CSV, dicts by header or lists without one; the body as
 a string for text, HTML and XML; and, for Prometheus exposition,
 `{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
 `labels`, and `value` — or a histogram's `buckets` (`le`, `count`), `sum` and

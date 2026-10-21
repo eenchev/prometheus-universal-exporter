@@ -139,7 +139,10 @@ The exporter's direct dependencies are `gojq` (jq and yq expressions),
 (CSS selectors) and `andybalholm/cascadia`, the selector compiler goquery uses
 underneath, which the exporter calls itself to compile each CSS selector once
 and keep it (`internal/expr/exprcache.go`), `gopkg.in/yaml.v3`,
-`golang.org/x/text` for its character encodings (`encoding/htmlindex`,
+`github.com/BurntSushi/toml`, which the `toml` decoder reads a document with
+(`internal/decode/toml.go`, see [NDJSON, logfmt, TOML and
+INI](CONFIGURATION.md#ndjson-logfmt-toml-and-ini)), and which `go.mod`
+already required as another module's dependency; `golang.org/x/text` for its character encodings (`encoding/htmlindex`,
 `encoding/unicode`), which convert a response in an encoding other than UTF-8
 to UTF-8 (`internal/decode/textencoding.go`, see [Character
 encodings](CONFIGURATION.md#character-encodings)), and `golang.org/x/net` for
@@ -149,7 +152,11 @@ build for goquery's HTML parser. The Prometheus text format is parsed by
 the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module
 brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
 for one function, and a test fails if `go.mod` requires `prometheus/common`,
-`client_model` or `goautoneg` again.
+`client_model` or `goautoneg` again. The `ndjson`, `logfmt` and `ini`
+decoders need no module: NDJSON is read by the exporter's own JSON decoder,
+line by line, and logfmt and INI by small parsers of its own
+(`internal/decode/logfmt.go`, `ini.go`), the dialects of INI agreeing on too
+little for a module to settle.
 
 The [`grpc`](GRPC.md) request type has three direct dependencies of its own:
 `google.golang.org/grpc`, which also carries the reflection client and the

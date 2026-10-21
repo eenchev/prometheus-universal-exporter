@@ -375,6 +375,10 @@
                   "prometheus",
                   "text",
                   "graphite",
+                  "ndjson",
+                  "logfmt",
+                  "toml",
+                  "ini",
                   ""
                 ],
                 "type": "string"

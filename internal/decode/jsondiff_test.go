@@ -434,7 +434,7 @@ func TestJSONDecoderErrorsSayWhere(t *testing.T) {
 		`{"a":"b`:                       `JSON decode: unexpected EOF`,
 		"":                              `JSON decode: EOF`,
 		" \n":                           `JSON decode: EOF`,
-		"{\"a\":1}\n{\"a\":2}":          `JSON decode: trailing data after the JSON value (NDJSON, one value per line, is not supported)`,
+		"{\"a\":1}\n{\"a\":2}":          `JSON decode: trailing data after the JSON value (for NDJSON, one value on each line, set decoder.type: ndjson)`,
 		"\xef\xbb\xbf{\"a\": 1,\n\"b\"": `JSON decode: unexpected EOF`,
 	} {
 		if _, err := decodeAs(t, "json", "", body); err == nil || err.Error() != want {

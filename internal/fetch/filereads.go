@@ -299,8 +299,10 @@ func fileKind(mode fs.FileMode) string {
 // extension implies. .prom is the textfile collector's Prometheus text
 // format, and .graphite and .carbon carbon's plaintext lines, which the
 // graphite decoder reads (decode/graphite.go); text/x-graphite is the
-// exporter's own name for them, since they have no registered type. Anything
-// else is detected from its content.
+// exporter's own name for them, since they have no registered type. .ndjson
+// and .jsonl are JSON Lines, and .toml TOML; .ini and logfmt have no type
+// that names them, and are read by an explicit decoder.type. Anything else
+// is detected from its content.
 func localFileContentType(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".json":
@@ -317,6 +319,10 @@ func localFileContentType(name string) string {
 		return "text/plain; version=0.0.4"
 	case ".graphite", ".carbon":
 		return GraphiteContentType
+	case ".ndjson", ".jsonl":
+		return "application/x-ndjson"
+	case ".toml":
+		return "application/toml"
 	}
 	return ""
 }

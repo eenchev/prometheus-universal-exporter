@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* Decoders for JSON, YAML, XML, CSV, HTML, plain text and Prometheus exposition, with auto-detection
+* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
 * Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
 * Declared metrics with types, descriptions, explicit labels and per-metric error policy

@@ -275,8 +275,8 @@ func TestDetectionTakesForJSONWhatItTook(t *testing.T) {
 		{`{"v":1`, "", "text", ""},
 		{`{"v":1`, "application/json", "", "JSON decode: unexpected EOF"},
 		{"\f" + `{"v":1}`, "", "", `JSON decode: invalid character '\f' looking for beginning of value, at line 1, column 1`},
-		{`{"v":1}` + "\u00a0", "", "", "JSON decode: trailing data after the JSON value (NDJSON, one value per line, is not supported)"},
-		{`[1]` + "\v", "application/octet-stream", "", "JSON decode: trailing data after the JSON value (NDJSON, one value per line, is not supported)"},
+		{`{"v":1}` + "\u00a0", "", "", "JSON decode: trailing data after the JSON value (for NDJSON, one value on each line, set decoder.type: ndjson)"},
+		{`[1]` + "\v", "application/octet-stream", "", "JSON decode: trailing data after the JSON value (for NDJSON, one value on each line, set decoder.type: ndjson)"},
 	} {
 		d, err := Decode(sniffResponse([]byte(tc.body), tc.contentType), jq)
 		switch {

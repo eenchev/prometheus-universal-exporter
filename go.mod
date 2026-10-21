@@ -3,6 +3,7 @@ module github.com/eenchev/prometheus-universal-exporter
 go 1.26.0
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/andybalholm/cascadia v1.3.5
@@ -33,7 +34,6 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.0.0 // indirect
-	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/ClickHouse/ch-go v0.74.0 // indirect
 	github.com/andybalholm/brotli v1.2.6 // indirect
 	github.com/apache/arrow-go/v18 v18.4.0 // indirect

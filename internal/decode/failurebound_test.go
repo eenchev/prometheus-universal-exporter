@@ -112,6 +112,10 @@ func TestADecodeErrorWithinTheBoundIsTheDecodersOwn(t *testing.T) {
 		{"prometheus", "# TYPE m histogram\nm_sum{a=\"b\"} 1\nm_sum{a=\"b\"} 1\n", model.Collector{}}, {"prometheus", "a 1\nb 2\nc 3\n", limited},
 		{"graphite", "a b c d e\n", model.Collector{}}, {"graphite", "a nope 1\n", model.Collector{}}, {"graphite", "a;b 1 1\n", model.Collector{}},
 		{"graphite", `[{"target": "t", "datapoints": [["x", 1]]}]`, model.Collector{}}, {"graphite", `[{"target": "t", "datapoints": [[1]]}]`, model.Collector{}},
+		{"ndjson", "{\"a\": nope}\n", model.Collector{}}, {"ndjson", "1 2\n", model.Collector{}}, {"ndjson", "{\n", model.Collector{}},
+		{"logfmt", "a=\"b\n", model.Collector{}}, {"logfmt", "=1\n", model.Collector{}}, {"logfmt", "a=\"\\q\"\n", model.Collector{}},
+		{"toml", "a = nope\n", model.Collector{}}, {"toml", "a = 1\na = 2\n", model.Collector{}}, {"toml", strings.Repeat("a.", 20) + "a = 1\n", model.Collector{}},
+		{"ini", "[s\n", model.Collector{}}, {"ini", "[s]\nx\n", model.Collector{}}, {"ini", "s=1\n[s]\n", model.Collector{}},
 		{"nope", "x", model.Collector{}},
 	} {
 		err, made := decodeFailure(t, tc.kind, tc.body, tc.c)

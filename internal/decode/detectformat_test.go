@@ -32,6 +32,9 @@ func TestTheDecoderAContentTypeNames(t *testing.T) {
 		"application/openmetrics-text; version=1.0.0; charset=utf-8": "prometheus",
 		"text/plain; version=0.0.4":                                  "prometheus",
 		fetch.GraphiteContentType:                                    "graphite",
+		"application/x-ndjson":                                       "ndjson",
+		"application/jsonl; charset=utf-8":                           "ndjson",
+		"Application/TOML":                                           "toml",
 
 		"text/plain":                  "text",
 		"application/csv":             "text",

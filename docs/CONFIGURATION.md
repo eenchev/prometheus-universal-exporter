@@ -49,9 +49,15 @@ What a response says it is, with the decoder left to it:
 | `text/html` | `.html`, `.htm` | `html` |
 | `application/openmetrics-text`, `text/plain; version=0.0.4` | `.prom` | `prometheus` |
 | `text/x-graphite` | `.graphite`, `.carbon` | `graphite` |
+| `application/x-ndjson`, `application/jsonl` | `.ndjson`, `.jsonl` | `ndjson` |
+| `application/toml` | `.toml` | `toml` |
 | any other, and none | any other, and none | by the content |
 
 The type is read without its parameters and in any case, as the extension is.
+No content is taken for NDJSON, logfmt, TOML or INI: an NDJSON body sent
+without its type is one JSON value followed by more, which is not JSON, and
+is text; logfmt and INI have no type, and `.ini` names no decoder, so those
+two are read only with `decoder.type: logfmt` or `ini`.
 Nothing but `text/csv` and `.csv` says CSV, and no content does: a body sent
 as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
 or `.txt`, is text, so a `python` script or a pre-script of a `jq` collector
@@ -62,7 +68,7 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
@@ -102,15 +108,19 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite` and `auto`. The `graphite` decoder reads
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` and
+`auto`. The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
-see [Graphite](GRAPHITE.md). Every collector sets `transform.type`, one of
+see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
+Lines, key=value log lines, TOML and INI files into a document jq, yq and
+Python read as they read JSON; see [NDJSON, logfmt, TOML and
+INI](#ndjson-logfmt-toml-and-ini). Every collector sets `transform.type`, one of
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
 no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
 for yq-compatible transformations). A JSON body is one value and a YAML body
 one document: NDJSON, or anything else after the JSON value but whitespace,
-fails the scrape saying so, and so does a second YAML document after `---`
+fails the scrape saying so (`decoder.type: ndjson` reads NDJSON), and so does a second YAML document after `---`
 (a leading `---`, and a trailing one with nothing after it, are fine), rather
 than everything after the first being dropped unseen. A key written twice in
 one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
@@ -187,6 +197,102 @@ log and in a debug report alike ([Logging](LOGGING.md#repeated-failures)): a
 jq rule that raises `error(.message)`, a script that raises an exception with
 its data, a redirect to a URL of a megabyte and a gRPC status message of ten
 fail in 2,000 bytes at most, where the error was as long as what it quoted.
+
+### NDJSON, logfmt, TOML and INI
+
+These four decoders make the values the `json` decoder makes — mappings,
+lists, text, numbers, booleans and null — so a `jq` or `yq` rule reads them
+as it reads JSON, and a [Python script](PYTHON.md#what-data-is) is handed
+them as it is handed JSON. No other transform reads them, and a collector
+that names one of them with another transform is refused when the
+configuration loads. Each fails the scrape in the `decode` stage over what it
+cannot read, naming the line, and the column where there is one, and quoting
+no more of the body than the start of a value, as every decoder does.
+
+**`ndjson`** reads newline-delimited JSON, also called JSON Lines: one JSON
+value on each line. The document is the list of the values, in the order of
+their lines, so `items: '.[]'` makes a series of each record. Blank lines are
+passed over, a carriage return before a line feed too, and a body without a
+value is the empty list. Each line is read as the `json` decoder reads a
+body, its numbers made the same way; a line that is no JSON value, that goes
+on after its value, or that ends inside it, as a pretty-printed value does,
+fails the scrape: `NDJSON decode: line 2, column 9: trailing data after the
+JSON value; NDJSON holds one value on each line`. The list is the outermost
+level of the document, so a line's value nests 9,999 deep at most.
+
+```yaml
+decoder:
+  type: ndjson
+transform:
+  type: jq
+metrics:
+  - name: queue_depth
+    items: '.[]'
+    expression: .depth
+    labels:
+      - name: queue
+        expression: .name
+```
+
+**`logfmt`** reads the `key=value` lines of Heroku's logs and of the Go
+loggers that write them, as `go-logfmt` reads them. The document is the list
+of the records, one for each line that holds a pair, each a mapping of its
+keys to their values as text — which a rule reads as a number when it is one
+([What counts as a number](#what-counts-as-a-number)). A value is a run of
+bytes without blanks, `=` and `"`, or a quoted string with the escapes of a
+JSON string (`msg="GET \"/\""`). A key written alone (`cached`) is null, so
+`has("cached")` tells it from a key the line does not write; `key=` is the
+empty string. Of a key written twice on one line the later is kept, as a JSON
+object keeps its later member: a logger may add a key a caller already gave,
+and refusing the body over it would lose every other record. Blank lines are
+passed over; anything else fails the scrape, naming the line, the column and
+the byte: `logfmt decode: line 3, column 16: unexpected '=' in a value; quote
+a value that holds it`.
+
+**`toml`** reads a TOML document with `github.com/BurntSushi/toml`. Tables
+are mappings, arrays and arrays of tables lists, integers and floats numbers
+(`nan` and `inf` are NaN and +Inf), and a date or a time, which JSON has not,
+is its text: an offset date-time in RFC 3339 with the fraction it was written
+with (`1979-05-27T00:32:00.5-07:00`), a local date-time as
+`1979-05-27T07:32:00` (with a `T` where it was written with a space), a local
+date as `1979-05-27` and a local time as `07:32:00`, which `time_format` reads
+as written. An error is the library's, after the line it names
+(`TOML decode: line 2: Key 'a' has already been defined.`), its message cut
+past 256 bytes with its length, as a quoted token can make it any length.
+Two bounds are kept before the library reads the body, since it keeps none
+and a few bytes can cost it far more than their size: arrays and inline
+tables nest 10,000 deep at most, as every decoder's document does; and a
+value may be named by no more than 16 parts, counting those of its `[table]`
+header, of its dotted key and of the keys of the inline tables around it
+(`[a.b]` then `c.d = { e = 1 }` names `e` by 5: `a.b.c.d.e`). The
+library looks a key up from the root for each of its parts, so a key costs
+the square of its parts: a single key of 10,000 held it for seconds. Within
+the bound, a document costs less than ten times what a flat one of its size
+does — a mebibyte of keys of 16 parts each decodes in about a second — and a
+real document names its values by a few. Past it, the scrape fails:
+`TOML decode: line 1: a value is named by more than 16 parts, ...`.
+
+**`ini`** reads an INI file with a parser of the exporter's own, since the
+dialects agree on little more than this. The document is a mapping of each
+section's name to the mapping of its keys to their values, as text, and of
+each key written before the first section to its value: `.pool.active` and
+`.uptime`.
+
+- `[name]` starts a section, and may be followed by a comment. A dotted name
+  is one name, and no path: `[db.primary]` is read as `.["db.primary"]`. A
+  section written twice is one section, its keys gathered from both.
+- Any other line is a key and its value, split at the first `=` or `:`, each
+  without the blanks around it. The value may be empty, and is taken as
+  written, quotes included; it does not go on to the next line.
+- A comment is a whole line starting with `;` or `#`, so a value may hold
+  either, as a URL does. Blank lines are passed over.
+- Of a key written twice in one section the later is kept, since an INI file
+  is often a defaults file with lines appended to override it. Keys and names
+  keep their case.
+- A key before the first section and a section of the same name would be one
+  member of the document, so the scrape fails naming both lines, as it does
+  over a line that is none of these: `INI decode: line 2: neither a section,
+  a key = value nor a comment`.
 
 ### Character encodings
 

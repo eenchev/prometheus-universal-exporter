@@ -194,6 +194,40 @@ type requestPolicy struct {
 	// filled in: max_pages above all, which bounds what one trip asks of
 	// the target.
 	Pagination *model.PaginationConfig `json:"pagination,omitempty"`
+	// Login is request.login as it will be applied: where it goes, where
+	// the token is read from and how it is sent, its header and prefix
+	// filled in, and the files its secrets are read from, never what they
+	// hold; a field or endpoint parameter whose name reads as a
+	// credential's is shown without its value.
+	Login *model.LoginConfig `json:"login,omitempty"`
+}
+
+// shownLogin is l as --dry-run shows it (requestPolicy.Login).
+func shownLogin(l *model.LoginConfig) *model.LoginConfig {
+	if l == nil {
+		return nil
+	}
+	shown := *l
+	masked := func(values map[string]string) map[string]string {
+		if values == nil {
+			return nil
+		}
+		out := make(map[string]string, len(values))
+		for name, value := range values {
+			if fetch.CredentialName(name) {
+				value = fetch.Redacted
+			}
+			out[name] = value
+		}
+		return out
+	}
+	shown.Fields, shown.EndpointParams = masked(l.Fields), masked(l.EndpointParams)
+	shown.Header = fetch.LoginHeader(l)
+	if l.TokenCookie == "" {
+		prefix := fetch.LoginPrefix(l)
+		shown.Prefix = &prefix
+	}
+	return &shown
 }
 
 // requestPolicies are the policies of the collectors that set one, by name.
@@ -201,11 +235,11 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	out := map[string]requestPolicy{}
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
-		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination}
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination, Login: shownLogin(c.Request.Login)}
 		if retried := c.Request.Retry.Statuses; retried != nil {
 			p.RetryStatuses = &retried
 		}
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil {
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.Login != nil {
 			out[c.Name] = p
 		}
 	}

@@ -56,6 +56,9 @@ func validateHTTPRequest(x *model.Collector) error {
 	if err := checkTLSSettings(x.Request.TLS); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
+	if err := validateCollectorLogin(x); err != nil {
+		return err
+	}
 	if err := checkForwardHeaders(x.Request.ForwardHeaders); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}

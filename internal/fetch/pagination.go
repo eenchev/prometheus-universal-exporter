@@ -470,38 +470,6 @@ func nextValue(next string, response *HTTPResponse, page any) (string, error) {
 	return "", fmt.Errorf("request.pagination.next %q gave %s; it must give text, a number, or null, false or \"\" when there is no next page", next, jsonKind(first))
 }
 
-// jqHeaders are a page's headers as jq's $headers has them: by lower-case
-// name, each with its values joined by ", ", as the transform has them.
-func jqHeaders(h http.Header) any {
-	if h == nil {
-		return nil
-	}
-	headers := make(map[string]any, len(h))
-	for name, values := range h {
-		headers[strings.ToLower(name)] = strings.Join(values, ", ")
-	}
-	return headers
-}
-
-// jsonKind names the kind of a decoded JSON value for a message.
-func jsonKind(v any) string {
-	switch v.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return "a boolean"
-	case string:
-		return "text"
-	case json.Number, int, float64, *big.Int:
-		return "a number"
-	case []any:
-		return "an array"
-	case map[string]any:
-		return "an object"
-	}
-	return fmt.Sprintf("a %T", v)
-}
-
 // resolvePageURL is the URL a page names, resolved against the URL of the
 // page that names it, as a link is (RFC 3986).
 func resolvePageURL(pageURL *url.URL, raw, from string) (*url.URL, error) {

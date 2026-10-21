@@ -102,6 +102,9 @@ type TargetRequestConfig struct {
 	// Connections replaces, key by key, a sql collector's
 	// request.connections for this target.
 	Connections *SQLConnections `yaml:"connections,omitempty"`
+	// Login replaces an http or graphite collector's request.login for
+	// this target.
+	Login *LoginConfig `yaml:"login,omitempty"`
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets

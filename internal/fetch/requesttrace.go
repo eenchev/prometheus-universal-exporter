@@ -31,6 +31,9 @@ type TracedRequest struct {
 	Header http.Header
 	// Redirect is set on a request that followed a redirect.
 	Redirect bool
+	// Login is set on a request request.login made for its token, whose
+	// body, holding the login's secrets, is never recorded (login.go).
+	Login bool
 	// Page is the page of request.pagination the request asked for, from
 	// 1; 0 without request.pagination.
 	Page int

@@ -7,7 +7,10 @@ same request with a URL built for the Graphite render API
 ([Graphite](GRAPHITE.md)), not the scrape Prometheus makes of the exporter. A
 `grpc` collector makes a gRPC call instead, with rules of its own, described in
 [gRPC](GRPC.md); its credentials, TLS keys and probe placeholders work as
-they do here. Each setting
+they do here. A token the target hands out at a login of its own, or an
+OAuth 2.0 client credentials token, is fetched with `request.login`,
+described with the other target credentials in
+[Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). Each setting
 lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
@@ -964,6 +967,9 @@ connection that breaks while the body is being read — reset, or closed before
 the length it promised — counts as a transport failure and is retried too,
 unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debug-probes)
 shows such an attempt as its status followed by `then the body broke off`.
+A `401` to a collector that [logs in](AUTHENTICATION.md#logging-in-to-a-target)
+is sent once more with the token of a new login, whatever the method; that
+is no attempt of `retry.attempts`, and is made within the probe's deadline.
 
 Only requests whose method is idempotent are retried — `GET`, `HEAD`,
 `OPTIONS`, `TRACE`, `PUT` and `DELETE` — since sending a `POST` or `PATCH`

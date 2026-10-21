@@ -156,6 +156,10 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_sql_limit_waits_total", model.CounterMetricType, "Scrapes of this sql collector that waited for a connection at request.connections.max_per_target before they had one.", nil},
 	{"http_exporter_sql_limit_failures_total", model.CounterMetricType, "Scrapes of this sql collector that failed at request.connections.max_per_target, no connection having been free before their deadline, or at max_targets, every target being in use.", nil},
 	{"http_exporter_sql_rows", model.GaugeMetricType, "Rows the last statement of this sql collector that succeeded returned, whichever target it ran on; 0 before one has.", nil},
+	// The tokens request.login keeps are the collector's, shared by its
+	// requests, so its logins have no per-request value either.
+	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401; 0 without request.login.", nil},
+	{"http_exporter_login_failures_total", model.CounterMetricType, "Logins of this http or graphite collector that failed: the scrapes that needed their token failed in the login stage, unless the token kept was still valid and was used instead.", nil},
 }
 
 // requestTypeFamilies are the families only the collectors of some request
@@ -180,6 +184,8 @@ var requestTypeFamilies = map[string][]string{
 	"http_exporter_sql_limit_waits_total":              {"sql"},
 	"http_exporter_sql_limit_failures_total":           {"sql"},
 	"http_exporter_sql_rows":                           {"sql"},
+	"http_exporter_logins_total":                       {"http", "graphite"},
+	"http_exporter_login_failures_total":               {"http", "graphite"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -381,6 +387,14 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		},
 		"http_exporter_sql_limit_failures_total": func(name string) float64 {
 			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(failed)
+		},
+		"http_exporter_logins_total": func(name string) float64 {
+			made, _ := fetch.CollectorLogins(requestTypes[name], name)
+			return float64(made)
+		},
+		"http_exporter_login_failures_total": func(name string) float64 {
+			_, failed := fetch.CollectorLogins(requestTypes[name], name)
 			return float64(failed)
 		},
 		"http_exporter_sql_rows": func(name string) float64 {

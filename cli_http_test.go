@@ -541,6 +541,36 @@ func TestDryRunReportsPagination(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.login as it will be applied, its
+// header and prefix filled in, the files its secrets are read from and
+// never what they hold, and a field whose name reads as a credential's
+// without its value; a missing secret file is a warning, and a login
+// startup refuses fails the check, as startup words it.
+func TestDryRunReportsALogin(t *testing.T) {
+	password := testutil.WriteFile(t, "password", "dry-run-secret")
+	logging := func(login string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: api\n    request:\n      type: http\n      login: "+login+"\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+logging("{type: json, url: /login, token: .t, fields: {tenant: acme, api_key: inline-key}, field_files: {password: "+password+", user: /nonexistent/user}}"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["api"].(map[string]any)
+	want := map[string]any{"type": "json", "url": "/login", "token": ".t", "header": "Authorization", "prefix": "Bearer ",
+		"fields": map[string]any{"tenant": "acme", "api_key": "<redacted>"}, "field_files": map[string]any{"password": password, "user": "/nonexistent/user"}}
+	if check.code != 0 || !reflect.DeepEqual(policy["login"], want) {
+		t.Fatalf("exit=%d, login %v\n%s", check.code, policy["login"], check.stdout)
+	}
+	if strings.Contains(check.stdout, "dry-run-secret") || strings.Contains(check.stdout, "inline-key") {
+		t.Errorf("the report holds a secret:\n%s", check.stdout)
+	}
+	if warnings, _ := check.result(t, "config").Details["warnings"].([]any); len(warnings) != 1 || !strings.Contains(fmt.Sprint(warnings[0]), `collector "api" request.login.field_files.user`) {
+		t.Errorf("warnings %v, want the missing user file", warnings)
+	}
+	out := runCheckCLI(t, "--config.file="+logging("{type: json, url: /login, field_files: {password: "+password+"}}"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "api" request.login sets 0 of token, token_header and token_cookie`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run takes a status of request.accept_status written as a number with
 // a point, an exponent or in hex, as startup does and as the schema an editor
 // checks the file against does, and lists it as the status it is; a number

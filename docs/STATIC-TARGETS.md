@@ -80,7 +80,14 @@ the target's scrape read from its file
 A target's own credential is sent instead of the collector's, whose
 `bearer_token_file` or `basic_auth_file` is then not read for that target: a
 collector's credential file that is missing fails only the targets that
-would have sent it.
+would have sent it. An `http` or `graphite` target may also set its own
+[`login`](AUTHENTICATION.md#logging-in-to-a-target), checked as a
+collector's is, which replaces the collector's for that target, and the
+collector's credential with it when both are sent in `Authorization`; a
+target that sets its own credential in the header the collector's login
+sends its token in makes no login. A target's `login` is part of the key
+its answers are cached under, so targets that log in differently share no
+answer.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the

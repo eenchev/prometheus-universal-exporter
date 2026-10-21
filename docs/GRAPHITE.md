@@ -62,7 +62,7 @@ is its host:
 | `until` | `now` | The end of the window. |
 | `path` | `/render` | Joined onto the target, for a Graphite served under a prefix or behind a proxy such as Grafana's. |
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
-| `headers`, credentials, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md). |
+| `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
 
 The probe's target is the Graphite server, and a query it carries is sent as
 written, before `query` and the type's own parameters — except a pair of it
@@ -310,6 +310,7 @@ the exporter on its interval. Its `target` is the Graphite server's URL, and
 under `request` it may set `path`, `timeout`, `insecure_skip_verify`,
 `follow_redirects`, `enable_http2`, `retry`, static `headers`, the credential
 keys (`basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`),
+its own [`login`](AUTHENTICATION.md#logging-in-to-a-target),
 its own [`accept_status`](REQUESTS.md#accepting-other-statuses), and its own
 `targets`, `from` and `until`, which replace the collector's:
 

@@ -405,7 +405,7 @@ func joinSchemaPath(path, key string) string {
 func configSchemaRules() map[string]map[string]any {
 	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
 	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
-	return map[string]map[string]any{
+	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
 		"": {
 			"anyOf": []any{
 				map[string]any{"required": []string{"collectors"}, "properties": map[string]any{"collectors": map[string]any{"minItems": 1}}},
@@ -618,7 +618,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].transform.exclude":   {"description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name."},
 		"collectors[].transform.exclude[]": filterEntry(),
 		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. Values may contain {{param_name}} placeholders, filled from the probe's parameters. See docs/CONFIGURATION.md#collector-wide-labels."},
-	}
+	})
 }
 
 // otlpSchemaRule is the rule of the otlp block: one that enabled switches on
@@ -917,7 +917,7 @@ func sqlRequired() map[string]any {
 
 // staticTargetsSchemaRules adds, by path, what the StaticTargetFile struct cannot say.
 func staticTargetsSchemaRules() map[string]map[string]any {
-	return map[string]map[string]any{
+	return withLoginRules("targets[].request", "http and graphite: replaces the collector's request.login for this target, as its own credential replaces the collector's. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
 		"": {
 			"required":    []string{"interval", "targets"},
 			"description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
@@ -972,5 +972,69 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.retry.non_idempotent":            {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                                    {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
 		"targets[].shard_key":                               {"description": "For the target allocator (pue-allocator): what it hashes to choose the replica that scrapes this target, in place of the target's name, so targets with one key share a replica. The exporter itself ignores it. See docs/ALLOCATOR.md."},
+	})
+}
+
+// withLoginRules adds to rules those of the login block under request, a
+// collector's or a static target's, as the exporter checks it
+// (fetch.validateLogin): type and url required; for json, exactly one of
+// token, token_header and token_cookie, and field_files; for oauth2,
+// client_secret_file and exactly one of client_id and client_id_file; no
+// key of the other kind; and neither header nor prefix beside token_cookie.
+// "" is a key left out, to both (writtenKey), but for prefix, where it is
+// the token sent alone.
+func withLoginRules(request, description string, rules map[string]map[string]any) map[string]map[string]any {
+	kind := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}}
 	}
+	none := func(keys ...string) map[string]any {
+		var written []any
+		for _, key := range keys {
+			written = append(written, writtenKey(key))
+		}
+		return map[string]any{"not": map[string]any{"anyOf": written}}
+	}
+	oneOf := func(keys ...string) map[string]any {
+		var written []any
+		for _, key := range keys {
+			written = append(written, writtenKey(key))
+		}
+		return map[string]any{"oneOf": written}
+	}
+	login := request + ".login"
+	rules[login] = map[string]any{
+		"description": description,
+		"allOf": []any{
+			writtenKey("type"),
+			writtenKey("url"),
+			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "scopes", "endpoint_params", "auth_style")}}},
+			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), writtenKey("client_secret_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in")}}},
+			// prefix written "" is a prefix of nothing, not one left out.
+			map[string]any{"if": writtenKey("token_cookie"), "then": map[string]any{"allOf": []any{none("header"), map[string]any{"not": map[string]any{"required": []string{"prefix"}}}}}},
+		},
+	}
+	for key, rule := range map[string]map[string]any{
+		"type":               {"enum": model.LoginTypes, "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4)."},
+		"url":                {"description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path such as /api/login resolved against the target, so each target is logged in to. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect."},
+		"fields":             {"description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant."},
+		"field_files":        {"description": "json: members of the JSON object posted, each read from its file at every login, such as {username: /var/run/secrets/login/username, password: /var/run/secrets/login/password}. Required: at least one. A field is in fields or here, not both."},
+		"token":              {"description": "json: the jq expression of the token in the answer's JSON body, such as .access_token, with $status and $headers as in a rule. Exactly one of token, token_header and token_cookie."},
+		"token_header":       {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "json: the header of the answer that holds the token, such as X-Subject-Token."},
+		"token_cookie":       {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "json: the cookie the answer sets that is the session, such as JSESSIONID; it is sent back in the Cookie header, and its Max-Age or Expires is its lifetime."},
+		"expires_in":         {"description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. Left out, or null, ttl applies."},
+		"client_id":          {"description": "oauth2: the client's id. Exactly one of client_id and client_id_file."},
+		"client_id_file":     {"description": "oauth2: the file holding the client's id, read at every login."},
+		"client_secret_file": {"description": "oauth2: required. The file holding the client's secret, read at every login."},
+		"scopes":             {"description": "oauth2: the scopes asked for, sent as the scope parameter."},
+		"scopes[]":           {"type": "string", "pattern": `^[^\s"\\]+$`},
+		"endpoint_params":    {"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{"grant_type", "scope", "client_id", "client_secret"}}}, "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id or client_secret, which the grant sets."},
+		"auth_style":         {"enum": optionalEnum(model.LoginAuthStyles), "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form."},
+		"ttl":                {"description": "How long a token is used when the answer does not say: no expires_in, an oauth2 answer without expires_in, a cookie without Max-Age or Expires, a token_header. Left out, such a token is used until the target answers 401."},
+		"header":             {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie."},
+		"prefix":             {"description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie."},
+		"tls":                {"description": "The login's own tls settings, for a login server whose certificate the collector's request.tls does not verify; left out, request.tls. Never what a probe or a static target changes of request.tls."},
+	} {
+		rules[login+"."+key] = rule
+	}
+	return rules
 }

@@ -61,8 +61,8 @@ import (
 //     a program run on the server, with the server's files and network;
 //   - a collector of another request type than http, whose type reads files,
 //     hosts or databases with the server's own keys and passwords, and an
-//     http collector that names a file — basic_auth_file, bearer_token_file
-//     or a tls file — are refused before they are checked, so nothing the
+//     http collector that names a file — basic_auth_file, bearer_token_file,
+//     a tls file or a login's — are refused before they are checked, so nothing the
 //     run answers can carry what such a file holds;
 //   - ${NAME} references are left as written: the answer would show the
 //     server's environment.
@@ -195,6 +195,7 @@ type debugShownRequest struct {
 	URL         string   `json:"url"`
 	Page        int      `json:"page,omitempty"`
 	Redirect    bool     `json:"redirect,omitempty"`
+	Login       bool     `json:"login,omitempty"`
 	Outcome     string   `json:"outcome,omitempty"`
 	Took        string   `json:"took,omitempty"`
 	Headers     []string `json:"headers,omitempty"`
@@ -225,7 +226,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	for _, req := range t.requests.Requests() {
 		shown := debugShownRequest{
 			Method: req.Method, URL: shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit),
-			Page: req.Page, Redirect: req.Redirect, Outcome: req.Outcome, Headers: headerLines(req.Header),
+			Page: req.Page, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
 			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy,
 		}
 		if req.Outcome != "" {
@@ -315,6 +316,10 @@ func refusedOnDebugPage(x *model.Collector) error {
 	}
 	if r.BearerTokenFile != "" {
 		files = append(files, "bearer_token_file")
+	}
+	if r.Login != nil {
+		// A login reads its secrets from files, and sends them.
+		files = append(files, "login")
 	}
 	for key, path := range map[string]string{"tls.ca_file": r.TLS.CAFile, "tls.cert_file": r.TLS.CertFile, "tls.key_file": r.TLS.KeyFile} {
 		if path != "" {

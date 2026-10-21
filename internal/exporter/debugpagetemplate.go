@@ -324,7 +324,7 @@ function show(answer, response, took) {
   const requests = answer.requests || [];
   $("requests-part").hidden = requests.length === 0;
   $("requests").textContent = requests.map((r) =>
-    r.method + " " + r.url + (r.page ? " (page " + r.page + ")" : "") + (r.redirect ? " (redirect)" : "") +
+    r.method + " " + r.url + (r.page ? " (page " + r.page + ")" : "") + (r.redirect ? " (redirect)" : "") + (r.login ? " (login)" : "") +
     (r.outcome ? " -> " + r.outcome + " in " + r.took : "") +
     (r.headers || []).map((h) => "\n  " + h).join("") +
     (r.withheld ? "\n  not sent: " + r.withheld.join(", ") + " — " + r.withheld_why : "")).join("\n");

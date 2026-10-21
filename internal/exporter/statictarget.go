@@ -343,7 +343,7 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 
 // targetOwnRequest is what the target's request sets that no probe can, for
 // its cache key: a graphite collector's targets, a grpc collector's metadata
-// and retry codes, the retried statuses, an sshfile collector's account and credential files. Each section names itself and how many values follow, so
+// and retry codes, the retried statuses, an sshfile collector's account and credential files, an http or graphite collector's login. Each section names itself and how many values follow, so
 // a value that looks like the next section's name cannot move the boundary
 // between two sections, and two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
@@ -371,6 +371,10 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	}
 	if r := &t.Request; r.Username != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
 		own = append(own, "ssh_account", "4", r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	}
+	// A target that logs in as it does itself is answered for that login.
+	if login := fetch.LoginFingerprint(t.Request.Login); login != "" {
+		own = append(own, "login", "1", login)
 	}
 	return own
 }

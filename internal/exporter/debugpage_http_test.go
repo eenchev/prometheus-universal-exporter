@@ -209,7 +209,8 @@ func TestTheDebugPageLeavesEnvironmentReferencesAsWritten(t *testing.T) {
 
 // A collector written on the page never runs Python, at full as at edit, a
 // request type other than http is refused, and so is an http collector
-// naming a file of the server's: nothing the file holds reaches the answer.
+// naming a file of the server's, a login's among them: nothing the file
+// holds reaches the answer.
 func TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(secret, []byte("file-secret-value"), 0o600); err != nil {
@@ -226,6 +227,7 @@ func TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector(t *testing.T
 		"bearer_token_file": {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  bearer_token_file: "+secret+"\n", 1), "request.bearer_token_file, which names a file on the server"},
 		"basic_auth_file":   {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  basic_auth_file:\n    username: "+secret+"\n    password: "+secret+"\n", 1), "request.basic_auth_file"},
 		"tls files":         {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  tls:\n    ca_file: "+secret+"\n    key_file: "+secret+"\n", 1), "request.tls.ca_file, request.tls.key_file"},
+		"login":             {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  login:\n    type: json\n    url: /login\n    token: .token\n    field_files: {password: "+secret+"}\n", 1), "request.login, which names a file on the server"},
 	} {
 		answer := postRun(t, server, pasted(c.yaml, debugExampleBody), http.StatusUnprocessableEntity)
 		if !strings.Contains(answer.Error, c.want) {

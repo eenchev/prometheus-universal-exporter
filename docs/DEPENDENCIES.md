@@ -179,6 +179,15 @@ dependency of their own: the first asks Go's own resolver (`net`), the second
 makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
 same test finds none of the other types' modules in a build of either.
 
+The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
+has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token
+endpoint for a token with the OAuth 2.0 client credentials grant
+(`internal/fetch/login.go`), and which `go.mod` already required as the
+`snowflake` driver's dependency. Only the file of the login imports it, built
+with either type, so a build of neither, such as `REQUEST_TYPES=grpc`, does
+not link it. A `json` login needs no module: it is a request the exporter
+makes itself, read with `gojq`.
+
 The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
 own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a
 host's key against a known_hosts file (`ssh/knownhosts`), and

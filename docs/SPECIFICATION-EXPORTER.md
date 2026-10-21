@@ -328,6 +328,8 @@ Support:
 - HTTP basic authentication
 - Optional file-backed basic authentication credentials
 - Bearer token authentication
+- A login before the request, whose token is sent on it: a JSON login or the
+  OAuth 2.0 client credentials grant (§ 42.6a)
 - TLS CA configuration
 - Configurable target certificate verification, including an explicit
   `insecure_skip_verify` opt-out
@@ -772,6 +774,7 @@ opt-in types.
 | `body` | none | Raw request body. |
 | `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. A username with a colon MUST be refused (§ 42.6). |
 | `bearer_token` / `bearer_token_file` | none | Mutually exclusive, and exclusive with basic authentication. |
+| `login` | none | A login made before the request, whose token is sent on it (§ 42.6a). |
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
@@ -790,7 +793,8 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
-and the basic and bearer credential keys.
+the basic and bearer credential keys, `accept_status` and `login`. No probe
+parameter MAY set or change `login`.
 
 ##### Pagination
 
@@ -1042,7 +1046,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1080,7 +1084,7 @@ lines: it only pulls. Its keys:
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
   `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
-  and `targets`, `from` and `until`, which replace the collector's. A static target's
+  `login`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
   the probe parameters of the same name, so it shares cached results with a
@@ -5887,6 +5891,9 @@ http_exporter_pages_fetched_total
 http_exporter_pagination_max_pages_reached_total
 http_exporter_series_limit_exceeded_total
 
+http_exporter_logins_total
+http_exporter_login_failures_total
+
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
@@ -5981,7 +5988,13 @@ for `http` collectors, `0` for one without `request.pagination`, per
 collector and per request in verbose mode: the pages `request.pagination`
 fetched in trips that ended with an answer, the first of each included, and
 the trips that stopped at `max_pages` with another page to come (§ 5.1,
-`http`).
+`http`). `http_exporter_logins_total` and
+`http_exporter_login_failures_total`, counters, MUST exist only for `http`
+and `graphite` collectors, `0` for one without `request.login`, per
+collector and with no per-request series: the logins the collector's login,
+or a static target's own, made, and those of them that failed (§ 42.6a). The
+counts MUST start at 0 at the exporter's shutdown and be forgotten with a
+collector a reload removes.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -7793,6 +7806,9 @@ Requirements:
   its TLS client certificate, only to the origin a request is made to: a
   followed redirect MUST NOT carry them anywhere else, unless the collector
   lists the host (§ 42.15c).
+- Send a login's secrets only where the configuration's `request.login.url`
+  says, held to the collector's lists, following no redirect; no probe
+  parameter MAY change where a login goes (§ 42.6a).
 - Protect against excessively large responses.
 - Bound regex, jq, yq, and Python execution.
 - Restrict Python networking/process/file capabilities.
@@ -8347,10 +8363,13 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status`, `accept_codes`, `retry.statuses` or `pagination` is listed
-  under `details.request_policies` with those settings as normalised for use,
-  `retry.statuses` as `retry_statuses`, an empty list as `[]`, a
-  `pagination` with its defaults filled in;
+  `accept_status`, `accept_codes`, `retry.statuses`, `pagination` or `login`
+  is listed under `details.request_policies` with those settings as
+  normalised for use, `retry.statuses` as `retry_statuses`, an empty list as
+  `[]`, a `pagination` with its defaults filled in, a `login` with the header
+  and prefix its token is sent with filled in and the values of its
+  `fields` and `endpoint_params` whose names read as credentials' withheld
+  (§ 42.6a);
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
@@ -24959,6 +24978,93 @@ Tests MUST cover bearer-token-file loading, basic-auth-file loading, whitespace
 trimming, missing and empty files, independent exporter Basic Auth, and the
 fact that the exporter Basic Auth credential is not forwarded to the target.
 
+## 42.6a Logging in to a target
+
+An `http` or `graphite` collector, and a static target of one, MAY set
+`request.login`: a login made before the request, whose token MUST be sent
+on it. A `grpc` collector MUST refuse it as a key of another type. Two kinds
+MUST be supported:
+
+- `type: json` MUST post, with `Content-Type: application/json`, a JSON
+  object of the members of `fields`, as written, and of `field_files`, each
+  read from its file at every login and trimmed as a credential file is
+  (§ 42.6), to `url`. `field_files` MUST hold one field at least, and a field
+  MUST NOT be in both. The token MUST be read from exactly one of: `token`, a
+  jq expression on the answer's JSON body with `$status` and `$headers` as in
+  a rule, which MUST give text that is not empty; `token_header`, a header of
+  the answer; `token_cookie`, a cookie the answer sets, which MUST be sent
+  back as that cookie in the `Cookie` header. `expires_in`, a jq expression,
+  MAY give the token's lifetime in seconds, a number above 0 or text of one,
+  or `null` when the answer does not say.
+- `type: oauth2` MUST ask the token endpoint `url` for a token with the
+  client credentials grant (RFC 6749 § 4.4): `client_secret_file` is
+  required, and exactly one of `client_id` and `client_id_file`; the id and
+  secret MUST be sent as a Basic credential, or as form parameters with
+  `auth_style: params`; `scopes` as the `scope` parameter, and
+  `endpoint_params` as further parameters, which MUST NOT name `grant_type`,
+  `scope`, `client_id` or `client_secret`. The answer's `expires_in` is the
+  token's lifetime.
+
+A key of the other kind MUST be refused, and so MUST a login without `type`
+or `url`, at load, naming the collector or the target and the key. A secret
+MUST NOT be read from the configuration: it MUST be read from its file at
+each login, so a rotated file is used by the next one.
+
+The token MUST be sent in `header`, `Authorization` when left out, after
+`prefix`, `"Bearer "` in `Authorization` and nothing in another header when
+left out. `header`'s name MUST read as a credential's, as the redaction of
+§ 42.17 reads names, or be refused at load, so that whatever shows a
+request's headers withholds the token. `token_cookie` MUST NOT be set with
+`header` or `prefix`. A login sent in `Authorization` MUST be refused beside
+the basic or bearer credential keys of the same collector or static target,
+and a `request.headers` entry of the login's header MUST be refused. A
+static target's `login` MUST replace the collector's, and the collector's
+credential sent in the same header; a header the request carries in the
+login's header — a static target's own credential or header, a probe's
+forwarded `Authorization` or header — MUST be sent instead of the token, and
+no login made for that request.
+
+Where a login goes MUST be the configuration's alone. `url` MUST be an
+absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
+reference resolved against the target, its scheme, host and port, without
+the target's credentials, query or fragment; it MUST hold no credentials,
+fragment or placeholder, and a reference naming a host without a scheme
+(`//host/...`) MUST be refused. The login request MUST be held to the
+collector's `allowed_targets` and `denied_targets` (§ 26.1), and a login URL
+they refuse MUST fail the trip as a failed login, not as a refused target. A
+login MUST NOT follow a redirect. It MUST be made with `login.tls` when set,
+and otherwise with the collector's `request.tls`, never with an
+`insecure_skip_verify` a probe parameter or a static target sets for the
+target.
+
+A token MUST be kept, by the collector, the login block and the URL the
+login was sent to, and sent on every request until it is due to be fetched
+again: when a tenth of its life is left or 30 seconds, whichever is more,
+but not before half of it has passed. Its lifetime is what the answer says,
+else `ttl`, else until the target refuses it. Requests that need a token
+while its login is made MUST wait for that one login, each within its own
+deadline, and the login MUST NOT be cut short by the request that began it
+going away. A login that fails while the token kept has not expired MUST
+leave that token in use, counted as a failure. A target that answers `401`
+MUST have the token it was sent dropped, unless a newer one replaced it
+meanwhile, and the request MUST be sent once more with the token of a new
+login, whatever its method; that request MUST NOT be one of
+`retry.attempts`, and MUST be made within the trip's deadline. At most 1000
+tokens MUST be kept, the one used longest ago dropped first, and a reload
+MUST drop the tokens of a login it changes or removes.
+
+A login that fails MUST fail the trip in the `login` stage, saying where it
+went, with its query's values masked, and why: for an answer that is not
+`2xx`, its status and the start of its body, at most 256 bytes, with what
+reads as a credential masked (§ 42.17), and for `oauth2` the error code and
+description RFC 6749 has the server send. What the login sent MUST NOT be
+shown anywhere: not its body, a file's content or the token. An error of a
+`token` or `expires_in` expression MUST say the kind of value it gave and
+never the value. A debug report MUST list a login request, marked as one,
+with its headers redacted as every request's are and without its body. A
+static target's `login` MUST be part of its cache key, and the debug page
+MUST refuse a collector written on it that sets `login`.
+
 ## 42.9 OTLP TLS configuration
 
 The OTLP configuration MUST support HTTPS endpoints with optional custom
@@ -26933,7 +27039,8 @@ checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
 why: a collector that runs Python (`transform.type: python` or
 `transform.pre_script`), which MUST NOT be run; one whose `request.type` is
 not `http`; and one that sets `request.basic_auth_file`,
-`request.bearer_token_file` or a `request.tls` file. Nothing a file holds
+`request.bearer_token_file`, a `request.tls` file or `request.login`
+(§ 42.6a). Nothing a file holds
 MUST reach the answer. Its own request block MUST NOT make a request.
 
 A configured collector MUST be run as it is configured, its Python

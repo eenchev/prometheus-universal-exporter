@@ -19,7 +19,7 @@ func init() {
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
-			"allowed_targets", "denied_targets", "accept_status", "pagination",
+			"allowed_targets", "denied_targets", "accept_status", "pagination", "login",
 		},
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
@@ -30,7 +30,7 @@ func init() {
 			"method", "path", "body", "timeout", "insecure_skip_verify",
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
-			"accept_status",
+			"accept_status", "login",
 		},
 		URLPath: true,
 		Validate: func(c *model.Collector) error {
@@ -39,7 +39,13 @@ func init() {
 			}
 			return validatePagination(c)
 		},
-		CheckTarget: checkHTTPTarget,
-		Fetch:       fetchHTTP,
+		CheckTarget:        checkHTTPTarget,
+		CheckTargetRequest: checkTargetLogin,
+		Fetch:              fetchHTTP,
+		// The tokens request.login keeps, and its counts (login.go).
+		CheckFiles:       checkLoginFiles,
+		Follow:           logins.follow,
+		CloseConnections: logins.reset,
+		Logins:           logins.counts,
 	})
 }

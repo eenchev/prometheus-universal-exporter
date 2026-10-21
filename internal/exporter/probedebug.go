@@ -724,6 +724,9 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		if req.Redirect {
 			via += " (redirect)"
 		}
+		if req.Login {
+			via += " (login)"
+		}
 		outcome := req.Outcome
 		if outcome == "" {
 			outcome = "no answer"

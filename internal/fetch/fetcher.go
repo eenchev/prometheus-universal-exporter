@@ -164,6 +164,10 @@ type RequestOverrides struct {
 	// Params are the param_<name> probe parameters, bound into the
 	// {{param_<name>}} placeholders of the collector's request.path.
 	Params map[string]string
+	// Login is a static target's request.login, replacing an http or
+	// graphite collector's; no probe parameter sets it, so a probe can
+	// neither change where a login goes nor what it sends (login.go).
+	Login *model.LoginConfig
 	// pageURL is the URL of a page after the first that request.pagination
 	// asks for, sent instead of the one the target and the request make
 	// (pagination.go). Only the pagination sets it.
@@ -772,9 +776,20 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		retryBackoff = 0
 	}
 
-	authorization, err := collectorAuthorization(c, forwarded...)
+	// The login is made, or its token taken from those kept, once the
+	// target has passed the collector's policy, so a target the policy
+	// refuses never has a login made for it.
+	login, err := startLogin(ctx, target, c, overrides, forwarded)
 	if err != nil {
 		return nil, err
+	}
+	authorization := ""
+	if !login.sends("Authorization") {
+		// A static target's login sent in Authorization replaces the
+		// collector's credential, as the target's own credential does.
+		if authorization, err = collectorAuthorization(c, forwarded...); err != nil {
+			return nil, err
+		}
 	}
 	start := time.Now()
 	limit := responseLimit(c)
@@ -799,6 +814,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if authorization != "" {
 			req.Header.Set("Authorization", authorization)
 		}
+		login.set(req)
 		if len(forwarded) > 0 {
 			for k, v := range forwarded[0] {
 				if strings.EqualFold(k, "Accept-Encoding") {
@@ -908,6 +924,21 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// Reading stopped one byte past the limit, so the size is not
 			// known and is not made up.
 			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", limit), model.ErrLimitExceeded)
+		}
+		// A 401 to a request that logged in is the target refusing the
+		// token, which may have been revoked or expired early: it is
+		// dropped and the request sent once more with a token from a new
+		// login. That is no attempt of request.retry's, and is made within
+		// the request's deadline.
+		if resp.StatusCode == http.StatusUnauthorized {
+			again, err := login.again(requestContext)
+			if err != nil {
+				return nil, err
+			}
+			if again {
+				attempt--
+				continue
+			}
 		}
 		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
 		// The answer of a request a redirect led to says so when the

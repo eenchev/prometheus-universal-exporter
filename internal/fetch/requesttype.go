@@ -151,6 +151,19 @@ type RequestType struct {
 	// ConnectionPools reports, of a collector, what the type's pools of
 	// connections hold now (PoolStats). Unset, the type keeps no pools.
 	ConnectionPools func(collector string) PoolStats
+	// Logins reports how many logins a collector's request.login made and
+	// how many of them failed (login.go). Unset, the type does not log in.
+	Logins func(collector string) (made, failed uint64)
+}
+
+// CollectorLogins reports how many logins a collector of requestType made
+// and how many failed (RequestType.Logins); zero for a type that does not
+// log in.
+func CollectorLogins(requestType, collector string) (made, failed uint64) {
+	if rt := RequestTypes[requestType]; rt != nil && rt.Logins != nil {
+		return rt.Logins(collector)
+	}
+	return 0, 0
 }
 
 // PoolStats is what a collector's pools of connections hold: the

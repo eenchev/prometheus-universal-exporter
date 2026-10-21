@@ -282,7 +282,60 @@ type RequestConfig struct {
 	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
 	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
 	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
+	// Login belongs to the http and graphite types: a login the exporter
+	// makes before it asks the target, whose token it sends on the
+	// request (fetch/login.go). Left out of a collector written as YAML
+	// when unset, as the sql keys are.
+	Login *LoginConfig `yaml:"login,omitempty"`
 }
+
+// LoginConfig is request.login: how the exporter logs in to get the token
+// it sends to an http or graphite target. Type json posts a JSON object of
+// Fields and FieldFiles to URL and reads the token from the answer's body
+// (Token, a jq expression), a header of it (TokenHeader) or a cookie it sets
+// (TokenCookie); type oauth2 asks the token endpoint URL for a token with
+// the client credentials grant (RFC 6749 § 4.4). A secret is read from a
+// file at each login, never written in the configuration.
+type LoginConfig struct {
+	Type string `yaml:"type" json:"type"`
+	// URL is where the login is sent: absolute, or relative to the target.
+	URL string `yaml:"url" json:"url"`
+	// Fields and FieldFiles are the members of a json login's body: each
+	// of Fields as written, each of FieldFiles read from its file.
+	Fields     map[string]string `yaml:"fields" json:"fields,omitempty"`
+	FieldFiles map[string]string `yaml:"field_files" json:"field_files,omitempty"`
+	// Token, TokenHeader and TokenCookie say where a json login's answer
+	// holds the token; ExpiresIn is the jq expression of its lifetime in
+	// seconds.
+	Token       string `yaml:"token" json:"token,omitempty"`
+	TokenHeader string `yaml:"token_header" json:"token_header,omitempty"`
+	TokenCookie string `yaml:"token_cookie" json:"token_cookie,omitempty"`
+	ExpiresIn   string `yaml:"expires_in" json:"expires_in,omitempty"`
+	// ClientID, ClientIDFile, ClientSecretFile, Scopes, EndpointParams
+	// and AuthStyle are an oauth2 login's.
+	ClientID         string            `yaml:"client_id" json:"client_id,omitempty"`
+	ClientIDFile     string            `yaml:"client_id_file" json:"client_id_file,omitempty"`
+	ClientSecretFile string            `yaml:"client_secret_file" json:"client_secret_file,omitempty"`
+	Scopes           []string          `yaml:"scopes" json:"scopes,omitempty"`
+	EndpointParams   map[string]string `yaml:"endpoint_params" json:"endpoint_params,omitempty"`
+	AuthStyle        string            `yaml:"auth_style" json:"auth_style,omitempty"`
+	// TTL is how long a token is used when the answer does not say how
+	// long it lasts; unset, until the target answers 401.
+	TTL Duration `yaml:"ttl" json:"ttl,omitempty"`
+	// Header and Prefix are how the token is sent: Authorization and
+	// "Bearer " when unset, and, with TokenCookie, as the cookie it was.
+	Header string  `yaml:"header" json:"header,omitempty"`
+	Prefix *string `yaml:"prefix" json:"prefix,omitempty"`
+	// TLS is the login's own tls block, for a login server the target's
+	// does not fit; unset, the collector's request.tls.
+	TLS *TLSConfig `yaml:"tls" json:"tls,omitempty"`
+}
+
+// The values of request.login.type and request.login.auth_style.
+var (
+	LoginTypes      = []string{"json", "oauth2"}
+	LoginAuthStyles = []string{"header", "params"}
+)
 
 // DNSRecordTypes are the values of a dns collector's request.record_type.
 var DNSRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
@@ -387,15 +440,17 @@ type BasicAuthFile struct {
 
 // TLSConfig is a tls block: the CA to verify the server with, a client
 // certificate and key, and whether verification is skipped.
+//
+// Its JSON names are its keys', for --dry-run, which shows a login's.
 type TLSConfig struct {
-	CAFile             string `yaml:"ca_file"`
-	CertFile           string `yaml:"cert_file"`
-	KeyFile            string `yaml:"key_file"`
-	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	CAFile             string `yaml:"ca_file" json:"ca_file,omitempty"`
+	CertFile           string `yaml:"cert_file" json:"cert_file,omitempty"`
+	KeyFile            string `yaml:"key_file" json:"key_file,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify" json:"insecure_skip_verify,omitempty"`
 	// ServerName is the name the server's certificate is checked against,
 	// and sent as SNI, when the target is addressed by something else, such
 	// as an IP address.
-	ServerName string `yaml:"server_name"`
+	ServerName string `yaml:"server_name" json:"server_name,omitempty"`
 }
 
 // ResponseConfig is a collector's response block: how to read the body the

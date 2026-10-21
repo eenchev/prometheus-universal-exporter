@@ -2078,6 +2078,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
+| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401` makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | `attempts`, `backoff`, `non_idempotent`, and `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set. See [Target requests](REQUESTS.md#retries). |
@@ -4251,8 +4252,9 @@ it is given runs on the server:
   configuration and run it by name.
 - **Only `http` collectors**, since the other request types read files,
   hosts and databases with the server's own credentials, and **no file of
-  the server's**: `request.basic_auth_file`, `request.bearer_token_file` and
-  the `request.tls` files are refused. A pasted response needs no
+  the server's**: `request.basic_auth_file`, `request.bearer_token_file`,
+  the `request.tls` files and a `request.login`, which reads its secrets
+  from files, are refused. A pasted response needs no
   credential, and a fetched target gets the configured collector's.
 
 A run takes as long as a probe may — the timeout on the page, sent as
@@ -4617,13 +4619,17 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses` or `pagination` is listed under
+`accept_codes`, `retry.statuses`, `pagination` or `login` is listed under
 `details.request_policies`, by name, with those settings as they will be
 applied — `2XX` as `2xx`, `not_found` as `NOT_FOUND`, `retry.statuses` as
 `retry_statuses`, `[]` included, a `pagination` with its defaults,
-`max_pages: 10` among them — so a list that lets through more or less than meant, or a
-pagination that asks the target for more pages than meant, shows before it is
-deployed.
+`max_pages: 10` among them, a `login` with the `header` and `prefix` its
+token is sent with — so a list that lets through more or less than meant, a
+pagination that asks the target for more pages than meant, or a token sent
+where it was not meant to go, shows before it is deployed. A login is shown
+with the files its secrets are read from, never what they hold, and a field
+or endpoint parameter whose name reads as a credential's without its value
+([Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target)).
 
 The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
 target of one, reads when it connects — its private key, passphrase,
@@ -4633,7 +4639,9 @@ under `details.warnings` of the `config` entry, or of the `static_targets`
 entry for a target's own files, and logged, without failing the check, since
 a file may be put in place after the exporter starts. So are the password,
 private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
-static target's own credential file.
+static target's own credential file, and the secret files of an `http` or
+`graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
+and of a static target's own.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

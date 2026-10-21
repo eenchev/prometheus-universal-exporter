@@ -257,6 +257,38 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].request.timeout", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "targets[].request.retry.backoff", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        backoff: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 	}
+	// request.login, a collector's and a static target's: its type is
+	// required; a token_header or token_cookie stands for the token, one
+	// of which is required; the rest are optional, an enum's or a
+	// pattern's "" the key left out.
+	login := func(prefix, document, at, indent string) []schemaKey {
+		logged := func(lines ...string) string {
+			var block strings.Builder
+			for _, line := range lines {
+				block.WriteString(indent + line + "\n")
+			}
+			return strings.Replace(document, at, block.String(), 1)
+		}
+		json := logged("login:", "  type: json", "  url: /login", "  token: .t", "  field_files: {password: /p}", "  # login")
+		oauth2 := logged("login:", "  type: oauth2", "  url: https://idp.example/token", "  client_id: x", "  client_secret_file: /s", "  # login")
+		in := func(text string) string { return indent + "  " + text }
+		mark := in("# login\n")
+		return []schemaKey{
+			{key: prefix + ".login.type", document: json, at: in("type: json\n"), setting: in("type: %s\n"), valid: "json", invalid: "form"},
+			{key: prefix + ".login.token_header", document: json, at: in("token: .t\n"), setting: in("token_header: %s\n"), valid: "X-Subject-Token", invalid: `"X Token"`},
+			{key: prefix + ".login.token_cookie", document: json, at: in("token: .t\n"), setting: in("token_cookie: %s\n"), valid: "JSESSIONID", invalid: `"S ID"`},
+			{key: prefix + ".login.header", document: json, at: mark, setting: in("header: %s\n"), valid: "X-Auth-Token", invalid: `"X Token"`, absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.ttl", document: json, at: mark, setting: in("ttl: %s\n"), valid: "15m", invalid: "soon", absent: true, duration: true},
+			{key: prefix + ".login.auth_style", document: oauth2, at: mark, setting: in("auth_style: %s\n"), valid: "params", invalid: "auto", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.scopes[]", document: oauth2, at: mark, setting: in("scopes: [%s]\n"), valid: "metrics", invalid: `"a b"`, absent: true},
+			{key: prefix + ".login.endpoint_params{}", document: oauth2, at: mark, setting: in("endpoint_params: {%s: x}\n"), valid: "audience", invalid: "grant_type", absent: true},
+		}
+	}
+	keys = append(keys, login("collectors[].request", jqCollector, request, "      ")...)
+	for _, row := range login("targets[].request", strings.Replace(oneTarget, target, "    request:\n      # target request\n", 1), "      # target request\n", "      ") {
+		row.file = inTargetFile
+		keys = append(keys, row)
+	}
 	for i := range keys {
 		if keys[i].file == inTargetFile {
 			keys[i].configuration = targetsConfiguration

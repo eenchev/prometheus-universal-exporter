@@ -90,6 +90,16 @@ func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Confi
 		seen[e.name] = true
 		out = append(out, e)
 	}
+	// A target is named <entry>_<address>, so were one entry's name another's
+	// followed by _, the two could name a target alike, and which got the
+	// name would turn on what else discovery found.
+	for _, a := range out {
+		for _, b := range out {
+			if a != b && strings.HasPrefix(b.name, a.name+"_") {
+				return nil, fmt.Errorf("%s entry %q begins with entry %q's name and _, so a target of one could be named as a target of the other; rename one", config.DiscoveredTargetsKey, b.name, a.name)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -258,11 +268,11 @@ type checkedTarget struct {
 // by source key, a source that has not yet answered having none. A probe
 // job's discovered target comes after those it writes and those of the
 // sources before; one listed already, or that the collector refuses, is
-// left out. An entry's discovered target is named <entry>_<address>, every
-// character a name cannot hold written _, and, when that name is another
-// target's too, followed by _ and 8 hex digits of the address's SHA-256, so
-// the name of a target stays the same from one discovery to the next. A
-// target the checks refuse is left out. skipped says what was left out.
+// left out. An entry's discovered target is named by discoveredName, or, when
+// the file writes a target of that name, <entry>_ and hashedAddress, so its
+// name depends on its entry, its address and the file alone, and stays the
+// same from one discovery to the next. A target the checks refuse is left
+// out. skipped says what was left out.
 // checked holds the targets checked before, by their text, and the
 // targets checked now are returned in its place, so a discovery that
 // changes little checks little.
@@ -358,6 +368,80 @@ func staticLabels(labels map[string]string) map[string]string {
 	return out
 }
 
+// maxEscapedAddress is the longest escapeAddress writes; a longer address,
+// such as a long host name, is named by hashedAddress, so a name stays of a
+// size fit for a label value and a log line.
+const maxEscapedAddress = 128
+
+// discoveredName is the name of the target the entry named entry makes of
+// address: <entry>_ and the address escaped, or, when escapeAddress does not
+// take it, its hashedAddress. It is a function of the two alone, never of
+// the other targets, so a target is never renamed by another's coming or
+// going, and it is injective: two addresses of one entry never share a name,
+// and, since no entry's name is another's followed by _ (checked at load),
+// neither do the targets of two entries. escapeAddress is injective on what
+// it takes; a hashedAddress always holds _ followed by an upper-case letter,
+// which an escaped address never does, so the two forms never meet; and
+// two hashedAddresses meet only if two addresses share 64 bits of SHA-256.
+func discoveredName(entry, address string) string {
+	if escaped, ok := escapeAddress(address); ok {
+		return entry + "_" + escaped
+	}
+	return entry + "_" + hashedAddress(address)
+}
+
+// escapeAddress writes an address made of lower-case letters, digits, ., :,
+// -, [ and ] in the characters of a name, readably for an IPv4 or IPv6
+// address with its port and a lower-case host name: a letter or digit as
+// itself, . as _, and :, -, [ and ] as _ and their byte in upper-case hex
+// (_3A, _2D, _5B, _5D), so 10.0.0.5:9100 is 10_0_0_5_3A9100. It is
+// injective: reading left to right, _ followed by a digit and an upper-case
+// letter is one of the four escapes, since an upper-case letter appears in
+// nothing else, and any other _ is a dot, so the address is read back
+// whole. Any other address, or one escaped longer than maxEscapedAddress,
+// is not taken.
+func escapeAddress(address string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(address); i++ {
+		switch c := address[i]; {
+		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c == '.':
+			b.WriteByte('_')
+		case c == ':' || c == '-' || c == '[' || c == ']':
+			_, _ = fmt.Fprintf(&b, "_%02X", c)
+		default:
+			return "", false
+		}
+		if b.Len() > maxEscapedAddress {
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// hashedAddressPrefix is how much of the address hashedAddress keeps.
+const hashedAddressPrefix = 48
+
+// hashedAddress names an address escapeAddress does not take: its first
+// hashedAddressPrefix bytes, lower-cased, every byte but a letter or a digit
+// written _, which only helps a reader, then _X and 16 hex digits of the
+// address's SHA-256, which tell it apart.
+func hashedAddress(address string) string {
+	prefix := address[:min(len(address), hashedAddressPrefix)]
+	readable := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 'a' - 'A'
+		}
+		return '_'
+	}, prefix)
+	sum := sha256.Sum256([]byte(address))
+	return readable + "_X" + hex.EncodeToString(sum[:8])
+}
+
 // candidate is a target an entry's discovery found.
 type candidate struct {
 	entry           *discoveredEntry
@@ -379,24 +463,19 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 					continue
 				}
 				addresses[d.Address] = true
-				candidates = append(candidates, &candidate{entry: e, address: d.Address, target: fromTemplate(e.template, d.Address), labels: staticLabels(d.Labels), name: e.name + "_" + sanitizeLabelName(d.Address)})
+				candidates = append(candidates, &candidate{entry: e, address: d.Address, target: fromTemplate(e.template, d.Address), labels: staticLabels(d.Labels), name: discoveredName(e.name, d.Address)})
 			}
 		}
 	}
 	if len(candidates) == 0 {
 		return
 	}
-	count := map[string]int{}
-	for i := range in.Targets.Targets {
-		count[in.Targets.Targets[i].Name]++
-	}
 	for _, c := range candidates {
-		count[c.name]++
-	}
-	for _, c := range candidates {
-		if count[c.name] > 1 {
-			sum := sha256.Sum256([]byte(c.address))
-			c.name += "_" + hex.EncodeToString(sum[:4])
+		// A target the file writes keeps its name, and the discovered one
+		// takes the form that is the address's digest: it stays so while
+		// the file does, whatever else discovery finds.
+		if _, written := in.targetIndex[c.name]; written {
+			c.name = c.entry.name + "_" + hashedAddress(c.address)
 		}
 	}
 	targets := &model.StaticTargetFile{Interval: in.Targets.Interval, Concurrency: in.Targets.Concurrency, Targets: slices.Clone(in.Targets.Targets)}

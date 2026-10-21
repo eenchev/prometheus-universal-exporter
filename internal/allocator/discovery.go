@@ -90,7 +90,7 @@ const (
 	// DefaultKubernetesRefresh is how often EndpointSlices are listed.
 	DefaultKubernetesRefresh = 30 * time.Second
 	// DefaultDiscoveryTimeout bounds an http_sd request or a Kubernetes
-	// listing.
+	// listing, or the source's refresh_interval when that is shorter.
 	DefaultDiscoveryTimeout = 10 * time.Second
 	// DefaultAddressType is the addressType of the EndpointSlices a
 	// kubernetes source takes by default.
@@ -312,20 +312,31 @@ func (k *KubernetesConfig) takes(addressType string) bool {
 	return want == "any" || addressType == want
 }
 
-// timeout is a source's timeout, its default when unset.
-func timeout(set model.Duration) time.Duration {
-	if set == 0 {
-		return DefaultDiscoveryTimeout
+// timeout is how long one ask of the source may take: its timeout, or
+// when that is unset DefaultDiscoveryTimeout, cut to its refresh_interval
+// when that is shorter, so an ask never outlasts the interval to the next
+// one. Only a timeout written longer than the interval is refused, as a
+// mistake; a short interval alone needs no timeout written beside it.
+func (d *DiscoveryConfig) timeout() time.Duration {
+	var set model.Duration
+	switch {
+	case d.HTTPSD != nil:
+		set = d.HTTPSD.Timeout
+	case d.Kubernetes != nil:
+		set = d.Kubernetes.Timeout
 	}
-	return time.Duration(set)
+	if set != 0 {
+		return time.Duration(set)
+	}
+	return min(DefaultDiscoveryTimeout, d.refresh())
 }
 
 func checkTimeout(kind string, set model.Duration, refresh time.Duration) error {
-	switch t := timeout(set); {
+	switch {
 	case set < 0:
 		return fmt.Errorf("%s.timeout must not be negative", kind)
-	case set != 0 && t > refresh:
-		return fmt.Errorf("%s.timeout %s is longer than its refresh_interval %s", kind, t, refresh)
+	case time.Duration(set) > refresh:
+		return fmt.Errorf("%s.timeout %s is longer than its refresh_interval %s", kind, time.Duration(set), refresh)
 	}
 	return nil
 }

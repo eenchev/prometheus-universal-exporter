@@ -24317,7 +24317,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - A source that has never answered adds no targets
   (`TestASourceThatNeverAnsweredHasNoTargets`).
 - The kubernetes source lists the EndpointSlices of its namespace with its
-  label selector and `limit=500`, follows the continue token, takes the
+  label selector and `limit=100`, follows the continue token, takes the
   ready endpoints (and those whose readiness is unknown) at the named port,
   sorted, with the meta labels and the mapping, skips a slice without the
   port, and with a numbered port and `include_not_ready` takes every
@@ -24336,8 +24336,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   removing one, `__meta_` labels passed and `job`, `instance` and other `__`
   labels dropped (`TestDiscoveredProbeTargetsAreServed`).
 - A `discovered_targets` entry is written out as a static target per
-  discovered address, named `<entry>_<address>` with a digest of the
-  address when two names collide, loaded by the replica's own loader from
+  discovered address, named `<entry>_<address>` with the address escaped,
+  so `a-b.example` and `a.b.example` keep apart, loaded by the replica's own loader from
   the shares, with the entry's labels over the discovered ones and no `__`
   label; the per-source metrics show the targets, refreshes and last
   success (`TestDiscoveredStaticTargetsAreShared`).
@@ -24352,8 +24352,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   without targets or discovery, a template without `{{address}}` or without
   discovery, unknown source keys; an entry without a name or discovery, with
   `target`, a `shard_key` other than `address`, an `http` collector without a
-  URL template, an unknown key or collector, twice, and `discovered_targets`
-  that is no list; a file of `discovered_targets` alone serves no share
+  URL template, an unknown key or collector, twice, named as another entry's
+  name followed by `_`, and `discovered_targets` that is no list; a file of `discovered_targets` alone serves no share
   until a target is found (`TestDiscoveredInputsAreCheckedAtLoad`).
 - `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
   stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
@@ -26463,8 +26463,9 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`, and
-a `timeout` (default `10s`) MUST NOT be longer than it. `file_sd.files` MUST
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`; a
+`timeout` written longer than it MUST be refused, and one left out MUST be
+`10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
 from the directory of the file naming them, read again at every refresh.
 `http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
@@ -26475,7 +26476,9 @@ optional `bearer_token_file` read again at every refresh and a `tls` block
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
-with its token read again at every listing, in pages of 500, in each of
+with its token read again at every listing, in pages of 100 (`limit=100`,
+following each `continue` token), the whole listing, every page of every
+namespace, bounded by its `timeout`, in each of
 `namespaces` (DNS-1123 labels; none lists the namespace of the service
 account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
 `label_selector` (checked at load), taking only the slices whose
@@ -26497,11 +26500,18 @@ be left out. A `discovered_targets` entry MUST have a `name` of a static
 target's name and `discovery`, MAY have `target_template` and `shard_key`
 (only `address`), MUST NOT have `target`, and MUST be checked at load as a
 static target of the file with `192.0.2.1:9100` for the address; each
-discovered address MUST make a static target named `<name>_<address>`, each
-character outside `[A-Za-z0-9_]` written `_`, followed by `_` and the first 8
-hex digits of the address's SHA-256 when another target has that name,
-whose `target` is made as a probe job's is, whose other keys are the entry's
-and whose shard key is its name, or its address with `shard_key: address`; one
+discovered address MUST make a static target named `<name>_<address>`, the
+address made only of `[a-z0-9.:\-\[\]]` and escaped to at most 128
+characters written with each letter and digit as itself, `.` as `_` and
+`:`, `-`, `[`, `]` as `_3A`, `_2D`, `_5B`, `_5D`, and any other address, or
+one whose name a written target of the file has, written as its first 48
+bytes lower-cased with each character but a letter or digit as `_`, then
+`_X` and the first 16 hex digits of its SHA-256; the name MUST depend on the
+entry, the address and the file alone, never on the other discovered
+targets, and an entry whose `name` is another entry's followed by `_` MUST
+be refused at load. The target's `target` MUST be made as a probe job's is,
+its other keys MUST be the entry's and its shard key its name, or its
+address with `shard_key: address`; one
 the checks refuse MUST be left out, and what is left out logged once while
 it stays the same. A `discovered_targets` file MAY leave `targets` out.
 A discovered probe target's group MUST carry its source's labels that are

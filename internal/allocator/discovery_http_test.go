@@ -123,8 +123,8 @@ func allTargets(t *testing.T, a *Allocator, members ...string) map[string]model.
 }
 
 // A discovered_targets entry is written out as a static target for every
-// target its discovery finds, named <entry>_<address>, a name two targets
-// would share followed by a digest of the address, and handed to the
+// target its discovery finds, named <entry>_<address> with the address
+// escaped, so a-b.example and a.b.example keep apart, and handed to the
 // replicas in their shares as a written target is, with the entry's labels
 // over the discovered ones and no label starting with __.
 func TestDiscoveredStaticTargetsAreShared(t *testing.T) {
@@ -142,11 +142,11 @@ func TestDiscoveredStaticTargetsAreShared(t *testing.T) {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	want := []string{"legacy", "node_a_b_example_9100_2e9f86bf", "node_a_b_example_9100_78ad07bd", "node_c_example_9100"}
+	want := []string{"legacy", "node_a_2Db_example_3A9100", "node_a_b_example_3A9100", "node_c_example_3A9100"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("the shares hold %v, want %v", names, want)
 	}
-	c := got["node_c_example_9100"]
+	c := got["node_c_example_3A9100"]
 	if c.Target != "http://c.example:9100/metrics" || time.Duration(c.Interval) != time.Minute {
 		t.Errorf("got the target %q every %s", c.Target, time.Duration(c.Interval))
 	}
@@ -204,7 +204,7 @@ func TestDiscoveryChangesAreAppliedAsAReload(t *testing.T) {
 	a.refreshDiscovery(ctx)
 	owner := ""
 	for _, m := range members {
-		if slices.Contains(share(t, a, m), "node_new_example_9100") {
+		if slices.Contains(share(t, a, m), "node_new_example_3A9100") {
 			owner = m
 		}
 	}
@@ -218,9 +218,9 @@ func TestDiscoveryChangesAreAppliedAsAReload(t *testing.T) {
 	// A target no longer found leaves at once.
 	write(targets[1:])
 	a.refreshDiscovery(ctx)
-	gone := "node_" + sanitizeLabelName(targets[0])
+	gone := discoveredName("node", targets[0])
 	for _, m := range members {
-		if slices.Contains(share(t, a, m), gone) || slices.Contains(share(t, a, m), "node_new_example_9100") {
+		if slices.Contains(share(t, a, m), gone) || slices.Contains(share(t, a, m), "node_new_example_3A9100") {
 			t.Errorf("%s keeps a target discovery no longer finds", m)
 		}
 	}
@@ -320,6 +320,7 @@ func TestDiscoveredInputsAreCheckedAtLoad(t *testing.T) {
 		"an unknown key":       {entry(good + "    bogus: 1\n"), "bogus"},
 		"an unknown collector": {"interval: 30s\ndiscovered_targets:\n  - name: node\n    collector: nope\n" + good, "nope"},
 		"twice":                {entry(good) + "  - name: node\n    collector: demo\n" + good, "defined twice"},
+		"a name's prefix":      {entry(good) + "  - name: node_eu\n    collector: demo\n" + good, `entry "node_eu" begins with entry "node"'s name and _`},
 		"no list":              {"interval: 30s\ndiscovered_targets: {}\n", "must be a list"},
 		"neither":              {"interval: 30s\n", "targets must not be empty"},
 	} {
@@ -337,6 +338,45 @@ func TestDiscoveredInputsAreCheckedAtLoad(t *testing.T) {
 	a, _ := settledAllocator(t, in, "r1")
 	if b := a.Bundle("r1"); b == nil || b.Files["static-targets.yaml"] != "" {
 		t.Errorf("a share of no target was served: %v", b)
+	}
+}
+
+// A discovered target's name depends on its entry, its address and the
+// file alone: it is not renamed when another target that looked like it
+// comes or goes, and one named as a target the file writes takes the
+// digest form, which stays while the file does.
+func TestADiscoveredTargetKeepsItsName(t *testing.T) {
+	static := strings.Replace(discoveredStatic, "  - name: legacy\n", "  - name: node_c_example_3A9100\n", 1)
+	p := writeInputs(t, testConfig, static, "")
+	dir := filepath.Dir(p.StaticTargets)
+	testutil.WriteIn(t, dir, "nodes.yaml", discoveredNodes)
+	members := []string{"r1", "r2"}
+	a, _ := settledAllocator(t, mustLoad(t, p), members...)
+	ctx := context.Background()
+	names := func() []string {
+		var out []string
+		for name := range allTargets(t, a, members...) {
+			out = append(out, name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	a.refreshDiscovery(ctx)
+	hashed := "node_" + hashedAddress("c.example:9100")
+	want := []string{"node_a_2Db_example_3A9100", "node_a_b_example_3A9100", "node_c_example_3A9100", hashed}
+	slices.Sort(want)
+	if got := names(); !slices.Equal(got, want) {
+		t.Fatalf("the shares hold %v, want %v", got, want)
+	}
+	if got := allTargets(t, a, members...)[hashed].Target; got != "http://c.example:9100/metrics" {
+		t.Errorf("%s is the target %q", hashed, got)
+	}
+	testutil.WriteIn(t, dir, "nodes.yaml", "- targets: [a.b.example:9100, c.example:9100]\n")
+	a.refreshDiscovery(ctx)
+	want = []string{"node_a_b_example_3A9100", "node_c_example_3A9100", hashed}
+	slices.Sort(want)
+	if got := names(); !slices.Equal(got, want) {
+		t.Errorf("once a-b.example is gone the shares hold %v, want %v: no target renamed", got, want)
 	}
 }
 
@@ -423,7 +463,7 @@ func TestAChangedSourceKeepsItsTargetsUntilItAnswers(t *testing.T) {
 	}
 	testutil.WriteIn(t, dir, "nodes.yaml", "- targets: [d.example:9100]\n")
 	a.refreshDiscovery(ctx)
-	if got := names(); !slices.Equal(got, []string{"legacy", "node_d_example_9100"}) {
+	if got := names(); !slices.Equal(got, []string{"legacy", "node_d_example_3A9100"}) {
 		t.Errorf("once the new source answers the shares hold %v", got)
 	}
 

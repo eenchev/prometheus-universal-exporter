@@ -284,10 +284,23 @@ other key (`collector`, `interval`, `request`, `labels`, `params`,
 target the entry makes. It is checked at load as such a target, with the
 address `192.0.2.1:9100` in place of a discovered one, so an `http` collector
 without a `target_template` making a URL is refused then. Each target it
-makes is named `<name>_<address>`, every character a name cannot hold
-written `_`; when two targets would get one name, each is followed by `_`
-and the first 8 hex digits of its address's SHA-256, so a target keeps its
-name from one discovery to the next. `shard_key` may only be `address`, which
+makes is named `<name>_<address>`, the address escaped so that no two
+addresses share a name: a letter or digit stays, `.` is written `_`, and
+`:`, `-`, `[` and `]` are written `_3A`, `_2D`, `_5B` and `_5D`, `_` and
+their byte in upper-case hex. So `10.0.0.5:9100` makes `node_10_0_0_5_3A9100`,
+`node-1.example.com:9100` makes `node_node_2D1_example_com_3A9100`, and
+`[fd00::1]:9100` makes `node__5Bfd00_3A_3A1_5D_3A9100`. An address of any
+other character, an upper-case letter or `_` say, or one whose escaped form
+would be longer than 128 characters, is written instead as its first 48
+characters, lower-cased and every one but a letter or digit written `_`,
+then `_X` and the first 16 hex digits of its SHA-256:
+`Web_1.example:80` makes `node_web_1_example_80_X` and 16 hex digits. A
+target whose name the file already gives a written target takes that second
+form too. A name depends on the entry, the address and the file alone, never
+on what else discovery finds, so a target keeps its name, and its
+`static_target` label and its series, from one discovery to the next. For
+the same reason no entry's `name` may be another entry's followed by `_`
+(`node` and `node_eu`, say), which is refused at load. `shard_key` may only be `address`, which
 allocates each target by its address, so the targets of several entries at
 one address share a replica; left out, a target is allocated by its name.
 The exporter refuses `discovered_targets` ([Static targets](STATIC-TARGETS.md)):
@@ -321,8 +334,8 @@ read again every `refresh_interval`, `1m` by default.
 **`http_sd`** asks `url`, an `http` or `https` URL without credentials, every
 `refresh_interval`, `1m` by default, for the same JSON list, as Prometheus's
 HTTP service discovery does, sending `X-Prometheus-Refresh-Interval-Seconds`.
-`timeout`, `10s` by default and no longer than the refresh interval, bounds
-the request; `bearer_token_file` holds a token sent as `Authorization:
+`timeout`, no longer than the refresh interval, bounds the request; left
+out, it is `10s`, or the refresh interval when that is shorter; `bearer_token_file` holds a token sent as `Authorization:
 Bearer`, read again at every refresh; `tls` is the exporter's `tls` block
 (`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`).
 Redirects are not followed, and an answer that is not `200` fails.
@@ -342,8 +355,11 @@ port is a target, and with `include_not_ready: true` every endpoint's;
 a slice without the port has none. `address_type` is the `addressType` of
 the slices taken: `IPv4`, the default, `IPv6`, or `any`, which takes every
 slice, `FQDN` ones included. A dual-stack Service has a slice of each family
-holding the same pods, so taking both would probe each pod twice. `timeout`
-is as `http_sd`'s. Each target
+holding the same pods, so taking both would probe each pod twice. The
+slices are asked for 100 at a time, following the API server's `continue`
+token, so that a page of large slices stays within the 16 MiB an answer may
+hold. `timeout` is as `http_sd`'s, and bounds the whole listing, every page
+of every namespace, not each request alone. Each target
 has the meta labels `__meta_kubernetes_namespace`,
 `__meta_kubernetes_endpointslice_name`,
 `__meta_kubernetes_endpointslice_address_type`, `__meta_kubernetes_service_name`

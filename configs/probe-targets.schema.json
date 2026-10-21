@@ -122,7 +122,7 @@
                       ]
                     },
                     "timeout": {
-                      "description": "How long a request may take, no longer than refresh_interval. Defaults to 10s.",
+                      "description": "How long a request may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
                       "maximum": 0,
                       "minimum": 0,
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -313,7 +313,7 @@
                       ]
                     },
                     "timeout": {
-                      "description": "How long a listing may take, no longer than refresh_interval. Defaults to 10s.",
+                      "description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
                       "maximum": 0,
                       "minimum": 0,
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",

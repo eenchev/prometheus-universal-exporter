@@ -39,13 +39,13 @@ func (s *sourceState) fetch(ctx context.Context) ([]discovered, error) {
 		}
 		return flatten(groups, d.Labels, s.limit)
 	case d.HTTPSD != nil:
-		groups, err := refreshHTTPSD(ctx, d.HTTPSD, seconds(d.refresh().Seconds()))
+		groups, err := refreshHTTPSD(ctx, d.HTTPSD, seconds(d.refresh().Seconds()), d.timeout())
 		if err != nil {
 			return nil, err
 		}
 		return flatten(groups, d.Labels, s.limit)
 	default:
-		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit)
+		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit, d.timeout())
 	}
 }
 

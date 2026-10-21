@@ -2004,8 +2004,14 @@ keys:
   listing a namespace in the order of `namespaces`.
 - A listing MUST ask for pages with `limit=100` and follow each page's
   `metadata.continue` to the last, sending `labelSelector` and
-  `fieldSelector` as written when they are set. The whole listing MUST take
-  at most the scrape's deadline, 30 seconds without one.
+  `fieldSelector` as written when they are set. A page larger than the
+  response limit MUST be read no further than one byte past it, MUST NOT
+  be taken, counted towards `max_objects` or the objects' bytes, and MUST
+  be asked for again with the same `continue` and half the limit, rounded
+  down, down to `limit=1`; the rest of the listing MUST keep the smaller
+  limit, and the next scrape MUST start at `limit=100` again. The whole
+  listing, the pages asked for again included, MUST take at most the
+  scrape's deadline, 30 seconds without one.
 - The answer MUST be a JSON document of `kind`, the list's kind without
   its `List` suffix, `api_version`, `count` and `items`, the objects in the
   order listed, each as the API server sent it without its
@@ -2013,9 +2019,10 @@ keys:
   when the API server named no kind, the collector's group and version as
   `api_version`.
 - More objects than `max_objects` MUST fail the scrape as a limit exceeded.
-  A page larger than the response limit, and objects that come to more
-  than it without their managed fields, MUST fail the scrape as a limit
-  exceeded, and so MUST a document larger than it.
+  A page of one object larger than the response limit MUST fail the scrape
+  as a limit exceeded, saying a single object is larger than the limit and
+  naming it in bytes; so MUST objects that come to more than it without
+  their managed fields, and a document larger than it.
 - A failed listing MUST be reported in the `kubernetes` stage. An API
   server's answer other than `200` MUST fail the scrape naming the
   resource, its group and version, the namespace or the cluster, the
@@ -2027,7 +2034,9 @@ keys:
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show each page's `GET` and URL, its
-  query's values masked, its `Authorization` masked, and its status. The
+  query's values masked, its `Authorization` masked, and its status, a
+  page asked for again included; a page larger than the response limit
+  MUST show after its status its limit and the response limit. The
   verbose `url` label MUST be `kubernetes:` and the path of the listing
   across the cluster, or with `api_server` its URL before that path, and
   `http_method` MUST be `LIST`.
@@ -26755,8 +26764,12 @@ EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`, made by `internal/kubeapi` as the `kubernetes`
 request type's are (§ 5.1), verified with the service account's `ca.crt`,
 with its token read again at every listing, in pages of 100 (`limit=100`,
-following each `continue` token), the whole listing, every page of every
-namespace, bounded by its `timeout`, in each of
+following each `continue` token), a page larger than 16 MiB asked for
+again as § 5.1's `kubernetes` asks for a page larger than its response
+limit (half the limit, down to 1, the rest of the listing keeping it, the
+next listing starting at 100) and the fall to a smaller limit logged once
+per listing at debug level, the whole listing, every page of every
+namespace and every page asked for again, bounded by its `timeout`, in each of
 `namespaces` (DNS-1123 labels; none lists the namespace of the service
 account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
 `label_selector` (checked at load), taking only the slices whose
@@ -26766,8 +26779,8 @@ endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
 `host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
 `__meta_kubernetes_endpointslice_address_type` among them. An
-answer larger than 16 MiB, with more targets than its bound or that cannot
-be read MUST be a failure; a failing source MUST keep the targets of its last
+answer larger than 16 MiB (for `kubernetes`, a page of one slice), with
+more targets than its bound or that cannot be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be
 logged and counted (`pue_allocator_discovery_refreshes_total{result="failure"}`)
 once while its text stays the same. A probe job's discovered target MUST be

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -195,8 +196,8 @@ func TestAKubernetesCollectorReadsTheTokenAgain(t *testing.T) {
 }
 
 // A listing of more objects than max_objects, 10000 when left out, fails
-// the scrape as a limit; so does a page larger than the response limit and
-// objects that come to more than it, managed fields not counted.
+// the scrape as a limit; so does an object larger than the response limit
+// alone and objects that come to more than it, managed fields not counted.
 func TestAKubernetesListingIsBounded(t *testing.T) {
 	s := kubeAPI(t)
 	s.Serve("/apis/apps/v1/namespaces/monitoring/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("monitoring", 30)})
@@ -210,14 +211,16 @@ func TestAKubernetesListingIsBounded(t *testing.T) {
 	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxObjects = 30 })); err != nil {
 		t.Errorf("30 objects at a bound of 30: %v", err)
 	}
-	// The page of 30 is about 7 kB with its managed fields, its objects
-	// about 4.5 kB without them; a page of 20 is about 4.5 kB, and the
-	// objects of two such pages come to about 5.6 kB without their managed
-	// fields and 9 kB with them.
-	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000 }))
-	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "a page of deployments is larger than 5000 bytes, the response limit") {
-		t.Errorf("a page over the limit: %v", err)
+	// A page of one object over the limit cannot be made smaller.
+	huge := deployments("big", 1)
+	huge[0]["spec"] = map[string]any{"replicas": 3, "note": strings.Repeat("x", 5000)}
+	s.Serve("/apis/apps/v1/namespaces/big/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: huge})
+	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.Namespaces = []string{"big"} }))
+	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "a page of a single one of the deployments, the least a listing can ask for, is larger than 5000 bytes, the response limit") {
+		t.Errorf("an object over the limit: %v", err)
 	}
+	// A page of 20 is about 4.5 kB, and the objects of two such pages come
+	// to about 5.6 kB without their managed fields and 9 kB with them.
 	s.Serve("/apis/apps/v1/namespaces/a/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("a", 20)})
 	s.Serve("/apis/apps/v1/namespaces/b/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("b", 20)})
 	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.Namespaces = []string{"a", "b"} }))
@@ -226,6 +229,42 @@ func TestAKubernetesListingIsBounded(t *testing.T) {
 	}
 	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 6000; c.Request.Namespaces = []string{"a", "b"} })); err != nil {
 		t.Errorf("two pages whose objects come to less than the limit without their managed fields: %v", err)
+	}
+}
+
+// A page over the response limit is asked for again with half the limit,
+// and the rest of the listing keeps it: 30 Deployments, about 7 kB with
+// their managed fields and 4.5 kB without, are listed under a limit of
+// 5000 bytes in pages of 12 after pages of 100, 50 and 25 were refused,
+// each object counted once, and a debug probe's trace shows every request
+// with its limit and why a refused page was asked for again.
+func TestAKubernetesPageOverTheLimitIsAskedForAgainSmaller(t *testing.T) {
+	s := kubeAPI(t)
+	s.Serve("/apis/apps/v1/namespaces/monitoring/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("monitoring", 30)})
+	c := kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.MaxObjects = 30 })
+	ctx, trace := WithRequestTrace(context.Background())
+	resp, err := FetchCollector(ctx, "", c, RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc kubernetesDocument
+	if err := json.Unmarshal(resp.Body, &doc); err != nil || doc.Count != 30 || len(doc.Items) != 30 {
+		t.Fatalf("listed %d objects, %v", doc.Count, err)
+	}
+	var asked, outcomes []string
+	for _, r := range trace.Requests() {
+		u, err := url.Parse(r.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		asked = append(asked, u.Query().Get("limit")+"@"+u.Query().Get("continue"))
+		outcomes = append(outcomes, r.Outcome)
+	}
+	if want := []string{"100@", "50@", "25@", "12@", "12@12", "12@24"}; !slices.Equal(asked, want) {
+		t.Errorf("traced the pages %v, want %v", asked, want)
+	}
+	if want := []string{"200 OK, a page of 100 larger than 5000 bytes", "200 OK, a page of 50 larger than 5000 bytes", "200 OK, a page of 25 larger than 5000 bytes", "200 OK", "200 OK", "200 OK"}; !slices.Equal(outcomes, want) {
+		t.Errorf("traced the outcomes %q, want %q", outcomes, want)
 	}
 }
 

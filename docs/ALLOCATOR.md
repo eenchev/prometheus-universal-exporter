@@ -358,8 +358,17 @@ slice, `FQDN` ones included. A dual-stack Service has a slice of each family
 holding the same pods, so taking both would probe each pod twice. The
 slices are asked for 100 at a time, following the API server's `continue`
 token, so that a page of large slices stays within the 16 MiB an answer may
-hold. `timeout` is as `http_sd`'s, and bounds the whole listing, every page
-of every namespace, not each request alone. Each target
+hold: 100 slices of the EndpointSlice controller's 100 endpoints are about
+10 MiB. A page larger than 16 MiB, as a cluster that raises
+`--max-endpoints-per-slice` makes, is asked for again, with the same
+`continue` token, with half as many slices, down to one, and the rest of
+the listing keeps the smaller size; it is logged once at debug level, with
+the size the listing fell to. Each listing starts at 100 again, so nothing
+outlives it, at the cost of the refused requests, at most seven, each read
+no further than 16 MiB. Only a single slice larger than 16 MiB cannot be
+listed, and fails the source. `timeout` is as `http_sd`'s, and bounds the
+whole listing, every page of every namespace and every page asked for
+again, not each request alone. Each target
 has the meta labels `__meta_kubernetes_namespace`,
 `__meta_kubernetes_endpointslice_name`,
 `__meta_kubernetes_endpointslice_address_type`, `__meta_kubernetes_service_name`

@@ -101,8 +101,12 @@ The listing is the API's own: a `GET` of the resource's path,
 `/api/v1/namespaces/<namespace>/pods` for the core group and
 `/apis/<group>/<version>/namespaces/<namespace>/<resource>` for the others,
 without the namespace for `all_namespaces`, asking for pages of 100 objects
-and following each page's `continue` token to the last. The whole listing,
-every page of every namespace, takes at most the probe's timeout; a listing
+and following each page's `continue` token to the last. A page larger than
+the response limit ([Limits](#limits)) is asked for again, with the same
+`continue` token, with half as many objects, down to one, and the rest of
+the listing keeps the smaller size; the next scrape starts at 100 again.
+The whole listing, every page of every namespace and every page asked for
+again, takes at most the probe's timeout; a listing
 with no deadline of its own, as a static target's without one, gives up
 after 30 seconds.
 
@@ -231,9 +235,13 @@ or age is better watched from what uses it. A custom resource named
 - The collector's response limit, `request.max_response_bytes` or
   `limits.max_response_bytes`, 10 MiB when neither is set, bounds each page
   as the API server sends it, managed fields included, and the objects of
-  the whole listing, without them: one past it fails the scrape as a limit
-  exceeded. A page holds 100 objects, so the limit bounds what a scrape
-  holds in memory whatever the cluster's size.
+  the whole listing, without them. A page over it is not taken but asked
+  for again with half as many objects, so large objects, such as custom
+  resources with large specs, make smaller pages rather than a failed
+  scrape; only a single object larger than the limit, or objects that come
+  to more than it, fail the scrape as a limit exceeded. A page holds at
+  most 100 objects and never more than the limit, so the limit bounds what
+  a scrape holds in memory whatever the cluster's size.
 
 ## Examples
 
@@ -354,4 +362,6 @@ collector's. A collector has no target to refuse, so no
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows each page's
 request, `GET` and its URL with the query's values masked, the token
-masked, and the status it was answered with, and then the document.
+masked, and the status it was answered with, a page over the response
+limit with its size and the limit after the status and followed by the
+same page's request with half the size, and then the document.

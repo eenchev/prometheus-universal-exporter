@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -24,8 +25,10 @@ import (
 var serviceAccountDir = kubeapi.ServiceAccountDir
 
 // kubernetesPageSize is how many EndpointSlices one listing request asks
-// for; the rest follow with the answer's continue token. A page must fit in
-// maxDiscoveryAnswerBytes, 16 MiB, or the listing fails at every refresh.
+// for at first; the rest follow with the answer's continue token. A page
+// should fit in maxDiscoveryAnswerBytes, 16 MiB: one that does not is asked
+// for again with half as many slices (internal/kubeapi), which costs a
+// refused request of up to 16 MiB at every refresh.
 // The API server sends whole slices: the EndpointSlice controller puts up
 // to 100 endpoints in one (its --max-endpoints-per-slice default), and an
 // endpoint with names of their longest, a 253-byte pod and node name, a
@@ -35,7 +38,8 @@ var serviceAccountDir = kubeapi.ServiceAccountDir
 // about 10 MiB, which fits with room to spare; 500 were about 50 MiB, which
 // a large cluster's listing reached. TestAKubernetesPageOfTheWorstCaseFits
 // builds such a page. A cluster that raises --max-endpoints-per-slice makes
-// larger slices than this allows for.
+// larger slices, whose listing falls to smaller pages; only a single slice
+// over 16 MiB, some 16000 endpoints, cannot be listed.
 const kubernetesPageSize = kubeapi.PageSize
 
 // endpointSliceList is the part of a discovery.k8s.io/v1 EndpointSliceList
@@ -79,8 +83,10 @@ const serviceNameLabel = "kubernetes.io/service-name"
 // of the cluster the allocator runs in, with the pod's service account: its
 // token, read again at every listing so a rotated one is used, and the
 // cluster's CA, which the API server's certificate must be signed by. The
-// whole listing, every page of every namespace, takes at most timeout.
-func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[string]string, limit int, timeout time.Duration) ([]discovered, error) {
+// whole listing, every page of every namespace, takes at most timeout. A
+// listing that falls to smaller pages is logged at debug level, once, with
+// the page size it fell to.
+func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[string]string, limit int, timeout time.Duration, logger *slog.Logger) ([]discovered, error) {
 	// The client's own timeout bounds one request alone; a listing of many
 	// pages could take many times it.
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -116,7 +122,11 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 	var out []discovered
 	seen := map[string]bool{}
 	for _, path := range paths {
-		listing := kubeapi.Listing{Client: client, Server: server, Path: path, Token: token, What: "EndpointSlices", LabelSelector: k.LabelSelector, PageSize: kubernetesPageSize, MaxPageBytes: maxDiscoveryAnswerBytes}
+		pageSize := 0
+		listing := kubeapi.Listing{
+			Client: client, Server: server, Path: path, Token: token, What: "EndpointSlices", LabelSelector: k.LabelSelector, PageSize: kubernetesPageSize, MaxPageBytes: maxDiscoveryAnswerBytes,
+			Smaller: func(size int) { pageSize = size },
+		}
 		err := listing.List(ctx, func(raw []byte) (string, error) {
 			var list endpointSliceList
 			if err := json.Unmarshal(raw, &list); err != nil {
@@ -140,6 +150,9 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 			}
 			return list.Metadata.Continue, nil
 		})
+		if pageSize > 0 {
+			logger.Debug("a page of EndpointSlices was larger than a discovery answer may be; the listing asked for smaller pages", "path", path, "bytes", maxDiscoveryAnswerBytes, "page_size", pageSize)
+		}
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, fmt.Errorf("listing the EndpointSlices took longer than the timeout, %s: %w", timeout, err)

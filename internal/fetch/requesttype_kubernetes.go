@@ -37,7 +37,8 @@ import (
 // the exporter's own namespace when none is, or, with all_namespaces, of
 // the whole cluster, which is how a cluster-scoped resource such as nodes
 // is listed. The listing is the API's REST one over HTTPS, a page of 100
-// objects at a time with the continue token of each, made with the
+// objects at a time with the continue token of each, a page over the
+// response limit asked for again with half as many, made with the
 // standard library alone (internal/kubeapi), as the target allocator lists
 // EndpointSlices: there is no client library behind it.
 //

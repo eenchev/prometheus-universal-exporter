@@ -39,9 +39,12 @@ const (
 	NamespaceFile = "namespace"
 )
 
-// PageSize is how many objects one request of a listing asks for; the rest
-// follow with the answer's continue token. 100 keeps a page of the largest
-// objects a listing meets, EndpointSlices of 100 endpoints, at about 10 MiB.
+// PageSize is how many objects one request of a listing asks for at first;
+// the rest follow with the answer's continue token. 100 keeps a page of the
+// largest objects a listing commonly meets, EndpointSlices of 100
+// endpoints, at about 10 MiB. A page over the listing's bound is asked for
+// again with half as many objects, so larger objects make smaller pages
+// rather than a failed listing.
 const PageSize = 100
 
 // InClusterServer is the URL of the API server of the cluster the process
@@ -100,18 +103,27 @@ type Listing struct {
 	What string
 	// LabelSelector and FieldSelector are sent as they are; "" sends none.
 	LabelSelector, FieldSelector string
-	// PageSize is the limit asked for each page; 0 is PageSize.
+	// PageSize is the limit asked for the first page; 0 is PageSize.
 	PageSize int
-	// MaxPageBytes bounds the body of each page; a larger one fails the
-	// listing with an error that is ErrPageTooLarge.
+	// MaxPageBytes bounds the body of each page. A page over it is asked
+	// for again, with the same continue token, with half the limit, down
+	// to 1, and the rest of the listing keeps the smaller limit; a page of
+	// one object over it fails the listing with an error that is
+	// ErrPageTooLarge.
 	MaxPageBytes int64
-	// Sent, when set, is told of each page's request before it is sent,
-	// and Answered of how it ended: the status line, or the error.
+	// Sent, when set, is told of each page's request before it is sent, a
+	// page asked for again included, and Answered of how it ended: the
+	// status line, the status line and that the page was over the bound,
+	// or the error.
 	Sent     func(req *http.Request)
 	Answered func(outcome string)
+	// Smaller, when set, is told of each smaller limit the listing falls
+	// to, after a page over MaxPageBytes.
+	Smaller func(size int)
 }
 
-// ErrPageTooLarge is the error of a page over MaxPageBytes.
+// ErrPageTooLarge is the error of a page of one object over MaxPageBytes:
+// that object cannot be listed under the bound.
 var ErrPageTooLarge = errors.New("page too large")
 
 // StatusError is an API server's answer other than 200 OK: its status and
@@ -129,24 +141,49 @@ func (e *StatusError) Error() string {
 }
 
 // pageTooLarge is the error of a page over the bound, ErrPageTooLarge
-// with the bound in words.
+// with the bound in words. List asks again for a smaller page, so only
+// that of a page of one object, which cannot be made smaller, is returned.
 type pageTooLarge struct {
 	what  string
 	bound int64
 }
 
 func (e *pageTooLarge) Error() string {
-	return fmt.Sprintf("a page of %s is larger than %d bytes", e.what, e.bound)
+	return fmt.Sprintf("a page of a single one of the %s, the least a listing can ask for, is larger than %d bytes", e.what, e.bound)
 }
 
 func (e *pageTooLarge) Is(target error) bool { return target == ErrPageTooLarge }
 
 // List asks for every page of the listing in turn, handing each page's body
 // to page, which returns the page's continue token, "" after the last.
+//
+// A page over MaxPageBytes is not handed to page, so what page counts, the
+// objects and their bytes, counts each object once; the same page is asked
+// for again with half the limit. The API server sends whole objects, and
+// how large they are is up to the cluster: EndpointSlices of a raised
+// --max-endpoints-per-slice, or custom resources with large specs, make a
+// page of PageSize larger than a bound that fits the common case, and
+// failing such a listing would fail it at every refresh. The smaller limit
+// is kept for the rest of the listing, the following objects being likely
+// as large, and not remembered for the next: a listing starts at PageSize
+// again, so no state outlives it, at the cost of at most seven refused
+// requests (100, 50, 25, 12, 6, 3, 1) each read no further than the bound.
+// Every request, the ones asked again included, is bounded by ctx.
 func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, err error)) error {
+	size := l.PageSize
+	if size <= 0 {
+		size = PageSize
+	}
 	next := ""
 	for {
-		raw, err := l.page(ctx, next)
+		raw, err := l.page(ctx, next, size)
+		if errors.Is(err, ErrPageTooLarge) && size > 1 {
+			size /= 2
+			if l.Smaller != nil {
+				l.Smaller(size)
+			}
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -159,12 +196,8 @@ func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, 
 	}
 }
 
-// page asks for one page of the listing.
-func (l *Listing) page(ctx context.Context, next string) ([]byte, error) {
-	size := l.PageSize
-	if size <= 0 {
-		size = PageSize
-	}
+// page asks for one page of the listing, of at most size objects.
+func (l *Listing) page(ctx context.Context, next string, size int) ([]byte, error) {
 	query := url.Values{"limit": {strconv.Itoa(size)}}
 	if l.LabelSelector != "" {
 		query.Set("labelSelector", l.LabelSelector)
@@ -194,19 +227,25 @@ func (l *Listing) page(ctx context.Context, next string) ([]byte, error) {
 		l.answered("error: " + err.Error())
 		return nil, err
 	}
+	// The body is closed without reading it to its end: the rest of a page
+	// over the bound may be of any size, and reading it to reuse the
+	// connection could take longer than asking again on another.
 	defer func() { _ = resp.Body.Close() }()
-	l.answered(resp.Status)
 	if resp.StatusCode != http.StatusOK {
+		l.answered(resp.Status)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, &StatusError{What: l.What, Address: address, Code: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body))}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, l.MaxPageBytes+1))
 	if err != nil {
+		l.answered(resp.Status + ", then the body broke off: " + err.Error())
 		return nil, err
 	}
 	if int64(len(raw)) > l.MaxPageBytes {
+		l.answered(fmt.Sprintf("%s, a page of %d larger than %d bytes", resp.Status, size, l.MaxPageBytes))
 		return nil, &pageTooLarge{what: l.What, bound: l.MaxPageBytes}
 	}
+	l.answered(resp.Status)
 	return raw, nil
 }
 

@@ -4,8 +4,8 @@
 // time as the limit asks with a continue token for the rest, refuses a
 // request without the token in its service account directory, or the one
 // it was told to require, with 401,
-// answers 403 and 404 as the API server does, and records every request
-// it was sent. It writes the service account directory a pod has, the
+// answers 403 and 404 as the API server does, can be slow to answer, and
+// records every request it was sent. It writes the service account directory a pod has, the
 // token, the server's CA and the namespace, and can set the environment
 // that points a pod at its API server. It imports nothing but the standard
 // library.
@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Server is a stand-in API server.
@@ -37,6 +38,7 @@ type Server struct {
 	lists    map[string]List
 	forbid   map[string]bool
 	requests []Request
+	delay    time.Duration
 }
 
 // List is what a listing of a path answers: the list's kind and
@@ -115,6 +117,14 @@ func (s *Server) RequireToken(token string) {
 	s.token = token
 }
 
+// Slow has the server take d to answer each request from now on, or its
+// client to give up first.
+func (s *Server) Slow(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.delay = d
+}
+
 // Requests are the requests the server was sent, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
@@ -128,7 +138,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	list, listed := s.lists[r.URL.Path]
 	forbidden := s.forbid[r.URL.Path]
 	token := s.token
+	delay := s.delay
 	s.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if token == "" {
 		raw, _ := os.ReadFile(filepath.Join(s.Dir, "token"))
 		token = strings.TrimSpace(string(raw))

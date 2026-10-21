@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubetest"
 )
@@ -92,7 +93,8 @@ func TestAListingFollowsEveryPage(t *testing.T) {
 }
 
 // An answer other than 200 is a StatusError with the status and the start
-// of the body; a page over the bound is ErrPageTooLarge; without a token,
+// of the body; a page of one object over the bound is ErrPageTooLarge;
+// without a token,
 // no Authorization is sent.
 func TestAListingsFailuresSayWhat(t *testing.T) {
 	s := kubetest.New(t)
@@ -106,7 +108,7 @@ func TestAListingsFailuresSayWhat(t *testing.T) {
 		}
 	}
 	_, err := names(t, &Listing{Client: s.Client(), Server: s.URL, Path: "/apis/apps/v1/deployments", Token: "token-1", What: "deployments", MaxPageBytes: 100})
-	if !errors.Is(err, ErrPageTooLarge) || err.Error() != "a page of deployments is larger than 100 bytes" {
+	if !errors.Is(err, ErrPageTooLarge) || err.Error() != "a page of a single one of the deployments, the least a listing can ask for, is larger than 100 bytes" {
 		t.Errorf("a page over the bound: %v", err)
 	}
 	_, err = names(t, &Listing{Client: s.Client(), Server: s.URL, Path: "/apis/apps/v1/deployments", What: "deployments", MaxPageBytes: 1 << 20})
@@ -142,5 +144,120 @@ func TestTheInClusterConfigurationIsReadFromThePod(t *testing.T) {
 	}
 	if _, err := ReadToken(filepath.Join(s.Dir, TokenFile)); err == nil || !strings.Contains(err.Error(), "is empty") {
 		t.Errorf("an empty token: %v", err)
+	}
+}
+
+// padded are the objects of names from on, each with a spec of pad bytes.
+func padded(from, n, pad int) []map[string]any {
+	out := make([]map[string]any, n)
+	for i := range out {
+		out[i] = map[string]any{"metadata": map[string]any{"name": fmt.Sprintf("obj-%d", from+i)}, "spec": map[string]any{"pad": strings.Repeat("x", pad)}}
+	}
+	return out
+}
+
+// asked are the limit and the continue token of each request s was sent.
+func asked(s *kubetest.Server) []string {
+	var out []string
+	for _, r := range s.Requests() {
+		out = append(out, r.Query.Get("limit")+"@"+r.Query.Get("continue"))
+	}
+	return out
+}
+
+// A page over the bound is asked for again with half the limit until it
+// fits, and the rest of the listing keeps that limit: 60 objects of about
+// 1 kB, a page of 25 fitting in 30000 bytes and one of 50 not, are listed
+// in pages of 25 after a page of 100 and one of 50 were refused, each
+// object once; the refused pages are told of as larger than the bound.
+func TestAPageOverTheBoundIsAskedForAgainSmaller(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: padded(0, 60, 1000)})
+	var answered []string
+	var smaller []int
+	l := &Listing{
+		Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", MaxPageBytes: 30000,
+		Answered: func(outcome string) { answered = append(answered, outcome) },
+		Smaller:  func(size int) { smaller = append(smaller, size) },
+	}
+	got, err := names(t, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for i := range 60 {
+		want = append(want, fmt.Sprintf("obj-%d", i))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("listed %v, want obj-0 to obj-59 once each", got)
+	}
+	if got, want := asked(s), []string{"100@", "50@", "25@", "25@25", "25@50"}; !slices.Equal(got, want) {
+		t.Errorf("asked %v, want %v", got, want)
+	}
+	if !slices.Equal(smaller, []int{50, 25}) {
+		t.Errorf("told of the limits %v, want [50 25]", smaller)
+	}
+	if want := []string{"200 OK, a page of 100 larger than 30000 bytes", "200 OK, a page of 50 larger than 30000 bytes", "200 OK", "200 OK", "200 OK"}; !slices.Equal(answered, want) {
+		t.Errorf("answered %q, want %q", answered, want)
+	}
+}
+
+// A page refused in the middle of a listing is asked for again with the
+// continue token it was asked for with: 30 small objects then 30 large
+// ones, in pages of 20 where 10 large ones are over the bound and 5 are
+// not, are listed each once, in order.
+func TestAPageAskedForAgainKeepsItsContinueToken(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: append(padded(0, 30, 10), padded(30, 30, 2000)...)})
+	got, err := names(t, &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", PageSize: 20, MaxPageBytes: 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for i := range 60 {
+		want = append(want, fmt.Sprintf("obj-%d", i))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("listed %v, want obj-0 to obj-59 once each", got)
+	}
+	if got, want := asked(s), []string{"20@", "20@20", "10@20", "10@30", "5@30", "5@35", "5@40", "5@45", "5@50", "5@55"}; !slices.Equal(got, want) {
+		t.Errorf("asked %v, want %v", got, want)
+	}
+}
+
+// A single object over the bound cannot be listed: the limit falls to 1,
+// and the page of that one object fails the listing saying so.
+func TestASingleObjectOverTheBoundFailsTheListing(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: append(padded(0, 1, 10), padded(1, 2, 2000)...)})
+	got, err := names(t, &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", PageSize: 4, MaxPageBytes: 1000})
+	if !errors.Is(err, ErrPageTooLarge) || err.Error() != "a page of a single one of the configmaps, the least a listing can ask for, is larger than 1000 bytes" {
+		t.Errorf("an object over the bound: %v", err)
+	}
+	if !slices.Equal(got, []string{"obj-0"}) {
+		t.Errorf("listed %v before the large object, want [obj-0]", got)
+	}
+	if got, want := asked(s), []string{"4@", "2@", "1@", "1@1"}; !slices.Equal(got, want) {
+		t.Errorf("asked %v, want %v", got, want)
+	}
+}
+
+// The requests a refused page is asked for again with are bounded by the
+// listing's context with the rest: a listing whose pages of 100 and 50 are
+// refused, each answer taking 300ms, runs out of its 750ms before the page
+// of 25 is answered.
+func TestPagesAskedForAgainAreBoundedByTheListingsDeadline(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: padded(0, 60, 1000)})
+	s.Slow(300 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	l := &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", MaxPageBytes: 30000}
+	err := l.List(ctx, func([]byte) (string, error) { return "", nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a listing out of time: %v, want the deadline", err)
+	}
+	if got := asked(s); len(got) != 3 || got[2] != "25@" {
+		t.Errorf("asked %v, want pages of 100, 50 and 25", got)
 	}
 }

@@ -340,7 +340,7 @@ func TestARuntimeErrorOfTheEngineThroughAProbe(t *testing.T) {
 			}
 		}
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	report := probe("cut_ignore", "&debug=true")
 	if !strings.Contains(report, "the XPath engine failed with a runtime error") || !strings.Contains(report, "goroutine ") || !strings.Contains(report, substringNaNFailure(3)) {
 		t.Errorf("the debug probe's report has no line with the stack:\n%s", report)

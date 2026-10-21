@@ -404,7 +404,7 @@ Each `sql` collector has, with no per-request series (see
 | `http_exporter_sql_limit_failures_total` | counter | Scrapes that failed at `max_per_target` or `max_targets`. |
 | `http_exporter_sql_rows` | gauge | Rows its last successful statement returned. |
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) shows the statement in its
+A [debug probe](CONFIGURATION.md#debug-probes) shows the statement in its
 request section — the driver, the server and the database, the account,
 whether the connection was made for the probe or kept, and how many values
 were bound — and never the password, the values or the statement's text; its

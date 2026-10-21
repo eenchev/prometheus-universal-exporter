@@ -220,12 +220,25 @@ added unless one Prometheus's probes reach one pod.
 
 The chart MUST offer an optional `autoscaling/v2` HorizontalPodAutoscaler,
 `autoscaling`, disabled by default, scaling the Deployment on CPU utilization
-(80% by default), memory utilization, further metrics or none of these but
-not all absent, with `behavior` passed through; with it the Deployment MUST NOT
-render `replicas`. `maxReplicas` below `minReplicas`, or nothing to scale on,
-MUST fail rendering.
+(80% by default), memory utilization, the exporter's own load, its static
+targets per pod, further metrics or none of these but not all absent, with
+`behavior` passed through; with it the Deployment MUST NOT render `replicas`.
+`maxReplicas` below `minReplicas`, or nothing to scale on, MUST fail
+rendering. `autoscaling.targetBusy`, null by default, MUST render a `Pods`
+metric named `autoscaling.busyMetric` (`http_exporter_busy` by default) with
+an `AverageValue` target of it, quoted: a number above 0, rendered as JSON
+writes it, or a decimal quantity with an optional `m`; zero, a negative
+number or any other text MUST fail rendering. `autoscaling.targetStaticTargetsPerPod`,
+null by default, a whole number from 1 to 2147483647, MUST render a `Pods`
+metric named `autoscaling.staticTargetsMetric` (`http_exporter_static_targets`
+by default) the same way, and MUST fail rendering without `allocator.enabled`,
+since without the allocator every pod scrapes every static target and their
+number per pod does not fall as pods are added. Either target with its metric
+name empty MUST fail rendering. The chart README MUST say that a metrics
+adapter serves the two metrics, and link the self-metrics documentation's
+prometheus-adapter rules and KEDA example.
 
-Every replica scrapes every static target, so the chart MUST document running
+Without the allocator every replica scrapes every static target, so the chart MUST document running
 static targets with one replica and without autoscaling: each added replica
 contacts every target again, and exports every target with `export_via_otlp`
 again, as duplicate series. Its notes MUST warn when `staticTargets.enabled`
@@ -525,7 +538,7 @@ values schema:
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
-| `server.probeDebug` | `--web.enable-probe-debug`, rendered only when `true`; default `false` |
+| `server.debug` | `--web.debug=<level>`, rendered only for `edit` or `full`; empty, the default, and `off` render no flag, and any other value MUST fail rendering, by the schema's enum and in the template |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -795,9 +808,45 @@ the configuration directory; `allocator.staticTargets.data` and
 ConfigMaps of their own, mounted into the allocator only, outside the
 configuration directory. The allocator's pods MUST roll when any of the three
 changes. A probe job MUST hold only the keys the allocator's probe targets
-file takes, `name`, `collector`, `targets`, `params`, `labels` and
-`shard_key`, since the allocator decodes it strictly, and MUST list at least
-one target; the values schema MUST declare exactly those keys.
+file takes, `name`, `collector`, `targets`, `params`, `labels`,
+`shard_key`, `discovery` and `target_template`, since the allocator decodes
+it strictly, and MUST list at least one target or one discovery source; the
+values schema MUST declare exactly those keys, and of each discovery source
+exactly the allocator's (`name`, `labels`, `max_targets` and one of
+`file_sd`, `http_sd` and `kubernetes`, each with its own keys).
+
+`allocator.extraVolumes` and `allocator.extraVolumeMounts`, empty by default,
+MUST be passed through unchanged into the allocator's pods, appended after the
+volumes and mounts the chart gives them, and never into the exporter's; the
+exporter's `extraVolumes` and `extraVolumeMounts` MUST NOT reach the
+allocator's pods. They are what mounts a `file_sd` source's files, and an
+`http_sd` source's token and TLS files, into the allocator. The values schema
+MUST take them in the shapes of `extraVolumes` and `extraVolumeMounts`, with
+the same pattern refusing a mount path inside the configuration directory. An
+`allocator.extraVolumeMounts` entry MUST fail rendering, naming the value and
+the directory, at or inside a directory the allocator's pod mounts, every one
+a read-only volume: the configuration directory always, the static target
+directory while `allocator.staticTargets.data` is not empty, the probe
+targets directory while `allocator.probeJobs` is not empty, the token's
+directory with `allocator.tokenSecret.name`, and
+`/var/run/secrets/kubernetes.io/serviceaccount` while the service account
+token is mounted, with a `kubernetes` source or `serviceAccount.automount`;
+and so MUST two entries of one `mountPath`. The paths MUST be compared
+cleaned, as for the exporter's (§ 33.10a).
+
+While a probe job or a `discovered_targets` entry of
+`allocator.staticTargets.data` has a `kubernetes` discovery source, the chart
+MUST render a ServiceAccount `<fullname>-allocator` with
+`automountServiceAccountToken: true`, and the allocator's pods MUST run as it
+with `automountServiceAccountToken: true`; with `allocator.rbac.create`, true
+by default, it MUST render, allowing `get`, `list` and `watch` on
+`endpointslices` of the API group `discovery.k8s.io` to that ServiceAccount,
+a Role and a RoleBinding `<fullname>-allocator` in each namespace a source
+lists, in the release's namespace for a source that lists none, and a
+ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>-allocator` for a
+source with `all_namespaces`. Without such a source none of them MUST be
+rendered, and the allocator's pods MUST run as the exporter's ServiceAccount
+with `serviceAccount.automount`.
 
 `allocator.staticTargets.expandEnv`, off by default, MUST render
 `--static-targets.expand-env` on the exporter pods in allocator mode, which
@@ -1171,7 +1220,13 @@ are skipped and the text checks of the templates still run:
    with neither of `minAvailable` and `maxUnavailable`, and both MUST fail
    rendering; `autoscaling.enabled` MUST render a HorizontalPodAutoscaler for
    the Deployment and leave `replicas` out of it, and `maxReplicas` below
-   `minReplicas` MUST fail rendering.
+   `minReplicas` MUST fail rendering; `autoscaling.targetBusy` of `0.5` and
+   `"1500m"` MUST render a `Pods` metric of `http_exporter_busy`, or of the
+   `busyMetric` set, with `averageValue` `"0.5"` and `"1500m"`;
+   `autoscaling.targetStaticTargetsPerPod: 40` with `allocator.enabled` MUST
+   render one of `http_exporter_static_targets` with `averageValue: "40"`, and
+   without the allocator MUST fail rendering, as MUST a `targetBusy` of `0m`
+   or `lots` and an empty `busyMetric`.
 18. Pod scheduling and metadata: `priorityClassName` MUST render on the pod;
    a `topologySpreadConstraints` entry without a `labelSelector` MUST render
    with one matching the Deployment's selector, and one with its own MUST
@@ -1179,9 +1234,11 @@ are skipped and the text checks of the templates still run:
    `defaultLabels` and `defaultAnnotations`; a `podLabels` key the chart sets
    itself MUST fail rendering, and a `podAnnotations` `checksum/config` MUST
    be replaced by the chart's.
-19. Debug probes: `server.probeDebug: true` MUST render
-   `--web.enable-probe-debug`, the default MUST NOT, and the flag in
-   `extraArgs` MUST fail rendering, naming `server.probeDebug`.
+19. Debugging collectors: `server.debug: edit` and `server.debug: full`
+   MUST render `--web.debug=edit` and `--web.debug=full`; the default and
+   `off` MUST render no `--web.debug`; any other value MUST fail rendering,
+   naming `server.debug`; and the flag in `extraArgs` MUST fail rendering,
+   naming `server.debug`.
 20. Names, network policy, monitors and scheduling: releases `blue` and
    `green` MUST get objects of their own names, a release named after the
    chart the chart's name, and `fullnameOverride` its own; the network policy

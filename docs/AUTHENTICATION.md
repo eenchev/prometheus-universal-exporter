@@ -129,6 +129,213 @@ When enabled, Basic Auth is required for `/probe`, the self-metrics path, the st
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 
+## Logging in to a target
+
+Some targets take no credential the operator can put in a file: they hand
+out a token at a login, and want it on every request. An `http` or
+`graphite` collector logs in with `request.login` before its request, and
+sends the token it was given, in `Authorization` as a bearer token unless
+the login says otherwise. The login is made once and its token kept for the
+requests after it (see [How long a token is kept](#how-long-a-token-is-kept)).
+There are two kinds, `json` and `oauth2`. A `grpc` collector does not log
+in: its credential is `bearer_token_file` or basic authentication. A secret
+of a login is never written in the configuration: it is read from a file at
+each login, so a rotated Secret is used by the next one.
+
+### A JSON login
+
+`type: json` posts a JSON object to `url` and reads the token from the
+answer:
+
+```yaml
+collectors:
+  - name: appliance
+    request:
+      type: http
+      path: /api/v2/status
+      login:
+        type: json
+        url: /api/v2/login            # resolved against the target
+        fields:
+          tenant: acme                # as written: nothing secret
+        field_files:                  # each read from its file at every login
+          username: /var/run/prometheus-universal-exporter/target-auth/username
+          password: /var/run/prometheus-universal-exporter/target-auth/password
+        token: .access_token          # jq on the answer's body
+        expires_in: .expires_in       # seconds; optional
+    transform:
+      type: jq
+    metrics:
+      - name: appliance_up
+        expression: .up
+```
+
+The body posted is `{"password": "...", "tenant": "acme", "username": "..."}`,
+with `Content-Type: application/json`. `field_files` is required, with one
+field at least; `fields` holds what is no secret, and a field is in one of
+the two. A file that is missing or empty fails the login, naming the field
+and the file, never what it holds; the whitespace around what it holds is
+trimmed, as for every [credential file](#credentials-from-a-kubernetes-secret).
+
+The token is read from exactly one of three places:
+
+| Key | The token is | Sent as |
+| --- | --- | --- |
+| `token` | what this jq expression gives of the answer's JSON body, such as `.access_token` or `.data.session.id`, with `$status` and `$headers` as in a rule; it must give text that is not empty | `Authorization: Bearer <token>` |
+| `token_header` | the value of this header of the answer, such as `X-Subject-Token` | `Authorization: Bearer <token>` |
+| `token_cookie` | the value of the cookie of this name that the answer sets, such as `JSESSIONID`, for an application that keeps a session | `Cookie: JSESSIONID=<value>`, the session sent back |
+
+`header` and `prefix` change how a token is sent: `header: X-Auth-Token`
+with `prefix: ""` sends `X-Auth-Token: <token>`. `header` is `Authorization`
+when left out, and `prefix` then `"Bearer "`, and nothing in another
+header. The header's name must read as a credential's — it has `auth`,
+`token`, `key`, `session`, `cookie` or the like in it — since every place
+that shows a request's headers, a debug report above all, withholds the
+values of those alone; `X-Tenant` is refused when the configuration loads.
+A `token_cookie` takes neither: the cookie is sent back as it was set.
+
+### OAuth 2.0 client credentials
+
+`type: oauth2` asks a token endpoint for a token with the client
+credentials grant (RFC 6749 § 4.4), the way a service logs in to an API
+behind Keycloak, Entra ID, Okta, Auth0 or the like:
+
+```yaml
+collectors:
+  - name: billing
+    request:
+      type: http
+      path: /v1/usage
+      login:
+        type: oauth2
+        url: https://idp.example/realms/ops/protocol/openid-connect/token
+        client_id: metrics-exporter   # or client_id_file
+        client_secret_file: /var/run/secrets/billing/client-secret
+        scopes: [usage:read]
+        endpoint_params:
+          audience: https://billing.example
+        # auth_style: params          # the id and secret as form parameters
+    transform:
+      type: jq
+    metrics:
+      - name: billing_requests
+        expression: .requests
+```
+
+`client_secret_file` is required, and one of `client_id` and
+`client_id_file`. The id and secret are sent as a Basic credential, which
+every server must take; `auth_style: params` sends them as parameters of
+the form instead, for a server that wants them there. `scopes` are sent as
+the `scope` parameter, and `endpoint_params` as further parameters, but not
+`grant_type`, `scope`, `client_id` or `client_secret`, which the grant sets.
+The answer's `access_token` is sent as `Authorization: Bearer <token>`, or
+as `header` and `prefix` say, and its `expires_in` is the token's lifetime.
+
+### Where a login goes
+
+Where a login goes is the configuration's alone. No probe parameter sets or
+changes `login`, and a [static target](STATIC-TARGETS.md) may set a `login`
+of its own, which replaces the collector's for it:
+
+- **`url` absolute**, such as an identity provider's token endpoint, is the
+  same for every target the collector is asked about, whatever a probe
+  says; one token serves them all.
+- **`url` a path**, such as `/api/v2/login`, is resolved against the target
+  — its scheme, host and port, without its credentials or query — so each
+  target is logged in to on its own, and keeps its own token. The secrets
+  then go to whichever target a probe names, as `basic_auth_file`'s do:
+  restrict the collector's targets with
+  [`allowed_targets`](REQUESTS.md#restricting-targets).
+
+The login request is held to the collector's `allowed_schemes`,
+`allowed_targets` and `denied_targets` as the request is; a login URL they
+refuse fails the probe in the `login` stage, and is no refusal of the
+target. It follows no redirect, whatever `follow_redirects` says, so the
+secrets go only where `url` says; a login answered with a redirect fails,
+saying `login.url` must be the URL that answers the login itself. It is
+made with `login.tls`, a [tls block](REQUESTS.md#tls) of its own for a login
+server the target's settings do not fit, or else the collector's
+`request.tls`, and never with the `insecure_skip_verify` a probe parameter or
+a static target sets for the target. The `login` block is written whole:
+`url` holds no `{{param_...}}` placeholder, no credentials and no fragment.
+
+### How long a token is kept
+
+A token is kept, by the collector, the login and the URL the login went to,
+and sent on every request until shortly before it expires. Its lifetime is
+`expires_in` for a `json` login, the answer's `expires_in` for `oauth2`, the
+cookie's `Max-Age` or `Expires` for `token_cookie`, and, where the answer
+says none, `ttl`, such as `15m`; with neither, the token is kept until the
+target refuses it. A token is fetched again once a tenth of its life is
+left, or 30 seconds, whichever is more, but never before half of it has
+passed: a token of an hour at 54 minutes, one of five minutes at four and a
+half, one of a minute at 30 seconds.
+
+Probes that need a token while it is being fetched wait for that one login
+rather than each making one, each within its own deadline. A login that
+fails while the token kept has not yet expired leaves that token in use, and
+is counted as a failed login; once it has expired, the probe fails.
+
+A target that answers `401` has the token it was sent dropped, and the
+request is sent once more with the token of a new login, whatever its
+method. That second request is not one of `retry.attempts`, and is made
+within the probe's deadline; a `401` to it is the probe's answer, failing
+in the `http_status` stage. A `403` is not taken for a token gone bad.
+
+At most 1000 tokens are kept, across collectors, the one used longest ago
+dropped first; a reload drops the tokens of a login it changes or removes.
+A secret file is read at each login, so a rotated secret is used at the
+next login; the token kept is used until then.
+
+### Beside other credentials
+
+A login sent in `Authorization` is refused beside `basic_auth`,
+`basic_auth_file`, `bearer_token` or `bearer_token_file`, which send that
+header too; one sent in a header of its own may stand beside them, for a
+gateway that wants a Basic credential and an application behind it that
+wants a session. A `request.headers` entry of the header the login sends
+its token in is refused. A probe's forwarded `Authorization`
+([`forward_authorization`](#reaching-the-target)), a forwarded header, or a
+static target's own credential or header, in the login's header, is sent
+instead of the token, and no login is made for that request.
+
+### When a login fails
+
+A login that fails fails the probe in the `login` stage, as the log, the
+probe's answer and a debug report name it, saying where the login went,
+with its query's values masked, and why: the status and the start of the
+answer, 256 bytes at most, with what reads as a credential masked, or, for
+`oauth2`, the status and the error code and description RFC 6749 has the
+server send. What the login sent — its body, its secrets — is never shown:
+
+```text
+login at https://appliance.example/api/v2/login failed: the login was answered with HTTP status 403: {"error": "account locked", "password": "<redacted>"}
+```
+
+An error of a `token` or `expires_in` expression says what it gave, such as
+"an object", never the value, which may be the token itself.
+
+Each collector's logins are counted in
+[`http_exporter_logins_total` and `http_exporter_login_failures_total`](SELF-METRICS.md#collector-metrics).
+A [debug probe](CONFIGURATION.md#debugging-collectors) lists the login
+request, marked `(login)`, before the request it was made for, with its
+headers shown as every request's are, a credential's value withheld, and
+never its body; it shows no login when the token was kept from an earlier
+one. [`--dry-run`](CONFIGURATION.md#dry-run) lists the login
+under `request_policies`, with its header and prefix filled in, the files
+its secrets are read from and never what they hold, and a field or endpoint
+parameter whose name reads as a credential's without its value; a secret
+file that is missing or empty is listed under `warnings`.
+
+### Secrets from a Kubernetes Secret
+
+With the Helm chart, `targetAuth.type: basic` mounts a Secret's username and
+password as the files the JSON login above reads. Any other Secret, an
+OAuth client's secret say, is mounted with `extraVolumes` and
+`extraVolumeMounts` (see the
+[chart README](../charts/prometheus-universal-exporter/README.md)), and its
+files named in `field_files`, `client_id_file` or `client_secret_file`.
+
 ## Probing from the browser
 
 `/collectors` lists every collector with a form that probes a target through
@@ -136,8 +343,9 @@ it and shows the answer in place. What the form asks for follows the
 collector:
 
 - **A credential in the collector's configuration** — `basic_auth`,
-  `basic_auth_file`, `bearer_token`, `bearer_token_file`, a TLS client
-  certificate — is the exporter's to send. The page says which kind the
+  `basic_auth_file`, `bearer_token`, `bearer_token_file`, a
+  [`login`](#logging-in-to-a-target), a TLS client certificate — is the
+  exporter's to send. The page says which kind the
   collector sends, never its value, and there is nothing to enter.
 - **`forward_authorization: true`** adds a *Target credential*: a bearer
   token or a username and password. The page sends it to `/probe` as the
@@ -157,16 +365,67 @@ scrape timeout Prometheus would send, so a target that never answers ends
 in the exporter's own error after it rather than a page waiting for ever.
 A credential left blank is not sent at all.
 
-When the exporter runs with `--web.enable-probe-debug`, each form also has a
-*Debug report* switch. Switched on, the form sends `debug=true` and shows the
-[debug report](CONFIGURATION.md#debugging-a-probe) of the trip in place of the
-metrics, with the status a probe would have answered above it, green or red
-as the probe would have been. Without the flag there is no switch.
+When the exporter runs with `--web.debug` at `edit` or `full`, each collector
+also has a *Debug* link, which opens the
+[debug page](CONFIGURATION.md#the-debug-page) with the collector chosen and,
+at `full`, the target entered in the form, to see the whole trip. Without the
+flag there is no link.
 
 The page itself is behind the exporter's Basic Auth when that is on, and the
 browser sends the same credential with each probe. Since exporter Basic Auth
 and `forward_authorization` cannot be combined, the `Authorization` header is
 never asked to carry both.
+
+### Debugging collectors
+
+`--web.debug` turns on [debugging](CONFIGURATION.md#debugging-collectors) at
+one of two levels, and the difference between them is what a visitor of the
+exporter's pages is shown of the targets:
+
+- **`edit`** serves `/debug`, where a collector is run on a response the
+  visitor pastes. Nothing is fetched and no target is contacted, so the page
+  never shows what a target answers: a visitor learns only what the
+  collector makes of what they pasted. `/probe?debug=true` and
+  `/static-targets?debug=<name>` stay refused (`403`).
+- **`full`** adds what shows a target's answer: the page fetching a target
+  through a configured collector or scraping a static target, and the two
+  debug URLs. A report shows the response as the target sent it — its body,
+  and every header whose name does not read as a credential's — so a visitor
+  sees whatever the targets the configured collectors can reach answer,
+  with those collectors' credentials sent, though never shown. Turn it on
+  while a collector is being fixed, not for good.
+
+Both are behind the exporter's Basic Auth like the other pages, and are for
+whoever may already change the exporter's configuration. What a run may do
+is kept from reaching further than that:
+
+- **Another site's page.** A browser sends the exporter's Basic Auth
+  credential with any request to the exporter, one a page of another site
+  makes included. Each run of the page therefore carries an `X-Debug-Run`
+  header and a JSON body, neither of which such a page can send without
+  first asking the exporter (a CORS preflight), which the exporter never
+  allows; a run without the header is answered `403`, and one the browser
+  marks as coming from another site (`Sec-Fetch-Site`) too. The page cannot
+  be framed. The debug URLs only read, with `GET`, and answer `text/plain`
+  with `nosniff`, which a browser never runs as a page.
+- **The server's files and credentials.** A collector written on the page
+  that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file, a
+  `login` — is refused, and so is any request type but `http`, since the others read
+  files, hosts and databases with the server's keys. `${NAME}` references in
+  it are not expanded, so the environment stays unseen. A pasted response
+  makes no request at all. A configured collector run by name is the
+  operator's own: on a pasted response it makes no request either.
+- **Requests to anywhere.** A target is only fetched, at `full`, through a
+  collector of the configuration in force, with its target policy and its
+  credentials, as a debug probe of it would be — nothing a probe could not
+  already reach. Nothing of the browser's request, its `Authorization` or
+  cookies, is forwarded.
+- **Code.** A collector written on the page never runs Python, at either
+  level. A configured collector runs its own script, as it does on every
+  probe, on whatever the visitor pasted: input chosen by someone else, as a
+  target's answer is on every probe. An expression of the other transforms
+  runs on the server against the response, bounded by the probe's deadline,
+  the collector's limits and 4 runs of the page at a time.
 
 ## Credentials from a Kubernetes Secret
 

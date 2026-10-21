@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
@@ -71,6 +72,24 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"static\",member=\"%s\"} %d\n", escape(name), assigned[name].static)
 	}
 
+	// The average is what one more member would take off each: the figure to
+	// scale the exporter's replicas by when it is to keep so many targets
+	// each. A member list that is empty has no average, and shows 0, as it
+	// shows no member assigned anything.
+	family("pue_allocator_targets_per_member", "gauge", "Targets allocated to the members of the member list, by kind, divided by the number of members: static targets and probe targets per member on average; 0 with no member.")
+	var allStatic, allProbe int
+	for _, name := range names {
+		allStatic += assigned[name].static
+		allProbe += assigned[name].probe
+	}
+	perMember := func(total int) string {
+		if len(a.effective) == 0 {
+			return "0"
+		}
+		return strconv.FormatFloat(float64(total)/float64(len(a.effective)), 'g', -1, 64)
+	}
+	fmt.Fprintf(&b, "pue_allocator_targets_per_member{kind=\"probe\"} %s\npue_allocator_targets_per_member{kind=\"static\"} %s\n", perMember(allProbe), perMember(allStatic))
+
 	family("pue_allocator_generation_info", "gauge", "The generation of the bundle each member of the member list is to have; a replica reports the one it has in force in its heartbeats.")
 	members := make([]string, 0, len(a.bundles))
 	for name := range a.bundles {
@@ -89,6 +108,28 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 
 	family("pue_allocator_members_refused_total", "counter", "Heartbeats of new members refused because as many members as --members.max allows were live.")
 	fmt.Fprintf(&b, "pue_allocator_members_refused_total %d\n", a.membersRefused)
+
+	sources := a.sourceMetrics()
+	labels := func(m sourceMetric) string {
+		return fmt.Sprintf("kind=\"%s\",owner=\"%s\",source=\"%s\"", m.kind, escape(m.owner), escape(m.name))
+	}
+	family("pue_allocator_discovered_targets", "gauge", "Targets in the last good answer of each discovery source, by kind (probe or static), owner (the probe job or the discovered_targets entry) and source; 0 for a source that has never answered.")
+	for _, m := range sources {
+		fmt.Fprintf(&b, "pue_allocator_discovered_targets{%s} %d\n", labels(m), m.found)
+	}
+	family("pue_allocator_discovery_refreshes_total", "counter", "Refreshes of each discovery source, by result: success for every answer taken, failure once for a failure while its text stays the same.")
+	for _, m := range sources {
+		fmt.Fprintf(&b, "pue_allocator_discovery_refreshes_total{%s,result=\"failure\"} %d\n", labels(m), m.failures)
+		fmt.Fprintf(&b, "pue_allocator_discovery_refreshes_total{%s,result=\"success\"} %d\n", labels(m), m.successes)
+	}
+	family("pue_allocator_discovery_last_success_timestamp_seconds", "gauge", "When each discovery source last answered, in seconds since the Unix epoch; 0 for a source that has never answered.")
+	for _, m := range sources {
+		at := 0.0
+		if !m.lastGood.IsZero() {
+			at = float64(m.lastGood.UnixNano()) / 1e9
+		}
+		fmt.Fprintf(&b, "pue_allocator_discovery_last_success_timestamp_seconds{%s} %s\n", labels(m), strconv.FormatFloat(at, 'f', -1, 64))
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
 }

@@ -129,9 +129,10 @@ func refusedAtLine(err error, line int) bool {
 // the schema finds a problem at the place and whether the exporter refuses
 // what is on its line while reading the file. A number is one the key's
 // least and most allow, so that it is the kind that is tried and not the
-// value. One place takes text beside a number and reads both as text, an
-// entry of accept_status: a boolean there is refused by the schema for its
-// kind and by the exporter once the file is read, as no status.
+// value. Two places take text beside a number and read both as text, an
+// entry of accept_status and one of retry.statuses: a boolean there is
+// refused by the schema for its kind and by the exporter once the file is
+// read, as no status.
 //
 // A collector file's collectors are the configuration's, so its places are
 // tried in one way each, and under the race detector, where a load costs
@@ -221,11 +222,12 @@ func TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes(t *testing.T) {
 				line := strings.Count(document, "\n")
 				what := fmt.Sprintf("%s, %s written %s", file.name, strings.Join(place, "."), way.written)
 				err := file.load(document)
-				// An entry of accept_status is a status or a class of
-				// them, a number or text, and the exporter reads whatever
-				// is written as text and refuses what is neither after the
-				// file is read, as the tables of the keys show of true.
-				afterReading := len(place) > 1 && place[len(place)-2] == "accept_status" && way.notText == "a boolean"
+				// An entry of accept_status or retry.statuses is a status
+				// or a class of them, a number or text, and the exporter
+				// reads whatever is written as text and refuses what is
+				// neither after the file is read, as the tables of the
+				// keys show of true.
+				afterReading := len(place) > 1 && (place[len(place)-2] == "accept_status" || place[len(place)-2] == "statuses") && way.notText == "a boolean"
 				if refusedAtLine(err, line) != way.refused && !afterReading {
 					t.Errorf("%s: want it refused by the exporter at its line: %v; the exporter says %v\n%s", what, way.refused, err, document)
 				}

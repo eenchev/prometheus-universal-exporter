@@ -112,7 +112,7 @@ func decodeAs(t *testing.T, kind, contentType, body string) (*Decoded, error) {
 func TestJSONTrailingDataIsRefused(t *testing.T) {
 	for _, body := range []string{"{\"a\":1}\n{\"a\":2}\n", "{\"a\":1}\ngarbage", `{"a":1} {"a":2}`, `[1]]`} {
 		for _, kind := range []string{"json", "auto"} {
-			if _, err := decodeAs(t, kind, "application/json", body); err == nil || !strings.Contains(err.Error(), "trailing data after the JSON value (NDJSON, one value per line, is not supported)") {
+			if _, err := decodeAs(t, kind, "application/json", body); err == nil || !strings.Contains(err.Error(), "trailing data after the JSON value (for NDJSON, one value on each line, set decoder.type: ndjson)") {
 				t.Errorf("%s %q: err=%v", kind, body, err)
 			}
 		}

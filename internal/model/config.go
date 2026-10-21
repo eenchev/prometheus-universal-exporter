@@ -173,6 +173,12 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// Pagination fetches the further pages of a paginated answer and merges
+	// them into one JSON document, the first page with its items array
+	// holding every page's items (fetch/pagination.go). Left out of a
+	// collector written as YAML when unset, as the sql keys are below, so
+	// the fingerprint of a collector without it is what it was.
+	Pagination *PaginationConfig `yaml:"pagination,omitempty"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses
@@ -254,7 +260,85 @@ type RequestConfig struct {
 	ServiceName string            `yaml:"service_name,omitempty"`
 	MaxRows     int               `yaml:"max_rows,omitempty"`
 	Connections *SQLConnections   `yaml:"connections,omitempty"`
+	// RecordType, Server and Transport belong to the dns type: the record
+	// type asked for, A when left out; the server asked, host:port, the
+	// system's resolver when left out; and udp or tcp (fetch/requesttype_dns.go).
+	// Left out of a collector written as YAML when empty, as the sql keys.
+	RecordType string `yaml:"record_type,omitempty"`
+	Server     string `yaml:"server,omitempty"`
+	Transport  string `yaml:"transport,omitempty"`
+	// Region, Endpoint and PathStyle belong to the s3file type, with Root,
+	// Path and the directory keys above: the region requests are signed
+	// for, the URL of an S3-compatible store in place of AWS's, and whether
+	// the bucket is named in the URL's path rather than its host.
+	// AccessKeyIDFile, SecretAccessKeyFile and SessionTokenFile are the
+	// files of static credentials, read at each request; without them the
+	// AWS SDK's default chain finds credentials (fetch/requesttype_s3file.go).
+	// Left out of a collector written as YAML when empty, as the sql keys
+	// are.
+	Region              string `yaml:"region,omitempty"`
+	Endpoint            string `yaml:"endpoint,omitempty"`
+	PathStyle           bool   `yaml:"path_style,omitempty"`
+	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
+	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
+	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
+	// Login belongs to the http and graphite types: a login the exporter
+	// makes before it asks the target, whose token it sends on the
+	// request (fetch/login.go). Left out of a collector written as YAML
+	// when unset, as the sql keys are.
+	Login *LoginConfig `yaml:"login,omitempty"`
 }
+
+// LoginConfig is request.login: how the exporter logs in to get the token
+// it sends to an http or graphite target. Type json posts a JSON object of
+// Fields and FieldFiles to URL and reads the token from the answer's body
+// (Token, a jq expression), a header of it (TokenHeader) or a cookie it sets
+// (TokenCookie); type oauth2 asks the token endpoint URL for a token with
+// the client credentials grant (RFC 6749 § 4.4). A secret is read from a
+// file at each login, never written in the configuration.
+type LoginConfig struct {
+	Type string `yaml:"type" json:"type"`
+	// URL is where the login is sent: absolute, or relative to the target.
+	URL string `yaml:"url" json:"url"`
+	// Fields and FieldFiles are the members of a json login's body: each
+	// of Fields as written, each of FieldFiles read from its file.
+	Fields     map[string]string `yaml:"fields" json:"fields,omitempty"`
+	FieldFiles map[string]string `yaml:"field_files" json:"field_files,omitempty"`
+	// Token, TokenHeader and TokenCookie say where a json login's answer
+	// holds the token; ExpiresIn is the jq expression of its lifetime in
+	// seconds.
+	Token       string `yaml:"token" json:"token,omitempty"`
+	TokenHeader string `yaml:"token_header" json:"token_header,omitempty"`
+	TokenCookie string `yaml:"token_cookie" json:"token_cookie,omitempty"`
+	ExpiresIn   string `yaml:"expires_in" json:"expires_in,omitempty"`
+	// ClientID, ClientIDFile, ClientSecretFile, Scopes, EndpointParams
+	// and AuthStyle are an oauth2 login's.
+	ClientID         string            `yaml:"client_id" json:"client_id,omitempty"`
+	ClientIDFile     string            `yaml:"client_id_file" json:"client_id_file,omitempty"`
+	ClientSecretFile string            `yaml:"client_secret_file" json:"client_secret_file,omitempty"`
+	Scopes           []string          `yaml:"scopes" json:"scopes,omitempty"`
+	EndpointParams   map[string]string `yaml:"endpoint_params" json:"endpoint_params,omitempty"`
+	AuthStyle        string            `yaml:"auth_style" json:"auth_style,omitempty"`
+	// TTL is how long a token is used when the answer does not say how
+	// long it lasts; unset, until the target answers 401.
+	TTL Duration `yaml:"ttl" json:"ttl,omitempty"`
+	// Header and Prefix are how the token is sent: Authorization and
+	// "Bearer " when unset, and, with TokenCookie, as the cookie it was.
+	Header string  `yaml:"header" json:"header,omitempty"`
+	Prefix *string `yaml:"prefix" json:"prefix,omitempty"`
+	// TLS is the login's own tls block, for a login server the target's
+	// does not fit; unset, the collector's request.tls.
+	TLS *TLSConfig `yaml:"tls" json:"tls,omitempty"`
+}
+
+// The values of request.login.type and request.login.auth_style.
+var (
+	LoginTypes      = []string{"json", "oauth2"}
+	LoginAuthStyles = []string{"header", "params"}
+)
+
+// DNSRecordTypes are the values of a dns collector's request.record_type.
+var DNSRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how
@@ -277,6 +361,49 @@ type SQLKeepalive struct {
 	Check    string    `yaml:"check"`
 }
 
+// PaginationConfig is an http collector's request.pagination: how the next
+// page of an answer is found, where each page holds its items, and how many
+// pages one trip fetches at most.
+type PaginationConfig struct {
+	// Type is how the next page is found: link, the Link header's
+	// rel="next"; next_url, a URL Next reads from the page; cursor, a value
+	// Next reads from the page, sent as the query parameter Param; page, a
+	// page number in Param counting from Start; offset, an offset in Param
+	// from Start, moved on by the items received or by Size.
+	Type string `yaml:"type" json:"type,omitempty"`
+	// Items is the jq path of the array each page holds its items in, such
+	// as .items, or . for a page that is an array.
+	Items string `yaml:"items" json:"items,omitempty"`
+	// Next is the jq expression of the next page's URL (next_url) or cursor
+	// (cursor); null, false or "" ends the pagination.
+	Next  string `yaml:"next" json:"next,omitempty"`
+	Param string `yaml:"param" json:"param,omitempty"`
+	// Start is the first page's number (page, 1 when unset) or offset
+	// (offset, 0 when unset).
+	Start *int `yaml:"start" json:"start,omitempty"`
+	// Size is how far the offset moves from one page to the next; unset,
+	// by the number of items the page held.
+	Size int `yaml:"size" json:"size,omitempty"`
+	// MaxPages is the most pages one trip fetches, the first included;
+	// DefaultMaxPages when unset, at most MaxMaxPages.
+	MaxPages int `yaml:"max_pages" json:"max_pages,omitempty"`
+}
+
+// The pagination types, the default of request.pagination.max_pages and its
+// largest value.
+const (
+	PaginationLink    = "link"
+	PaginationNextURL = "next_url"
+	PaginationCursor  = "cursor"
+	PaginationPage    = "page"
+	PaginationOffset  = "offset"
+	DefaultMaxPages   = 10
+	MaxMaxPages       = 1000
+)
+
+// PaginationTypes are the values of request.pagination.type.
+var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCursor, PaginationPage, PaginationOffset}
+
 // RetryConfig is request.retry: how often a failed request is tried again,
 // and how long to wait before each attempt.
 type RetryConfig struct {
@@ -289,6 +416,12 @@ type RetryConfig struct {
 	// Codes are the gRPC status codes a grpc request retries, by name;
 	// UNAVAILABLE alone when unset. Only for the grpc type.
 	Codes []string `yaml:"codes"`
+	// Statuses are the HTTP statuses an http or graphite request retries,
+	// written as accept_status is: 408, 425, 429 and 5xx when unset. A list
+	// replaces that set, and an empty one retries no status, while a
+	// connection that failed is retried still. Not for the grpc type, which
+	// retries by Codes.
+	Statuses []string `yaml:"statuses"`
 }
 
 // BasicAuth is request.basic_auth, credentials written in the configuration.
@@ -307,15 +440,17 @@ type BasicAuthFile struct {
 
 // TLSConfig is a tls block: the CA to verify the server with, a client
 // certificate and key, and whether verification is skipped.
+//
+// Its JSON names are its keys', for --dry-run, which shows a login's.
 type TLSConfig struct {
-	CAFile             string `yaml:"ca_file"`
-	CertFile           string `yaml:"cert_file"`
-	KeyFile            string `yaml:"key_file"`
-	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	CAFile             string `yaml:"ca_file" json:"ca_file,omitempty"`
+	CertFile           string `yaml:"cert_file" json:"cert_file,omitempty"`
+	KeyFile            string `yaml:"key_file" json:"key_file,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify" json:"insecure_skip_verify,omitempty"`
 	// ServerName is the name the server's certificate is checked against,
 	// and sent as SNI, when the target is addressed by something else, such
 	// as an IP address.
-	ServerName string `yaml:"server_name"`
+	ServerName string `yaml:"server_name" json:"server_name,omitempty"`
 }
 
 // ResponseConfig is a collector's response block: how to read the body the
@@ -520,7 +655,7 @@ func (l LabelRule) Static() bool { return l.Expression == "" }
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite"}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini"}
 
 // TransformTypes are the values of transform.type, which a collector must set.
 // Validation and the JSON Schema both read this list, and a test keeps the

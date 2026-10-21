@@ -453,7 +453,7 @@ func (r *followRig) shown() string {
 		if strings.HasPrefix(line, "#") || !strings.HasPrefix(name, "http_exporter_") {
 			continue
 		}
-		timed := strings.Contains(name, "duration") || strings.Contains(name, "timestamp") || strings.Contains(name, "_age") || strings.Contains(name, "uptime") || strings.Contains(name, "start_time")
+		timed := strings.Contains(name, "duration") || strings.Contains(name, "timestamp") || strings.Contains(name, "_age") || strings.Contains(name, "uptime") || strings.Contains(name, "start_time") || strings.HasSuffix(name, "_seconds_total")
 		if timed && !strings.HasSuffix(name, "_count") {
 			continue
 		}

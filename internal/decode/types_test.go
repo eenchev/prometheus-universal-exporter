@@ -21,6 +21,10 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"prometheus": "a 1\n",
 		"text":       "a=1",
 		"graphite":   "a.b 1 1727000000\n",
+		"ndjson":     "{\"a\":1}\n{\"a\":2}\n",
+		"logfmt":     "a=1 b=2\n",
+		"toml":       "a = 1\n",
+		"ini":        "[s]\na = 1\n",
 	}
 	for _, decoder := range model.DecoderTypes {
 		if decoder == "auto" {

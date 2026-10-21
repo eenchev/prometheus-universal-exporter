@@ -147,7 +147,7 @@ func TestADebugProbeShowsWhatARedirectWasSent(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := newLeavingTarget(t)
 	server := modeServer(t, redirectCollector("wary"), redirectCollector("trusting", "localhost"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	query := "&debug=true&target=" + url.QueryEscape(target.URL+"/start")
 
 	body := debugProbeGet(t, server, "collector=wary"+query).Body.String()
@@ -187,7 +187,7 @@ func TestARedirectToTheSameHostOnAnotherPortNamesBothOrigins(t *testing.T) {
 	if sent := target.sentTo("/end"); sent != "|" {
 		t.Errorf("the redirect was sent %q", sent)
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=wary&debug=true&target="+url.QueryEscape(target.URL+"/start")).Body.String()
 	assertContains(t, body, "     not sent: Authorization, X-Api-Key — the redirect leads to "+other.URL+", which is not the origin the request was made to, "+target.URL+", and whose host is not in request.redirect_trusted_hosts\n")
 }
@@ -211,7 +211,7 @@ func TestCredentialsOfTheTargetURLAreNamedAsNotSent(t *testing.T) {
 	if target.sentTo("/start") != "Basic c2NyYXBlcjpwYXNz|" || target.sentTo("/end") != "|" {
 		t.Errorf("the target was sent %q and the redirect %q", target.sentTo("/start"), target.sentTo("/end"))
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=bare&debug=true&target="+url.QueryEscape(withUser)).Body.String()
 	assertContains(t, body, "     not sent: Authorization (the target URL's credentials) — the redirect leads to a host that is not the origin the request was made to and is not in request.redirect_trusted_hosts\n")
 	if strings.Contains(body, "pass@") {

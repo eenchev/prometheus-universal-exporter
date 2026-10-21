@@ -281,11 +281,15 @@ func TestADecoderTheTransformCannotReadIsRefused(t *testing.T) {
 		{"json", "csv", "it reads csv; set decoder.type to csv", "jq, yq or python"},
 		{"json", "xpath", "it reads xml or html; set decoder.type to one of them", "jq, yq or python"},
 		{"json", "prometheus", "it reads prometheus; set decoder.type to prometheus", "jq, yq or python"},
-		{"text", "jq", "it reads json, yaml or graphite; set decoder.type to one of them, give the transform a pre_script that leaves its rules a mapping or a list", "regex or python"},
-		{"csv", "yq", "it reads json, yaml or graphite", "csv or python"},
+		{"text", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml or ini; set decoder.type to one of them, give the transform a pre_script that leaves its rules a mapping or a list", "regex or python"},
+		{"csv", "yq", "it reads json, yaml, graphite, ndjson, logfmt, toml or ini", "csv or python"},
 		{"xml", "css", "it reads html", "xpath or python"},
 		{"html", "regex", "it reads text", "xpath, css or python"},
-		{"prometheus", "jq", "it reads json, yaml or graphite", "python or prometheus"},
+		{"prometheus", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml or ini", "python or prometheus"},
+		{"ndjson", "regex", "it reads text; set decoder.type to text", "jq, yq or python"},
+		{"logfmt", "csv", "it reads csv; set decoder.type to csv", "jq, yq or python"},
+		{"toml", "xpath", "it reads xml or html; set decoder.type to one of them", "jq, yq or python"},
+		{"ini", "prometheus", "it reads prometheus; set decoder.type to prometheus", "jq, yq or python"},
 	} {
 		err := Validate(collector(pair.decoder, pair.transform, ""))
 		want := fmt.Sprintf("collector \"a\" decodes with %s, which its %s transform cannot read: %s", pair.decoder, pair.transform, pair.reads)

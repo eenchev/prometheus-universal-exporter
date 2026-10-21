@@ -13,8 +13,9 @@ spec:
     matchLabels:
       {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
   {{- /* Callers are this release's exporter pods, which heartbeat and fetch
-         their bundles, and Prometheus, which fetches the probe targets. The
-         allocator calls nothing, so egress stays open. */}}
+         their bundles, and Prometheus, which fetches the probe targets.
+         Egress stays open: the allocator's discovery sources, an http_sd URL
+         or the Kubernetes API server, are reached through it. */}}
   policyTypes:
     - Ingress
   ingress:

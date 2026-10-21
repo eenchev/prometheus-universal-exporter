@@ -36,7 +36,7 @@ func errorLengthServer(t *testing.T, collector string) (*Server, *bytes.Buffer) 
 		t.Fatal(err)
 	}
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	logs := &bytes.Buffer{}
 	server.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return server, logs

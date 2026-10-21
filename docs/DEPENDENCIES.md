@@ -95,9 +95,12 @@ The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `LXML_VERSION`,
 defaults. Override them with `docker build --build-arg NAME=value`.
 
 `REQUEST_TYPES` is a build argument too, but not a pinned version: empty by
-default, which builds every request type, or a comma-separated list such as
-`http` to build only those. See
+default, which builds every request type but the opt-in ones, or a
+comma-separated list such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
+`OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
+leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)).
+`SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
 
@@ -139,7 +142,10 @@ The exporter's direct dependencies are `gojq` (jq and yq expressions),
 (CSS selectors) and `andybalholm/cascadia`, the selector compiler goquery uses
 underneath, which the exporter calls itself to compile each CSS selector once
 and keep it (`internal/expr/exprcache.go`), `gopkg.in/yaml.v3`,
-`golang.org/x/text` for its character encodings (`encoding/htmlindex`,
+`github.com/BurntSushi/toml`, which the `toml` decoder reads a document with
+(`internal/decode/toml.go`, see [NDJSON, logfmt, TOML and
+INI](CONFIGURATION.md#ndjson-logfmt-toml-and-ini)), and which `go.mod`
+already required as another module's dependency; `golang.org/x/text` for its character encodings (`encoding/htmlindex`,
 `encoding/unicode`), which convert a response in an encoding other than UTF-8
 to UTF-8 (`internal/decode/textencoding.go`, see [Character
 encodings](CONFIGURATION.md#character-encodings)), and `golang.org/x/net` for
@@ -149,7 +155,11 @@ build for goquery's HTML parser. The Prometheus text format is parsed by
 the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module
 brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
 for one function, and a test fails if `go.mod` requires `prometheus/common`,
-`client_model` or `goautoneg` again.
+`client_model` or `goautoneg` again. The `ndjson`, `logfmt` and `ini`
+decoders need no module: NDJSON is read by the exporter's own JSON decoder,
+line by line, and logfmt and INI by small parsers of its own
+(`internal/decode/logfmt.go`, `ini.go`), the dialects of INI agreeing on too
+little for a module to settle.
 
 The [`grpc`](GRPC.md) request type has three direct dependencies of its own:
 `google.golang.org/grpc`, which also carries the reflection client and the
@@ -163,6 +173,20 @@ import them, so a build without the type does not link them, and a test
 for every type but `sql` against 17.9 MB for
 `REQUEST_TYPES=http,localfile,graphite,sshfile`.
 Dependabot's Go group and `govulncheck` cover them with no change.
+
+The [`dns`](DNS.md) and [`tlscert`](TLSCERT.md) request types have no
+dependency of their own: the first asks Go's own resolver (`net`), the second
+makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
+same test finds none of the other types' modules in a build of either.
+
+The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
+has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token
+endpoint for a token with the OAuth 2.0 client credentials grant
+(`internal/fetch/login.go`), and which `go.mod` already required as the
+`snowflake` driver's dependency. Only the file of the login imports it, built
+with either type, so a build of neither, such as `REQUEST_TYPES=grpc`, does
+not link it. A `json` login needs no module: it is a request the exporter
+makes itself, read with `gojq`.
 
 The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
 own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a
@@ -202,3 +226,30 @@ Snowflake's. CI vets, builds and
 tests a build with all four opt-in drivers, which no other build compiles
 (see [Development](DEVELOPMENT.md#the-sql-request-type)). The stand-in
 database of the tests (`internal/sqltest`) uses `database/sql/driver` alone.
+
+The [`s3file`](S3FILE.md) request type, which a build carries only when
+`OPT_IN_REQUEST_TYPES` names it, has four direct dependencies of its own,
+all of the AWS SDK for Go v2: `github.com/aws/aws-sdk-go-v2`, the SDK's
+core, for its configuration and credential types (`aws`);
+`github.com/aws/aws-sdk-go-v2/config`, which finds the region and the
+credentials by the SDK's default chain — the environment, a web identity
+token, the shared files, the container's or the instance's role — and
+brings the credential providers and the STS, SSO and instance metadata
+clients they use; `github.com/aws/aws-sdk-go-v2/service/s3`, the S3 client
+that signs and sends the HeadObject, GetObject, HeadBucket and
+ListObjectsV2 requests; and `github.com/aws/smithy-go`, the SDK's runtime,
+whose `APIError` tells a missing bucket by its error code. They were in
+`go.mod` already, as indirect dependencies of the `snowflake` driver, at
+the same versions. Only the type's two files, built under its tag alone
+(`internal/fetch/requesttype_s3file.go` and `s3source.go`), import them,
+so the default build and the published image link none of the AWS SDK, and
+a test (`TestOnlyTheTypesThatNeedThemLinkTheirModules`) keeps it so, finding
+the S3 client in a build with the type and no AWS module in one without
+it; the `snowflake` driver links the AWS SDK too, its S3 client among it,
+which is that driver's build to carry
+(`TestOnlyTheBuildsWithASQLDriverLinkIt`). Measured as the image builds,
+they add about 6.7 MB: 37.0 MB for the default build with `s3file`
+against 30.3 MB without it. CI vets, builds, lints and tests a build with
+it beside the default build's types, and each build of one type, `s3file`
+among them. The stand-in store of the tests is an `httptest` server answering
+the calls a read makes, in the tests themselves, with no SDK code.

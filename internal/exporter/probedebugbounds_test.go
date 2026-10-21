@@ -79,10 +79,7 @@ func debugTripOf(t *testing.T, server *Server, collector, target string, query u
 	if limited := server.trips.tryAcquire(collector, maxConcurrentProbes(c)); limited != nil {
 		t.Fatal(limited.message)
 	}
-	verdict, answer := server.debugTrip(ctx, trace, p, collectLog{
-		failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
-		attrs: []any{"collector", collector, "target", p.logTarget},
-	})
+	verdict, answer, _ := server.debugTrip(ctx, trace, p)
 	return debugTrip{trace: trace, probe: p, verdict: verdict, answer: answer}
 }
 
@@ -99,10 +96,10 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 	b.WriteString("\n")
 	if p.static != nil {
 		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
-		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric and exports nothing over OTLP.\n")
+		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.\n")
 	} else {
 		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
-		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.\n")
+		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.\n")
 	}
 
 	b.WriteString("\nRequests\n")
@@ -129,6 +126,12 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 		oldWriteHeaders(&b, req.Header, "     ")
 		if len(req.Withheld) > 0 {
 			fmt.Fprintf(&b, "     not sent: %s — %s\n", strings.Join(req.Withheld, ", "), req.WithheldWhy)
+		}
+	}
+	// The line of retries, added since, is no line the bounds cut.
+	if requester := p.slotOf(); requester != nil && len(requests) > 0 {
+		if retries := fetch.RetriesOf(requester, p.overrides); retries != "" {
+			fmt.Fprintf(&b, "  Retries: %s.\n", retries)
 		}
 	}
 
@@ -444,7 +447,7 @@ func shapedServer(t *testing.T, answer func(target string) (*fetch.HTTPResponse,
 	testutil.CaptureLogs(t)
 	registerShapedType(t, answer)
 	server := pathServer(t, append([]model.Collector{shapedCollector()}, more...)...)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	return server
 }
 
@@ -962,7 +965,7 @@ func TestAStaticTargetsDebugReportIsBoundedAsAProbesIs(t *testing.T) {
 	cfg := &model.Config{Collectors: []model.Collector{shapedCollector()}}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "shaped", Collector: "shaped", Target: "shaped://target"}}}
 	server := newStaticServer(t, cfg, file)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/static-targets?debug=shaped", nil))
 	report := recorder.Body.String()

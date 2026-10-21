@@ -5,8 +5,22 @@
 {{- if lt (int64 $maxReplicas) (int64 $minReplicas) }}
 {{- fail (printf "autoscaling.maxReplicas %s is below autoscaling.minReplicas %s" ($maxReplicas | default "<nil>") ($minReplicas | default "<nil>")) }}
 {{- end }}
-{{- if and (not $scaling.targetCPUUtilizationPercentage) (not $scaling.targetMemoryUtilizationPercentage) (not $scaling.metrics) }}
-{{- fail "autoscaling.enabled needs something to scale on: targetCPUUtilizationPercentage, targetMemoryUtilizationPercentage or metrics" }}
+{{- $busy := include "prometheus-universal-exporter.averageValue" (list "autoscaling.targetBusy" $scaling.targetBusy) }}
+{{- $perPod := include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.targetStaticTargetsPerPod" $scaling.targetStaticTargetsPerPod 1 2147483647) }}
+{{- /* Without the allocator every pod scrapes every static target, so the
+       average per pod stays the whole count however many pods there are,
+       and the autoscaler would only ever scale up. */}}
+{{- if and $perPod (not (and .Values.allocator .Values.allocator.enabled)) }}
+{{- fail "autoscaling.targetStaticTargetsPerPod is set without allocator.enabled, but without the allocator every pod scrapes every static target, so the static targets per pod do not fall as pods are added; scale on targetBusy, or enable the allocator, which splits the static targets over the pods" }}
+{{- end }}
+{{- if and $busy (not $scaling.busyMetric) }}
+{{- fail "autoscaling.targetBusy is set, but autoscaling.busyMetric, the name the metrics adapter serves the metric under, is empty" }}
+{{- end }}
+{{- if and $perPod (not $scaling.staticTargetsMetric) }}
+{{- fail "autoscaling.targetStaticTargetsPerPod is set, but autoscaling.staticTargetsMetric, the name the metrics adapter serves the metric under, is empty" }}
+{{- end }}
+{{- if and (not $scaling.targetCPUUtilizationPercentage) (not $scaling.targetMemoryUtilizationPercentage) (not $busy) (not $perPod) (not $scaling.metrics) }}
+{{- fail "autoscaling.enabled needs something to scale on: targetCPUUtilizationPercentage, targetMemoryUtilizationPercentage, targetBusy, targetStaticTargetsPerPod or metrics" }}
 {{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -40,6 +54,24 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.targetMemoryUtilizationPercentage" . 1 2147483647) }}
+    {{- end }}
+    {{- if $busy }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ $scaling.busyMetric | toString | quote }}
+        target:
+          type: AverageValue
+          averageValue: {{ $busy | quote }}
+    {{- end }}
+    {{- if $perPod }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ $scaling.staticTargetsMetric | toString | quote }}
+        target:
+          type: AverageValue
+          averageValue: {{ $perPod | quote }}
     {{- end }}
     {{- with $scaling.metrics }}
     {{- toYaml . | nindent 4 }}

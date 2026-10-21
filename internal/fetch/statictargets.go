@@ -13,14 +13,15 @@ import (
 
 // A static target file in force is read by the scrapes while a reload checks
 // it against the configuration just read (CheckTargetRequest), so that check
-// never writes into it: the spellings a scrape compares — accept_status in
-// lower case and a status by its digits alone, accept_codes and retry.codes
-// in upper case — are written once,
+// never writes into it: the spellings a scrape compares — accept_status and
+// retry.statuses in lower case and a status by its digits alone,
+// accept_codes and retry.codes in upper case — are written once,
 // by NormalizeTargetRequest, when the file is loaded and nothing reads it
 // yet, and the check only reads.
 
 // NormalizeTargetRequest writes a static target's request.accept_status,
-// request.accept_codes and request.retry.codes as a scrape compares them:
+// request.retry.statuses, request.accept_codes and request.retry.codes as a
+// scrape compares them:
 // trimmed, statuses in lower case and by their digits alone (canonicalStatus)
 // and codes in upper case. It is called once,
 // when the target file is loaded; whether each entry is one the collector's
@@ -36,6 +37,9 @@ func NormalizeTargetRequest(t *model.StaticTarget) {
 		for i, code := range retry.Codes {
 			retry.Codes[i] = strings.ToUpper(strings.TrimSpace(code))
 		}
+		for i, entry := range retry.Statuses {
+			retry.Statuses[i] = canonicalStatus(entry)
+		}
 	}
 }
 
@@ -43,6 +47,38 @@ func NormalizeTargetRequest(t *model.StaticTarget) {
 // written, a static target's: a copy is normalized and checked.
 func checkAcceptStatus(entries []string) error {
 	return normalizeAcceptStatus(slices.Clone(entries))
+}
+
+// checkTargetRetryStatuses checks a static target's request.retry.statuses
+// as the collector's are checked, and, where the target sets it or its own
+// accept_status, refuses an entry the accept_status in force for the target
+// accepts whole, which could never be retried (checkRetryStatuses). It
+// writes nothing into the target.
+func checkTargetRetryStatuses(t *model.StaticTarget, c *model.Collector) error {
+	var own []string
+	if t.Request.Retry != nil {
+		own = t.Request.Retry.Statuses
+	}
+	if own == nil && t.Request.AcceptStatus == nil {
+		return nil
+	}
+	retried := c.Request.Retry.Statuses
+	if own != nil {
+		retried = slices.Clone(own)
+		if err := normalizeAcceptStatus(retried); err != nil {
+			return fmt.Errorf("request.retry.statuses %w", err)
+		}
+	}
+	accepted := c.Request.AcceptStatus
+	if t.Request.AcceptStatus != nil {
+		accepted = slices.Clone(t.Request.AcceptStatus)
+		// CheckTargetRequest refuses an entry that is no status before
+		// this is asked, in these words.
+		if err := normalizeAcceptStatus(accepted); err != nil {
+			return fmt.Errorf("request.accept_status %w", err)
+		}
+	}
+	return checkRetryStatuses(retried, accepted)
 }
 
 // TargetOverrides translates the target request block into the same per-scrape
@@ -78,6 +114,7 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 	}
 	out.SSHUsername, out.SSHPrivateKeyFile, out.SSHPassphraseFile, out.SSHPasswordFile = t.Request.Username, t.Request.PrivateKeyFile, t.Request.PassphraseFile, t.Request.PasswordFile
 	out.SQLConnections = t.Request.Connections
+	out.Login = t.Request.Login
 	if t.Request.InsecureSkipVerify != nil {
 		value := *t.Request.InsecureSkipVerify
 		out.InsecureSkipVerify = &value
@@ -107,6 +144,9 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		}
 		if retry.Codes != nil {
 			out.RetryCodes = append([]string{}, retry.Codes...)
+		}
+		if retry.Statuses != nil {
+			out.RetryStatuses = append([]string{}, retry.Statuses...)
 		}
 	}
 	return out

@@ -230,8 +230,23 @@ request:
 
 `attempts` counts retries after the initial request and defaults to zero.
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
-retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
+retry transport failures and the HTTP statuses `retry.statuses` lists, which
+are, when it is left out, the transient statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
+`retry.statuses`, for `http` and `graphite`, MUST be written and checked as
+`accept_status` is (§ 5.1, `http`), statuses from 100 to 599 and classes such as
+`5xx`, refused in the same words; a list MUST replace the default set, not add
+to it, and an empty list MUST retry no status while a transport failure is
+still retried. An entry every status of which the collector accepts — the
+`accept_status` in force, or every 2xx without one — MUST be refused when the
+configuration loads, naming the collector, or the static target, and the
+entry, since it could never take effect; a class only some of whose statuses
+are accepted MUST be taken, and an accepted status MUST NOT be retried.
+`retry.statuses` MUST be refused for `grpc`, in a collector and a static
+target, as `retry.codes` is for every other type; a static target's MUST
+replace its collector's whole, and no probe parameter sets it. A debug report
+of an `http` or `graphite` request with retries MUST say, after its requests,
+how often, how far apart and on which statuses it is retried.
 A refused target (§ 26.1) and response headers over their bound (§ 4) MUST
 NOT be retried. An HTTP/2 connection closed for a protocol error before the
 response's headers were read (§ 4) MUST be retried once, as one of
@@ -313,6 +328,8 @@ Support:
 - HTTP basic authentication
 - Optional file-backed basic authentication credentials
 - Bearer token authentication
+- A login before the request, whose token is sent on it: a JSON login or the
+  OAuth 2.0 client credentials grant (§ 42.6a)
 - TLS CA configuration
 - Configurable target certificate verification, including an explicit
   `insecure_skip_verify` opt-out
@@ -578,7 +595,8 @@ number and which the exporter MUST refuse.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql` are implemented;
+data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
+`tlscert` and `s3file` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -625,11 +643,16 @@ added without deciding which types it belongs to.
 Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
-type.
+type but the opt-in ones. An opt-in type is one whose libraries few
+deployments want in the binary, `s3file` and the AWS SDK it links: no build
+MAY carry it unless asked for it by its tag, and the source MUST list the
+opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
-  `//go:build !select_request_types || request_type_<name>`. Code and imports
+  `//go:build !select_request_types || request_type_<name>`, or, for an
+  opt-in type, exactly `//go:build request_type_<name>`, so that its tag
+  adds it to a default build and to a selective one alike. Code and imports
   that only that type needs MUST live behind the same constraint, and so MUST
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
@@ -651,7 +674,14 @@ type.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver.
+  that driver. `dns` and `tlscert` MUST import nothing outside the standard library,
+  and the test MUST find none of the other types' modules in a build of
+  either. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
+  find them in a build of `s3file` alone and its S3 client and
+  configuration in a default build with it, and none of them in the default
+  build or a build of any other one type; the `snowflake` driver links the
+  AWS SDK too, which only its own build may.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -660,16 +690,23 @@ type.
 - The source MUST keep a list of every type in the tree, whether or not the
   build carries it. A collector naming a type that exists but was left out of
   the build MUST be rejected with a message saying so, listing the types the
-  build carries and naming the tag that would include it; a name that is no
+  build carries and naming the tag that would include it, and, for an opt-in
+  type, saying that it is one, which the default build and the published
+  image leave out, and naming `OPT_IN_REQUEST_TYPES`; a name that is no
   type at all keeps the unknown-type message.
 - `tools/request-type-tags.sh` MUST turn a comma-separated `REQUEST_TYPES` list
   into those tags, printing nothing for an empty list and failing on a name
   that is not a type in the tree, and a second list, `SQL_DRIVERS`, into the
   `sql_driver_<name>` tags of the `sql` type's opt-in drivers, failing on a
   name that is no opt-in driver of the tree — a default driver included —
-  and on drivers with a `REQUEST_TYPES` that leaves `sql` out. The
-  Dockerfile's `REQUEST_TYPES` and `SQL_DRIVERS` build arguments and the
-  Makefile's variables of those names MUST all use it.
+  and on drivers with a `REQUEST_TYPES` that leaves `sql` out, and a third
+  list, `OPT_IN_REQUEST_TYPES`, into the `request_type_<name>` tags of
+  opt-in types, added to the default build's types or to those
+  `REQUEST_TYPES` lists, failing on a name that is no opt-in type of the
+  tree, a type of every build included. `REQUEST_TYPES` MUST take an opt-in
+  type as any other. The Dockerfile's `REQUEST_TYPES`, `SQL_DRIVERS` and
+  `OPT_IN_REQUEST_TYPES` build arguments and the Makefile's variables of
+  those names MUST all use it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
   log line, as `sql_drivers`, empty in a build without the type.
@@ -684,7 +721,14 @@ type.
   `make test-sql-drivers`, which `make ci` includes, MUST run the same; CI
   MUST lint that build with golangci-lint too, as `make lint-sql-drivers`,
   which `make ci` includes, does; a test MUST keep these lists naming every
-  opt-in driver of the tree.
+  opt-in driver of the tree. CI MUST likewise vet, build, lint and test (the
+  `internal/fetch` and `test/repository` packages) a build with every
+  opt-in type beside the default build's types, as `make
+  build-opt-in-types`, `make lint-opt-in-types` and `make
+  test-opt-in-types`, which `make ci` includes, do, and a test MUST keep
+  their lists naming every opt-in type of the tree; each single-type
+  selection, an opt-in type's included, is vetted, built and tested as
+  below.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, over the exporter's packages
   when they are to run (§ 34.33), which `make test-request-types` runs over
@@ -707,11 +751,15 @@ type.
   apart from the message above for a collector that names it: a `/probe`
   parameter that only left-out types accept is a parameter no type accepts
   and MUST be ignored as one, and the schema the binary prints (§ 24.3)
-  lists only its own types. The committed schemas are those of a build with
-  every type and the sql type's default drivers alone, and the test that
-  compares them with what the code generates MUST run in that build alone,
-  not in one with an opt-in sql driver, whose schema names that driver as
-  its loader takes it.
+  lists only its own types. The committed schemas are those of a default
+  build, of every type but the opt-in ones and the sql type's default
+  drivers alone, and the test that compares them with what the code
+  generates MUST run in that build alone, not in one with an opt-in type or
+  sql driver, whose schema names that type or driver as its loader takes it.
+  An opt-in type's request keys are struct keys, in every build's schema;
+  the default build's test that every request key belongs to a type MUST
+  know them without the type, and a test in a build with the type MUST keep
+  that list the type's own.
 
 #### `http`
 
@@ -726,10 +774,11 @@ type.
 | `body` | none | Raw request body. |
 | `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. A username with a colon MUST be refused (§ 42.6). |
 | `bearer_token` / `bearer_token_file` | none | Mutually exclusive, and exclusive with basic authentication. |
+| `login` | none | A login made before the request, whose token is sent on it (§ 42.6a). |
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
-| `retry` | none | `attempts` and `backoff`, both non-negative. |
+| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out (§ 3.2a). |
 | `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
@@ -737,13 +786,92 @@ type.
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
+| `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
 `retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
-and the basic and bearer credential keys.
+the basic and bearer credential keys, `accept_status` and `login`. No probe
+parameter MAY set or change `login`.
+
+##### Pagination
+
+`request.pagination` MUST fetch the pages of a paginated answer after the
+first and merge them into one JSON document, which the decoder, the
+transform and the limits MUST read as the trip's one answer: the first page,
+with the array `items` names holding the items of every page, in order. It
+is the `http` type's alone, and neither a static target nor a probe
+parameter MAY set or change it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `type` | none | Required: `link`, `next_url`, `cursor`, `page` or `offset`, matched without regard to case or surrounding whitespace. |
+| `items` | none | Required: a jq path to the array of a page's items, such as `.items` or `.`. An expression that is not one path of keys and indexes — evaluated against `null` at load, it fails or names other than one place — MUST be refused at load. |
+| `next` | none | Required with `next_url` and `cursor`, refused with the others: a jq expression over the page, with `$status` and `$headers` bound as in a rule, giving the next URL or cursor. |
+| `param` | none | Required with `cursor`, `page` and `offset`, refused with the others: the query parameter the cursor, page number or offset is sent in. A name with a control character, and a `request.query` key that is the same name in any case, MUST be refused at load. |
+| `start` | 1 for `page`, 0 for `offset` | `page` and `offset` only, not negative: the first page's number or offset, sent on the first page. |
+| `size` | the items received | `offset` only, at least 1: how far the offset moves from one page to the next. |
+| `max_pages` | 10 | From 1 to 1000: the most pages one trip fetches, the first included. |
+
+A key that does not apply to the type MUST be refused at load naming it and
+how the type finds its next page, and so MUST `pagination` with method
+`HEAD`, whose answers have no body. Every refusal MUST name the collector.
+The pages are read as JSON: a collector with `pagination` MUST decode with
+`json`, a `decoder.type` left out or `auto` MUST become `json`, and any other
+MUST be refused at load.
+
+The next page MUST be: for `link`, the target of the `Link` header's link
+whose first `rel` lists `next`, compared without regard to case (RFC 8288),
+a comma or semicolon inside a quoted value separating nothing and a malformed
+link skipped without hiding the others; for `next_url`, the URL `next` gives;
+both resolved against the URL of the page that names them, without a
+fragment. For `cursor`, it MUST be the URL of the page before with `param`
+set to the text `next` gives, a number as its text; for `page`, `param` one
+more than the page before's, from `start`; for `offset`, `param` moved on
+from `start` by the number of items the page before held, or by `size`. A
+parameter of the target's query or of a next URL that is `param` in any case
+MUST be dropped where `param` is set, and `param` MUST be sent last. `next`
+giving `null`, `false` or `""` MUST end the pages, more than one value or
+another kind MUST fail the trip, and so MUST items that are neither an array
+nor missing or `null`, which are no items.
+
+The pages MUST end at the first that names no next page — no `rel="next"`,
+no next URL or cursor, or, for `page` and `offset`, no items — or at
+`max_pages`. A trip that stops at `max_pages` while the last page named
+another page, or for `page` and `offset` held items, MUST NOT fail: its
+answer MUST be the pages fetched, the trip MUST be counted in
+`http_exporter_pagination_max_pages_reached_total` and logged at warn level
+through the failure log (§ 25.1), with the pages and `max_pages`, and the end of
+it logged when a trip of that collector and target fetches every page again.
+Every page fetched by a trip that ends with an answer MUST be counted in
+`http_exporter_pages_fetched_total` (§ 22).
+
+Every page MUST be a request of the collector's own, made as the first is:
+the same method, body, headers, credentials, forwarded headers, TLS
+settings, retries, redirect rules and target policy (§ 26.1), the policy
+checked on each page's connections. A next page whose scheme, host or port
+— a port left out being its scheme's — is not the first page's MUST fail the
+trip before it is asked for, since it would be sent the target's
+credentials, and so MUST a next page whose URL a page of the trip already
+had. The probe's `timeout` and the trip's deadline MUST cover every page
+together. The response limit (§ 20) MUST hold each page, the pages' bodies
+added up, failing the trip after the page that takes them past it, and the
+merged document, each failure a limit failure (`ErrLimitExceeded`).
+
+A first page that is not JSON, or answered with a status the collector does
+not accept, MUST be the answer as it came, failing in the `decode` or the
+`http_status` stage as without pagination. A later page answered with such
+a status MUST be the trip's answer, with its status, headers and body,
+failing in the `http_status` stage with an error that names its number and
+its URL, with credential query values masked:
+`received HTTP status 503 on page 3 of request.pagination, <url>`. A later
+page that is not JSON, or whose request failed, MUST fail the trip naming
+the page. An answer of one page MUST be the page byte for byte; the merged
+document of several MUST be written again as JSON, each number as it was
+written, the first page's status and headers, without its
+`Content-Length`.
 
 #### `localfile`
 
@@ -918,7 +1046,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -956,7 +1084,7 @@ lines: it only pulls. Its keys:
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
   `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
-  and `targets`, `from` and `until`, which replace the collector's. A static target's
+  `login`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
   the probe parameters of the same name, so it shares cached results with a
@@ -985,7 +1113,7 @@ keys:
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
-| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` and `statuses` MUST be refused, and `codes` for every other type, in a collector and a static target. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -1617,6 +1745,186 @@ of objects, one a row, of its columns by name. Its keys:
   be that URL, with the database's placeholders as written, and
   `http_method` MUST be `QUERY`.
 
+#### `dns`
+
+A `dns` collector resolves the probe's `target`, a DNS name, and hands its
+records to the transforms as a JSON document. The lookup MUST be Go's own
+resolver (`net.Resolver` with `PreferGo`), so the type needs no library. Its
+keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
+| `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
+| `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
+
+- The record type, server and transport MUST be the collector's alone: no
+  probe parameter or static target key may change them. A probe MUST take
+  `timeout` and `param_<name>` parameters, and a static target's request
+  block `timeout`.
+- A target MUST be a name of letters, digits, `.`, `-` and `_`, at most 253
+  characters, each label from 1 to 63, matched without regard to case and a
+  trailing dot; for `PTR` it MUST instead be an IPv4 or IPv6 address, without
+  a zone. A URL, a name with a port, path, query or user, an IP address for
+  any other record type, and an address for `PTR` that is none MUST be
+  refused, a probe's with `400` before anything is asked and a static
+  target's at load.
+- The name MUST be asked as an absolute name, so that no search domain of
+  the system's configuration is appended to it.
+- The answer MUST be a JSON document of `name` (lower case, no trailing
+  dot), `record_type`, `server` (`host:port`, `""` for the system's
+  resolver), `transport`, `not_found`, `count`, `duration_seconds` and
+  `answers`, one object a record with the fields of its type alone:
+  `address` (A, AAAA); `target` (CNAME, the canonical name, present only
+  when it differs from the name); `host` and `preference` (MX); `host` (NS);
+  `text`, the record's strings joined (TXT); `target`, `port`, `priority`
+  and `weight` (SRV); `name` (PTR). Names MUST be given without their
+  trailing dot, and the records MUST be in an order of their own — by
+  preference or priority first, then by their data — so that two lookups of
+  the same records give the same document.
+- A name that does not exist, or has no records of the type, MUST be an
+  answer: `not_found` true, `answers` empty and `count` 0. A server failure,
+  a refusal, a malformed answer and a server that does not answer MUST fail
+  the scrape in the `dns` stage, naming the record type, the name and the
+  server asked, not the system's; a lookup cut short by the scrape's
+  deadline MUST wrap the context's error. TTLs and response codes are not
+  given by the resolver and MUST NOT be invented.
+- The target lists MUST be matched against the name by name alone, never
+  by what it resolves to: a denied name, and with `allowed_targets` one that
+  matches none of its names, MUST be refused with `403` before the server is
+  asked, so a network in `allowed_targets` allows no name. A `PTR` target
+  MUST be matched as an address, the cloud metadata addresses refused unless
+  `allowed_targets` lists them. The server is not held to the lists.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `QUERY`, the DNS URI without
+  its query, and the record type, server and transport, with the number of
+  records, `not found` or the error as its outcome. The verbose `url` label
+  MUST be the DNS URI of RFC 4501, `dns:name?type=T` with the system's
+  resolver and `dns://host:port/name?type=T` with `server`, and
+  `http_method` MUST be `QUERY`.
+
+#### `tlscert`
+
+A `tlscert` collector makes a TLS handshake with the probe's `target` and
+hands the certificates the server presented to the transforms as a JSON
+document. Nothing MUST be sent over the connection, which MUST be closed
+after the handshake. Its keys are `tls` and `allowed_targets` /
+`denied_targets`:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` true MUST be refused at load, and by the schema (§ 24.3). The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
+| `allowed_targets`, `denied_targets` | none | As for `http`: the host's name before the connection, and the address the connection is made to. |
+
+- A target MUST be `host`, `host:port` or `[v6]:port`, port 443 when left
+  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  refused, a probe's with `400` before anything is dialed and a static
+  target's at load. A probe MUST take `timeout` and `param_<name>`
+  parameters, and a static target's request block `timeout`.
+- The handshake MUST take whatever chain the server presents, and the
+  chain MUST then be verified as a TLS client would: the first certificate
+  for `server_name`, the others as intermediates, up to the system's roots
+  and `ca_file`'s, at the time of the scrape. A chain that does not verify
+  MUST NOT fail the scrape: the document MUST say `verified` false with the
+  error's text as `verify_error`. A connection that fails, a handshake that
+  fails and a deadline that comes first MUST fail the scrape in the `tls`
+  stage, naming `host:port`.
+- The answer MUST be a JSON document of `host`, `port`, `server_name`,
+  `tls_version` and `cipher_suite` as the handshake settled them,
+  `verified`, `verify_error`, `duration_seconds`, the first certificate's
+  `not_after` and `seconds_until_expiry`, `chain` (`length`,
+  `earliest_not_after`, `seconds_until_earliest_expiry`) and
+  `certificates`, the chain as presented, each with `subject_cn`,
+  `subject`, `issuer_cn`, `issuer`, `serial` (lower-case hexadecimal),
+  `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
+  `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
+  `seconds_until_expiry` (negative once expired), `is_ca`,
+  `signature_algorithm` and `sha256_fingerprint`.
+- STARTTLS is not supported: the handshake MUST start at the connection's
+  first byte.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `HANDSHAKE`, `tls://host:port`,
+  the name sent as SNI and whether a client certificate is presented, with
+  the version, the number of certificates and whether the chain verified,
+  or the error, as its outcome. The verbose `url` label MUST be
+  `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
+
+#### `s3file`
+
+An `s3file` collector reads an object, or every matching object under a
+prefix, from a bucket of Amazon S3 or of a store that speaks the S3 API, the
+probe's `target` naming the bucket, and MUST present what it read exactly as
+`localfile` presents a file: the same path rules, the same reading of one
+file and of a directory (§ 5.1a), the same response. It is an opt-in type
+(§ 5.1, Selecting request types at build time): only a build asked for it
+carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `root` | none | **Required.** As `localfile`'s, an absolute directory, read as the key prefix of the objects under it: `/a/b` is the keys that start with `a/b/`. `/`, every key of the bucket, MUST be taken. |
+| `path`, `files`, `max_files`, `max_total_bytes`, `max_age`, `max_response_bytes` | as `localfile` | With `localfile`'s rules; an object's key is `root`'s prefix and the file's path under it joined. |
+| `region` | the AWS SDK's, else `us-east-1` | Letters, digits, `-` and `_`. |
+| `endpoint` | AWS's | An `http://` or `https://` URL of a host, with a port or not, and no user, path, query or fragment. |
+| `path_style` | `false` | The bucket in the URL's path rather than its host. |
+| `access_key_id_file`, `secret_access_key_file` | none | Both or neither. |
+| `session_token_file` | none | Only with the two above. |
+| `allowed_targets`, `denied_targets` | none | Bucket names and globs of them; an address or a network MUST be refused at load. |
+
+- The credential files MUST be read at every request, not at load, as every
+  credential file is, their surrounding whitespace taken off; a file that is
+  missing, unreadable or empty MUST fail the scrape naming the key and the
+  file, never its content. A placeholder in one, or one written with blanks
+  alone, MUST be refused at load: `""` is the key left out. `--dry-run`
+  MUST read them as a request would and list what a scrape would fail on as
+  warnings of the `config` check, without failing it; startup and reloads
+  MUST NOT read them. Without them, the credentials MUST be the AWS SDK's
+  default chain: the environment, a web identity token, the shared files,
+  the container's and the instance's role. A client of the S3 API, and the
+  credentials its chain found, MUST be shared by the scrapes of collectors
+  with the same region, endpoint, path style and credential files, and
+  dropped when no collector in force has those settings.
+- The target MUST be a bucket name, written as it is or after `s3://`, with
+  a `/` after it or not: 3 to 63 lower-case letters, digits, dots and
+  hyphens, starting and ending with a letter or a digit, without `..`. It is
+  required: a probe without one MUST be answered `400`, a static target
+  without one refused at load. A target with a key, a query, a user or
+  another scheme, or that is no bucket name, MUST be answered `400` before
+  anything is sent. A bucket `denied_targets` matches, or, with
+  `allowed_targets` set, that it does not, MUST be refused with `403`
+  before anything is sent and counted in
+  `http_exporter_targets_refused_total`.
+- One object MUST be read with a HeadObject and then a GetObject, and read
+  again, once, when the GetObject finds its size or modification time other
+  than the HeadObject said, as `localfile` reads a file that changes under
+  the read. An object missing to the HeadObject MUST be followed by a
+  HeadBucket, so that a missing bucket fails the scrape saying the bucket
+  does not exist; an answer of `403` MUST fail it saying access was denied
+  and which permissions the credentials need. Every request MUST be sent
+  once, without the SDK's retries, within the probe's deadline. A failed
+  read MUST be reported in the `s3` stage, naming the key as the file under
+  `root` and the bucket as `s3://<bucket>`.
+- A collector with `files` MUST list the objects directly under `root`'s
+  prefix with ListObjectsV2 and the delimiter `/`, in pages of at most 256
+  asked for one at a time as `localfile` lists a directory in batches, and
+  read the objects whose name, the key after the prefix, matches, as
+  `localfile` reads a directory's files: a key below a further `/` and the
+  key of the prefix itself MUST NOT be read. A listing's description of an
+  object MUST stand in for its HeadObject until a GetObject finds the object
+  changed since. A prefix no key has MUST be read as an empty directory. A
+  store that answers 16 pages in a row with no entry while saying more
+  follow MUST fail the read saying so.
+- An object's response MUST be `localfile`'s, with `ETag`, the object's
+  entity tag, among its headers. A debug probe's request section MUST show
+  `READ` and the object's `s3://bucket/key` URL, or the prefix's ending in
+  `/`, and never a credential; the verbose `url` label MUST be that URL,
+  path parameters as their placeholders, and `http_method` MUST be `READ`.
+- A static target MAY set `path` and `timeout`, the path held to the rules
+  of a file's.
+- Only the type's files, behind its tag alone, MAY import the AWS SDK.
+
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
 a trip that fails. Omitting `cache`, or setting both to `0s`, MUST disable
@@ -1655,6 +1963,10 @@ html
 prometheus
 text
 graphite
+ndjson
+logfmt
+toml
+ini
 auto
 ```
 
@@ -1708,8 +2020,8 @@ return a clear transform error. An explicit decoder remains available for
 ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
-by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml` and
-`graphite`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
+`graphite`, `ndjson`, `logfmt`, `toml` and `ini`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -1743,7 +2055,13 @@ taken for JSON when it is one JSON value none of whose numbers lies beyond a
 taken for JSON MUST be read once, the decoder returning what the detection
 made of it rather than reading the body a second time. A local file ending
 in `.graphite` or `.carbon` MUST be given the Content-Type `text/x-graphite`,
-which MUST select the `graphite` decoder. Such a
+which MUST select the `graphite` decoder; one ending in `.ndjson` or `.jsonl`
+MUST be given `application/x-ndjson`, and one ending in `.toml`
+`application/toml`. `application/x-ndjson` and `application/jsonl` MUST
+select the `ndjson` decoder and `application/toml` the `toml` decoder. No
+content MUST be taken for NDJSON, logfmt, TOML or INI, and no Content-Type or
+extension for logfmt or INI: those two MUST be read only by an explicit
+`decoder.type`. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1756,6 +2074,69 @@ headerless response. Omitting response configuration MUST NOT weaken validation:
 decode failures and transform/input incompatibilities remain collector-level
 errors controlled by `error_handling`; `metric.error_mode` applies after a
 response has been decoded and an individual metric is being extracted.
+
+### 6.0a NDJSON, logfmt, TOML and INI
+
+The `ndjson`, `logfmt`, `toml` and `ini` decoders MUST make the values the
+`json` decoder makes — mappings with text keys, lists, text, whole numbers,
+floats, booleans and null — so that `jq` and `yq` read them as JSON, and a
+Python script is handed them as it is handed JSON (§ 16). Each MUST fail the
+decode over what it cannot read, naming the line, as a position that is no
+part of what the failure is recognised by, and MUST quote no more of a value
+of the body than its first 64 bytes and its length, as every decoder's error
+does (§ 6.1a).
+
+- `ndjson`: the document MUST be the list of the values of the body's lines,
+  in their order, a line being what lies between two line feeds. A line of
+  nothing but JSON whitespace MUST be passed over, and a body of no value
+  MUST be the empty list. Each other line MUST be one value read as the
+  `json` decoder reads a body, its numbers made alike, with nothing but
+  whitespace after it on the line; a line that is no value, that goes on
+  after its value, or that ends inside it MUST fail the decode naming the
+  line, and the column where there is one, counted in the whole body. The
+  list MUST count as the outermost level, so a line's value nests
+  `MaxDepth - 1` deep at most.
+- `logfmt`: the document MUST be the list of the records, one for each line
+  that holds a pair, in their order. A line MUST be read as
+  `github.com/go-logfmt/logfmt` reads one: pairs separated by bytes up to and
+  including the space; a key a run of bytes above the space other than `=`
+  and `"`; a value a run of the same bytes, or a double-quoted string with the
+  escapes of a JSON string and no raw control character. A record MUST map
+  each key to its value as text, a key written without `=` to null and a key
+  written with `=` and nothing after it to the empty string. Of a key written
+  twice on one line the later MUST be kept. A line of nothing but blanks and
+  control characters MUST be passed over; any other mistake MUST fail the
+  decode naming the line, the column and the byte, and no more of the body.
+  The exporter MUST NOT depend on a logfmt module for this.
+- `toml`: the document MUST be read with `github.com/BurntSushi/toml`:
+  tables as mappings, arrays and arrays of tables as lists, integers as whole
+  numbers, floats as floats, `nan` and `inf` included, and a date or time as
+  its text — an offset date-time in RFC 3339 with the fraction it was written
+  with, a local date-time as `YYYY-MM-DDTHH:MM:SS` with its fraction, a local
+  date as `YYYY-MM-DD`, a local time as `HH:MM:SS` with its fraction. Before
+  the library reads the body, a body whose arrays and inline tables nest
+  deeper than `MaxDepth`, or one with a value named by more than 16 parts,
+  counting those of its table header, of its dotted key and of the keys of
+  the inline tables around it, MUST be refused naming the line: the library
+  parses nested brackets by recursion and costs the square of a key's parts
+  for each key. A document whose tables and arrays together nest deeper than
+  `MaxDepth` MUST be refused too. An error of the library MUST be its message
+  after the line it names, without the last key it read, and a message past
+  256 bytes MUST be cut there with its length.
+- `ini`: the document MUST be a mapping of each section's name to the mapping
+  of its keys to their values, as text, and of each key written before the
+  first section to its value. A line MUST be read without the spaces, tabs
+  and carriage returns around it; an empty line and one starting with `;` or
+  `#` MUST be passed over, a comment being only a whole line. `[name]` MUST
+  start a section, may be followed by a comment and nothing else, and MUST
+  name it by the text between the brackets without the blanks around it,
+  which MUST NOT be empty; a dotted name MUST be one name. A section written
+  twice MUST be one section. Any other line MUST be a key and its value split
+  at the first `=` or `:`, each without the blanks around it; the key MUST NOT
+  be empty, and the value MUST be taken as written, quotes included. Of a key
+  written twice in one section the later MUST be kept. A key before the first
+  section and a section of the same name MUST fail the decode naming both
+  lines, and so MUST any line that is none of these.
 
 ### 6.1 Auto detection
 
@@ -1778,6 +2159,9 @@ text/html                 -> html
 text/plain                -> text
 text/plain; version=0.0.4 -> potentially prometheus
 application/openmetrics-text -> prometheus, read as OpenMetrics (§ 14.1)
+application/x-ndjson      -> ndjson
+application/jsonl         -> ndjson
+application/toml          -> toml
 ```
 
 The type MUST be compared without its parameters and in any case; a type
@@ -3348,8 +3732,8 @@ exposes them.
 any case, joined by `, `, as jq's `$headers` has them, and `default` when the
 response has none.
 
-`data` MUST be the decoded response: the document for JSON, YAML and
-graphite; the rows for CSV, dicts by header or lists without one; the body as
+`data` MUST be the decoded response: the document for JSON, YAML,
+graphite, NDJSON, logfmt, TOML and INI; the rows for CSV, dicts by header or lists without one; the body as
 a string for text, HTML and XML; and, for Prometheus exposition,
 `{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
 `labels`, and `value` — or a histogram's `buckets` (`le`, `count`), `sum` and
@@ -5503,7 +5887,12 @@ http_exporter_metrics_emitted_total
 http_exporter_invalid_utf8_total
 http_exporter_decoder_series_left_out_total
 http_exporter_decoder_lines_skipped_total
+http_exporter_pages_fetched_total
+http_exporter_pagination_max_pages_reached_total
 http_exporter_series_limit_exceeded_total
+
+http_exporter_logins_total
+http_exporter_login_failures_total
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -5529,6 +5918,8 @@ http_exporter_sql_limit_failures_total
 http_exporter_sql_rows
 http_exporter_trips_in_flight
 http_exporter_trips_max_concurrent
+http_exporter_static_targets_scrape_seconds_total
+http_exporter_probes_seconds_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -5546,6 +5937,8 @@ http_exporter_otlp_export_retries_total
 http_exporter_otlp_points_dropped_total
 http_exporter_otlp_export_duration_seconds
 http_exporter_otlp_last_export_success_timestamp_seconds
+
+http_exporter_debug_runs_total
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
@@ -5587,7 +5980,21 @@ waited at `max_per_target` and that failed there or at `max_targets`; and
 returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
-targets count in `http_exporter_targets_refused_total`.
+targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
+collector's refused buckets.
+`http_exporter_pages_fetched_total` and
+`http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
+for `http` collectors, `0` for one without `request.pagination`, per
+collector and per request in verbose mode: the pages `request.pagination`
+fetched in trips that ended with an answer, the first of each included, and
+the trips that stopped at `max_pages` with another page to come (§ 5.1,
+`http`). `http_exporter_logins_total` and
+`http_exporter_login_failures_total`, counters, MUST exist only for `http`
+and `graphite` collectors, `0` for one without `request.login`, per
+collector and with no per-request series: the logins the collector's login,
+or a static target's own, made, and those of them that failed (§ 42.6a). The
+counts MUST start at 0 at the exporter's shutdown and be forgotten with a
+collector a reload removes.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -6046,6 +6453,7 @@ Implement:
 ```text
 /
 /collectors
+/debug
 /health
 /ready
 /self-metrics
@@ -6073,13 +6481,16 @@ Recommended behavior:
   `Authorization` header and never in the URL, and not at all when left
   blank. Credential fields MUST NOT be named form fields, so a submission
   without the page's script leaves them out. A credential the collector's configuration holds MUST be named by kind
-  and its value MUST NOT appear on the page. With `--web.enable-probe-debug`,
-  and only then, each form MUST offer a *Debug report* switch, a checkbox
-  named `debug` with the value `true`, so the form asks for a debug report
-  (§ 42.17) with or without the page's script; the page MUST then show the
-  status the probe would have answered, from the report, rather than the
-  report's own `200`.
-- Both pages MUST be protected like `/probe` when the exporter's Basic
+  and its value MUST NOT appear on the page. With `--web.debug` at `edit` or
+  `full`, and only then, each collector MUST link the debug page (§ 42.17)
+  as `debug?collector=<name>`, and at `full` the link MUST carry the target
+  entered in the form as `target`; no form MUST ask `/probe` for a debug
+  report.
+- `/debug`, with `--web.debug` at `edit` or `full` only, and `/debug/run`,
+  which its runs post to: § 42.17. With the flag, `/` and `/collectors` MUST
+  link the page; without it, neither path is served (`404`) and neither page
+  links it.
+- Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
   Authentication is on (§ 42.5), since they list the collectors, MUST escape
   what they show, MUST NOT be cached, MUST NOT be framed by another site
   (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
@@ -6116,7 +6527,8 @@ Recommended behavior:
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
   requires MUST answer `400` naming the collector and the request type. With
-  `debug=true` it MUST answer a report of the trip instead (§ 42.17).
+  `debug=true` and `--web.debug=full` it MUST answer a report of the trip
+  instead (§ 42.17).
 
 `/probe`, the self-metrics path and the static targets path MUST compress
 their answer with gzip when the request's `Accept-Encoding` accepts `gzip` (or
@@ -6585,8 +6997,8 @@ Whatever needs both — a static target scrape above all — MUST read the pair
 once rather than each on its own, and a scrape MUST use the configuration
 its target was read with. Validation MUST NOT write into a configuration or
 a static target file in force, which scrapes are reading: whatever spelling
-it normalizes — a target's `accept_status`, `accept_codes` and
-`retry.codes` — MUST be written once, when the file is loaded and before it
+it normalizes — a target's `accept_status`, `retry.statuses`, `accept_codes`
+and `retry.codes` — MUST be written once, when the file is loaded and before it
 is in force, and the check of the target file against the configuration,
 which a reload repeats on the file in force, MUST only read both. That check
 MUST NOT go through the configuration's collectors for each target, which
@@ -6784,7 +7196,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile, sql, sshfile`. A
+  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
@@ -6920,7 +7332,8 @@ begin with the modeline pointing at it.
 
 The schemas and the example configurations MUST live together in `configs/`,
 not at the repository root, and the schemas' published addresses MUST be under
-it. `make schemas` MUST regenerate all three.
+it. `make schemas` MUST regenerate all three, and the target allocator's two
+(§ 42.14d).
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads free text, since YAML reads `expression: 1`
@@ -6990,8 +7403,8 @@ integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
 a fraction past the digits of the floating-point number a schema is handed,
 such as `1.00000000000000000001`, stay the exporter's to refuse, the
 documentation of the schemas MUST say so, and a test MUST put such numbers
-through both. An entry of `request.accept_status` written as a number is the
-status it equals to both (§ 5.0), which the tables of keys MUST show of a
+through both. An entry of `request.accept_status`, and of
+`request.retry.statuses`, written as a number is the status it equals to both (§ 5.0), which the tables of keys MUST show of a
 number with a point, an exponent, in hex, in octal, with an underscore, and
 with a sign and leading zeros; the spellings of a number the exporter's
 reader takes beyond YAML 1.2, such as `5_03`, are text that is no status to
@@ -7059,9 +7472,9 @@ exporter requires MUST be refused by both written `""`, as it is left out:
 `transform.type`, `request.type`, a collector's and a label's `name`, and a
 static target's `collector`. A duration and a size have no empty form, and
 MUST be refused by both written `""`; so MUST an empty entry of
-`collector_files`, `request.accept_status`, `request.allowed_targets`,
-`request.denied_targets`, `request.redirect_trusted_hosts`,
-`transform.include`, `transform.exclude`,
+`collector_files`, `request.accept_status`, `request.retry.statuses`,
+`request.allowed_targets`, `request.denied_targets`,
+`request.redirect_trusted_hosts`, `transform.include`, `transform.exclude`,
 `transform.libraries` and `transform.required_libs`, and an empty key of a
 `value_map`, of `request.metadata`, `request.headers` and `request.query`,
 of a static target's `params`, `labels` and `request.headers`, and an empty
@@ -7394,6 +7807,9 @@ Requirements:
   its TLS client certificate, only to the origin a request is made to: a
   followed redirect MUST NOT carry them anywhere else, unless the collector
   lists the host (§ 42.15c).
+- Send a login's secrets only where the configuration's `request.login.url`
+  says, held to the collector's lists, following no redirect; no probe
+  parameter MAY change where a login goes (§ 42.6a).
 - Protect against excessively large responses.
 - Bound regex, jq, yq, and Python execution.
 - Restrict Python networking/process/file capabilities.
@@ -7409,7 +7825,9 @@ and `request.denied_targets`, lists of host names, globs of host names
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
 entry that is none of these, such as one with a scheme, a port or a path,
 MUST be refused at load; another request type setting either MUST be refused
-as any key of another type is. A name entry MAY hold letters, digits, dots,
+as any key of another type is. An `s3file` collector's lists name buckets,
+whose target is one (§ 5.1, `s3file`), and are held to the rules of names
+alone. A name entry MAY hold letters, digits, dots,
 hyphens and underscores, a hyphen first or last included. An entry MUST be
 written in ASCII: one with any character outside it — an internationalised
 name in its own letters, a full-width spelling, a space outside ASCII beside
@@ -7847,7 +8265,7 @@ Provide clear CLI flags, for example:
 --python.max-workers=0
 --runtime.memory-limit-ratio=0
 --web.enable-lifecycle
---web.enable-probe-debug
+--web.debug=off
 --web.shutdown-timeout=15s
 --web.shutdown-delay=0s
 --version
@@ -7946,8 +8364,13 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status` or `accept_codes` is listed under
-  `details.request_policies` with those lists as normalised for use;
+  `accept_status`, `accept_codes`, `retry.statuses`, `pagination` or `login`
+  is listed under `details.request_policies` with those settings as
+  normalised for use, `retry.statuses` as `retry_statuses`, an empty list as
+  `[]`, a `pagination` with its defaults filled in, a `login` with the header
+  and prefix its token is sent with filled in and the values of its
+  `fields` and `endpoint_params` whose names read as credentials' withheld
+  (§ 42.6a);
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
@@ -10655,9 +11078,9 @@ Tests MUST show:
 
 Tests MUST show:
 
-- Without `--web.enable-probe-debug`, `debug=true` is answered `403` naming
-  the flag, and the target is not contacted; a `debug` value that is not a
-  boolean is `400`; `debug=false` is a probe.
+- Below `--web.debug=full`, at `off` and at `edit`, `debug=true` is answered
+  `403` naming `--web.debug=full`, and the target is not contacted; a `debug`
+  value that is not a boolean is `400`; `debug=false` is a probe.
 - A report lists the request with its credentials, query values and
   credential-named response headers redacted, the response body, each stage,
   the series by metric, the rules that gave none and the rule that carried
@@ -10676,10 +11099,11 @@ Tests MUST show:
   probe would have served is named.
 - A `grpc` collector's call is listed with its method and code and its
   answer as JSON; a `localfile` collector's read is listed as the file.
-- The chart renders the flag with `server.probeDebug`, not by default, and
+- The chart renders `--web.debug` with `server.debug`, not by default, and
   refuses it in `extraArgs`.
-- The collectors page has a *Debug report* switch, sending `debug=true`, on
-  each form with the flag, and none without it.
+- The collectors page links each collector into the debug page with
+  `--web.debug` on, carrying the form's target at `full`, and has no link
+  without it; no form asks `/probe` for a debug report.
 
 ## 34.70 Review fixes: stale answers, logged bodies, redaction and static target debug tests
 
@@ -10707,7 +11131,7 @@ Tests MUST show:
   parameter stay two OTLP series; two targets differing only in a
   credential's value, shown alike, are still two in the failure log, each
   first failure logged.
-- `/static-targets?debug=<name>` is `403` without the flag, `404` for an
+- `/static-targets?debug=<name>` is `403` at `off` and at `edit`, `404` for an
   unknown name and `400` for an empty, repeated or combined parameter; it
   scrapes with the target's own credential, which the report withholds,
   shows the labelled series, and publishes and counts nothing.
@@ -20548,10 +20972,10 @@ A debug report bounds every line but the body's (§ 42.17):
 - A static target's debug report shows a header value of a megabyte by its
   first 1,024 bytes and its length and a header line of 12 kB by its first
   8,192, with the series the scrape would have published as they were.
-- The collectors page's form, with its `debug` switch on, is answered with a
-  report whose second line is `Took ... A probe would have answered 200 with
-  1 series.` and whose megabyte of a header value is shown by its first
-  1,024 bytes.
+- A debug probe and the debug page's run of the same collector are each
+  answered with a report whose second line is `Took ... A probe would have
+  answered 200 with 1 series.` and whose megabyte of a header value is shown
+  by its first 1,024 bytes, in the page's JSON `response` too.
 - The report of a directory at the end of a path of 4 kB, with two files
   read and three skipped, lists the directory, the files and the skipped
   files as it did, and differs from what it was in one line alone: the log's
@@ -23240,6 +23664,764 @@ The exporter's tests and the target allocator's run when a file each needs chang
   what follows a parenthesis or "other than" aside; the test fails on
   "Database connectors" and "Static targets scraped by the exporter itself".
 
+## 34.152 Pagination and autoscaling signals
+
+Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
+
+- `link` follows the `Link` header's `rel="next"`, absolute and relative,
+  among other links, a quoted title holding a comma and a semicolon, and a
+  `rel` listing several types in another case; every page is sent the
+  collector's bearer token and headers, the trace records each request with
+  its page number, and a top-level array merges into one array.
+- `next_url` reads the next URL from the page, relative to the page's URL;
+  the merged document is the first page with `.data.hosts` holding every
+  page's items, its other keys the first page's, and a number of twenty
+  digits and `1.5e400` kept as written.
+- `cursor` sends the cursor `next` reads, from `$headers` or as a number, in
+  `param`, replacing the parameter of that name in the target's query and
+  going last; a page without a cursor is the last.
+- `page` counts from 1, or from `start: 0`, and ends at a page without
+  items; `offset` moves on by the items each page held, or by `size`.
+- A trip stops at `max_pages`, 10 when unset, and says another page was to
+  come; one whose last page at `max_pages` names no next page does not.
+- A next page on another port, host or scheme than the target's is refused
+  before it is asked for, the foreign server never reached, the error naming
+  the target's origin and the credentials; a next page fetched already is
+  refused as a circle.
+- The response limit holds each page, the pages added up (failing after the
+  third page of 400-byte pages under 1000), and the merged document (pages
+  of 34, 34 and 12 bytes whose invalid UTF-8 merges into 137 under 100),
+  each a limit failure.
+- The probe's `timeout` covers every page together: pages of 150 ms under a
+  400 ms timeout fail on page 3 with the deadline.
+- A later page answered 503 is the answer with its status and body and the
+  pages before it; a first page that is no JSON is the answer as it came; a
+  later page with a second JSON value fails naming the page and its URL.
+- An answer of one page is the page byte for byte; items that are an object,
+  and a `next` that gives an array, fail naming the page.
+- The `Link` header parser: separators inside quotes, only a link's first
+  `rel`, escaped quotes, a malformed link skipped, a link without `rel` and
+  an unclosed one.
+- Load-time checks: a missing and an unknown `type`, `items` missing, not a
+  path, naming two places or not compiling, `next` and `param` required by
+  their types and refused by the others, a control character in `param`,
+  `request.query` setting `param` in another case, `start` and `size` on
+  the wrong types or out of range, `max_pages` outside 1 to 1000, and method
+  `HEAD`; the type is lower-cased and `max_pages` and `start` filled in.
+- A probe of a GitHub-style collector reads all three pages into its jq
+  rules and counts them in `http_exporter_pages_fetched_total`; with
+  `max_pages: 2` two probes answer the first two pages, count 2 in
+  `http_exporter_pagination_max_pages_reached_total` and warn once; a 503 on
+  page 2 fails the probe with 502 in the `http_status` stage naming page 2
+  and its URL.
+- A debug probe lists each page's request with `(page N)`, says the response
+  is merged from 2 pages and stopped at `max_pages`, and the fetch stage's
+  note gives the pages.
+- A collector with `pagination` and no decoder decodes with `json`; one with
+  `decoder.type: yaml` is refused at load.
+- A static target of a paginated collector, with its own `path`, is scraped
+  page by page.
+- `--dry-run` lists `pagination` under `request_policies` with `start` and
+  `max_pages` filled in, and refuses a `page` pagination without `param` as
+  startup does.
+- The schema holds `request.pagination.type` to its values and requires
+  `type` and `items`, refusing either written `""` and `items` of blanks, as
+  the exporter does (schema tables).
+- `http_exporter_static_targets_scrape_seconds_total` and
+  `http_exporter_probes_seconds_total` are in the self-metrics of a server
+  without verbose mode, typed counter, as one series each without labels, at
+  `0` before anything was scraped or probed.
+- One static target scrape of a target answering after 20ms adds to
+  `http_exporter_static_targets_scrape_seconds_total` exactly what its
+  collector's `http_exporter_scrape_duration_seconds` reports, at least
+  20ms, and nothing to the probes' counter; a second scrape adds its own
+  duration.
+- One probe of the same target adds to `http_exporter_probes_seconds_total`
+  exactly what its collector's `http_exporter_scrape_duration_seconds`
+  reports, and nothing to the static targets' counter; a second probe,
+  answered from the cache, adds its own duration.
+- The allocator's `/metrics` shows
+  `pue_allocator_targets_per_member{kind}` as a gauge, `0` for both kinds
+  before the member list has formed, and, with 9 static targets and 2 probe
+  targets over two members, `4.5` static and `1` probe.
+- The chart renders `autoscaling.targetBusy` of `0.5` as a `Pods` metric of
+  `http_exporter_busy` with `averageValue: "0.5"` beside CPU, `"1500m"` with
+  `busyMetric: pue_busy` as a `Pods` metric of `pue_busy` alone, and
+  `autoscaling.targetStaticTargetsPerPod: 40` with `allocator.enabled` as
+  one of `http_exporter_static_targets` with `averageValue: "40"`; it fails
+  rendering `targetStaticTargetsPerPod` without the allocator, a `targetBusy`
+  of `0m` or `lots`, and `targetBusy` with an empty `busyMetric`
+  (`make helm-test` and ci.yml render and refuse the same).
+
+## 34.153 NDJSON, logfmt, TOML and INI decoders, and the debug page
+
+- An NDJSON body is the list of the values of its lines, each made as the
+  json decoder makes a document, big whole numbers included; blank lines and
+  carriage returns are passed over, and a body of no value is the empty list
+  (§ 6.0a).
+- A line that is no JSON value, one that goes on after its value, and one
+  that ends inside it fail the decode naming the line, and the column,
+  counted in the whole body; the same mistake on another line is the same
+  failure (§ 6.0a).
+- A line's value nests `MaxDepth - 1` deep and decodes, and one level more
+  is refused, the list counting as the outermost level (§ 6.0a).
+- A logfmt body is the list of the records of its lines: quoted values with
+  their escapes and surrogate pairs, a key written alone null, `key=` the
+  empty string, of a key written twice the later; a bare value holding `=` is
+  refused at its column (§ 6.0a).
+- What is no logfmt — a key starting with `=` or holding `"`, a bare value
+  holding `"`, text after a quoted value, an unclosed quote, an invalid
+  escape, a short `\u`, a raw control character — fails naming the line, the
+  column and the byte, and quotes no more of a 64 KiB value (§ 6.0a).
+- A TOML body decodes into the values of JSON: tables, arrays of tables,
+  ints, floats with nan and inf, and the four kinds of date and time as their
+  text; a body of comments is the empty table (§ 6.0a).
+- A TOML error is the library's message after its line, without the last
+  key; one quoting a 64 KiB token is cut past 256 bytes with its length, and
+  the same mistake elsewhere and shorter is the same failure (§ 6.0a).
+- A TOML body whose arrays and inline tables nest past 10,000, a megabyte of
+  `[` among them, or with a value named by more than 16 parts through its
+  header, its key and the inline tables around it, a key of 10,000 parts
+  among them, is refused within a second naming the line, before the library
+  parses it; 16 parts, arrays 9,000 deep in a table, and brackets, dots and
+  quotes in strings and comments decode; arrays 9,999 deep under a header of
+  three parts are refused as nested past 10,000 (§ 6.0a).
+- An INI body is a mapping of its sections, and of the keys before the first,
+  with comments as whole lines, `=` and `:`, dotted names as one name, a
+  section written twice merged, the later of a key written twice, and values
+  as written (§ 6.0a).
+- What is no INI — an unclosed section name, text after it, an empty name, a
+  line without `=` or `:`, an empty key, a section named as a key before the
+  first section — fails naming the line, quoting no more than 64 bytes of a
+  64 KiB name (§ 6.0a).
+- `application/x-ndjson` and `application/jsonl` select `ndjson`, and
+  `application/toml` `toml`, in any case and with parameters; a local file
+  ending in `.ndjson` or `.jsonl` is given `application/x-ndjson`, one ending
+  in `.toml` `application/toml`, and `.ini` and `.logfmt` none (§ 6).
+- Every decoder `model.DecoderTypes` lists has a sample the decoder reads,
+  the four new ones included, and the errors each new decoder makes of a
+  short mistaken body are its own once bounded (§ 6).
+- A collector naming `ndjson`, `logfmt`, `toml` or `ini` with a `regex`,
+  `csv`, `xpath` or `prometheus` transform is refused at load naming what that
+  transform reads and that jq, yq or python read the decoder, and the jq
+  refusal of other decoders names the four (§ 6).
+- Through a probe, a jq transform reads each of the four: items over NDJSON
+  and logfmt records, `has()` of a key written alone, paths into TOML tables
+  and arrays of tables and into INI sections; NDJSON and TOML left to the
+  response are chosen by their Content-Type, and a debug probe names the
+  decoder (§ 6).
+- A collector written on the debug page and run on a pasted response
+  answers, as its series, what `/probe` answers for the same collector and
+  response to the byte, with the stages, the verdict, a report naming it a
+  debug run of an edited collector that sent no request, and the pasted
+  response in the JSON's `response`; the test fails when the run does not go
+  through the probe's trip.
+- A pasted response the collector's `accept_status` does not accept fails at
+  `http_status`, and one over its response limit fails as a fetched one
+  does; the test fails when a pasted body skips either.
+- A written collector the loader would refuse is answered `422` with the
+  loader's message — an unknown key at its line, a bad value, a bad
+  expression, a list entry, a whole configuration, an empty document, a
+  second document — and nothing runs.
+- `config.ParseCollector` reports each mistake — an unknown key, a number
+  where the schema takes text, a fraction, a bad expression, a bad name — in
+  the words, and at the line one further down, the loader reports for the
+  same collector under `collectors:`; the test fails when the collector is
+  not held to the schema's kinds.
+- Neither `ParseCollector` nor a run of the debug page expands `${NAME}`,
+  and `ParseCollector` returns the refusal it was given before checking the
+  collector.
+- The debug page refuses with `422`, at `full` too, a written python
+  transform and `pre_script` (with an interpreter that would fail any
+  script), a `localfile` collector, and `bearer_token_file`,
+  `basic_auth_file` and `tls` files, and no answer shows what such a file
+  holds; the test fails when Python is let through.
+- A body over 1 MiB, a collector over 256 KiB and a request over 2 MiB are
+  answered `413`; two sources, neither, two collectors, none, a status that
+  is no status, a bad header name, an unknown key, a `target` parameter,
+  `params` with `static_target` and an unknown configured collector `400`.
+- With `--web.debug` off `/debug` and `/debug/run` answer `404` and neither
+  `/` nor `/collectors` links the debug page; at `edit` and at `full` both
+  link it and a run runs.
+- With `web.basic_auth` the page and a run answer `401` without the
+  credential and run with it.
+- A run without `X-Debug-Run`, or marked `Sec-Fetch-Site` `cross-site` or
+  `same-site`, is answered `403`, one with a form or text body `415`, a
+  `GET` `405`; one without `Sec-Fetch-Site` runs.
+- A fetch is refused at `edit` (`403` naming `--web.debug=full`) without
+  reaching the target; at `full` it goes through the configured collector
+  named in `request_from` with its bearer token — not the written
+  collector's — and the forwarded `header_<name>`, sends the target neither
+  the browser's cookie nor `X-Debug-Run`, lists the request, its
+  credential redacted, and the response in the JSON, is refused by that
+  collector's `allowed_targets` without reaching the target, and answers
+  `400` for an unknown collector, a missing target and a written collector
+  without `request_from`; a configured collector fetches through itself;
+  the test fails when the written collector makes the request.
+- A run past the 4 in progress is answered `503` and counted a failure, and
+  runs once a slot is free.
+- The page names no URL but the documentation and a placeholder, has no
+  `<link>`, `src=`, `@import`, `url(` or absolute link, posts its runs to
+  `debug/run` relative to itself with `X-Debug-Run`, offers the configured
+  collectors at every level, and the fetch and the static target's scrape
+  only at `full`.
+- `/debug` and `/debug/run` are refused as `--web.self-metrics-path`.
+- A run's notes give the load's warning, a decoder left to each response,
+  before the line the run logged for a rule under `error_mode: log`.
+
+## 34.154 The dns, tlscert and opt-in s3file request types
+
+- A dns collector asks the configured server for each record type — A,
+  AAAA, CNAME (an alias and a name that is none), MX, NS, TXT, SRV and PTR —
+  against an in-process DNS server written by hand in the test, and answers
+  a document whose records have the fields of their type, names without
+  their trailing dot, in an order of their own; the record type is matched
+  in any case and with blanks around it, the name in any case and without a
+  trailing dot, and every question is asked as an absolute name.
+- A dns name that does not exist, and one without records of the type, are
+  answers with not_found true and no records; SERVFAIL and REFUSED fail the
+  scrape naming the server asked, and a server that never answers fails it
+  at the deadline, wrapping context.DeadlineExceeded.
+- transport tcp asks over TCP alone, udp and the default over UDP, as the
+  server sees them.
+- A dns collector's record_type, server and transport are refused at load
+  when they are no record type, a server with a scheme, a bad port or blanks
+  alone, or a transport other than udp and tcp, in capitals too, and so is a
+  key of another type; host, host:port, [v6], [v6]:port, a bare IPv6
+  address and a name are taken as servers.
+- A dns target is refused when it is a URL, has a port, a path or a user, is
+  an IP address for a record type other than PTR, a name too long or with an
+  empty or 64-character label, holds a blank or a character outside ASCII;
+  a PTR target that is no address, or has a zone, is refused; the url label
+  is dns:name?type=A and dns://host:port/name?type=PTR, http_method QUERY,
+  the stage dns, and a target with credentials is shown as <invalid target>.
+- A dns collector's allowed_targets and denied_targets match the name by
+  name: a denied glob and a name allowed_targets does not list are refused
+  before the server is asked, a network in allowed_targets allows no name, a
+  denied network does not refuse a name resolving into it, and a PTR
+  target is matched as an address.
+- A debug probe's request section shows a dns lookup as QUERY with the DNS
+  URI without its query, Dns-Type, Dns-Server, Dns-Transport and the number
+  of records.
+- A tlscert collector answers the chain of two a server presents, signed by
+  the root of ca_file, as a document: subject, issuer, serial in
+  hexadecimal, DNS and IP SANs, validity in Unix seconds and RFC 3339,
+  seconds until expiry from a fixed now, the leaf's expiry and the chain's
+  earliest at the top, verified true for server_name, TLS 1.3 and a cipher.
+- A tlscert chain that does not verify is answered with verified false and
+  the reason — untrusted, expired, not yet valid, another name, the
+  intermediate left out — with the seconds until expiry, negative for an
+  expired certificate; one name of several SANs and an IP SAN for the
+  target's address verify.
+- A tlscert collector presents the tls block's client certificate to a
+  server that requires one, which sees its subject.
+- A tlscert scrape fails when nothing listens, naming the address, when a
+  server never answers within the deadline, wrapping
+  context.DeadlineExceeded, and when the server speaks no TLS.
+- A tlscert collector refuses insecure_skip_verify, a lone cert_file or
+  key_file, a server_name that is no host and a key of another type at
+  load; a target with a scheme, a path, a user, port 0 or a named port is
+  refused; host alone is port 443; the url label is tls://host:port,
+  http_method HANDSHAKE, the stage tls.
+- A tlscert collector's denied network, and an allowed_targets that does not
+  list the server's address, refuse the handshake before the server sees
+  one; an allowed network lets it through.
+- A debug probe's request section shows a handshake as HANDSHAKE
+  tls://host:port with Tls-Server-Name, Tls-Client-Certificate and the
+  version, the certificate count and verified; --dry-run warns of a missing
+  ca_file, through the fetch package and the CLI.
+- A dns and a tlscert collector's decoder is json, left out or written, with
+  no warning of an undecided decoder; another decoder and a transform that
+  does not read JSON are refused, naming the type.
+- A probe of a dns collector through the exporter gives the count of
+  records, one series an address and whether the name exists, against an
+  in-process UDP responder, a name not found giving count 0; the verbose
+  self-metrics carry the DNS URI and QUERY; the debug report shows the
+  document; a target that is no name is answered 400; the collectors page
+  says the target is the name to resolve.
+- A probe of a tlscert collector through the exporter gives the days to
+  expiry, the 14-day flag and verified 1 with ca_file, verified 0 without;
+  the verbose self-metrics carry tls://host:port and HANDSHAKE; the debug
+  report shows the handshake; a target with a scheme is answered 400 and
+  the metadata address 403.
+- The examples of docs/DNS.md load as written, with their static target;
+  those of docs/TLSCERT.md run against a TLS server, verified and not within
+  14 days of expiry, with their static target.
+- The schema and the exporter agree on a dns collector's record_type (in
+  another case, with blanks), server and transport, left out, written "",
+  written well and badly.
+- Builds of dns and of tlscert alone, and of the two together, link none of
+  the gRPC, SSH, SFTP and SQL driver modules.
+- The README's tagline names a DNS name and a TLS certificate, and its
+  sources paragraph DNS records and TLS certificates (§ 35).
+- A dns and a tlscert collector's label values take a probe's
+  param_<name>, its default when the probe gives none; a python transform
+  reads a dns and a tlscert collector's document as data.
+- The schema and the exporter agree on a tlscert collector's
+  allowed_targets and denied_targets entries and on its
+  tls.insecure_skip_verify: false taken by both, true refused by both,
+  which the schema took before.
+- An s3file collector reads an object as a file: its body with no status,
+  Content-Length, Last-Modified and ETag headers from the object, a
+  HeadObject and a GetObject of the key root's prefix and path make, sent
+  path-style to the endpoint and signed with SigV4 by the credential files'
+  access key for the region; the url label is the object's s3:// URL, the
+  method READ and the stage s3 (TestS3FileReadsAnObjectAsAFile).
+- The credential files are read at every request: a key rotated on disk
+  signs the next request, an emptied file fails the scrape naming it, and
+  --dry-run warns of it (TestS3FileReadsItsCredentialFilesAtEveryRequest).
+- Without credential files the SDK's default chain signs, with the
+  environment's key and region where the collector sets none, and --dry-run
+  warns of nothing (TestS3FileTakesTheSDKsDefaultCredentialsAndRegion).
+- A collector with files reads the matching objects directly under the
+  prefix, each with its modification time, leaving out a key in a
+  subdirectory, the prefix's own marker and a name that does not match; the
+  listing is paged and asks no HeadObject; the url label is the prefix's,
+  and a path parameter is refused (TestS3FileReadsTheMatchingObjectsUnderAPrefix).
+- An object replaced between the listing and its read is read again after a
+  HeadObject, and the new object answered
+  (TestS3FileReadsAgainAnObjectReplacedSinceTheListing).
+- A missing object, a missing bucket and a bucket answered 403 fail the
+  scrape saying so, naming the key and the bucket
+  (TestS3FileFailuresNameTheObjectAndTheBucket).
+- An object over the response limit fails with the limit's error, and one
+  older than max_age is refused for its age
+  (TestS3FileHoldsAnObjectToTheResponseLimitAndMaxAge).
+- A path parameter names the object, a value with / is refused, and the url
+  label keeps the placeholder (TestS3FilePathParametersNameTheObject).
+- A store that does not answer is given up at the probe's deadline
+  (TestS3FileReturnsAtTheProbesDeadline).
+- A target is a bucket, as written or after s3://; a key, a query, a user,
+  another scheme, upper case, a name too short, .. and a leading hyphen are
+  refused and shown as <invalid target>, and no target is required
+  (TestS3FileTargetIsABucket).
+- allowed_targets and denied_targets name buckets: a refused bucket is
+  refused before anything is sent, and an address in the lists is refused at
+  load (TestS3FileTargetListsNameBuckets).
+- The keys of an s3file collector are held to their rules at load, root /
+  among those taken (TestS3FileValidation); a static target's path is held
+  to a file's rules (TestS3FileStaticTargetRequest).
+- A reload that leaves no collector with a client's settings drops the
+  client, and one that keeps them keeps it
+  (TestS3FileClientsFollowTheConfiguration).
+- optInRequestKeys lists exactly the keys s3file accepts that no other type
+  does (TestTheOptInRequestKeysAreTheTypesOwn), and the default build counts
+  them as claimed (TestEveryRequestKeyBelongsToAType).
+- The refusal of an unused probe parameter of an s3file collector names its
+  request.path and label values alone
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+- requesttype_s3file.go and its tests are built under request_type_s3file
+  alone; a default build compiles every type but s3file, its tag adds it to
+  a default and to a selective build, and the guard names it
+  (TestEveryRequestTypeFileHasItsSelectionConstraint,
+  TestBuildTagsSelectTheRequestTypeFiles, TestTheGuardNamesEveryRequestType,
+  TestRequestTypeTestFilesCarryTheirTypesConstraint,
+  TestADefaultBuildRegistersEveryRequestType).
+- A build without s3file refuses an s3file collector at load, saying it is
+  an opt-in type the default build and the published image leave out and
+  naming OPT_IN_REQUEST_TYPES=s3file and request_type_s3file
+  (TestABuildWithoutS3FileRefusesAnS3FileCollector).
+- Through the exporter, an s3file probe answers the object's series, its
+  verbose series carry the s3:// URL and READ, it has a refused-targets
+  series, and a debug probe shows READ and the URL and no secret
+  (TestAnS3FileCollectorProbe); a missing or malformed target is answered
+  400 and a denied bucket 403 with no request sent (TestS3FileProbeTargets);
+  label values take probe parameters and a prefix answers each object's
+  series with file labels and localfile's series
+  (TestAnS3FileCollectorsLabelsTakeAProbeParameter); a Python transform sees
+  no status, the extension's type, the length and the ETag
+  (TestAnS3FileCollectorWithPython); static targets name the bucket and a
+  path of their own (TestS3FileStaticTargets).
+- tools/request-type-tags.sh turns a third list into the opt-in types'
+  tags, alone or beside REQUEST_TYPES and SQL_DRIVERS, and refuses a type of
+  every build and one that does not exist; REQUEST_TYPES may name s3file
+  (TestRequestTypeTagsScript); the Dockerfile passes OPT_IN_REQUEST_TYPES
+  (TestDockerfileBuildsTheSelectedRequestTypes) and make build does
+  (TestMakeBuildKeepsTheExportersBinary).
+- No build of one default type, and not the default build, links the AWS
+  SDK; a build of s3file alone links it, and a default build with s3file
+  links its S3 client and configuration
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- CI and make ci vet, build, test and lint the build with every opt-in
+  request type, their lists naming every opt-in type of the tree, ci.yml's
+  lint step with the tags the script makes of them
+  (TestCIBuildsEveryOptInRequestType); CI's and the Makefile's loops over
+  the request types and the test matrix name s3file
+  (TestCIBuildsEveryRequestTypeOnItsOwn, TestCIAndMakeTestEveryRequestTypeOnItsOwn).
+- The committed schemas are compared in a build without any opt-in type
+  (TestTheCommittedSchemaComparisonsRunInTheDefaultBuild); s3file's region,
+  endpoint and credential files get one verdict from the schema the binary
+  generates and the exporter (TestSchemaAndExporterAgreeOnS3FileKeysWrittenEmpty),
+  each constrained key being in a table (TestEveryConstrainedKeyOfTheSchemasIsInATable),
+  and region and endpoint are held to text alone
+  (TestTheKeysHeldToTextAloneAreTheSchemas).
+- The README names s3file in its tagline and sources paragraph
+  (TestReadmeOpeningNamesEveryRequestType), and docs/DEPENDENCIES.md each
+  direct AWS module (TestDependenciesNamesEveryDirectDependencyOfTheExporter).
+- The check of a target file against a configuration says what going
+  through the collectors said in a build of s3file alone, whose targets of
+  an s3file collector mostly name a bucket
+  (TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid).
+- The examples of docs/S3FILE.md load as written in a build with the type,
+  and its static targets against them (TestS3FileDocumentationExamples);
+  its Static targets section names every key a target may set
+  (TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet).
+- An s3file collector without decoder.type is warned at load that it
+  decodes by the extension of each file
+  (TestAnS3FileCollectorWithoutADecoderIsWarnedOfTheExtension).
+- The collectors page hints an s3file collector's target as the bucket, or
+  s3://bucket, and required (TestTheCollectorsPageHintsAnS3FileTarget).
+
+## 34.155 One debugging feature at two levels
+
+- `--web.debug` takes `off`, `edit`, `full` and `FULL` at `--dry-run`, and
+  `on`, `true` and an empty value are command-line errors (exit 2, before
+  `--dry-run`) saying the level is none of `off`, `edit` or `full` (§ 42.17).
+- The level reaches the server: with the flag left out `/debug` answers `404`
+  and a debug probe `403`; at `edit` `/debug` answers `200` and a debug probe
+  `403`; at `full` both are served, the debug probe of an unknown collector
+  answered `400` (§ 42.17).
+- At `edit` a debug probe and `/static-targets?debug=<name>` are answered
+  `403` naming `--web.debug=full`, the probe's refusal saying that `edit`
+  runs on pasted responses only, and neither reaches the target (§ 42.17).
+- A debug probe's report is answered with `X-Content-Type-Options: nosniff`
+  (§ 42.17).
+- A configured collector run by name on a pasted body at `edit` makes no
+  request, has a report naming it a debug run of the collector, not an
+  edited one, on a pasted response, and answers the series a probe of it
+  answers for the same response (§ 42.17).
+- A configured collector's python transform runs on a pasted body at `edit`
+  and counts one run in the collector's own worker statistics (§ 42.17).
+- At `full` the debug page scrapes a static target once with its own
+  credential, which the report withholds, answers `target up 1` with the
+  series labelled with the target's labels and `static_target`, runs a
+  written collector on the same scrape, answers `404` for an unknown target
+  and publishes nothing; at `edit` the scrape is `403` naming
+  `--web.debug=full` without reaching the target (§ 42.17).
+- At `edit` a fetch is refused `403` for a written collector and for a
+  configured one alike, without reaching the target; at `full` a configured
+  collector fetches through itself, with its own credential, and a written
+  collector without `request_from` is answered `400` (§ 42.17).
+- `http_exporter_debug_runs_total` is absent with debugging off; at `edit` it
+  has `kind="page"` alone, counting two successes, one failure and three
+  invalid runs — a collector the loader refuses, a run with no source and a
+  fetch the level refuses; at `full` it counts a debug probe's success and
+  two invalid ones — a wrong parameter and an unknown collector — a debug
+  scrape's success and an unknown name's invalid one, and a page run's
+  fetch, and none of the collector's families nor
+  `http_exporter_probes_seconds_total` (§ 42.17).
+- A page run past the 4 in progress is answered `503` and counted a
+  `failure` (§ 42.17).
+- The collectors page links each collector as `debug?collector=<name>` at
+  `edit`, with the link carrying the form's target at `full`, links nothing
+  with debugging off, and no form asks `/probe` for a debug report (§ 23,
+  § 42.17).
+- A debug probe and the debug page's run of the same collector both show a
+  header value of a megabyte by its first 1,024 bytes and its length, the
+  page's JSON `response` too, with the second line saying what a probe would
+  have answered (§ 42.17).
+- The chart renders `--web.debug=edit` and `--web.debug=full` for
+  `server.debug` `edit` and `full`, nothing for the default and `off`, and
+  fails rendering for `server.debug: on` and for `--web.debug` in
+  `extraArgs`, naming `server.debug` (chart § 19).
+
+## 34.156 The HTTP statuses retried
+
+- Without `retry.statuses` an `http` collector with one retry sends a target
+  answering `408`, `425`, `429`, `500`, `503` and `599` two requests, and one
+  answering `404`, `400`, `409` and `302` one; `[404, 503]` retries a `404`
+  and a `503` and no longer a `500` or a `429`; `[4xx]` retries `404`, `418`
+  and `499` and not `503`; `[]` retries no status, while a connection closed
+  before the answer is retried (`TestRetryStatusesReplaceTheDefaultSet`).
+- `retry.statuses` refuses `600`, `99`, `6xx`, `2x`, `ok` and `""` in
+  `accept_status`'s words, naming the collector and the entry, and writes
+  ` 4XX `, `+0503` and `0429` as `4xx`, `503` and `429`; an entry the
+  collector accepts whole is refused, naming it — `503` with `accept_status:
+  [2xx, 503]`, `502` and `5XX` with `[5xx]`, `200` and `2xx` without
+  `accept_status` — while `5xx` with `[2xx, 503]`, `2xx` with `[200]`,
+  `[404, 301, 100]` and `[]` are taken; with `5xx` retried and `503` accepted
+  a `503` is sent once and a `502` twice; `attempts: 11` is refused as before
+  (`TestRetryStatusesAreCheckedAsAcceptStatusIs`).
+- A static target's `retry.statuses` is normalized when its file is loaded,
+  replaces the collector's whole in `Over` and in the overrides a scrape
+  makes, so a `404` is retried and the collector's `502` is not; a target
+  entry that is no status, one the collector's `accept_status` accepts, a
+  target `accept_status` that accepts the collector's entry and one that
+  accepts its own entry are refused naming the target, and a target
+  `accept_status` without `503` takes its own `[503]`
+  (`TestAStaticTargetsRetryStatuses`).
+- `retry.statuses`, listed or empty, is refused for every built request type
+  not retried by HTTP status, in a collector and a static target: for `grpc`
+  as `sets request.retry.statuses, which does not apply to request.type
+  "grpc"; retry.codes says which gRPC status codes are retried`, for the types
+  without retries as any retry key is
+  (`TestRetryStatusesAreRefusedForTypesNotRetriedByHTTPStatus`); a `grpc`
+  collector refuses `[503]` and `[]` (`TestGRPCValidation`), and a
+  `grpc` static target's `statuses: [503]` fails the target file
+  (`TestGRPCStaticTargets`); `retry.codes` on an `http` collector is refused
+  naming `retry.statuses` and its default
+  (`TestTheKeysOfOtherTypesDoNotApplyToHTTP`).
+- A `graphite` collector with `retry.statuses: [404, 503]` sends a target
+  answering `404` two requests and one answering `500` one
+  (`TestGraphiteRetriesTheStatusesRetryStatusesLists`).
+- `RetriesOf` says `up to 2, 1s apart, on a failed connection and on an answer
+  of 408, 425, 429, 5xx that is not accepted` by default, the listed statuses
+  for a list, `on a failed connection alone: retry.statuses is empty` for a
+  target's `[]`, and nothing with no attempts or for a `POST` without
+  `non_idempotent` (`TestRetriesOfSaysWhichStatusesAreRetried`); a debug probe
+  of a collector retrying `[404, 5xx]` shows the `404` attempt, the `200`
+  one and the `Retries:` line below them, and one of a collector without
+  retries no such line (`TestADebugProbeSaysWhichStatusesAreRetried`); the
+  examples' reports, compared with the oracle writer, carry the line as the
+  writer does (`TestTheReportsOfTheExamplesAreWrittenAsTheyWere`).
+- A static target's `retry.statuses` is a counted section of its cache key,
+  `retry_statuses`, so a listed, an empty and an unset list make three keys
+  (`TestATargetsRetryStatusesArePartOfItsCacheKey`).
+- `--dry-run` lists `retry.statuses: [404, "5XX", 4.29e2]` under
+  `request_policies` as `retry_statuses: ["404", "5xx", "429"]`, `[]` as `[]`,
+  and no policy for a collector that leaves it out, and fails a collector
+  whose `retry.statuses: [503]` its `accept_status: [2xx, 503]` accepts, in
+  startup's words (`TestDryRunReportsRetryStatuses`).
+- The schemas take an entry of `collectors[].request.retry.statuses` and
+  `targets[].request.retry.statuses` as `accept_status`'s, `503` and `503.0`,
+  `5.03e2`, `0x1F7`, `0o767`, `5_03` and `+0503`, and refuse `600`, `503.5`,
+  `6e2`, `0x258`, `0o1130`, `6_00` and `-503`, as the exporter does, in the
+  tables of keys (`TestEveryConstrainedKeyOfTheSchemasIsInATable`); a boolean
+  there is refused by both, the exporter once the file is read
+  (`TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes`).
+
+## 34.157 Logging in to an HTTP target
+
+- A json login posts the fields of `fields` and of `field_files`, those read
+  from their files and trimmed, reads the token with `token` and sends it as
+  a bearer token; a second request makes no second login, and the login is
+  counted for the collector (§ 42.6a).
+- A token read from a header of the login's answer is sent in `login.header`
+  after `login.prefix`, and one read from a cookie the answer sets is sent
+  back as that cookie, fetched again once a tenth of its `Max-Age` is left.
+- A token lasting 100 seconds is kept at 69 seconds and fetched again at 71,
+  30 seconds before it expires; a login that fails then, the token not yet
+  expired, leaves the token in use and is counted as a failure; once it has
+  expired, the failing login fails the request in the `login` stage, naming
+  the status. The test moves the login's clock.
+- A target answering `401` has the token dropped and a POST sent once more
+  with a new login's token, though `retry.attempts` is 0; a target refusing
+  every token is asked twice and answers with its `401`.
+- A login answered `403` fails the request in the `login` stage with the
+  status and the start of the answer, a credential in it masked, without the
+  secrets the login sent, and the target is not asked; a `token` expression
+  that fails says so without the answer's values.
+- A login answered with a redirect fails, naming it, and the host it names
+  is never asked, `follow_redirects` set or not.
+- Twenty requests needing a token at once wait for one login (run under the
+  race detector).
+- A relative `login.url` is resolved against each target, without its
+  credentials or query, each target logged in to once; an absolute one that
+  the collector's `denied_targets` refuses fails the request in the `login`
+  stage, and is no refusal of the target.
+- A login to a server whose certificate does not verify fails though the
+  probe sets `insecure_skip_verify`, and goes through with
+  `login.tls.insecure_skip_verify`.
+- An oauth2 login sends the client's id and secret as a Basic credential, or
+  as form parameters with `auth_style: params`, `grant_type`
+  `client_credentials`, the scopes and the endpoint parameters; a `401` of
+  the target makes one new login, and the token is fetched again 30 seconds
+  before its `expires_in` of 300 runs out.
+- A token endpoint answering `invalid_client` fails the request in the
+  `login` stage with its status, code and description, without the secret,
+  counted as a failed login.
+- A static target's own bearer token is sent instead of the collector's
+  login, which is then not made; a static target's own login replaces the
+  collector's, with its own secrets.
+- A login block is checked at load, naming the collector and the key: no
+  type or an unknown one, no url, a url with credentials, a placeholder, a
+  scheme other than http and https or one `allowed_schemes` refuses, or a
+  host without a scheme; none or two of `token`, `token_header` and
+  `token_cookie`; a `token` that does not compile; no `field_files`; a field
+  in both maps; a key of the other kind; a header that is no header name or
+  whose name does not read as a credential's; `token_cookie` with `header`;
+  a negative `ttl`; a login in `Authorization` beside `bearer_token_file`, or
+  beside a `request.headers` entry of its header; for oauth2, both or neither
+  of `client_id` and `client_id_file`, no `client_secret_file`, an endpoint
+  parameter the grant sets, a scope with a blank, an unknown `auth_style`. A
+  login in `X-Auth-Token` beside `basic_auth_file` is taken; a static
+  target's login beside its own bearer token is refused.
+- Following a configuration keeps the tokens of a login in force, drops
+  those of a login that changed, and forgets the counts of a collector
+  removed.
+- At most 1000 tokens are kept, the one used longest ago dropped first.
+- A debug trace records the login request, marked as one, before the request
+  it was made for.
+- A graphite collector logs in as an http one does, and a graphite static
+  target's login is checked.
+- A grpc collector's `request.login` is refused as a key of another type.
+- A probe of a collector that logs in is answered with the target's answer
+  to the token and counted in `http_exporter_logins_total`; a failed login
+  fails the probe in the `login` stage, logged so, counted in
+  `http_exporter_login_failures_total`, and the secret is in neither the log
+  nor the answer.
+- `http_exporter_logins_total` and `http_exporter_login_failures_total` are
+  families of the http and graphite types alone, at 0 for an http collector
+  without a login.
+- A debug probe's report lists the login request marked `(login)` before the
+  request, with `Authorization` redacted, and shows neither the secret nor the
+  token.
+- Static targets logging in at different URLs have different cache keys, and
+  a target without a login has no login section in its key.
+- The debug page refuses a collector written on it that sets `request.login`,
+  naming it, and shows nothing of the secret file.
+- `--dry-run` lists a collector's login under `request_policies` with its
+  header and prefix filled in, its files and a credential-named field's
+  value withheld, warns of a missing secret file, and fails a login startup
+  refuses, as startup words it.
+- The committed schema and the exporter agree on login blocks: the keys
+  each kind takes and requires, the token's one source, and `header` and
+  `prefix` beside `token_cookie`; a header that does not read as a
+  credential's, a URL with credentials, a login beside a bearer token file
+  and a token that does not compile pass the schema and are refused by the
+  exporter.
+- Each of `request.login`'s constrained keys, a collector's and a static
+  target's, is a row of the schema key tables: left out, written "",
+  written well and badly.
+
+## 34.158 Target discovery for the allocator
+
+- Target groups are read from JSON and YAML as Prometheus reads them, and an
+  unknown key, a label that is no label name, an empty target, an answer
+  that is no list and text after the list are refused
+  (`TestTargetGroupsAreReadStrictly`).
+- A discovery source's `labels` mapping sets a label from one of the
+  source's own, and a mapping whose source label is missing sets nothing
+  (`TestTheLabelsMappingSetsLabelsFromTheSources`).
+- A discovery list is checked at load: exactly one kind per source, names
+  and their defaults, `labels` mappings, `max_targets`, URLs, TLS for `http`,
+  label selectors, ports, namespaces, timeouts against refresh intervals,
+  file patterns and extensions, and relative paths taken from the file's
+  directory (`TestDiscoveryIsCheckedAtLoad`).
+- `file_sd` reads its files again at every refresh, a change is what it
+  finds next, a broken file keeps the last good targets, and one failure is
+  counted once while it stays the same (`TestFileSDReadsItsFilesAgain`).
+- `http_sd` sends the bearer token of its file, read again at every refresh,
+  and `X-Prometheus-Refresh-Interval-Seconds`; a `500`, an answer that is no
+  JSON, one over `max_targets` and one over 16 MiB each keep the last good
+  targets and count a failure (`TestHTTPSDKeepsItsLastGoodAnswer`).
+- A source that has never answered adds no targets
+  (`TestASourceThatNeverAnsweredHasNoTargets`).
+- The kubernetes source lists the EndpointSlices of its namespace with its
+  label selector and `limit=500`, follows the continue token, takes the
+  ready endpoints (and those whose readiness is unknown) at the named port,
+  sorted, with the meta labels and the mapping, skips a slice without the
+  port, and with a numbered port and `include_not_ready` takes every
+  endpoint (`TestKubernetesFindsReadyEndpointsAtTheNamedPort`).
+- The kubernetes source reads the service account token again at every
+  listing, so a rotated token is sent (`TestKubernetesReadsTheTokenAgain`).
+- The kubernetes source asks each listed namespace and, with
+  `all_namespaces`, the cluster-wide path, refuses more targets than
+  `max_targets`, and fails against an API server whose certificate the
+  service account's CA did not sign (`TestKubernetesVerifiesTheAPIServer`);
+  outside a pod it fails naming `KUBERNETES_SERVICE_HOST`
+  (`TestKubernetesOutsideAPod`).
+- A probe job's discovered targets are served after its written ones, made
+  by `target_template`, each once, a target the collector refuses left out,
+  with the source's labels under the job's, a job label written `""`
+  removing one, `__meta_` labels passed and `job`, `instance` and other `__`
+  labels dropped (`TestDiscoveredProbeTargetsAreServed`).
+- A `discovered_targets` entry is written out as a static target per
+  discovered address, named `<entry>_<address>` with a digest of the
+  address when two names collide, loaded by the replica's own loader from
+  the shares, with the entry's labels over the discovered ones and no `__`
+  label; the per-source metrics show the targets, refreshes and last
+  success (`TestDiscoveredStaticTargetsAreShared`).
+- A discovery change changes only the bundle whose share changes, a target
+  no longer found leaves at once, and a reload setting `shard_key: address`
+  hands moved discovered targets over for one interval while the source
+  keeps what it found (`TestDiscoveryChangesAreAppliedAsAReload`).
+- A source that never answered leaves the written targets served, and an
+  answer over `--discovery.max-targets` is refused
+  (`TestAFailingSourceLeavesTheRest`).
+- A probe job and a `discovered_targets` entry are checked at load: a job
+  without targets or discovery, a template without `{{address}}` or without
+  discovery, unknown source keys; an entry without a name or discovery, with
+  `target`, a `shard_key` other than `address`, an `http` collector without a
+  URL template, an unknown key or collector, twice, and `discovered_targets`
+  that is no list; a file of `discovered_targets` alone serves no share
+  until a target is found (`TestDiscoveredInputsAreCheckedAtLoad`).
+- `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
+  stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
+- The exporter refuses a static target file with `discovered_targets`,
+  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`).
+- `--discovery.max-targets=0` exits 2, and `-h` lists the flag with its
+  default, 10000 (`TestAMalformedCommandLineExits2`, `TestVersionAndHelp`).
+- The chart renders no allocator ServiceAccount or RBAC without a
+  kubernetes source; with one, a ServiceAccount the allocator runs as with
+  its token, and a Role and RoleBinding (`get`, `list`, `watch` on
+  `discovery.k8s.io` `endpointslices`) in each listed namespace and the
+  release's; a `discovered_targets` source of every namespace renders a
+  ClusterRole and ClusterRoleBinding; `allocator.rbac.create: false` renders
+  the ServiceAccount alone
+  (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
+- The values schema takes a probe job of discovery alone and refuses a
+  source of two kinds, an unknown key, a file_sd file of no format, a
+  kubernetes source without a port, a template without `{{address}}` and an
+  empty discovery list (`TestChartSchemaChecksProbeJobDiscovery`); the
+  schema requires a name, a collector and targets or discovery
+  (`TestChartProbeJobKeysAreTheAllocatorsKeys`).
+
+## 34.159 The allocator's extra volumes and its own schemas
+
+- `allocator.extraVolumes` and `allocator.extraVolumeMounts` are rendered
+  into the allocator's pod after its own volumes and mounts, as given, and
+  not into the exporter's, whose `extraVolumes` stay its own; by default
+  the allocator's pod has its configuration volume alone, and without the
+  allocator nothing is rendered (TestChartMountsTheAllocatorsExtraVolumes).
+- An `allocator.extraVolumeMounts` entry at or inside the configuration
+  directory, the static target and probe targets directories while the
+  allocator reads them, the token's directory with a token, or the service
+  account token's directory while a `kubernetes` source or
+  `serviceAccount.automount` mounts it, and two entries of one path, fail
+  rendering with the schema and without it, compared cleaned; the values
+  schema refuses one inside the configuration directory itself; each of
+  those directories while it is not mounted, a path beside one and one
+  climbing out again render
+  (TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready).
+- The values schema takes `allocator.extraVolumes` and
+  `allocator.extraVolumeMounts` exactly as `extraVolumes` and
+  `extraVolumeMounts` (TestChartSchemaTakesTheAllocatorsExtraVolumesAsTheExportersOwn).
+- `configs/allocator-static-targets.schema.json` and
+  `configs/probe-targets.schema.json` are what the allocator generates, and
+  say where they are published (TestCommittedAllocatorSchemasAreCurrent).
+- The allocator's static target schema takes `discovered_targets` beside
+  `targets`, alone and beside `targets: []`, and the exporter's example
+  target file, while the exporter's schema refuses `discovered_targets`
+  (TestTheAllocatorsStaticTargetSchemaTakesDiscoveredTargets).
+- The two schemas refuse a table of files the allocator refuses at load:
+  no targets and no entries, an entry without a name, collector or
+  discovery, with `target`, a `shard_key` other than `address` or a
+  template without `{{address}}`, a source of two kinds or none, with an
+  unknown key, a file of no format, an `ftp` or credentialed URL, a
+  certificate without a key, no or a bad port, a bad namespace, namespaces
+  beside `all_namespaces`, a reserved or `__` label; a probe targets file
+  without jobs, a job without a name, a collector or a target or source, a
+  parameter of the allocator's, an `instance` label and an unknown key
+  (TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses).
+- The schemas declare exactly the keys of `allocator.ProbeFile`, of
+  `allocator.DiscoveryConfig` with each kind's own, in a probe job and in an
+  entry, and of a `discovered_targets` entry a static target's keys but
+  `target`, with `name`, `shard_key`, `target_template` and `discovery`;
+  the chart's values schema declares a probe job's keys, its discovery
+  source's included, as `configs/probe-targets.schema.json` does
+  (TestTheAllocatorsSchemasDeclareTheDecodersKeys).
+- The allocator takes, as a key, every key the schema declares of a
+  `discovered_targets` entry, and refuses `target`, `targets` and an
+  unknown key (TestTheAllocatorTakesTheKeysTheSchemaDeclaresOfAnEntry).
+- Every probe targets and static target example of `docs/ALLOCATOR.md` is
+  valid against its schema, and the page shows both schemas' modelines
+  (TestTheAllocatorsExamplesMatchItsSchemas).
+- `pue-allocator --static-targets-file-schema` and
+  `--probe-targets-file-schema` print the schemas and exit 0 without
+  reading a file, and `-h` lists them (TestSchemaFlagsPrintTheSchemas,
+  TestVersionAndHelp).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -23498,7 +24680,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -23958,7 +25140,8 @@ checks on its own endpoints MUST be compared the same way.
 
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
-endpoint, the landing page at `/` and the collectors page at `/collectors`. The
+endpoint, the landing page at `/`, the collectors page at `/collectors` and,
+when enabled, `/debug` and `/debug/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -24027,6 +25210,93 @@ Authentication.
 Tests MUST cover bearer-token-file loading, basic-auth-file loading, whitespace
 trimming, missing and empty files, independent exporter Basic Auth, and the
 fact that the exporter Basic Auth credential is not forwarded to the target.
+
+## 42.6a Logging in to a target
+
+An `http` or `graphite` collector, and a static target of one, MAY set
+`request.login`: a login made before the request, whose token MUST be sent
+on it. A `grpc` collector MUST refuse it as a key of another type. Two kinds
+MUST be supported:
+
+- `type: json` MUST post, with `Content-Type: application/json`, a JSON
+  object of the members of `fields`, as written, and of `field_files`, each
+  read from its file at every login and trimmed as a credential file is
+  (§ 42.6), to `url`. `field_files` MUST hold one field at least, and a field
+  MUST NOT be in both. The token MUST be read from exactly one of: `token`, a
+  jq expression on the answer's JSON body with `$status` and `$headers` as in
+  a rule, which MUST give text that is not empty; `token_header`, a header of
+  the answer; `token_cookie`, a cookie the answer sets, which MUST be sent
+  back as that cookie in the `Cookie` header. `expires_in`, a jq expression,
+  MAY give the token's lifetime in seconds, a number above 0 or text of one,
+  or `null` when the answer does not say.
+- `type: oauth2` MUST ask the token endpoint `url` for a token with the
+  client credentials grant (RFC 6749 § 4.4): `client_secret_file` is
+  required, and exactly one of `client_id` and `client_id_file`; the id and
+  secret MUST be sent as a Basic credential, or as form parameters with
+  `auth_style: params`; `scopes` as the `scope` parameter, and
+  `endpoint_params` as further parameters, which MUST NOT name `grant_type`,
+  `scope`, `client_id` or `client_secret`. The answer's `expires_in` is the
+  token's lifetime.
+
+A key of the other kind MUST be refused, and so MUST a login without `type`
+or `url`, at load, naming the collector or the target and the key. A secret
+MUST NOT be read from the configuration: it MUST be read from its file at
+each login, so a rotated file is used by the next one.
+
+The token MUST be sent in `header`, `Authorization` when left out, after
+`prefix`, `"Bearer "` in `Authorization` and nothing in another header when
+left out. `header`'s name MUST read as a credential's, as the redaction of
+§ 42.17 reads names, or be refused at load, so that whatever shows a
+request's headers withholds the token. `token_cookie` MUST NOT be set with
+`header` or `prefix`. A login sent in `Authorization` MUST be refused beside
+the basic or bearer credential keys of the same collector or static target,
+and a `request.headers` entry of the login's header MUST be refused. A
+static target's `login` MUST replace the collector's, and the collector's
+credential sent in the same header; a header the request carries in the
+login's header — a static target's own credential or header, a probe's
+forwarded `Authorization` or header — MUST be sent instead of the token, and
+no login made for that request.
+
+Where a login goes MUST be the configuration's alone. `url` MUST be an
+absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
+reference resolved against the target, its scheme, host and port, without
+the target's credentials, query or fragment; it MUST hold no credentials,
+fragment or placeholder, and a reference naming a host without a scheme
+(`//host/...`) MUST be refused. The login request MUST be held to the
+collector's `allowed_targets` and `denied_targets` (§ 26.1), and a login URL
+they refuse MUST fail the trip as a failed login, not as a refused target. A
+login MUST NOT follow a redirect. It MUST be made with `login.tls` when set,
+and otherwise with the collector's `request.tls`, never with an
+`insecure_skip_verify` a probe parameter or a static target sets for the
+target.
+
+A token MUST be kept, by the collector, the login block and the URL the
+login was sent to, and sent on every request until it is due to be fetched
+again: when a tenth of its life is left or 30 seconds, whichever is more,
+but not before half of it has passed. Its lifetime is what the answer says,
+else `ttl`, else until the target refuses it. Requests that need a token
+while its login is made MUST wait for that one login, each within its own
+deadline, and the login MUST NOT be cut short by the request that began it
+going away. A login that fails while the token kept has not expired MUST
+leave that token in use, counted as a failure. A target that answers `401`
+MUST have the token it was sent dropped, unless a newer one replaced it
+meanwhile, and the request MUST be sent once more with the token of a new
+login, whatever its method; that request MUST NOT be one of
+`retry.attempts`, and MUST be made within the trip's deadline. At most 1000
+tokens MUST be kept, the one used longest ago dropped first, and a reload
+MUST drop the tokens of a login it changes or removes.
+
+A login that fails MUST fail the trip in the `login` stage, saying where it
+went, with its query's values masked, and why: for an answer that is not
+`2xx`, its status and the start of its body, at most 256 bytes, with what
+reads as a credential masked (§ 42.17), and for `oauth2` the error code and
+description RFC 6749 has the server send. What the login sent MUST NOT be
+shown anywhere: not its body, a file's content or the token. An error of a
+`token` or `expires_in` expression MUST say the kind of value it gave and
+never the value. A debug report MUST list a login request, marked as one,
+with its headers redacted as every request's are and without its body. A
+static target's `login` MUST be part of its cache key, and the debug page
+MUST refuse a collector written on it that sets `login`.
 
 ## 42.9 OTLP TLS configuration
 
@@ -24548,7 +25818,7 @@ an entry.
 The presence and the absence of a parameter, a header, or a credential MUST
 produce different keys. Every list the key is built from — a parameter's
 values, a header's values, and a static target's own sections (`targets`,
-`metadata`, `retry_codes`) — MUST be written with its length, so a value that
+`metadata`, `retry_codes`, `retry_statuses`) — MUST be written with its length, so a value that
 reads like the next item cannot move a boundary and make two different
 requests share a key. A probe that supplies no credential, no forwarded
 header, or no TLS override therefore MUST NOT be able to read an entry stored
@@ -24790,7 +26060,9 @@ targets:
 ```
 
 `interval` and `targets` MUST be required, and `targets` MUST NOT be empty; a
-document without either MUST be refused. `--static-targets-file-schema` MUST
+document without either MUST be refused. A document with the target
+allocator's `discovered_targets` (§ 42.14d) MUST be refused, naming the
+allocator, since the exporter discovers no targets. `--static-targets-file-schema` MUST
 print the document's JSON Schema, and the committed
 `configs/static-targets.schema.json` MUST be that output (§ 24.3). Every
 target MUST name a configured collector; an unknown collector MUST be rejected
@@ -25050,7 +26322,18 @@ self-metrics rather than in per-target series, so exporter self-metric
 cardinality does not grow with the number of targets. The exporter MUST
 expose `http_exporter_static_targets`, the number of targets loaded, and
 `http_exporter_static_targets_exported_via_otlp`, the number with
-`export_via_otlp`. The document's reloads MUST be reported under
+`export_via_otlp`. For autoscaling, the exporter MUST expose the counters
+`http_exporter_static_targets_scrape_seconds_total`, the seconds every static
+target scrape took from its start to its end, waiting for a slot included and
+a scrape whose result a reload superseded too, but not one the shutdown cut
+short, and `http_exporter_probes_seconds_total`, the seconds every probe
+counted in `http_exporter_scrapes_total` took until its answer was ready, a
+cache hit, a shared probe and one a limit turned away included, but not a
+debug probe or a request refused before it was counted. Each MUST add the
+same duration as its collector's `http_exporter_scrape_duration_seconds`,
+MUST be one series without labels, also without verbose self-metrics, and
+MUST be exposed from the start at `0`, so that their rate, the average number
+in progress, can be added up per pod. The document's reloads MUST be reported under
 `file="static_targets"` (§ 22.0b).
 
 A target MAY set `shard_key`, any text; the exporter MUST ignore it, and the
@@ -25073,8 +26356,9 @@ configuration loader, `--static-targets-file` with the static target file's
 loader and checks, against the configuration, and `--probe-targets-file` MUST
 be a document of one key, `probe_jobs`, besides `x-` keys, whose jobs each
 have a `name` (unique, `[A-Za-z0-9_][A-Za-z0-9_.-]*`), a `collector` of the
-configuration, `targets` (not empty, each once, each checked as a static
-target's `target` is for the collector), and MAY have `params` (probe
+configuration, `targets` (not empty unless the job has `discovery`, each
+once, each checked as a static target's `target` is for the collector), and
+MAY have `discovery` and `target_template` (below), `params` (probe
 parameters, checked as a probe checks them; `target`, `collector`, `debug`
 and a name that makes no label name MUST be refused), `labels` (a label name,
 not `instance` nor starting with `__`; `""` leaves the label out) and
@@ -25104,6 +26388,81 @@ force otherwise, and one refusal MUST be logged and counted
 (`model.SameFailureText`) stays the same. What is served MUST be the text
 that was checked: files that change while they are checked MUST be read
 again at the next check.
+
+**Discovery.** A probe job's `discovery`, and an entry of the static target
+file's `discovered_targets`, MUST be a list of sources each setting exactly
+one of `file_sd`, `http_sd` and `kubernetes`, decoded strictly, with an
+optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
+`<kind>_<index>`), `labels` (a label name, not starting with `__` nor `job`,
+`instance` or `static_target`, set to the value of the source label it
+names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
+default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`, and
+a `timeout` (default `10s`) MUST NOT be longer than it. `file_sd.files` MUST
+be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
+from the directory of the file naming them, read again at every refresh.
+`http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
+asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
+optional `bearer_token_file` read again at every refresh and a `tls` block
+(only for `https`), without following redirects. Both MUST read a list of
+`{targets, labels}` groups strictly, refusing an empty target and a label
+that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
+EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
+with its token read again at every listing, in pages of 500, in each of
+`namespaces` (DNS-1123 labels; none lists the namespace of the service
+account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
+`label_selector` (checked at load); its targets MUST be each address of each
+endpoint whose `ready` condition is true or unknown (every endpoint with
+`include_not_ready`) at the slice's port named or numbered `port`, as
+`host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists. An
+answer larger than 16 MiB, with more targets than its bound or that cannot
+be read MUST be a failure; a failing source MUST keep the targets of its last
+good answer, one that never answered MUST add none, and a failure MUST be
+logged and counted (`pue_allocator_discovery_refreshes_total{result="failure"}`)
+once while its text stays the same. A probe job's discovered target MUST be
+its `target_template` (which MUST hold `{{address}}`, and MUST NOT be set
+without `discovery`) with the address in place of `{{address}}`, or the
+address without one; one listed already or that the collector refuses MUST
+be left out. A `discovered_targets` entry MUST have a `name` of a static
+target's name and `discovery`, MAY have `target_template` and `shard_key`
+(only `address`), MUST NOT have `target`, and MUST be checked at load as a
+static target of the file with `192.0.2.1:9100` for the address; each
+discovered address MUST make a static target named `<name>_<address>`, each
+character outside `[A-Za-z0-9_]` written `_`, followed by `_` and the first 8
+hex digits of the address's SHA-256 when another target has that name,
+whose `target` is made as a probe job's is, whose other keys are the entry's
+and whose shard key is its name, or its address with `shard_key: address`; one
+the checks refuse MUST be left out, and what is left out logged once while
+it stays the same. A `discovered_targets` file MAY leave `targets` out.
+A discovered probe target's group MUST carry its source's labels that are
+`__meta_` labels or label names but `job` and `instance`, under the job's
+labels, a job label written `""` removing one; a discovered static target
+MUST carry its source's labels but those starting with `__`, `job`,
+`instance` and `static_target`, under the entry's labels. What the sources
+find MUST be put in force as a reload is (handover, removal at once, a
+bundle changing only with its share), and a reload MUST keep a source whose
+owner and settings it leaves alone, with what it found.
+
+**Schemas.** The repository MUST publish the JSON Schemas of the
+allocator's own files in `configs/`, generated from the structs the
+allocator decodes with rules by path, as the exporter's are (§ 24.3):
+`configs/allocator-static-targets.schema.json`, the exporter's static target
+file schema with `discovered_targets`, its entries declaring a static
+target's keys but `target`, with `name` (required), `discovery` (required,
+not empty), `target_template` and `shard_key` (only `address`), and the
+static target file then valid with `targets` empty or left out; and
+`configs/probe-targets.schema.json`, the probe targets file's. A discovery
+source MUST declare exactly the keys of the allocator's `DiscoveryConfig`,
+with each kind's own, and require one kind. `pue-allocator
+--static-targets-file-schema` and `--probe-targets-file-schema` MUST print
+them and exit 0, and `make schemas` MUST write them. The exporter's
+`configs/static-targets.schema.json` MUST keep refusing `discovered_targets`.
+A test MUST fail when a committed file differs from what the code generates,
+when a schema's keys differ from the keys the allocator decodes, the probe
+job's of the chart's values schema included (SPECIFICATION-CHART.md
+§ 33.10c), when an example of `docs/ALLOCATOR.md` does not validate against
+its schema, and when a schema accepts any of a set of invalid files.
 
 **Members.** A member MUST be live while its last heartbeat is younger than
 `allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
@@ -25183,10 +26542,15 @@ only.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
+`pue_allocator_targets_per_member{kind}` (the targets allocated to the
+members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
-`pue_allocator_member_changes_total` and
-`pue_allocator_members_refused_total`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_member_changes_total`,
+`pue_allocator_members_refused_total`, and for each discovery source, by
+`kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
+`pue_allocator_discovery_refreshes_total{result}` and
+`pue_allocator_discovery_last_success_timestamp_seconds`. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 
@@ -25751,33 +27115,61 @@ drift when daylight saving changes. The workflow's cron is evaluated in UTC,
 which has no daylight saving, so its hour MUST be chosen to fall mid-morning in
 Sofia in both halves of the year.
 
-## 42.17 Debug probes
+## 42.17 Debugging collectors
+
+One flag, `--web.debug`, MUST set how far collectors can be debugged: `off`,
+the default; `edit`; or `full`, in any case. Any other value MUST be a
+command-line error (exit 2, before `--dry-run` or startup). There MUST be no
+other flag for any part of it.
+
+- At `off`, `/debug` and `/debug/run` MUST answer `404`, and a debug probe
+  and a debug scrape `403`.
+- At `edit`, the exporter MUST serve the debug page, `/debug` (below), on pasted
+  responses only: nothing a target answers may be shown. A debug probe, a
+  debug scrape and a page's run that would fetch a target or scrape a static
+  target MUST be answered `403` naming `--web.debug=full`, without
+  contacting the target.
+- At `full`, the exporter MUST serve the debug page with every source, debug
+  probes and debug scrapes.
+
+Every run — a debug probe, a debug scrape, a run of the page — MUST be made
+by one engine, given the collector and what it reads, and reported in one
+structure: the requests, the response, the stages, what was logged, what a
+probe or the scrape would have answered and the series it would have served.
+A debug probe and a debug scrape MUST answer it as the text report below,
+and the debug page as JSON with the same report beside it.
 
 `/probe` MUST accept `debug`: `true`, `1` or empty turn a probe into a debug
 probe, `false` or `0` leave it a probe, and any other value MUST be answered
-`400`. A debug probe MUST be answered `403` naming `--web.enable-probe-debug`
-unless the exporter was started with that flag, off by default, before
-anything else about the probe is checked and without contacting the target.
-It MUST be authenticated like a probe (§ 42.5).
+`400`. A debug probe MUST be answered `403` naming `--web.debug=full` unless
+the exporter runs with `--web.debug=full`, at `edit` too, before anything
+else about the probe is checked and without contacting the target. It MUST
+be authenticated like a probe (§ 42.5).
 
 A debug probe MUST make one trip exactly as a probe would, through the
 target policy (§ 26.1), the trip limits (§ 42.13b) and the probe's deadline,
-and MUST answer `200` with a `text/plain` report of it:
+and MUST answer `200` with a `text/plain` report of it, with
+`X-Content-Type-Options: nosniff`, since it holds what the target sent:
 
 - the status and reason a probe would have answered, and where
   `cache.stale_if_error` would have answered with the last good result, that
   it would have, and its age;
 - every request sent, with retries and redirects, its method, URL, headers
   and outcome, a redirect with the headers it was sent and the names of the
-  ones withheld from it (§ 42.15c); a `grpc` call with its method, metadata and code; a
-  `localfile` read as its file;
+  ones withheld from it (§ 42.15c); a request of `request.pagination` with
+  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a `grpc`
+  call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
   the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the
   target's own. The body is shown up to 64 KiB and only when it is text. A
   body that was converted MUST be listed with its size as sent and the
   encoding it was converted from, and shown as the same text in UTF-8, in
   which an XML declaration still names the encoding it was sent in. A
-  directory is shown as its files, with their sizes as read;
+  directory is shown as its files, with their sizes as read. A response of
+  `request.pagination` MUST say how many pages it is merged from, or which
+  page's status failed the trip, and whether the pages stopped at
+  `max_pages` with another to come, and the fetch stage's note MUST give the
+  number of pages;
 - each stage, its duration and outcome, saying when `error_handling` carried
   on;
 - the series by metric name, the rules that gave none, each by the name its
@@ -25837,9 +27229,9 @@ share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
 A debug probe MUST NOT read or fill the response cache, share a trip with a
-probe in flight (§ 42.13a), be counted in any self-metric but the Python
-worker series (below), or be queued for
-OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
+probe in flight (§ 42.13a), be counted in any self-metric but
+`http_exporter_debug_runs_total` (below) and the Python worker series, or be
+queued for OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
@@ -25866,16 +27258,16 @@ by the rule below: they contain, in any case, `auth`, `cookie`,
 `session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
 `pass` as a whole word.
 
-With the same flag, `/static-targets?debug=<name>` MUST scrape the static
+With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request
 settings, headers and credentials, its interval as the budget, and waiting for
 a slot of the collector's `max_concurrent_probes` — and answer the same
 report, saying what the scrape would have published: `http_exporter_target_up`
 `1` or `0`, why, whether a stale result would stand in, and the series with the
 target's labels and `static_target`. It MUST NOT publish anything on the
-endpoint, count in a self-metric but the Python worker series (above) or be
-exported over OTLP, and MUST skip the
-response cache. Without the flag it MUST be answered `403`; a name no target
+endpoint, count in a self-metric but `http_exporter_debug_runs_total` and the
+Python worker series (above) or be exported over OTLP, and MUST skip the
+response cache. Below `full` it MUST be answered `403`; a name no target
 in force has `404`; more than one `debug` value, an empty one, or `debug`
 together with `targets`, `400`.
 
@@ -25915,3 +27307,111 @@ quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value
 masked, wherever the error is shown: a log line, a probe's answer or a debug
 report. The error MUST still unwrap to what it was.
+
+At `edit` and `full` the exporter MUST serve `/debug`, a page for running a
+collector, and take its runs at `POST /debug/run`. Both MUST be
+authenticated like a probe (§ 42.5). The page MUST be one document whose
+style and script are inline, loading nothing from anywhere, with the
+headers, escaping and layout of the other pages (§ 23), and MUST post its
+runs relative to itself, so it works under a proxy's path prefix. It MUST
+run a collector on demand and a moment after an edit, a run cancelling the
+one before it, and MUST start from the collector, and at `full` the target
+or the static target, its URL names (`collector`, `target`,
+`static_target`), as the collectors page links it. It MUST offer the
+configured collectors at every level, and the fetch and the static target's
+scrape at `full` only.
+
+A run MUST be a JSON object of the collector — `collector`, the YAML of one
+collector as it is written under `collectors:`, or `configured`, the name of
+one of the configuration in force, not both — and one source: a pasted
+response — `body`, with `content_type`, `status` (200 when left out, else
+100 to 599) and `headers` — or `target`, with `request_from`, a collector of
+the configuration in force, and `params`, probe parameters, as `/probe` takes
+them, without `target`, `collector` or `debug`; or `static_target`, the name
+of a static target, without `params`. A run that is not that object, names
+two collectors or none, or sends two sources or none, MUST be answered
+`400`, and so MUST a configured collector or a `request_from` the
+configuration does not have; a request over 2 MiB, a collector over 256 KiB
+or a body over 1 MiB, `413`; a method other than `POST`, `405`; a static
+target no target in force has, `404`. Every refusal MUST be a JSON object
+with `error`.
+
+A run MUST carry the `X-Debug-Run` header and `Content-Type:
+application/json`, which a page of another site cannot send without a CORS
+preflight the exporter never allows: without the header, or with a
+`Sec-Fetch-Site` other than `same-origin` or `none`, it MUST be answered
+`403`, and with another content type `415`, before the collector is read.
+
+A collector written on the page MUST be read as the loader reads an entry of
+the collectors list — the same decoding, the same checks of each value's
+kind against the schema, the same validation — and one the loader would
+refuse MUST be answered `422` with the loader's message, its line numbers
+counted from the collector's first line. `${NAME}` references MUST NOT be
+expanded, whatever `--config.expand-env` says, and reading it MUST NOT size
+the expression caches, which are the configuration in force's. Before it is
+checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
+why: a collector that runs Python (`transform.type: python` or
+`transform.pre_script`), which MUST NOT be run; one whose `request.type` is
+not `http`; and one that sets `request.basic_auth_file`,
+`request.bearer_token_file`, a `request.tls` file or `request.login`
+(§ 42.6a). Nothing a file holds
+MUST reach the answer. Its own request block MUST NOT make a request.
+
+A configured collector MUST be run as it is configured, its Python
+included, at `edit` as at `full`: its scripts are the operator's, and read
+what a target sends on every probe, as they read a pasted body here. Its
+scripts MUST run in its own workers and count in its Python worker series,
+as a debug probe's do.
+
+A pasted response MUST NOT make any request. It MUST go through the trip a
+probe makes: the collector's `accept_status`, its response limit, which a
+body over fails as a fetched one does, the decode, the transform and the
+validation under the collector's limits. A fetch, at `full` only, MUST be
+made exactly as a debug probe of the collector that fetches would make it:
+the configured collector run, or the one `request_from` names, which a
+written collector MUST name (`400` otherwise) — through its request block,
+target policy (§ 26.1), credentials, `accept_status`, forwarded
+`header_<name>` parameters and trip limits (§ 42.13b), and with nothing of
+the browser's request — its `Authorization`, cookies or other headers —
+forwarded; a target missing or a parameter wrong MUST be answered as
+`/probe` answers them. A static target's scrape, at `full` only, MUST be
+made as `/static-targets?debug=<name>` makes it, and answered as what the
+scrape would have published, its series with the target's labels and
+`static_target`; nothing MUST be published. A collector run on what
+another collector fetched — a written one, or one other than the static
+target's — MUST be given what an `http` collector fetched only (`400`
+otherwise), and decodes, transforms and validates it.
+
+A run MUST be bounded by the probe's deadline (§ 3.2a), and by
+`--probe.default-timeout`'s default when that is `0`, or a static target's
+by its interval; at most 4 runs of the page MUST be in progress at once, a
+run past them answered `503`. A run MUST be answered `200` with a JSON
+object of `ok`, true when every stage succeeded and none carried on;
+`verdict`, what a probe or the scrape would have answered, as the text
+report says it; `series`, the exposition a probe would have served, to the
+byte; `requests` and `response`, what was sent and read, redacted and
+bounded as the text report redacts and bounds them; `stages` and `notes`,
+the stages and the warnings the load would give with every line the run
+logged; and `report`, the text report of a debug probe, whose first line names it a
+debug run, the collector, whether it was written on the page, and what it
+read.
+
+The collector MUST NOT be put in force. A run MUST NOT read or fill the
+response cache, share a trip, reach the failure log or the exporter's log
+but for one `info` line per run, be queued for OTLP, or be counted in any
+collector's self-metrics, but a configured collector's Python worker series,
+or in `http_exporter_probes_seconds_total`. A run that panics MUST be
+reported as `500: probe failed: internal error: <panic>` and logged with its
+stack, and a fetch MUST give back its trip slot however it ends.
+
+Every run MUST be counted in
+`http_exporter_debug_runs_total{kind, result}`, from 0: `kind` is `probe`,
+`static` or `page`; `result` is `success` when the trip went through whole,
+`failure` when it ran, or was taken and could not run for a trip slot or
+the page's bound, and did not, and `invalid` when it was refused before it
+ran for what it asked: a parameter, a collector, a static target's name, a
+run's form or headers, or a source the level does not allow. A debug probe
+or scrape the level does not serve, or whose `debug` value is not a
+boolean, is no run, and MUST NOT be counted. The family MUST be absent at
+`off`, and present with the kinds the level serves: `page` alone at `edit`,
+every kind at `full`.

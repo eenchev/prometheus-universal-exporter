@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -482,6 +483,94 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.retry.statuses as retry_statuses,
+// normalized, an empty list as [], and none for a collector that leaves it
+// out, whose default set is no policy of its own; and it refuses an entry
+// accept_status accepts whole, as startup does.
+func TestDryRunReportsRetryStatuses(t *testing.T) {
+	config := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: starting
+    request:
+      type: http
+      retry: {attempts: 2, statuses: [404, "5XX", 4.29e2]}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: connections_only
+    request:
+      type: http
+      retry: {attempts: 2, statuses: []}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: default
+    request:
+      type: http
+      retry: {attempts: 2}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	starting, _ := policies["starting"].(map[string]any)
+	connectionsOnly, _ := policies["connections_only"].(map[string]any)
+	if check.code != 0 || len(policies) != 2 || !reflect.DeepEqual(starting["retry_statuses"], []any{"404", "5xx", "429"}) || !reflect.DeepEqual(connectionsOnly["retry_statuses"], []any{}) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	refused := testutil.WriteFile(t, "refused.yaml", "collectors:\n  - name: health\n    request:\n      type: http\n      accept_status: [2xx, 503]\n      retry: {attempts: 1, statuses: [503]}\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	out := runCheckCLI(t, "--config.file="+refused)
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "health" request.retry.statuses entry "503" is never retried: request.accept_status accepts it`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
+// --dry-run lists a collector's request.pagination as it will be applied,
+// its defaults filled in, max_pages among them, and refuses one startup
+// refuses, as startup words it.
+func TestDryRunReportsPagination(t *testing.T) {
+	paged := func(pagination string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: paged\n    request:\n      type: http\n      pagination: "+pagination+"\n    transform: {type: jq}\n    metrics: [{name: v, expression: length}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+paged("{type: Page, param: p, items: .}"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["paged"].(map[string]any)
+	if want := map[string]any{"type": "page", "param": "p", "items": ".", "start": float64(1), "max_pages": float64(10)}; check.code != 0 || !reflect.DeepEqual(policy["pagination"], want) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	out := runCheckCLI(t, "--config.file="+paged("{type: page, items: .}"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "paged" request.pagination.param is required with type page`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
+// --dry-run lists a collector's request.login as it will be applied, its
+// header and prefix filled in, the files its secrets are read from and
+// never what they hold, and a field whose name reads as a credential's
+// without its value; a missing secret file is a warning, and a login
+// startup refuses fails the check, as startup words it.
+func TestDryRunReportsALogin(t *testing.T) {
+	password := testutil.WriteFile(t, "password", "dry-run-secret")
+	logging := func(login string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: api\n    request:\n      type: http\n      login: "+login+"\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+logging("{type: json, url: /login, token: .t, fields: {tenant: acme, api_key: inline-key}, field_files: {password: "+password+", user: /nonexistent/user}}"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["api"].(map[string]any)
+	want := map[string]any{"type": "json", "url": "/login", "token": ".t", "header": "Authorization", "prefix": "Bearer ",
+		"fields": map[string]any{"tenant": "acme", "api_key": "<redacted>"}, "field_files": map[string]any{"password": password, "user": "/nonexistent/user"}}
+	if check.code != 0 || !reflect.DeepEqual(policy["login"], want) {
+		t.Fatalf("exit=%d, login %v\n%s", check.code, policy["login"], check.stdout)
+	}
+	if strings.Contains(check.stdout, "dry-run-secret") || strings.Contains(check.stdout, "inline-key") {
+		t.Errorf("the report holds a secret:\n%s", check.stdout)
+	}
+	if warnings, _ := check.result(t, "config").Details["warnings"].([]any); len(warnings) != 1 || !strings.Contains(fmt.Sprint(warnings[0]), `collector "api" request.login.field_files.user`) {
+		t.Errorf("warnings %v, want the missing user file", warnings)
+	}
+	out := runCheckCLI(t, "--config.file="+logging("{type: json, url: /login, field_files: {password: "+password+"}}"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "api" request.login sets 0 of token, token_header and token_cookie`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run takes a status of request.accept_status written as a number with
 // a point, an exponent or in hex, as startup does and as the schema an editor
 // checks the file against does, and lists it as the status it is; a number
@@ -536,5 +625,52 @@ func TestDryRunReportsALabelExpressionOfBlanks(t *testing.T) {
 	}
 	if start := runCLI(t, "--config.file="+config); start.code != 1 || !strings.Contains(start.stderr, `label \"site\" expression \"  \" is nothing but blanks`) {
 		t.Fatalf("startup exit=%d\n%s", start.code, start.stderr)
+	}
+}
+
+// --web.debug takes off, edit or full, in any case, and nothing else, which
+// is a command-line error before --dry-run.
+func TestTheDebugLevelIsACommandLineChoice(t *testing.T) {
+	for _, level := range []string{"off", "edit", "full", "FULL"} {
+		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--web.debug="+level)
+		if out.code == 2 || strings.Contains(out.stderr, "web.debug") {
+			t.Errorf("--web.debug=%s: exit=%d stderr=%s", level, out.code, out.stderr)
+		}
+	}
+	for _, args := range [][]string{{"--web.debug=on"}, {"--dry-run", "--config.file=configs/config.example.yaml", "--web.debug=true"}, {"--web.debug="}} {
+		out := runCLI(t, args...)
+		if out.code != 2 || !strings.Contains(out.stderr, "is not a level; use off, edit or full") || out.stdout != "" {
+			t.Errorf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+}
+
+// The level is the server's: off serves no debug page, edit serves it and
+// refuses a debug probe, and full serves both.
+func TestTheDebugLevelReachesTheServer(t *testing.T) {
+	get := func(p *exporterProcess, path string) int {
+		resp, err := http.Get("http://" + p.address + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for level, want := range map[string][2]int{
+		"":     {http.StatusNotFound, http.StatusForbidden},
+		"edit": {http.StatusOK, http.StatusForbidden},
+		"full": {http.StatusOK, http.StatusBadRequest},
+	} {
+		var args []string
+		if level != "" {
+			args = append(args, "--web.debug="+level)
+		}
+		p := startHeldExporter(t, args...)
+		// A debug probe of a collector that does not exist is refused 400
+		// when debug probes are served, and 403 when they are not.
+		if page, probe := get(p, "/debug"), get(p, "/probe?collector=nobody&debug=true"); page != want[0] || probe != want[1] {
+			t.Errorf("--web.debug=%s: /debug %d, the debug probe %d, want %v", level, page, probe, want)
+		}
+		_ = p.cmd.Process.Kill()
 	}
 }

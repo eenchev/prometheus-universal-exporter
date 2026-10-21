@@ -178,14 +178,56 @@ func checkStartup(in checkInputs) checkReport {
 }
 
 // requestPolicy is what a collector's request lets through: the targets it
-// may and may not reach and the statuses it decodes, as they will be
-// applied, so a list that says less or more than meant shows before it is
-// deployed.
+// may and may not reach, the statuses it decodes and those it retries, as
+// they will be applied, so a list that says less or more than meant shows
+// before it is deployed.
 type requestPolicy struct {
 	AllowedTargets []string `json:"allowed_targets,omitempty"`
 	DeniedTargets  []string `json:"denied_targets,omitempty"`
 	AcceptStatus   []string `json:"accept_status,omitempty"`
 	AcceptCodes    []string `json:"accept_codes,omitempty"`
+	// RetryStatuses is request.retry.statuses when the collector sets it,
+	// which replaces the default set: an empty list, which retries no
+	// status, is shown as [] rather than left out.
+	RetryStatuses *[]string `json:"retry_statuses,omitempty"`
+	// Pagination is request.pagination as it will be applied, its defaults
+	// filled in: max_pages above all, which bounds what one trip asks of
+	// the target.
+	Pagination *model.PaginationConfig `json:"pagination,omitempty"`
+	// Login is request.login as it will be applied: where it goes, where
+	// the token is read from and how it is sent, its header and prefix
+	// filled in, and the files its secrets are read from, never what they
+	// hold; a field or endpoint parameter whose name reads as a
+	// credential's is shown without its value.
+	Login *model.LoginConfig `json:"login,omitempty"`
+}
+
+// shownLogin is l as --dry-run shows it (requestPolicy.Login).
+func shownLogin(l *model.LoginConfig) *model.LoginConfig {
+	if l == nil {
+		return nil
+	}
+	shown := *l
+	masked := func(values map[string]string) map[string]string {
+		if values == nil {
+			return nil
+		}
+		out := make(map[string]string, len(values))
+		for name, value := range values {
+			if fetch.CredentialName(name) {
+				value = fetch.Redacted
+			}
+			out[name] = value
+		}
+		return out
+	}
+	shown.Fields, shown.EndpointParams = masked(l.Fields), masked(l.EndpointParams)
+	shown.Header = fetch.LoginHeader(l)
+	if l.TokenCookie == "" {
+		prefix := fetch.LoginPrefix(l)
+		shown.Prefix = &prefix
+	}
+	return &shown
 }
 
 // requestPolicies are the policies of the collectors that set one, by name.
@@ -193,8 +235,11 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	out := map[string]requestPolicy{}
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
-		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes}
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 {
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination, Login: shownLogin(c.Request.Login)}
+		if retried := c.Request.Retry.Statuses; retried != nil {
+			p.RetryStatuses = &retried
+		}
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.Login != nil {
 			out[c.Name] = p
 		}
 	}

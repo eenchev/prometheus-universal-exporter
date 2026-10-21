@@ -73,7 +73,7 @@ func init() {
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
 			"targets", "from", "until",
-			"allowed_targets", "denied_targets", "accept_status",
+			"allowed_targets", "denied_targets", "accept_status", "login",
 		},
 		Overrides: []string{
 			"path", "timeout", "insecure_skip_verify",
@@ -85,7 +85,7 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"targets", "from", "until",
-			"accept_status",
+			"accept_status", "login",
 		},
 		URLPath:            true,
 		Validate:           validateGraphiteRequest,
@@ -93,6 +93,11 @@ func init() {
 		Query:              graphiteQuery,
 		CheckTargetRequest: checkGraphiteTargetRequest,
 		Method:             graphiteMethod,
+		// The tokens request.login keeps, and its counts (login.go).
+		CheckFiles:       checkLoginFiles,
+		Follow:           logins.follow,
+		CloseConnections: logins.reset,
+		Logins:           logins.counts,
 		Fetch: func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
 			overrides.formPost = graphiteMethod(c, overrides) == http.MethodPost
 			return fetch(ctx, target, c, overrides, forwarded)
@@ -167,9 +172,12 @@ func refuseRepeatedExpressions(targets []string) error {
 }
 
 // checkGraphiteTargetRequest checks what a static target's request sets for
-// a graphite collector: its own expressions and window, which replace the
-// collector's.
-func checkGraphiteTargetRequest(_ *model.Collector, t *model.StaticTarget) error {
+// a graphite collector: its own expressions, window and login, which
+// replace the collector's.
+func checkGraphiteTargetRequest(c *model.Collector, t *model.StaticTarget) error {
+	if err := checkTargetLogin(c, t); err != nil {
+		return err
+	}
 	for i, expression := range t.Request.Targets {
 		if err := checkGraphiteExpression(expression); err != nil {
 			return fmt.Errorf("request.targets[%d] %q: %w", i, expression, err)

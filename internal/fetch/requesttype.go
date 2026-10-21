@@ -20,7 +20,9 @@ import (
 // asks a URL, localfile reads a file from the exporter's own filesystem,
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
-// statement on a database. The
+// statement on a database, dns resolves a name, tlscert reads the
+// certificates of a TLS handshake, s3file reads an object from S3 or a
+// store that speaks its API. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -46,13 +48,24 @@ const (
 	RequestTypeGRPC      = "grpc"
 	RequestTypeSSHFile   = "sshfile"
 	RequestTypeSQL       = "sql"
+	RequestTypeDNS       = "dns"
+	RequestTypeTLSCert   = "tlscert"
+	RequestTypeS3File    = "s3file"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File}
+
+// optInRequestTypes are the types of knownRequestTypes that a default build
+// leaves out, as it leaves out the sql type's opt-in drivers: s3file links
+// the AWS SDK, which few deployments want in the binary. A build carries one
+// only when asked, with its request_type_<name> tag, and its file is built
+// under that tag alone. A test keeps the list in step with the files'
+// constraints.
+var optInRequestTypes = []string{RequestTypeS3File}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -138,6 +151,19 @@ type RequestType struct {
 	// ConnectionPools reports, of a collector, what the type's pools of
 	// connections hold now (PoolStats). Unset, the type keeps no pools.
 	ConnectionPools func(collector string) PoolStats
+	// Logins reports how many logins a collector's request.login made and
+	// how many of them failed (login.go). Unset, the type does not log in.
+	Logins func(collector string) (made, failed uint64)
+}
+
+// CollectorLogins reports how many logins a collector of requestType made
+// and how many failed (RequestType.Logins); zero for a type that does not
+// log in.
+func CollectorLogins(requestType, collector string) (made, failed uint64) {
+	if rt := RequestTypes[requestType]; rt != nil && rt.Logins != nil {
+		return rt.Logins(collector)
+	}
+	return 0, 0
 }
 
 // PoolStats is what a collector's pools of connections hold: the
@@ -247,9 +273,15 @@ func ReadFiles(c *model.Collector) (paths []string, read string) {
 //
 //	//go:build !select_request_types || request_type_<name>
 //
-// A default build carries every type. Building with -tags
-// select_request_types,request_type_http carries only the listed ones; the
-// others, and everything only they import, are left out of the binary.
+// A default build carries every type but the opt-in ones (optInRequestTypes),
+// whose files are built under their own tag alone:
+//
+//	//go:build request_type_<name>
+//
+// so -tags request_type_s3file is a default build with s3file added. Building
+// with -tags select_request_types,request_type_http carries only the listed
+// ones; the others, and everything only they import, are left out of the
+// binary.
 //
 // The map is a variable, rather than being built once, only so a test can
 // register a fixture type to exercise the per-type rules with more than one
@@ -302,6 +334,9 @@ func ValidateRequest(c *model.Collector) error {
 		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: %s` to its request block)", c.Name, supportedRequestTypes(), suggestedRequestType())
 	}
 	rt, ok := RequestTypes[c.Request.Type]
+	if !ok && slices.Contains(optInRequestTypes, c.Request.Type) {
+		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. %s is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=%s (make build, or the Dockerfile's build argument), which adds the tag request_type_%s", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type, c.Request.Type, c.Request.Type)
+	}
 	if !ok && slices.Contains(knownRequestTypes, c.Request.Type) {
 		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. Use a build that includes it: the default build includes every type, and a build with -tags select_request_types needs request_type_%s in its tags too", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type)
 	}
@@ -313,7 +348,7 @@ func ValidateRequest(c *model.Collector) error {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
 	}
-	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.NonIdempotent); err != nil {
+	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent); err != nil {
 		return fmt.Errorf("collector %q %w", c.Name, err)
 	}
 	if c.Request.MaxResponseBytes < 0 {
@@ -325,15 +360,21 @@ func ValidateRequest(c *model.Collector) error {
 	if err := validateAcceptStatus(c); err != nil {
 		return err
 	}
+	if err := validateRetryStatuses(c); err != nil {
+		return err
+	}
 	return rt.Validate(c)
 }
 
 // checkRetryKeys refuses the retry key that does not apply to the type:
 // codes, the gRPC status codes a grpc request retries, for the others, and
-// non_idempotent, about HTTP methods, for grpc.
-func checkRetryKeys(rt *RequestType, codes, nonIdempotent bool) error {
+// statuses and non_idempotent, about HTTP answers and methods, for grpc.
+func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent bool) error {
 	if codes && !rt.StatusCodes {
-		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on 408, 425, 429 and 5xx answers", rt.Name)
+		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on the HTTP statuses retry.statuses lists, 408, 425, 429 and 5xx when it is left out", rt.Name)
+	}
+	if statuses && rt.StatusCodes {
+		return fmt.Errorf("sets request.retry.statuses, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
 	}
 	if nonIdempotent && rt.StatusCodes {
 		return fmt.Errorf("sets request.retry.non_idempotent, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
@@ -424,12 +465,15 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 		}
 	}
 	if retry := t.Request.Retry; retry != nil {
-		if err := checkRetryKeys(rt, retry.Codes != nil, retry.NonIdempotent != nil); err != nil {
+		if err := checkRetryKeys(rt, retry.Codes != nil, retry.Statuses != nil, retry.NonIdempotent != nil); err != nil {
 			return fmt.Errorf("target %q %w", t.Name, err)
 		}
 	}
 	if err := checkAcceptStatus(t.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)
+	}
+	if err := checkTargetRetryStatuses(t, c); err != nil {
+		return fmt.Errorf("target %q %w", t.Name, err)
 	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {

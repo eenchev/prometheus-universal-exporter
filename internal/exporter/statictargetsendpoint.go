@@ -347,12 +347,13 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	// ?debug=<name> scrapes one target and reports the trip, as a debug
 	// probe does (probedebug.go).
 	if values, debug := r.URL.Query()[probeDebugParam]; debug {
-		if !s.probeDebug {
-			http.Error(w, errProbeDebugDisabled.Error(), http.StatusForbidden)
+		if !s.debugServes(debugKindStatic) {
+			http.Error(w, s.debugReportsRefused(), http.StatusForbidden)
 			return
 		}
 		name := strings.TrimSpace(values[len(values)-1])
 		if len(values) != 1 || name == "" || r.URL.Query().Has(staticTargetsParam) {
+			s.countDebugRun(debugKindStatic, debugInvalid)
 			http.Error(w, "the debug parameter takes the name of one static target, and no targets parameter", http.StatusBadRequest)
 			return
 		}

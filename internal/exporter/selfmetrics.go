@@ -38,6 +38,10 @@ type statsValues struct {
 	// out before the rules saw it (graphitereport.go), linesSkipped also the
 	// sample lines the prometheus decoder left out (prometheusreport.go).
 	seriesLeftOut, linesSkipped uint64
+	// pagesFetched counts the pages request.pagination fetched, and
+	// pagesStopped the trips that stopped at its max_pages with another
+	// page to come (paginationreport.go).
+	pagesFetched, pagesStopped uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -121,6 +125,8 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_invalid_utf8_total", model.CounterMetricType, "Label values and help texts this collector produced that were not valid UTF-8, whose invalid bytes were replaced with U+FFFD.", func(v statsValues) float64 { return float64(v.invalidUTF8) }},
 	{"http_exporter_decoder_series_left_out_total", model.CounterMetricType, "Series the graphite decoder left out before the metric rules saw them: with no point that has a value, with the newest point older than response.graphite.max_age, or answered twice.", func(v statsValues) float64 { return float64(v.seriesLeftOut) }},
 	{"http_exporter_decoder_lines_skipped_total", model.CounterMetricType, "Lines a decoder left out and read on: carbon lines the graphite decoder could not read, under response.graphite.invalid_lines: skip, and sample lines the prometheus decoder found to be no part of their histogram or summary family.", func(v statsValues) float64 { return float64(v.linesSkipped) }},
+	{"http_exporter_pages_fetched_total", model.CounterMetricType, "Pages this http collector's request.pagination fetched, the first of each trip included, in trips that ended with an answer; 0 without request.pagination.", func(v statsValues) float64 { return float64(v.pagesFetched) }},
+	{"http_exporter_pagination_max_pages_reached_total", model.CounterMetricType, "Trips of this http collector that stopped at request.pagination.max_pages with another page to come; their series are of the pages fetched.", func(v statsValues) float64 { return float64(v.pagesStopped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead, and one a concurrency limit turned away only as rejected.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
@@ -150,6 +156,10 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_sql_limit_waits_total", model.CounterMetricType, "Scrapes of this sql collector that waited for a connection at request.connections.max_per_target before they had one.", nil},
 	{"http_exporter_sql_limit_failures_total", model.CounterMetricType, "Scrapes of this sql collector that failed at request.connections.max_per_target, no connection having been free before their deadline, or at max_targets, every target being in use.", nil},
 	{"http_exporter_sql_rows", model.GaugeMetricType, "Rows the last statement of this sql collector that succeeded returned, whichever target it ran on; 0 before one has.", nil},
+	// The tokens request.login keeps are the collector's, shared by its
+	// requests, so its logins have no per-request value either.
+	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401; 0 without request.login.", nil},
+	{"http_exporter_login_failures_total", model.CounterMetricType, "Logins of this http or graphite collector that failed: the scrapes that needed their token failed in the login stage, unless the token kept was still valid and was used instead.", nil},
 }
 
 // requestTypeFamilies are the families only the collectors of some request
@@ -159,19 +169,23 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 var requestTypeFamilies = map[string][]string{
 	"http_exporter_scrape_grpc_status_code": {"grpc"},
 	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total":        {"http", "graphite", "grpc", "sshfile", "sql"},
-	"http_exporter_sshfile_connections":          {"sshfile"},
-	"http_exporter_sshfile_connects_total":       {"sshfile"},
-	"http_exporter_sshfile_limit_waits_total":    {"sshfile"},
-	"http_exporter_sshfile_limit_failures_total": {"sshfile"},
-	"http_exporter_sql_connections":              {"sql"},
-	"http_exporter_sql_idle_connections":         {"sql"},
-	"http_exporter_sql_targets":                  {"sql"},
-	"http_exporter_sql_connects_total":           {"sql"},
-	"http_exporter_sql_keepalive_failures_total": {"sql"},
-	"http_exporter_sql_limit_waits_total":        {"sql"},
-	"http_exporter_sql_limit_failures_total":     {"sql"},
-	"http_exporter_sql_rows":                     {"sql"},
+	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql", "s3file"},
+	"http_exporter_pages_fetched_total":                {"http"},
+	"http_exporter_pagination_max_pages_reached_total": {"http"},
+	"http_exporter_sshfile_connections":                {"sshfile"},
+	"http_exporter_sshfile_connects_total":             {"sshfile"},
+	"http_exporter_sshfile_limit_waits_total":          {"sshfile"},
+	"http_exporter_sshfile_limit_failures_total":       {"sshfile"},
+	"http_exporter_sql_connections":                    {"sql"},
+	"http_exporter_sql_idle_connections":               {"sql"},
+	"http_exporter_sql_targets":                        {"sql"},
+	"http_exporter_sql_connects_total":                 {"sql"},
+	"http_exporter_sql_keepalive_failures_total":       {"sql"},
+	"http_exporter_sql_limit_waits_total":              {"sql"},
+	"http_exporter_sql_limit_failures_total":           {"sql"},
+	"http_exporter_sql_rows":                           {"sql"},
+	"http_exporter_logins_total":                       {"http", "graphite"},
+	"http_exporter_login_failures_total":               {"http", "graphite"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -207,6 +221,9 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
+	"http_exporter_static_targets_scrape_seconds_total":        "Seconds spent on static target scrapes, from the start of each to its end, waiting for a slot included; its rate is the average number of static target scrapes in progress.",
+	"http_exporter_probes_seconds_total":                       "Seconds spent serving probes, from the start of each to its answer being ready, cache hits and shared probes included; its rate is the average number of probes in progress.",
+	"http_exporter_debug_runs_total":                           "Runs of the debug engine (--web.debug), by kind (probe: /probe?debug=true, static: /static-targets?debug=<name>, page: the debug page) and result: success (the trip went through whole), failure (it ran, or was taken and could not run, and did not go through whole) or invalid (it was refused before it ran); present only with --web.debug on, for the kinds its level serves.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
 	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, rejected by an export it accepted (partialSuccess), the oldest waiting past otlp.max_pending_points, or those of the last export before exiting when it failed.",
@@ -372,6 +389,14 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
 			return float64(failed)
 		},
+		"http_exporter_logins_total": func(name string) float64 {
+			made, _ := fetch.CollectorLogins(requestTypes[name], name)
+			return float64(made)
+		},
+		"http_exporter_login_failures_total": func(name string) float64 {
+			_, failed := fetch.CollectorLogins(requestTypes[name], name)
+			return float64(failed)
+		},
 		"http_exporter_sql_rows": func(name string) float64 {
 			if rows := fetch.CollectorPools(requestTypes[name], name).Rows; rows != nil {
 				return float64(*rows)
@@ -412,6 +437,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
+	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
 	// The reload counters are the configuration manager's and the OTLP ones
 	// the server's, neither of which a reload replaces, and the go_ and
 	// process_ ones the runtime's and the kernel's: all count since the
@@ -420,6 +446,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, countingSince(s.allocatorStatusMetrics(), started)...)
+	out = append(out, countingSince(s.debugRunMetrics(), started)...)
 	out = append(out, requestFamilies...)
 	out = append(out, s.verboseCollectorMetrics(stats)...)
 	out = append(out, countingSince(s.runtimeMetrics(), started)...)

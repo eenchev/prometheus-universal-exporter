@@ -345,6 +345,10 @@
                   "prometheus",
                   "text",
                   "graphite",
+                  "ndjson",
+                  "logfmt",
+                  "toml",
+                  "ini",
                   ""
                 ],
                 "type": "string"
@@ -955,9 +959,34 @@
                     ]
                   }
                 }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "tlscert"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "tls": {
+                      "properties": {
+                        "insecure_skip_verify": {
+                          "not": {
+                            "const": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile and docs/SQL.md for sql.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert and docs/S3FILE.md for s3file.",
             "properties": {
               "accept_codes": {
                 "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
@@ -979,6 +1008,18 @@
                 },
                 "type": "array"
               },
+              "access_key_id_file": {
+                "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "allowed_schemes": {
                 "items": {
                   "type": [
@@ -990,7 +1031,7 @@
                 "type": "array"
               },
               "allowed_targets": {
-                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile and sql.",
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql and tlscert; dns matches its names by name alone, and a PTR target by address; for s3file, whose target is a bucket, the buckets it may read, by name or glob, and no address.",
                 "items": {
                   "minLength": 1,
                   "not": {
@@ -1197,8 +1238,13 @@
               "enable_http2": {
                 "type": "boolean"
               },
+              "endpoint": {
+                "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores.",
+                "pattern": "^$|^https?://[^/?#@]+/?$",
+                "type": "string"
+              },
               "files": {
-                "description": "localfile and sshfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
+                "description": "localfile, sshfile and s3file: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
                 "items": {
                   "type": [
                     "string",
@@ -1289,8 +1335,550 @@
                   "boolean"
                 ]
               },
+              "login": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "type": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "url": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "url"
+                    ]
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "json"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "token": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "token_header": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token_header"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "token_cookie": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token_cookie"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "field_files": {
+                              "minProperties": 1
+                            }
+                          },
+                          "required": [
+                            "field_files"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "scopes": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "scopes"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "oauth2"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "client_id": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "client_id"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "client_id_file": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "client_id_file"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "client_secret_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "client_secret_file"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "expires_in": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "expires_in"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "token_cookie": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "token_cookie"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "header"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "not": {
+                            "required": [
+                              "prefix"
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "description": "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.",
+                "properties": {
+                  "auth_style": {
+                    "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form.",
+                    "enum": [
+                      "header",
+                      "params",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "client_id": {
+                    "description": "oauth2: the client's id. Exactly one of client_id and client_id_file.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_id_file": {
+                    "description": "oauth2: the file holding the client's id, read at every login.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_secret_file": {
+                    "description": "oauth2: required. The file holding the client's secret, read at every login.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "endpoint_params": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id or client_secret, which the grant sets.",
+                    "propertyNames": {
+                      "minLength": 1,
+                      "not": {
+                        "enum": [
+                          "grant_type",
+                          "scope",
+                          "client_id",
+                          "client_secret"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "expires_in": {
+                    "description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. Left out, or null, ttl applies.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "field_files": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "json: members of the JSON object posted, each read from its file at every login, such as {username: /var/run/secrets/login/username, password: /var/run/secrets/login/password}. Required: at least one. A field is in fields or here, not both.",
+                    "type": "object"
+                  },
+                  "fields": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant.",
+                    "type": "object"
+                  },
+                  "header": {
+                    "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "prefix": {
+                    "description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "scopes": {
+                    "description": "oauth2: the scopes asked for, sent as the scope parameter.",
+                    "items": {
+                      "pattern": "^[^\\s\"\\\\]+$",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "tls": {
+                    "additionalProperties": false,
+                    "description": "The login's own tls settings, for a login server whose certificate the collector's request.tls does not verify; left out, request.tls. Never what a probe or a static target changes of request.tls.",
+                    "properties": {
+                      "ca_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "cert_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "insecure_skip_verify": {
+                        "type": "boolean"
+                      },
+                      "key_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "server_name": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "token": {
+                    "description": "json: the jq expression of the token in the answer's JSON body, such as .access_token, with $status and $headers as in a rule. Exactly one of token, token_header and token_cookie.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "token_cookie": {
+                    "description": "json: the cookie the answer sets that is the session, such as JSESSIONID; it is sent back in the Cookie header, and its Max-Age or Expires is its lifetime.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "token_header": {
+                    "description": "json: the header of the answer that holds the token, such as X-Subject-Token.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "ttl": {
+                    "description": "How long a token is used when the answer does not say: no expires_in, an oauth2 answer without expires_in, a cookie without Max-Age or Expires, a token_header. Left out, such a token is used until the target answers 401.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "type": {
+                    "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4).",
+                    "enum": [
+                      "json",
+                      "oauth2"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path such as /api/login resolved against the target, so each target is logged in to. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
               "max_age": {
-                "description": "localfile and sshfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
+                "description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
                 "maximum": 0,
                 "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -1300,7 +1888,7 @@
                 ]
               },
               "max_files": {
-                "description": "localfile and sshfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
+                "description": "localfile, sshfile and s3file with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -1318,7 +1906,7 @@
                     "minimum": 1024
                   }
                 ],
-                "description": "http, graphite, grpc, localfile and sshfile: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+                "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -1332,7 +1920,7 @@
                 "type": "integer"
               },
               "max_total_bytes": {
-                "description": "localfile and sshfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
+                "description": "localfile, sshfile and s3file with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -1392,6 +1980,149 @@
                 "description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers.",
                 "type": "object"
               },
+              "pagination": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "type": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "items": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ]
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "next_url",
+                            "cursor"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "next": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "next"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "cursor",
+                            "page",
+                            "offset"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "param": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "param"
+                      ]
+                    }
+                  }
+                ],
+                "description": "http: fetch the further pages of a paginated answer and merge them into one JSON document, the first page with its items array holding every page's items, which the decoder and the rules read as the answer. Every page is sent the request's headers, credentials and body, and must stay on the target's scheme, host and port. The decoder is json. See docs/REQUESTS.md#pagination.",
+                "properties": {
+                  "items": {
+                    "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order.",
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "max_pages": {
+                    "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged.",
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "next": {
+                    "description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "param": {
+                    "description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "size": {
+                    "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": {
+                    "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size.",
+                    "enum": [
+                      "link",
+                      "next_url",
+                      "cursor",
+                      "page",
+                      "offset"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
               "passphrase_file": {
                 "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with.",
                 "not": {
@@ -1417,12 +2148,16 @@
                 ]
               },
               "path": {
-                "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. s3file: the object, relative to request.root, its key the two joined. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
                 "type": [
                   "string",
                   "number",
                   "boolean"
                 ]
+              },
+              "path_style": {
+                "description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false.",
+                "type": "boolean"
               },
               "private_key_file": {
                 "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
@@ -1481,6 +2216,11 @@
                 },
                 "type": "object"
               },
+              "record_type": {
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "type": "string"
+              },
               "redirect_trusted_hosts": {
                 "description": "http and graphite: the hosts, besides the origin the request is made to, that a followed redirect may carry the collector's headers, credentials and request body to, and present its TLS client certificate to: host names, globs such as *.example.com, whose star matches dots too, and single IP addresses, each trusted on every port; \"*\" trusts every host. Matched against the host the redirect names as it is written there, which is never looked up: a final dot is part of the name, and an internationalised name is listed, and matched, in its xn-- form. No probe parameter sets it.",
                 "items": {
@@ -1488,6 +2228,11 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "region": {
+                "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md.",
+                "pattern": "^$|^[A-Za-z0-9_-]+$",
+                "type": "string"
               },
               "retry": {
                 "additionalProperties": false,
@@ -1518,12 +2263,25 @@
                   "non_idempotent": {
                     "description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
                     "type": "boolean"
+                  },
+                  "statuses": {
+                    "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused.",
+                    "items": {
+                      "maximum": 599,
+                      "minimum": 100,
+                      "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "type": "array"
                   }
                 },
                 "type": "object"
               },
               "root": {
-                "description": "localfile and sshfile, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree. See docs/LOCALFILE.md and docs/SSHFILE.md.",
+                "description": "localfile, sshfile and s3file, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host, or, for s3file, the key prefix written as one, /exports/app for the keys under exports/app/. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree, and for s3file, for every key of the bucket. See docs/LOCALFILE.md, docs/SSHFILE.md and docs/S3FILE.md.",
                 "type": [
                   "string",
                   "number",
@@ -1535,8 +2293,44 @@
                 "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
               },
+              "secret_access_key_file": {
+                "description": "s3file, with access_key_id_file: the file of the static access key's secret.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "server": {
+                "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "service_name": {
                 "description": "sql, required for the oracle driver and for no other: the service of the database.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "session_token_file": {
+                "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -1609,15 +2403,26 @@
                 },
                 "type": "object"
               },
+              "transport": {
+                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone.",
+                "enum": [
+                  "udp",
+                  "tcp",
+                  ""
+                ],
+                "type": "string"
+              },
               "type": {
                 "description": "Required. How the collector reaches its data.",
                 "enum": [
+                  "dns",
                   "graphite",
                   "grpc",
                   "http",
                   "localfile",
                   "sql",
-                  "sshfile"
+                  "sshfile",
+                  "tlscert"
                 ],
                 "type": "string"
               },

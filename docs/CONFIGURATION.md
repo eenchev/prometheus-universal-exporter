@@ -49,9 +49,15 @@ What a response says it is, with the decoder left to it:
 | `text/html` | `.html`, `.htm` | `html` |
 | `application/openmetrics-text`, `text/plain; version=0.0.4` | `.prom` | `prometheus` |
 | `text/x-graphite` | `.graphite`, `.carbon` | `graphite` |
+| `application/x-ndjson`, `application/jsonl` | `.ndjson`, `.jsonl` | `ndjson` |
+| `application/toml` | `.toml` | `toml` |
 | any other, and none | any other, and none | by the content |
 
 The type is read without its parameters and in any case, as the extension is.
+No content is taken for NDJSON, logfmt, TOML or INI: an NDJSON body sent
+without its type is one JSON value followed by more, which is not JSON, and
+is text; logfmt and INI have no type, and `.ini` names no decoder, so those
+two are read only with `decoder.type: logfmt` or `ini`.
 Nothing but `text/csv` and `.csv` says CSV, and no content does: a body sent
 as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
 or `.txt`, is text, so a `python` script or a pre-script of a `jq` collector
@@ -62,7 +68,7 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
@@ -102,15 +108,19 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite` and `auto`. The `graphite` decoder reads
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` and
+`auto`. The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
-see [Graphite](GRAPHITE.md). Every collector sets `transform.type`, one of
+see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
+Lines, key=value log lines, TOML and INI files into a document jq, yq and
+Python read as they read JSON; see [NDJSON, logfmt, TOML and
+INI](#ndjson-logfmt-toml-and-ini). Every collector sets `transform.type`, one of
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
 no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
 for yq-compatible transformations). A JSON body is one value and a YAML body
 one document: NDJSON, or anything else after the JSON value but whitespace,
-fails the scrape saying so, and so does a second YAML document after `---`
+fails the scrape saying so (`decoder.type: ndjson` reads NDJSON), and so does a second YAML document after `---`
 (a leading `---`, and a trailing one with nothing after it, are fine), rather
 than everything after the first being dropped unseen. A key written twice in
 one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
@@ -188,6 +198,102 @@ jq rule that raises `error(.message)`, a script that raises an exception with
 its data, a redirect to a URL of a megabyte and a gRPC status message of ten
 fail in 2,000 bytes at most, where the error was as long as what it quoted.
 
+### NDJSON, logfmt, TOML and INI
+
+These four decoders make the values the `json` decoder makes — mappings,
+lists, text, numbers, booleans and null — so a `jq` or `yq` rule reads them
+as it reads JSON, and a [Python script](PYTHON.md#what-data-is) is handed
+them as it is handed JSON. No other transform reads them, and a collector
+that names one of them with another transform is refused when the
+configuration loads. Each fails the scrape in the `decode` stage over what it
+cannot read, naming the line, and the column where there is one, and quoting
+no more of the body than the start of a value, as every decoder does.
+
+**`ndjson`** reads newline-delimited JSON, also called JSON Lines: one JSON
+value on each line. The document is the list of the values, in the order of
+their lines, so `items: '.[]'` makes a series of each record. Blank lines are
+passed over, a carriage return before a line feed too, and a body without a
+value is the empty list. Each line is read as the `json` decoder reads a
+body, its numbers made the same way; a line that is no JSON value, that goes
+on after its value, or that ends inside it, as a pretty-printed value does,
+fails the scrape: `NDJSON decode: line 2, column 9: trailing data after the
+JSON value; NDJSON holds one value on each line`. The list is the outermost
+level of the document, so a line's value nests 9,999 deep at most.
+
+```yaml
+decoder:
+  type: ndjson
+transform:
+  type: jq
+metrics:
+  - name: queue_depth
+    items: '.[]'
+    expression: .depth
+    labels:
+      - name: queue
+        expression: .name
+```
+
+**`logfmt`** reads the `key=value` lines of Heroku's logs and of the Go
+loggers that write them, as `go-logfmt` reads them. The document is the list
+of the records, one for each line that holds a pair, each a mapping of its
+keys to their values as text — which a rule reads as a number when it is one
+([What counts as a number](#what-counts-as-a-number)). A value is a run of
+bytes without blanks, `=` and `"`, or a quoted string with the escapes of a
+JSON string (`msg="GET \"/\""`). A key written alone (`cached`) is null, so
+`has("cached")` tells it from a key the line does not write; `key=` is the
+empty string. Of a key written twice on one line the later is kept, as a JSON
+object keeps its later member: a logger may add a key a caller already gave,
+and refusing the body over it would lose every other record. Blank lines are
+passed over; anything else fails the scrape, naming the line, the column and
+the byte: `logfmt decode: line 3, column 16: unexpected '=' in a value; quote
+a value that holds it`.
+
+**`toml`** reads a TOML document with `github.com/BurntSushi/toml`. Tables
+are mappings, arrays and arrays of tables lists, integers and floats numbers
+(`nan` and `inf` are NaN and +Inf), and a date or a time, which JSON has not,
+is its text: an offset date-time in RFC 3339 with the fraction it was written
+with (`1979-05-27T00:32:00.5-07:00`), a local date-time as
+`1979-05-27T07:32:00` (with a `T` where it was written with a space), a local
+date as `1979-05-27` and a local time as `07:32:00`, which `time_format` reads
+as written. An error is the library's, after the line it names
+(`TOML decode: line 2: Key 'a' has already been defined.`), its message cut
+past 256 bytes with its length, as a quoted token can make it any length.
+Two bounds are kept before the library reads the body, since it keeps none
+and a few bytes can cost it far more than their size: arrays and inline
+tables nest 10,000 deep at most, as every decoder's document does; and a
+value may be named by no more than 16 parts, counting those of its `[table]`
+header, of its dotted key and of the keys of the inline tables around it
+(`[a.b]` then `c.d = { e = 1 }` names `e` by 5: `a.b.c.d.e`). The
+library looks a key up from the root for each of its parts, so a key costs
+the square of its parts: a single key of 10,000 held it for seconds. Within
+the bound, a document costs less than ten times what a flat one of its size
+does — a mebibyte of keys of 16 parts each decodes in about a second — and a
+real document names its values by a few. Past it, the scrape fails:
+`TOML decode: line 1: a value is named by more than 16 parts, ...`.
+
+**`ini`** reads an INI file with a parser of the exporter's own, since the
+dialects agree on little more than this. The document is a mapping of each
+section's name to the mapping of its keys to their values, as text, and of
+each key written before the first section to its value: `.pool.active` and
+`.uptime`.
+
+- `[name]` starts a section, and may be followed by a comment. A dotted name
+  is one name, and no path: `[db.primary]` is read as `.["db.primary"]`. A
+  section written twice is one section, its keys gathered from both.
+- Any other line is a key and its value, split at the first `=` or `:`, each
+  without the blanks around it. The value may be empty, and is taken as
+  written, quotes included; it does not go on to the next line.
+- A comment is a whole line starting with `;` or `#`, so a value may hold
+  either, as a URL does. Blank lines are passed over.
+- Of a key written twice in one section the later is kept, since an INI file
+  is often a defaults file with lines appended to override it. Keys and names
+  keep their case.
+- A key before the first section and a section of the same name would be one
+  member of the document, so the scrape fails naming both lines, as it does
+  over a line that is none of these: `INI decode: line 2: neither a section,
+  a key = value nor a comment`.
+
 ### Character encodings
 
 Everything the exporter answers is UTF-8, as Prometheus requires; it refuses
@@ -252,7 +358,7 @@ as browsers do. An unknown name in `response.charset` fails to load; an
 unknown name in the `Content-Type` header, or in the XML declaration of a
 document decoded as XML, fails the `decode` stage, naming it.
 Transforms and Python scripts see the converted body, and its `Content-Type`
-says `charset=utf-8`. A [debug report](#debugging-a-probe) shows the response
+says `charset=utf-8`. A [debug report](#debug-probes) shows the response
 as the target sent it, and says what its body was converted from.
 
 What still is not valid UTF-8 after that — a target that says UTF-8 and is
@@ -1946,12 +2052,14 @@ request:
   path: /api/status
 ```
 
-There are six types: `http` asks a URL, `localfile` reads a file from the
+There are eight types: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 `grpc` calls a unary gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-and `sql` runs a statement on a database — see [Databases over SQL](SQL.md).
+`sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
+`dns` resolves a name — see [DNS](DNS.md) — and `tlscert` reads the
+certificates of a TLS handshake — see [TLS certificates](TLSCERT.md).
 A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
@@ -1970,15 +2078,17 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
+| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401` makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
-| `retry` | none | See [Target requests](REQUESTS.md#retries). |
+| `retry` | none | `attempts`, `backoff`, `non_idempotent`, and `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set. See [Target requests](REQUESTS.md#retries). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
+| `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -2028,7 +2138,9 @@ and `from` and `until`, which no other type accepts. `grpc` accepts
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
 `sshfile` accepts `path`, `timeout` and `param_<name>`, as `localfile` does,
 and requires a `target`, the host. `sql` accepts `timeout` and
-`param_<name>`, and requires a `target`, the database server.
+`param_<name>`, and requires a `target`, the database server. `dns` and
+`tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
+name to resolve and the server, `host:port`.
 
 `target`, `collector` and each of these parameters is given once. A second
 value gets a `400` naming the parameter rather than one of the two being
@@ -2048,9 +2160,10 @@ may be 64 KiB; the exporter answers a longer one `431`.
 
 #### Choosing request types at build time
 
-Every build of the exporter carries every request type, and so does the
-published image. A build can instead carry only the types it needs, which keeps
-the other types' code, and the libraries only they use, out of the binary:
+Every build of the exporter carries every request type but the opt-in ones,
+and so does the published image. A build can instead carry only the types it
+needs, which keeps the other types' code, and the libraries only they use, out
+of the binary:
 
 ```sh
 make build REQUEST_TYPES=http
@@ -2062,7 +2175,7 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `go build .` writes it to the current directory.
 
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
-means every type. A name that is not a request type fails the build, and so does
+means every type but the opt-in ones. A name that is not a request type fails the build, and so does
 a selection that names none. The script turns the list into Go build tags —
 `select_request_types` plus `request_type_<name>` per type — which is all
 `go build -tags select_request_types,request_type_http` needs by hand.
@@ -2078,16 +2191,35 @@ only a left-out type accepts is one no request type knows, ignored rather
 than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
-An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile` and
-`sql` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile`,
+`sql`, `dns` and `tlscert` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
 HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
-database drivers, about 6 MB for the three built in by default. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+database drivers, about 6 MB for the three built in by default; `dns` and
+`tlscert` need nothing outside the standard library; the opt-in `s3file`
+links the AWS SDK, below. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
 drivers](SQL.md#building-with-more-drivers)).
+
+An opt-in type is one no build carries unless asked, the default build and
+the published image among them: `s3file`, which links the AWS SDK, about
+6.7 MB. `OPT_IN_REQUEST_TYPES` adds one to the types a build carries,
+whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like any
+type:
+
+```sh
+make build OPT_IN_REQUEST_TYPES=s3file
+docker build --build-arg OPT_IN_REQUEST_TYPES=s3file -t exporter:s3file .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file)" .
+```
+
+Its tag alone, `request_type_s3file`, adds it to a default build. A collector
+of an opt-in type is refused by a build without it with a message that says
+the type is opt-in and how to build with it ([Building with
+s3file](S3FILE.md#building-with-s3file)).
 
 ### When a metric cannot be extracted
 
@@ -2181,7 +2313,7 @@ series ([Reading CSV: what to expect](#reading-csv-what-to-expect) lists
 what takes a column away); a rule that is not required still says nothing of
 a value's column that is gone. While writing a collector leave its rules
 required, so that a column that is gone is reported, and read the header the
-target sends in a [debug probe](#debugging-a-probe).
+target sends in a [debug probe](#debug-probes).
 
 The error of a `css` or an `xpath` rule names its metric first, and, where
 the failure belongs to one of the things the rule selected, which: an item
@@ -2482,7 +2614,7 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of graphite, grpc, http, localfile, sql, sshfile`. And a boolean is `true` or
+  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. And a boolean is `true` or
   `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label
@@ -2771,9 +2903,14 @@ it; the ones under `examples/` do not.
 
 The [static target file](STATIC-TARGETS.md) has a schema of its own,
 [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
-`configs/static-targets.example.yaml` points editors at the same way. All three
-schemas — this one, the [collector file](#collector-files) one and the static
-target file one — are in `configs/` with the examples, and are regenerated with
+`configs/static-targets.example.yaml` points editors at the same way. The
+[target allocator](ALLOCATOR.md)'s files have schemas of their own:
+[`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json),
+its static target file, which may have `discovered_targets`, and
+[`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json),
+its probe targets file. All of them — this one, the
+[collector file](#collector-files) one, the static target file one and the
+allocator's two — are in `configs/` with the examples, and are regenerated with
 `make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
@@ -2848,8 +2985,8 @@ naming the key, the number and the range, and so is one past what a
 floating-point number holds, such as `1e400`, which the YAML reader the
 exporter uses takes for text, and an editor, reading YAML 1.2, for a number; and a fraction the exporter
 refuses however small, though a schema, handed the floating-point number,
-takes `1.00000000000000000001` for 1. An entry of `request.accept_status` is
-a status written as a number or as text: a number is the status it is
+takes `1.00000000000000000001` for 1. An entry of `request.accept_status`,
+and one of `request.retry.statuses`, is a status written as a number or as text: a number is the status it is
 however it is written — `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and
 `0503` are 503 — to both; text is text, the digits of a status or a class,
 so `"503.0"` is refused by both. In quotes, digits with a sign or leading
@@ -2902,7 +3039,7 @@ YAML 1.2, and the exporter's reader takes a few more spellings for a
 number, `1_000` and `0b101` among them: at a key of text alone the exporter
 refuses those as numbers too, which is all the two differ on there. What is
 not text has no empty form: `""` is no duration and no size, and both refuse it; and both refuse an empty entry of
-`collector_files`, `request.accept_status`, `request.allowed_targets`,
+`collector_files`, `request.accept_status`, `request.retry.statuses`, `request.allowed_targets`,
 `request.denied_targets`, `request.redirect_trusted_hosts`,
 `transform.include`, `transform.exclude` and the Python
 libraries, and an empty key of a `value_map`, of `request.metadata` and of a
@@ -3686,7 +3823,7 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
 Once the exporter starts writing an answer, the client has 30 seconds to read
 it, on every endpoint. An answer can be megabytes — a passed-through
 exposition, the static targets, the verbose self-metrics, a
-[debug report](#debugging-a-probe) — and a client that asked for one and
+[debug report](#debug-probes) — and a client that asked for one and
 stopped reading would otherwise hold the request, and the answer in memory,
 for as long as it kept the connection open. After 30 seconds its connection is
 closed, which the log notes at `debug` level only. The time a probe takes to
@@ -4037,10 +4174,127 @@ changed and changed back, or removed and brought back, while an earlier probe
 was at the target makes a trip of its own, and its result is cached and its
 failure logged as any probe's of a collector in force.
 
-## Debugging a probe
+## Debugging collectors
 
-When a collector does not give what it should, add `&debug=true` to the probe
-and read what happened, step by step, in a browser or with curl:
+When a collector does not give what it should, run it and read what
+happened, step by step: the requests, the response, each stage, what was
+logged and the series a probe would have answered. One flag, `--web.debug`
+(the Helm chart's `server.debug`), sets how far that goes:
+
+| `--web.debug` | What is served |
+|---------------|----------------|
+| `off`, the default | Nothing: `/debug` is not there (`404`), and `debug=true` on `/probe` and `debug=<name>` on `/static-targets` are answered `403`. |
+| `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
+| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). |
+
+Any other value stops the exporter at startup, as any wrong flag does
+(exit status 2). Every run, whichever asked for it, is made by the same
+engine and reported in the same terms: as plain text by the two URLs, and as
+JSON by the page, which shows the text report too. Each is counted in
+`http_exporter_debug_runs_total{kind, result}`
+([Self-metrics](SELF-METRICS.md#debug-runs)), and in no collector's
+self-metrics.
+
+Use `edit` where the people who can open the exporter's pages may write and
+try collectors but should not see what the targets answer: the page runs
+only on what they paste. Turn `full` on while a collector is being fixed
+against its real target, and off again: a report shows what the target sent,
+and a secret under a header name that does not read as one, or in the body,
+is shown as the target sent it.
+[Debugging](AUTHENTICATION.md#debugging-collectors) says what each level lets
+a visitor of the exporter's pages do.
+
+### The debug page
+
+`/debug` runs one collector and shows the series a probe would answer, the
+stages, what was logged, the requests sent and the response read and,
+folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
+and, with *Run as you type* on, a moment after each edit. The landing page
+links it, and `/collectors` links each collector into it, the collector
+chosen and, at `full`, with the target entered in the collector's form.
+
+The collector run is one of two:
+
+- **Written on the page**: the YAML of one collector, as it is written under
+  `collectors:` — a mapping that starts with `name`, without the dash. It is
+  read as a configuration's collectors are: the same keys, the same checks,
+  and a mistake is reported in the words a load would use, with line numbers
+  counted from the collector's first line. `${NAME}` references are left as
+  they are written, whatever `--config.expand-env` says. It is never put in
+  force, and its own request block never makes a request.
+- **Configured**: one of the configuration in force, chosen by name, run as
+  it is configured, its Python included: its script is the operator's, and
+  reads whatever a target sends on every probe, which is what a pasted body
+  stands for.
+
+It reads one of three responses:
+
+- **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
+  200 unless given, and other headers. No request is made. The status must be
+  one the collector's `request.accept_status` accepts, and the body is held
+  to its response limit, as a fetched response would be.
+- **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
+  it, through a configured collector — the one run, when it is configured,
+  or the one chosen to fetch through — with its request block,
+  [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
+  credentials, `accept_status` and
+  [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
+  parameters entered on the page. A collector written on the page decodes
+  and transforms what the chosen one fetched. A collector run on what
+  another fetched reads what an `http` collector fetches only.
+- **A static target's scrape**, at `full` only: made once as its schedule
+  makes it, with the target's own settings and credentials, its interval as
+  the budget and its labels on the series, as
+  [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target)
+  makes it. Nothing is published. It is read by the collector run, the
+  target's own when that is chosen.
+
+A collector written on the page may do nothing past the response, since what
+it is given runs on the server:
+
+- **Python is never run.** A collector with `transform.type: python` or a
+  `pre_script` is refused, at `full` as at `edit`; put it in the
+  configuration and run it by name.
+- **Only `http` collectors**, since the other request types read files,
+  hosts and databases with the server's own credentials, and **no file of
+  the server's**: `request.basic_auth_file`, `request.bearer_token_file`,
+  the `request.tls` files and a `request.login`, which reads its secrets
+  from files, are refused. A pasted response needs no
+  credential, and a fetched target gets the configured collector's.
+
+A run takes as long as a probe may — the timeout on the page, sent as
+Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
+target's interval — and at most 4 runs of the page are in progress at once;
+one more is answered `503`. A run reads and fills no cache, counts in no
+collector's self-metrics but the [Python worker
+series](SELF-METRICS.md#python-workers) of a configured collector's script,
+and logs one `debug run served` line at `info`. The page is behind
+`web.basic_auth` when that is configured;
+[Debugging](AUTHENTICATION.md#debugging-collectors) says how a run is kept
+from being sent by another site.
+
+The page posts each run to `POST /debug/run` as JSON, which a script can do
+too:
+
+```sh
+curl -s http://exporter:8080/debug/run \
+  -H 'Content-Type: application/json' -H 'X-Debug-Run: run' \
+  -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
+```
+
+A run sends `collector`, the YAML, or `configured`, a name; and `body` with
+`content_type`, `status` and `headers`, or `target` with `request_from`, the
+collector to fetch through, and `params`, or `static_target`. It answers
+`200` with `ok`, `verdict` (what a probe would have answered), `series`
+(Prometheus text), `requests`, `response`, `stages`, `notes` and `report`,
+the text report. A collector refused is answered `422` with `error`, a
+malformed run `400`, one too large `413`, a fetch or a scrape below `full`
+`403`.
+
+### Debug probes
+
+At `full`, add `&debug=true` to a probe and read the report in a browser or
+with curl:
 
 ```sh
 curl 'http://exporter:8080/probe?collector=app_json&target=https://api.example.com&debug=true'
@@ -4049,7 +4303,7 @@ curl 'http://exporter:8080/probe?collector=app_json&target=https://api.example.c
 ```text
 Debug probe of collector "app_json", target https://api.example.com
 Took 184ms. A probe would have answered 502: metric queue_len failed: ...
-A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.
+A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.
 
 Requests
   1. GET https://api.example.com/v1/status?tenant=<redacted> -> 200 OK in 162ms
@@ -4090,7 +4344,10 @@ The report lists:
   request.redirect_trusted_hosts`. A `grpc` call is listed with its method,
   metadata and status code. A `localfile` read, which sends nothing, is
   listed as the file it reads. A URL longer than 512 bytes is listed by its
-  first 512.
+  first 512. An `http` or `graphite` request that is retried ends the list
+  with how: `Retries: up to 2, 1s apart, on a failed connection and on an
+  answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
+  collector's [`retry`](REQUESTS.md#retries) or the static target's.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4159,11 +4416,9 @@ each metric name and the exposition one for each series, up to
 `limits.max_metrics`, and a directory one for each file read, up to
 `request.max_files`, and for each file skipped.
 
-The [collectors page](AUTHENTICATION.md#probing-from-the-browser) at
-`/collectors` offers the same report with a *Debug report* switch on each
-form, shown only when debug probes are enabled. A
-[static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged at
-`/static-targets?debug=<name>`.
+A [static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged
+at `/static-targets?debug=<name>`, and the [debug page](#the-debug-page)
+shows the same report for its runs.
 
 The report always answers `200` with `text/plain`, whatever the probe would
 have answered. It takes the same parameters as the probe. For debug, `true`,
@@ -4172,8 +4427,9 @@ any other value is answered `400`.
 
 A debug probe always goes to the target, and leaves nothing behind. It does
 not read or fill the response cache, it does not share an identical probe in
-flight, and it is not counted in the self-metrics or exported over OTLP,
-which is what the report's line "records no self-metric" says. One thing is
+flight, and it is not exported over OTLP or counted in the self-metrics but
+`http_exporter_debug_runs_total`, which is what the report's line "records
+no self-metric but http_exporter_debug_runs_total" says. One thing is
 counted all the same: a Python script it runs is run by the collector's
 workers, and the [Python worker series](SELF-METRICS.md#python-workers)
 count what the workers did, a debug probe's runs among them. Its
@@ -4186,11 +4442,9 @@ A trip that panics — a bug, in a request type, a decoder or a transform — is
 reported as the `500` a probe would have answered, with the panic's message,
 and logged with its stack; its slot is given back as after any other trip.
 
-The report shows what the target answered, so debug probes are off unless the
-exporter runs with `--web.enable-probe-debug` (the Helm chart's
-`server.probeDebug`). Without the flag `debug=true` is answered `403`. When
-`web.basic_auth` is configured, a debug probe needs the same credentials as a
-probe. The report redacts:
+Below `--web.debug=full`, `debug=true` is answered `403`, before the target
+is contacted. When `web.basic_auth` is configured, a debug probe needs the
+same credentials as a probe. The report, and the page's JSON alike, redacts:
 
 - every query value, in the requests listed and in the errors that quote a
   URL alike. The query is otherwise shown as it was sent: each pair where it
@@ -4205,8 +4459,7 @@ probe. The report redacts:
   a whole word of it, as in `X-Sig` or `X-Db-Pwd`.
 
 Request bodies are not shown. A secret under any other header name, or in
-the response itself, is shown as the target sent it, so turn the flag on
-while a collector is being written or fixed, not for good.
+the response itself, is shown as the target sent it.
 
 ## Readiness
 
@@ -4370,11 +4623,18 @@ A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
-Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`
-or `accept_codes` is listed under `details.request_policies`, by name, with
-those lists as they will be applied — `2XX` as `2xx`, `not_found` as
-`NOT_FOUND` — so a list that lets through more or less than meant shows before
-it is deployed.
+Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
+`accept_codes`, `retry.statuses`, `pagination` or `login` is listed under
+`details.request_policies`, by name, with those settings as they will be
+applied — `2XX` as `2xx`, `not_found` as `NOT_FOUND`, `retry.statuses` as
+`retry_statuses`, `[]` included, a `pagination` with its defaults,
+`max_pages: 10` among them, a `login` with the `header` and `prefix` its
+token is sent with — so a list that lets through more or less than meant, a
+pagination that asks the target for more pages than meant, or a token sent
+where it was not meant to go, shows before it is deployed. A login is shown
+with the files its secrets are read from, never what they hold, and a field
+or endpoint parameter whose name reads as a credential's without its value
+([Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target)).
 
 The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
 target of one, reads when it connects — its private key, passphrase,
@@ -4384,7 +4644,9 @@ under `details.warnings` of the `config` entry, or of the `static_targets`
 entry for a target's own files, and logged, without failing the check, since
 a file may be put in place after the exporter starts. So are the password,
 private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
-static target's own credential file.
+static target's own credential file, and the secret files of an `http` or
+`graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
+and of a static target's own.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

@@ -20,7 +20,7 @@ without the header, or a default, `response.header("x-mode", "")`.
 credentials included: `https://user:password@host/api?token=abc` reaches the
 script as written, not redacted as the exporter's logs show it. Do not print
 it or put it in a label as it is. What a script prints is logged at debug
-level and shown in [debug reports](CONFIGURATION.md#debugging-a-probe), and a
+level and shown in [debug reports](CONFIGURATION.md#debug-probes), and a
 label is kept by Prometheus. When a script needs the host, take it apart
 first, for example `urllib.parse.urlsplit(target).hostname`.
 
@@ -47,7 +47,7 @@ definitions dynamically through `metric(...)`.
 
 A rule under `metrics` makes no series there: it names one the script makes,
 by the `name` the script gives it, and that is all it says. A
-[debug probe](CONFIGURATION.md#debugging-a-probe)'s report lists the rule
+[debug probe](CONFIGURATION.md#debug-probes)'s report lists the rule
 among those that gave no series when the script made none of that name; the
 rule has its [`http_exporter_rule_failures_total`](SELF-METRICS.md) series,
 which stays `0`, since a rule that makes no series fails none; and each of
@@ -95,6 +95,10 @@ The worker runs the interpreter `--python.path` names, `python3` by default, whi
 | Decoder | `data` |
 | --- | --- |
 | `json`, `yaml` | The document: dicts, lists, strings, numbers, booleans and `None`. |
+| `ndjson` | The list of the values of the lines, each as `json` gives it. |
+| `logfmt` | The list of the records, a dict per line of its keys and their values as strings, `None` for a key written alone. |
+| `toml` | The document, as for `json`, with each date and time a string ([NDJSON, logfmt, TOML and INI](CONFIGURATION.md#ndjson-logfmt-toml-and-ini)). |
+| `ini` | A dict of each section's dict of strings, and of each key before the first section to its string. |
 | `graphite` | The [series document](GRAPHITE.md#the-series-document), `{"series": [...]}`. |
 | `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
 | `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. A histogram or summary the target wrote without a `_sum` or a `_count` has no `sum` or `count` key: read one with `series.get("sum")`. A histogram's `count` and the `count` of its `+Inf` bucket are each what the target wrote, and [may differ](CONFIGURATION.md#character-encodings) for a target scraped between two of its updates. A `count`, the series' or a bucket's, must stay a whole number from 0: `2.5` fails the scrape. |

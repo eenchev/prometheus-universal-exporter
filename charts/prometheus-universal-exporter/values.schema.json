@@ -121,7 +121,7 @@
         "expandEnv": {"type": "boolean"},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
-        "probeDebug": {"type": "boolean", "description": "Rendered as --web.enable-probe-debug when true: enables /probe?debug=true."},
+        "debug": {"type": "string", "enum": ["", "off", "edit", "full"], "description": "Rendered as --web.debug when edit or full: edit enables the /debug page on pasted responses, full also fetching targets there, /probe?debug=true and /static-targets?debug=<name>. Empty and off render no flag."},
         "probeTimeoutOffset": {
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",
@@ -354,13 +354,40 @@
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out. Every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
+      "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out, on CPU, memory, the exporter's own load (targetBusy) or, with the allocator, its static targets per pod. Without the allocator every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
       "properties": {
         "enabled": {"type": "boolean"},
         "minReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "maxReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "targetCPUUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
         "targetMemoryUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
+        "targetBusy": {
+          "type": [
+            "number",
+            "string",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,9})?m?$",
+          "description": "The average number of probes and static target scrapes in progress per pod to keep, a number above 0 or a Kubernetes quantity such as 1500m, served by a metrics adapter as busyMetric."
+        },
+        "busyMetric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetStaticTargetsPerPod": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "The static targets per pod to keep, with allocator.enabled only, served by a metrics adapter as staticTargetsMetric."
+        },
+        "staticTargetsMetric": {
+          "type": "string",
+          "minLength": 1
+        },
         "metrics": {"type": "array", "items": {"type": "object"}},
         "behavior": {"type": "object"}
       }
@@ -564,15 +591,28 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "collector", "targets"],
+            "required": ["name", "collector"],
+            "anyOf": [
+              {"required": ["targets"], "properties": {"targets": {"minItems": 1}}},
+              {"required": ["discovery"], "properties": {"discovery": {"minItems": 1}}}
+            ],
             "properties": {
               "name": {"type": "string", "description": "A DNS-1123 label: it names the job's ScrapeConfig and its path on the allocator.", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
               "collector": {"type": "string", "minLength": 1},
-              "targets": {"type": "array", "minItems": 1, "uniqueItems": true, "description": "The probes' targets, at least one; the allocator refuses an empty list, an empty entry and one listed twice.", "items": {"type": "string", "minLength": 1}},
+              "targets": {"type": "array", "uniqueItems": true, "description": "The probes' targets, at least one unless discovery finds them; the allocator refuses an empty entry and one listed twice.", "items": {"type": "string", "minLength": 1}},
+              "discovery": {"type": "array", "description": "Sources whose targets are probed besides targets; see Discovering targets in docs/ALLOCATOR.md.", "items": {"$ref": "#/$defs/allocatorDiscoverySource"}},
+              "target_template": {"type": "string", "pattern": "\\{\\{address\\}\\}", "description": "Makes a target of each discovered address, {{address}} standing for it, such as https://{{address}}/health."},
               "params": {"type": "object", "description": "Query parameters sent on every probe.", "additionalProperties": {"type": ["string", "number", "boolean"]}},
               "labels": {"type": "object", "description": "Labels on every target of the job.", "additionalProperties": {"type": ["string", "number", "boolean"]}},
               "shard_key": {"enum": ["", "target", "address"], "description": "What a target is allocated by: its text (target, the default) or the host and port it reaches (address)."}
             }
+          }
+        },
+        "rbac": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": {"type": "boolean", "description": "With a kubernetes discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them."}
           }
         },
         "networkPolicy": {
@@ -588,6 +628,20 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"}
+          }
+        },
+        "extraVolumes": {
+          "type": "array",
+          "description": "Volumes of the allocator's pods only, as extraVolumes are the exporter's: the files of a file_sd source, or an http_sd source's token and TLS files.",
+          "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "description": "Mounts of the allocator's pods only, as extraVolumeMounts are the exporter's; none at or inside a directory the allocator's pod mounts already.",
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "mountPath": {"type": "string", "not": {"description": "A path inside the configuration directory, a read-only ConfigMap volume in which no mount point can be created. Only paths the templates' own check also refuses: a path climbing out again with .. is left to it.", "pattern": "^/etc/prometheus-universal-exporter/+[^/.][^/]*(/+([^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+|\\.))*/*$"}}, "readOnly": {"type": "boolean"}, "subPath": {"type": "string"}},
+            "required": ["name", "mountPath"]
           }
         },
         "podLabels": {"$ref": "#/$defs/stringMap"},
@@ -643,6 +697,62 @@
 
   "$defs": {
     "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "allocatorDiscoverySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A discovery source of the allocator: exactly one of file_sd, http_sd and kubernetes (internal/allocator DiscoveryConfig).",
+      "oneOf": [{"required": ["file_sd"]}, {"required": ["http_sd"]}, {"required": ["kubernetes"]}],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"},
+        "labels": {"$ref": "#/$defs/stringMap", "description": "Labels set from the source's own, such as namespace: __meta_kubernetes_namespace."},
+        "max_targets": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "file_sd": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["files"],
+          "properties": {
+            "files": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "\\.(json|yml|yaml)$"}},
+            "refresh_interval": {"type": "string"}
+          }
+        },
+        "http_sd": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": {
+            "url": {"type": "string", "pattern": "^https?://"},
+            "refresh_interval": {"type": "string"},
+            "timeout": {"type": "string"},
+            "bearer_token_file": {"type": "string"},
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "ca_file": {"type": "string"},
+                "cert_file": {"type": "string"},
+                "key_file": {"type": "string"},
+                "server_name": {"type": "string"},
+                "insecure_skip_verify": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "kubernetes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["port"],
+          "properties": {
+            "namespaces": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}},
+            "all_namespaces": {"type": "boolean"},
+            "label_selector": {"type": "string"},
+            "port": {"anyOf": [{"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}, {"type": "integer", "minimum": 1, "maximum": 65535}]},
+            "include_not_ready": {"type": "boolean"},
+            "refresh_interval": {"type": "string"},
+            "timeout": {"type": "string"}
+          }
+        }
+      }
+    },
     "probeTimings": {
       "type": "object",
       "additionalProperties": false,

@@ -98,13 +98,15 @@ server:
   # the Deployment anyway. The endpoint is behind web.basic_auth when that is
   # configured. SIGHUP reloads whether or not this is set.
   enableLifecycle: false
-  # Enable /probe?debug=true (--web.enable-probe-debug), which answers one
-  # probe with a plain-text report of its trip: the requests, the response
-  # body, each stage, the logs and what the probe would have answered. The
-  # report shows what the target answered, so it is off by default; it is
-  # behind web.basic_auth when that is configured. Also enables
-  # /static-targets?debug=<name>, the same report for one static target.
-  probeDebug: false
+  # Debugging collectors (--web.debug): off (or empty), edit or full. edit
+  # serves /debug, a page where a collector written there, or a configured
+  # one, is run on a pasted response and each stage of its trip shown;
+  # nothing is fetched. full adds fetching a target or scraping a static
+  # target on that page, /probe?...&debug=true and
+  # /static-targets?debug=<name>, which show what the target answered. A
+  # collector written on the page never runs Python or reads a file of the
+  # pod. Off by default; behind web.basic_auth when that is configured.
+  debug: ""
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
   # on top of each collector's max_concurrent_probes. Each holds a response
@@ -462,7 +464,8 @@ readinessProbe:
 # target, and each replica serves its own results at the static targets
 # endpoint. A target with export_via_otlp is then exported over OTLP once per
 # replica, as duplicate series under the same resource. Keep static targets
-# in a release without autoscaling. Utilization is measured against
+# in a release without autoscaling, or give them to the allocator, which
+# splits them over the replicas. Utilization is measured against
 # resources.requests, so keep those set.
 autoscaling:
   enabled: false
@@ -470,6 +473,23 @@ autoscaling:
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: null
+  # Scaling on the exporter's own load, as Pods metrics that a metrics
+  # adapter, such as prometheus-adapter, serves from the self-metrics
+  # Prometheus scrapes (selfMetrics); the adapter's rules are in "Autoscaling"
+  # in docs/SELF-METRICS.md. targetBusy is the average number of probes and
+  # static target scrapes in progress per pod to keep, a number above 0 or a
+  # Kubernetes quantity such as "1500m": keep it well below
+  # server.probeMaxConcurrent when that is set. busyMetric is the name the
+  # adapter serves the metric under. null leaves the metric out.
+  targetBusy: null
+  busyMetric: http_exporter_busy
+  # The static targets per pod to keep, a whole number, with allocator.enabled,
+  # where each pod scrapes its own share of them: the autoscaler then runs
+  # about allocator.staticTargets' count divided by it. Without the allocator
+  # every pod scrapes every static target, and setting it fails rendering.
+  # staticTargetsMetric is the name the adapter serves the metric under.
+  targetStaticTargetsPerPod: null
+  staticTargetsMetric: http_exporter_static_targets
   # Further autoscaling/v2 metrics, such as a Pods metric from an adapter.
   metrics: []
   # autoscaling/v2 behavior: scaleUp and scaleDown policies.
@@ -723,9 +743,11 @@ allocator:
   # The probe jobs, rendered as the allocator's probe targets file
   # (probe_jobs). Each entry: name, a DNS-1123 label, which also names its
   # ScrapeConfig <fullname>-<name>; collector, one the configuration defines;
-  # targets, at least one; and optionally params, labels and shard_key
-  # (target or address). These are the keys the allocator's file takes, and
-  # any other key fails rendering, as the allocator would refuse it.
+  # targets, at least one unless discovery finds them; and optionally params,
+  # labels, shard_key (target or address), discovery (file_sd, http_sd or
+  # kubernetes sources, see "Discovering targets" in docs/ALLOCATOR.md) and
+  # target_template. These are the keys the allocator's file takes, and any
+  # other key fails rendering, as the allocator would refuse it.
   #
   #   probeJobs:
   #     - name: websites
@@ -737,7 +759,26 @@ allocator:
   #       targets:
   #         - https://shop.example
   #         - https://docs.example
+  #     - name: databases
+  #       collector: pg_health
+  #       discovery:
+  #         - kubernetes:
+  #             namespaces: [db]
+  #             label_selector: app.kubernetes.io/name=postgres
+  #             port: metrics
+  #           labels:
+  #             namespace: __meta_kubernetes_namespace
   probeJobs: []
+  # A kubernetes discovery source, in probeJobs or in the
+  # discovered_targets of staticTargets.data, runs the allocator as a
+  # ServiceAccount <fullname>-allocator of its own, with its token mounted.
+  # With create, the chart also lets it get, list and watch EndpointSlices: a
+  # Role and RoleBinding in each namespace a source lists (the release's when
+  # it lists none), and a ClusterRole and ClusterRoleBinding for a source
+  # with all_namespaces. Without, bind the ServiceAccount yourself. Nothing
+  # is rendered while no source is a kubernetes one.
+  rbac:
+    create: true
   # A NetworkPolicy for the allocator: ingress on its port only from this
   # release's exporter pods and from the peers in prometheus, the Prometheus
   # pods that fetch the probe targets. The default peer is a pod labelled
@@ -755,6 +796,30 @@ allocator:
   # A PodDisruptionBudget of maxUnavailable: 1 for the allocator.
   pdb:
     enabled: true
+  # Extra volumes and mounts of the allocator's pods only, in the shapes of
+  # extraVolumes and extraVolumeMounts, which mount into the exporter's pods
+  # and never the allocator's. This is how a file_sd source's files, or an
+  # http_sd source's bearer_token_file and tls files, reach the allocator:
+  #
+  #   extraVolumes:
+  #     - name: file-sd
+  #       configMap:
+  #         name: websites-sd
+  #   extraVolumeMounts:
+  #     - name: file-sd
+  #       mountPath: /etc/pue-sd
+  #       readOnly: true
+  #
+  # and a source of files: [/etc/pue-sd/*.json]. A mount path the
+  # allocator's pod already uses is rejected while rendering, and so is one
+  # inside it, since those are read-only volumes in which no mount point can
+  # be created: the configuration directory, the static target and probe
+  # targets directories while the allocator reads those files, the token's
+  # directory with tokenSecret, and the service account token's directory,
+  # /var/run/secrets/kubernetes.io/serviceaccount, while that token is
+  # mounted. So is a path two entries share.
+  extraVolumes: []
+  extraVolumeMounts: []
   # Labels and annotations of the allocator's pods only, over defaultLabels
   # and defaultAnnotations, as podLabels and podAnnotations are for the
   # exporter's: a label the chart sets itself fails rendering, and

@@ -1,0 +1,454 @@
+{
+  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/probe-targets.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The probe targets file of the target allocator (pue-allocator --probe-targets-file): probe jobs, whose targets the allocator hands Prometheus through HTTP service discovery at /v1/sd/\u003cname\u003e, each pointed at the replica that probes it. See docs/ALLOCATOR.md#probe-targets.",
+  "patternProperties": {
+    "^x-.+": {
+      "description": "The file's own, ignored by the exporter: a place for YAML anchors (\u0026name) the rest of the file reuses with aliases (*name) and merge keys (\u003c\u003c: *name)."
+    }
+  },
+  "properties": {
+    "probe_jobs": {
+      "description": "The probe jobs.",
+      "items": {
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "properties": {
+              "targets": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "targets"
+            ]
+          },
+          {
+            "properties": {
+              "discovery": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "discovery"
+            ]
+          }
+        ],
+        "description": "Targets probed with one collector, at least one written or found by discovery.",
+        "properties": {
+          "collector": {
+            "description": "The collector of the configuration every probe of the job names.",
+            "minLength": 1,
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "discovery": {
+            "description": "Discovery sources, whose targets are allocated as written ones are. See docs/ALLOCATOR.md#sources.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One source: exactly one of file_sd, http_sd and kubernetes.",
+              "oneOf": [
+                {
+                  "required": [
+                    "file_sd"
+                  ]
+                },
+                {
+                  "required": [
+                    "http_sd"
+                  ]
+                },
+                {
+                  "required": [
+                    "kubernetes"
+                  ]
+                }
+              ],
+              "properties": {
+                "file_sd": {
+                  "additionalProperties": false,
+                  "description": "Prometheus file_sd files: JSON or YAML lists of target groups.",
+                  "properties": {
+                    "files": {
+                      "description": "Paths or patterns, relative to the directory of the file that names them; a pattern that matches nothing gives no targets.",
+                      "items": {
+                        "description": "Ends in .json, .yml or .yaml, which tells how its files are read.",
+                        "pattern": "\\.([Jj][Ss][Oo][Nn]|[Yy][Mm][Ll]|[Yy][Aa][Mm][Ll])$",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "refresh_interval": {
+                      "description": "How often the files are read again, at least 1s. Defaults to 1m.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files"
+                  ],
+                  "type": "object"
+                },
+                "http_sd": {
+                  "additionalProperties": false,
+                  "description": "A URL asked for target groups as Prometheus's HTTP service discovery asks it.",
+                  "properties": {
+                    "bearer_token_file": {
+                      "description": "A file holding a token sent as Authorization: Bearer, read again at every refresh. Relative to the directory of the file that names it.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "refresh_interval": {
+                      "description": "How often the URL is asked, at least 1s. Defaults to 1m.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "timeout": {
+                      "description": "How long a request may take, no longer than refresh_interval. Defaults to 10s.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "tls": {
+                      "additionalProperties": false,
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "cert_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "cert_file"
+                            ]
+                          },
+                          "then": {
+                            "properties": {
+                              "key_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "key_file"
+                            ]
+                          }
+                        },
+                        {
+                          "if": {
+                            "properties": {
+                              "key_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "key_file"
+                            ]
+                          },
+                          "then": {
+                            "properties": {
+                              "cert_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "cert_file"
+                            ]
+                          }
+                        }
+                      ],
+                      "description": "TLS for an https URL, as the exporter's tls block: ca_file, cert_file with key_file, server_name and insecure_skip_verify.",
+                      "properties": {
+                        "ca_file": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "cert_file": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "insecure_skip_verify": {
+                          "type": "boolean"
+                        },
+                        "key_file": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "server_name": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "url": {
+                      "description": "An absolute http or https URL, without credentials.",
+                      "pattern": "^[Hh][Tt][Tt][Pp][sS]?://[^/?#@]+([/?#]|$)",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "kubernetes": {
+                  "additionalProperties": false,
+                  "description": "The discovery.k8s.io/v1 EndpointSlices of the cluster the allocator runs in.",
+                  "not": {
+                    "properties": {
+                      "all_namespaces": {
+                        "const": true
+                      },
+                      "namespaces": {
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "namespaces",
+                      "all_namespaces"
+                    ]
+                  },
+                  "properties": {
+                    "all_namespaces": {
+                      "description": "List the EndpointSlices of every namespace, which needs a ClusterRole.",
+                      "type": "boolean"
+                    },
+                    "include_not_ready": {
+                      "description": "Take the endpoints that are not ready too.",
+                      "type": "boolean"
+                    },
+                    "label_selector": {
+                      "description": "A Kubernetes label selector, checked at load.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "namespaces": {
+                      "description": "The namespaces listed, each once; none lists the allocator's own. Not with all_namespaces.",
+                      "items": {
+                        "maxLength": 63,
+                        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "port": {
+                      "anyOf": [
+                        {
+                          "maxLength": 15,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        {
+                          "maximum": 65535,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      ],
+                      "description": "The endpoint port the targets are at: its name, as the Service names it, or its number."
+                    },
+                    "refresh_interval": {
+                      "description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "timeout": {
+                      "description": "How long a listing may take, no longer than refresh_interval. Defaults to 10s.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "port"
+                  ],
+                  "type": "object"
+                },
+                "labels": {
+                  "additionalProperties": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                  },
+                  "description": "Labels set from the source's own, each target's label of the key taking the value of the label the value names, such as namespace: __meta_kubernetes_namespace. Not job, instance or static_target, nor a name starting with __.",
+                  "propertyNames": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "pattern": "^__"
+                        },
+                        {
+                          "enum": [
+                            "instance",
+                            "job",
+                            "static_target"
+                          ]
+                        }
+                      ]
+                    },
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  },
+                  "type": "object"
+                },
+                "max_targets": {
+                  "description": "How many targets one answer may hold; one with more is a failure. 0 or left out takes --discovery.max-targets.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "name": {
+                  "description": "Unique in its list, in the metrics and logs. Letters, digits, _, . and -, not starting with . or -. Defaults to the source's kind and place, such as file_sd_1.",
+                  "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Labels on every target of the job; one written \"\" is left out. Not instance, which the allocator sets, nor a name starting with __.",
+            "propertyNames": {
+              "not": {
+                "anyOf": [
+                  {
+                    "pattern": "^__"
+                  },
+                  {
+                    "const": "instance"
+                  }
+                ]
+              },
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "type": "object"
+          },
+          "name": {
+            "description": "Unique: the job's path, /v1/sd/\u003cname\u003e. Letters, digits, _, . and -, not starting with . or -.",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Probe parameters sent on every probe, as __param_\u003cname\u003e labels: timeout, path, param_\u003cname\u003e and the others the collector's request type takes, checked as a probe checks them. Not target, collector or debug.",
+            "propertyNames": {
+              "not": {
+                "enum": [
+                  "target",
+                  "collector",
+                  "debug"
+                ]
+              },
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "type": "object"
+          },
+          "shard_key": {
+            "description": "What a probe is allocated by: target, the default, its target as written, or address, the host and port it reaches.",
+            "enum": [
+              "target",
+              "address",
+              ""
+            ],
+            "type": "string"
+          },
+          "target_template": {
+            "description": "Makes a target of each discovered address, {{address}} standing for it, such as https://{{address}}/health; without one the address is the target.",
+            "pattern": "^$|\\{\\{address\\}\\}",
+            "type": "string"
+          },
+          "targets": {
+            "description": "The probes' targets, each listed once and checked as a static target's target is for the collector's request type.",
+            "items": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "collector"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "probe_jobs"
+  ],
+  "title": "prometheus-universal-exporter allocator probe targets file",
+  "type": "object"
+}

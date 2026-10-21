@@ -37,7 +37,7 @@ func TestAMegabyteMetricNameIsLoggedByItsStartByEveryTrip(t *testing.T) {
 	c.Limits = model.Limits{MaxResponseBytes: 4 << 20}
 	static := model.StaticTarget{Name: "yard", Collector: "depot", Target: target.URL}
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{c}}, &model.StaticTargetFile{Interval: model.Duration(60e9), Targets: []model.StaticTarget{static}})
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	logs := &bytes.Buffer{}
 	server.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	want := strings.Repeat("n", 200) + "... (1048576 bytes)"

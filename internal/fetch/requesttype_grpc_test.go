@@ -940,6 +940,8 @@ func TestGRPCValidation(t *testing.T) {
 		{"unknown code", func(c *model.Collector) { c.Request.Retry.Codes = []string{"UNAVAILABLE", "BUSY"} }, `"BUSY", which is not a gRPC status code`},
 		{"OK retried", func(c *model.Collector) { c.Request.Retry.Codes = []string{"OK"} }, "lists OK"},
 		{"non_idempotent", func(c *model.Collector) { c.Request.Retry.NonIdempotent = true }, "retry.non_idempotent, which does not apply"},
+		{"http statuses", func(c *model.Collector) { c.Request.Retry.Statuses = []string{"503"} }, `sets request.retry.statuses, which does not apply to request.type "grpc"; retry.codes says which gRPC status codes are retried`},
+		{"no http status", func(c *model.Collector) { c.Request.Retry.Statuses = []string{} }, "sets request.retry.statuses, which does not apply"},
 		{"negative attempts", func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "must be from 0 to 10"},
 		{"not JSON", func(c *model.Collector) { c.Request.Message = `{"queue": }` }, "is not JSON"},
 		{"unquoted string placeholder", func(c *model.Collector) { c.Request.Message = `{"queue": {{param_q:orders}}}` }, "is not JSON"},

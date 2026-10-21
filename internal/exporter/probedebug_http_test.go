@@ -28,9 +28,10 @@ func debugCollector(name string) model.Collector {
 	return c
 }
 
-// Without --web.enable-probe-debug a debug probe is refused 403, naming the
-// flag, before the target is contacted; a debug value that is not a boolean
-// is refused 400; debug=false is a normal probe.
+// Below --web.debug=full a debug probe is refused 403, naming the flag and
+// the level, before the target is contacted — at edit too, which shows no
+// target's answer; a debug value that is not a boolean is refused 400;
+// debug=false is a normal probe.
 func TestDebugProbesAreOffByDefault(t *testing.T) {
 	testutil.CaptureLogs(t)
 	var hits atomic.Int32
@@ -41,13 +42,17 @@ func TestDebugProbesAreOffByDefault(t *testing.T) {
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
 	query := "collector=dbg&target=" + url.QueryEscape(target.URL)
-	if r := debugProbeGet(t, server, query+"&debug=true"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.enable-probe-debug") {
+	if r := debugProbeGet(t, server, query+"&debug=true"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.debug=full") {
 		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	server.SetDebug(DebugEdit)
+	if r := debugProbeGet(t, server, query+"&debug=true"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.debug=full") || !strings.Contains(r.Body.String(), "pasted responses only") {
+		t.Fatalf("at edit, answered %d: %s", r.Code, r.Body)
 	}
 	if hits.Load() != 0 {
 		t.Fatal("a refused debug probe reached the target")
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	if r := debugProbeGet(t, server, query+"&debug=maybe"); r.Code != http.StatusBadRequest {
 		t.Fatalf("debug=maybe answered %d", r.Code)
 	}
@@ -70,11 +75,16 @@ func TestADebugProbeReportsTheTrip(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	r := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL))
 	body := r.Body.String()
 	if r.Code != http.StatusOK || !strings.HasPrefix(r.Header().Get("Content-Type"), "text/plain") {
 		t.Fatalf("answered %d %s:\n%s", r.Code, r.Header().Get("Content-Type"), body)
+	}
+	// The report holds the target's body, which a browser must not sniff
+	// for HTML.
+	if got := r.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options %q", got)
 	}
 	if authorization.Load() != "Bearer s3cret-bearer" {
 		t.Fatalf("the target got Authorization %v", authorization.Load())
@@ -118,7 +128,7 @@ func TestADebugProbeLeavesNothingBehind(t *testing.T) {
 	c.Cache = model.CacheConfig{TTL: model.Duration(time.Minute)}
 	cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	server := newStaticServer(t, cfg, nil)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	query := "collector=dbg&target=" + url.QueryEscape(target.URL)
 
 	debugProbeGet(t, server, query+"&debug=true")
@@ -154,7 +164,7 @@ func TestADebugProbeReportsAFailure(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, body,
 		"A probe would have answered 502: collector dbg http_status failed: received HTTP status 503",
@@ -184,7 +194,7 @@ func TestADebugProbeKeepsTheTargetPolicy(t *testing.T) {
 	c := debugCollector("dbg")
 	c.Request.DeniedTargets = []string{"127.0.0.0/8", "::1"}
 	server := modeServer(t, c)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, body, "A probe would have answered 403: collector dbg refused the target", "target_policy refused")
 	if hits.Load() != 0 {
@@ -213,7 +223,7 @@ func TestADebugProbeListsRedirectsAndTheStaleAnswer(t *testing.T) {
 	c.Request.FollowRedirects = true
 	c.Cache = model.CacheConfig{TTL: model.Duration(time.Millisecond), StaleIfError: model.Duration(time.Hour)}
 	server := modeServer(t, c)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	query := "collector=dbg&target=" + url.QueryEscape(target.URL+"/old")
 
 	body := debugProbeGet(t, server, query+"&debug=true").Body.String()
@@ -244,7 +254,7 @@ func TestRequestTraceIsOnlyKeptWhenAsked(t *testing.T) {
 
 // /static-targets?debug=<name> scrapes that one target as its schedule
 // would, with its own credential, and reports the trip; it publishes
-// nothing, counts nothing, and is refused without the flag.
+// nothing, counts nothing, and is refused below --web.debug=full.
 func TestADebugScrapeOfAStaticTarget(t *testing.T) {
 	testutil.CaptureLogs(t)
 	var authorization atomic.Value
@@ -265,10 +275,14 @@ func TestADebugScrapeOfAStaticTarget(t *testing.T) {
 		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/static-targets?"+query, nil))
 		return recorder
 	}
-	if r := get("debug=eu"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.enable-probe-debug") {
+	if r := get("debug=eu"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.debug=full") {
 		t.Fatalf("without the flag: %d %s", r.Code, r.Body)
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugEdit)
+	if r := get("debug=eu"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.debug=full") || authorization.Load() != nil {
+		t.Fatalf("at edit: %d %s", r.Code, r.Body)
+	}
+	server.SetDebug(DebugFull)
 	for query, code := range map[string]int{"debug=nobody": http.StatusNotFound, "debug=": http.StatusBadRequest, "debug=eu&targets=us": http.StatusBadRequest, "debug=eu&debug=us": http.StatusBadRequest} {
 		if r := get(query); r.Code != code {
 			t.Errorf("%s answered %d, want %d: %s", query, r.Code, code, r.Body)
@@ -309,7 +323,7 @@ func TestAFailedRequestKeepsItsQueryOutOfEveryAnswer(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	c := debugCollector("dbg")
 	server := modeServer(t, c)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	target := url.QueryEscape("http://user:s3cret-password@127.0.0.1:1/x")
 	answer := debugProbeGet(t, server, "collector=dbg&target="+target)
 	report := debugProbeGet(t, server, "collector=dbg&debug=true&target="+target)
@@ -320,4 +334,34 @@ func TestAFailedRequestKeepsItsQueryOutOfEveryAnswer(t *testing.T) {
 	}
 	assertContains(t, answer.Body.String(), "token=<redacted>", "view=<redacted>")
 	assertContains(t, report.Body.String(), "failed", "token=<redacted>")
+}
+
+// A debug probe's report says, below its requests, how the request is
+// retried, on the collector's retry.statuses: a 404 it lists is asked for
+// again, and the report shows both attempts. A collector that makes no
+// retry says nothing of retries.
+func TestADebugProbeSaysWhichStatusesAreRetried(t *testing.T) {
+	testutil.CaptureLogs(t)
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"up":1,"latency":2}`))
+	}))
+	t.Cleanup(target.Close)
+	retried := modeCollector("starting", model.ErrorModeLog)
+	retried.Request.Retry = model.RetryConfig{Attempts: 2, Statuses: []string{"404", "5xx"}}
+	server := modeServer(t, retried, modeCollector("plain", model.ErrorModeLog))
+	server.SetDebug(DebugFull)
+	body := debugProbeGet(t, server, "collector=starting&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
+	assertContains(t, body, "-> 404 Not Found in", "-> 200 OK in", "\n  Retries: up to 2, 0s apart, on a failed connection and on an answer of 404, 5xx that is not accepted.\n")
+	if hits.Load() != 2 {
+		t.Fatalf("the target was asked %d times", hits.Load())
+	}
+	if body := debugProbeGet(t, server, "collector=plain&debug=true&target="+url.QueryEscape(target.URL)).Body.String(); strings.Contains(body, "Retries:") {
+		t.Fatalf("a collector without retries:\n%s", body)
+	}
 }

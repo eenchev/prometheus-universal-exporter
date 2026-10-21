@@ -236,20 +236,22 @@ func TestThePagesWorkUnderAPathPrefix(t *testing.T) {
 	}
 }
 
-// With --web.enable-probe-debug each form has a Debug report switch, a
-// checkbox named as the probe parameter, so the form sends debug=true when
-// it is on, with or without the page's script; without the flag there is
-// none.
-func TestTheCollectorsPageOffersADebugSwitchWhenDebugIsOn(t *testing.T) {
+// With --web.debug on each collector links the debug page with its name,
+// and at full the link carries the form's target; with debugging off there
+// is no link. No form asks /probe for a debug report: the debug page shows
+// the trip.
+func TestTheCollectorsPageLinksEachCollectorIntoTheDebugPage(t *testing.T) {
 	server := landingServer(t, weatherConfig())
-	if page := getPage(t, server, "/collectors"); strings.Contains(page, `name="debug"`) || strings.Contains(page, "Debug probes are on") {
-		t.Fatal("the page offers a debug switch without --web.enable-probe-debug")
+	if page := getPage(t, server, "/collectors"); strings.Contains(page, `href="debug`) || strings.Contains(page, "Debugging is on") {
+		t.Fatal("the page links the debug page with debugging off")
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugEdit)
 	page := getPage(t, server, "/collectors")
-	requireContains(t, page,
-		`<label class="switch"><input type="checkbox" name="debug" value="true" role="switch"> Debug report</label>`,
-		"Debug probes are on",
-		`params.get("debug") === "true"`,
-	)
+	requireContains(t, page, `<a class="debug" href="debug?collector=weather">Debug</a>`, "Debugging is on at <code>edit</code>")
+	server.SetDebug(DebugFull)
+	page = getPage(t, server, "/collectors")
+	requireContains(t, page, `<a class="debug" href="debug?collector=weather" data-with-target>Debug</a>`, `link.searchParams.set("target", target)`)
+	if strings.Contains(page, `name="debug"`) {
+		t.Error("a form asks /probe for a debug report")
+	}
 }

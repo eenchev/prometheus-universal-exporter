@@ -160,15 +160,16 @@ func TestGRPCStaticTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for want, target := range map[string]string{
-		"request.message cannot use {{param_...}} placeholders":    strings.Replace(good, `"orders"}`, `"{{param_queue}}"}`, 1),
-		"request.metadata x-tenant cannot use {{param_...}}":       strings.Replace(good, "x-tenant: acme", "x-tenant: '{{param_t}}'", 1),
-		`unknown field "queues"`:                                   strings.Replace(good, `{"queue":`, `{"queues":`, 1),
-		"has the scheme http://":                                   strings.Replace(good, "grpcs://queue.internal:9090", "http://queue.internal:9090/x", 1),
-		"is not host:port":                                         strings.Replace(good, "grpcs://queue.internal:9090", "queue.internal", 1),
-		`lists "SOON", which is not a gRPC status code`:            strings.Replace(good, "[UNAVAILABLE]", "[SOON]", 1),
-		"sets request.path, which does not apply to collector":     good + "      path: /x\n",
-		"sets request.headers, which does not apply to collector":  good + "      headers:\n        X-A: b\n",
-		"sets request.retry.non_idempotent, which does not apply ": strings.Replace(good, "codes: [UNAVAILABLE]", "non_idempotent: true", 1),
+		"request.message cannot use {{param_...}} placeholders":                    strings.Replace(good, `"orders"}`, `"{{param_queue}}"}`, 1),
+		"request.metadata x-tenant cannot use {{param_...}}":                       strings.Replace(good, "x-tenant: acme", "x-tenant: '{{param_t}}'", 1),
+		`unknown field "queues"`:                                                   strings.Replace(good, `{"queue":`, `{"queues":`, 1),
+		"has the scheme http://":                                                   strings.Replace(good, "grpcs://queue.internal:9090", "http://queue.internal:9090/x", 1),
+		"is not host:port":                                                         strings.Replace(good, "grpcs://queue.internal:9090", "queue.internal", 1),
+		`lists "SOON", which is not a gRPC status code`:                            strings.Replace(good, "[UNAVAILABLE]", "[SOON]", 1),
+		"sets request.path, which does not apply to collector":                     good + "      path: /x\n",
+		"sets request.headers, which does not apply to collector":                  good + "      headers:\n        X-A: b\n",
+		"sets request.retry.non_idempotent, which does not apply ":                 strings.Replace(good, "codes: [UNAVAILABLE]", "non_idempotent: true", 1),
+		`sets request.retry.statuses, which does not apply to request.type "grpc"`: strings.Replace(good, "codes: [UNAVAILABLE]", "statuses: [503]", 1),
 	} {
 		if err := load(target); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("err=%v, want %q", err, want)

@@ -23,8 +23,8 @@ type transformInput struct {
 // the two never disagree. The python transform is not listed: its script is
 // handed whatever was decoded.
 var transformInputs = map[string]transformInput{
-	"jq":         {[]string{"json", "yaml", "graphite"}, "a structured JSON/YAML"},
-	"yq":         {[]string{"json", "yaml", "graphite"}, "a structured JSON/YAML"},
+	"jq":         {[]string{"json", "yaml", "graphite", "ndjson", "logfmt", "toml", "ini"}, "a structured JSON/YAML"},
+	"yq":         {[]string{"json", "yaml", "graphite", "ndjson", "logfmt", "toml", "ini"}, "a structured JSON/YAML"},
 	"regex":      {[]string{"text"}, "a text"},
 	"csv":        {[]string{"csv"}, "a CSV"},
 	"css":        {[]string{"html"}, "an HTML"},

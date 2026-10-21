@@ -79,7 +79,7 @@ const MaxDepth = 10000
 // Only whitespace may follow it: a second record, as in NDJSON, or anything
 // else would otherwise be dropped unseen, and the collector would report the
 // first record as the whole answer.
-var errJSONTrailingData = errors.New("trailing data after the JSON value (NDJSON, one value per line, is not supported)")
+var errJSONTrailingData = errors.New("trailing data after the JSON value (for NDJSON, one value on each line, set decoder.type: ndjson)")
 
 // decodeJSON decodes body, which must be one JSON value.
 func decodeJSON(body []byte) (any, error) {

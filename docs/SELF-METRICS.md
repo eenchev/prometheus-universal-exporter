@@ -25,6 +25,10 @@ configured:
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
 | `http_exporter_decoder_lines_skipped_total` | counter | Lines a decoder left out and read on: carbon lines the `graphite` decoder could not read, under [`response.graphite.invalid_lines: skip`](GRAPHITE.md#carbon-lines-from-a-file), and sample lines the `prometheus` decoder found to be [no part of their histogram or summary family](CONFIGURATION.md#collectors), such as Micrometer's `x{quantile="0.95"}` under `# TYPE x histogram`. |
+| `http_exporter_pages_fetched_total` | counter | `http` collectors only, `0` for one without [`request.pagination`](REQUESTS.md#pagination): the pages its pagination fetched, the first page of each trip included, in trips that ended with an answer — merged, or a page whose status failed the trip. Divided by `http_exporter_scrapes_total` less the cache hits, the pages a trip takes. |
+| `http_exporter_pagination_max_pages_reached_total` | counter | `http` collectors only: the trips that stopped at `request.pagination.max_pages` with another page to come, answered with the pages they fetched, whose series then describe part of what the target holds. Each is logged at warn level, once and then sparingly while it repeats. |
+| `http_exporter_logins_total` | counter | `http` and `graphite` collectors only, `0` for one without [`request.login`](AUTHENTICATION.md#logging-in-to-a-target): the logins its login, or a static target's own, made for a token — the first, each made again before the token expired, and each after the target refused a token with `401`. A token kept answers the probes between them, so the rate is far below that of the scrapes; one near it is a token not kept, its lifetime too short or the target refusing it. |
+| `http_exporter_login_failures_total` | counter | `http` and `graphite` collectors only: those logins that failed. A scrape that needed the token failed in the `login` stage, unless the token kept had not expired and was used instead. |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups: a probe answered from the cache is a hit, including one that found it filled while it waited to start; a probe that went to the target is a miss. A probe that [shared](#shared-probes) another's trip is neither, and is counted in `http_exporter_probes_coalesced_total`; nor is one that [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) or `--probe.max-concurrent` turned away, which is counted only as rejected, in `http_exporter_probes_rejected_total` or `http_exporter_probes_rejected_exporter_limit_total`. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
@@ -33,7 +37,7 @@ configured:
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
 | `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
-| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile` and `sql` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
+| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` and `s3file` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused, an `s3file` collector's being buckets; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
 | `http_exporter_sshfile_connections` | gauge | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes use that are open now. A connection collectors with the same host and settings share counts for each of them. |
 | `http_exporter_sshfile_connects_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes made — the first to each host, and each made again after one broke, was closed idle, by keepalives or at the collector's `max_open_connections`, or had a credential or known_hosts file change. A counter that keeps rising while scrapes succeed is a connection that does not last. |
 | `http_exporter_sshfile_limit_waits_total`, `http_exporter_sshfile_limit_failures_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only, `0` for one without `max_open_connections`: the scrapes that waited for room at the collector's `max_open_connections`, and those that failed there, every connection it may open held by a read or being made for a scrape waiting for it when their deadline came. Failures rising mean a limit too low for the hosts read, or reads too slow for the scrape's timeout. |
@@ -104,7 +108,8 @@ up * on (instance) group_left (version) http_exporter_build_info
 | `http_exporter_static_targets_exported_via_otlp` | gauge | Those of them with `export_via_otlp`, also delivered over OTLP. |
 
 A static target's scrapes are counted in its collector's families above, as
-probes are. Each target's own health, `http_exporter_target_up` and
+probes are, and the time they take in
+`http_exporter_static_targets_scrape_seconds_total` ([Autoscaling](#autoscaling)). Each target's own health, `http_exporter_target_up` and
 `http_exporter_target_scrape_duration_seconds`, is served with its results on
 the [static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint),
 not here.
@@ -182,6 +187,146 @@ increase(http_exporter_allocator_bundle_refused_total[15m]) > 0
 time() - http_exporter_allocator_last_sync_timestamp_seconds > 120
 ```
 
+## Autoscaling
+
+Two counters say how busy a replica is, for a HorizontalPodAutoscaler to
+scale the exporter on rather than on CPU. Each is one series for the whole
+exporter, with no `collector` or target label, so it costs the same however
+many targets there are, and both are there from the start at `0`, whether or
+not the exporter has static targets or is probed:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_static_targets_scrape_seconds_total` | counter | Seconds spent on static target scrapes, each from its start to its end, waiting for a slot under `max_concurrent_probes` or `--probe.max-concurrent` included, a scrape answered from the cache or a reload made another target's too; not one the shutdown cut short. |
+| `http_exporter_probes_seconds_total` | counter | Seconds spent serving probes, each from its start to its answer being ready, the probes counted in `http_exporter_scrapes_total`: a cache hit, a probe that [shared](#shared-probes) another's trip and one a limit turned away too; not a refused request, such as one with no collector, nor a [debug probe](CONFIGURATION.md#debug-probes). |
+
+Each scrape or probe adds the time it took when it ends, the time its
+collector's `http_exporter_scrape_duration_seconds` reports. Their rate is
+seconds of work per second: the average number of static target scrapes and
+probes in progress over the window, which a gauge such as
+`http_exporter_trips_in_flight` only samples at the moment it is scraped.
+Added up, they are the load of one replica:
+
+```promql
+sum by (pod) (rate(http_exporter_static_targets_scrape_seconds_total[2m]))
+  + sum by (pod) (rate(http_exporter_probes_seconds_total[2m]))
+```
+
+A value of 3 is three scrapes or probes in progress on average. Probes spread
+over the replicas through the Service, and with the
+[target allocator](ALLOCATOR.md) so do static targets, each replica scraping
+its share; so adding replicas brings each one's load down. Without the
+allocator every replica scrapes every static target, and its static target
+load does not fall as replicas are added: scale such a release on its probes,
+or not at all (see the [chart README](../charts/prometheus-universal-exporter/README.md#autoscaling)).
+
+In allocator mode `http_exporter_static_targets` is the replica's share of
+the static targets, those it keeps draining included, and the allocator's
+`pue_allocator_targets{kind="static"}` and
+`pue_allocator_targets_per_member{kind="static"}` are the count across
+replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)).
+
+### Pods metrics from prometheus-adapter
+
+A HorizontalPodAutoscaler reads a Pods metric from the custom metrics API,
+which [prometheus-adapter](https://github.com/kubernetes-sigs/prometheus-adapter)
+serves from Prometheus. Prometheus must scrape the self-metrics of every pod,
+with `namespace` and `pod` labels, as the chart's self-metrics monitor does.
+These rules, in the prometheus-adapter chart's `rules.custom`, serve the load
+above as `http_exporter_busy` and the static targets of each pod as
+`http_exporter_static_targets`, the names the exporter chart's
+`autoscaling.busyMetric` and `autoscaling.staticTargetsMetric` default to:
+
+```yaml
+rules:
+  custom:
+    - seriesQuery: 'http_exporter_probes_seconds_total{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: "^.*$"
+        as: http_exporter_busy
+      metricsQuery: |
+        sum by (<<.GroupBy>>) (rate(http_exporter_static_targets_scrape_seconds_total{<<.LabelMatchers>>}[2m]))
+          + sum by (<<.GroupBy>>) (rate(http_exporter_probes_seconds_total{<<.LabelMatchers>>}[2m]))
+    - seriesQuery: 'http_exporter_static_targets{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: "^.*$"
+        as: http_exporter_static_targets
+      metricsQuery: sum by (<<.GroupBy>>) (<<.Series>>{<<.LabelMatchers>>})
+```
+
+The window, `2m`, should hold at least four scrapes of the self-metrics, so
+that a missed scrape does not leave a rate without two samples. Then the
+exporter chart scales on them:
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: null
+  # Three probes and static target scrapes in progress per pod on average.
+  targetBusy: 3
+  # With allocator.enabled only: 200 static targets per pod.
+  targetStaticTargetsPerPod: 200
+```
+
+The autoscaler runs as many pods as bring the average of each metric down to
+its target, the most that any metric asks for: with 1,000 static targets and
+`targetStaticTargetsPerPod: 200`, five. Keep `targetBusy` well below
+`server.probeMaxConcurrent` when that is set, since a pod at its limit turns
+probes away rather than getting busier. A new pod reports no static targets
+until the allocator's member list has taken it in, after `--settle`, which
+lowers the average meanwhile; Kubernetes' default scale-down stabilization
+window, five minutes, outlasts that, and a shorter one in
+`behavior.scaleDown` should too.
+
+The allocator's own count can be an External metric instead, which does not
+depend on the replicas having caught up with the allocator: served by a rule
+like the second, on `pue_allocator_targets{kind="static"}` with no `pod`
+resource, under `autoscaling.metrics` with `target.type: AverageValue`, which
+the autoscaler divides by the replica count itself.
+
+### KEDA
+
+[KEDA](https://keda.sh) queries Prometheus itself, without an adapter. Leave
+the chart's `autoscaling` disabled, since KEDA makes its own
+HorizontalPodAutoscaler, and point a ScaledObject at the Deployment; its
+`threshold` is the average per pod, as `targetBusy` is:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: exporter
+  namespace: monitoring
+spec:
+  scaleTargetRef:
+    name: exporter-prometheus-universal-exporter
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        query: |
+          sum(rate(http_exporter_static_targets_scrape_seconds_total{namespace="monitoring",pod=~"exporter-prometheus-universal-exporter-.*"}[2m]))
+            + sum(rate(http_exporter_probes_seconds_total{namespace="monitoring",pod=~"exporter-prometheus-universal-exporter-.*"}[2m]))
+        threshold: "3"
+```
+
+The query is the load of every pod together, which KEDA divides by the
+target to find the replica count. With the allocator, a second trigger with
+the query `pue_allocator_targets{kind="static"}` and the threshold `"200"`
+does what `targetStaticTargetsPerPod` does.
+
 ## Shared probes
 
 `http_exporter_probes_coalesced_total{collector="..."}` counts the probes that
@@ -195,6 +340,20 @@ once. It belongs to none of the probes sharing it: in the
 [verbose per-request series](#verbose-per-request-self-metrics) it is counted
 on the request whichever probe started it, also when that probe's caller went
 away and the trip answered the others.
+
+## Debug runs
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_debug_runs_total` | counter | Runs of the [debugging](CONFIGURATION.md#debugging-collectors) engine, by `kind` — `probe` for `/probe?...&debug=true`, `static` for `/static-targets?debug=<name>`, `page` for the [debug page](CONFIGURATION.md#the-debug-page) — and `result`: `success` (the trip went through whole), `failure` (it ran, or was taken and could not run — a trip slot or the page's 4 runs taken — and did not go through whole: a stage failed or carried on) or `invalid` (it was refused before it ran: a wrong parameter, collector, target name or run, or a source the level does not allow). Present only with `--web.debug` at `edit` or `full`, with the kinds the level serves: `page` alone at `edit`, all three at `full`. |
+
+A debug probe that `--web.debug` does not allow, or whose `debug` value is not
+a boolean, is not counted: it is no run. A run counts in nothing else here,
+in no collector's families, but for the [Python worker
+series](#python-workers) of a configured collector's script. A run that
+fetches a target holds a trip slot of the collector it fetches through while
+it runs, as a [debug probe](CONFIGURATION.md#debug-probes) does, which
+`http_exporter_probes_in_flight` and `http_exporter_trips_in_flight` show.
 
 ## Resource metrics
 
@@ -484,8 +643,10 @@ Every label is from a fixed set, and a collector without Python has none of
 these series. The counters are kept whether or not verbose mode is on, so
 turning it on through a reload shows what was counted before it was on.
 They count what the workers did, whoever asked: the scripts of a
-[debug probe](CONFIGURATION.md#debugging-a-probe), which is counted in no
-other self-metric, run in the collector's workers and are counted here.
+[debug probe](CONFIGURATION.md#debug-probes) or of a configured
+collector run on the [debug page](CONFIGURATION.md#the-debug-page), which
+are counted in no other self-metric but `http_exporter_debug_runs_total`,
+run in the collector's workers and are counted here.
 
 They are the collector's, and follow a reload as its
 [other counters](#collector-metrics) do. A reload that removes the collector

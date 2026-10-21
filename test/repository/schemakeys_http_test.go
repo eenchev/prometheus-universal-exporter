@@ -43,6 +43,9 @@ const (
 	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - name: up\n        # metric\n"
 )
 
+// paginatedCollector is jqCollector fetching its pages by page number.
+var paginatedCollector = strings.Replace(jqCollector, "      # request\n", "      pagination:\n        type: page\n        param: page\n        items: .items\n", 1)
+
 // escapingNames is a configuration of one collector with its name_escaping
 // set.
 func escapingNames(configuration, escaping string) string {
@@ -119,6 +122,11 @@ func httpSchemaKeys() []schemaKey {
 		// exporter took, and the schema but for a name written "".
 		{key: "collectors[].metrics[].name", of: "of a prometheus rule without an expression", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        name: up\n", 1), at: "        name: up\n", setting: "        name: %s\n", valid: "up", invalid: "bad-name", absentWas: taken},
 		{key: "collectors[].metrics[].expression", of: "of a prometheus rule without a name", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        expression: '^up$'\n", 1), at: "        expression: '^up$'\n", setting: "        expression: %s\n", valid: `"^up$"`, invalid: `"  "`, invalidWas: taken, absentWas: taken, emptyWas: taken},
+		// The keys request.pagination requires: written "", each is as
+		// missing as left out, to both, and items of blanks alone, which
+		// names no array, both refuse.
+		{key: "collectors[].request.pagination.type", document: paginatedCollector, at: "        type: page\n", setting: "        type: %s\n", valid: "offset", invalid: "pages"},
+		{key: "collectors[].request.pagination.items", document: paginatedCollector, at: "        items: .items\n", setting: "        items: %s\n", valid: ".data.results", invalid: `"  "`, booleanAlone: `request.pagination.items "true" is not a path`, numberAlone: `request.pagination.items "1" is not a path`},
 		// Optional, with allowed values or a pattern: "" is the default.
 		{key: "collectors[].metrics_prefix", document: jqCollector, at: collector, setting: "    metrics_prefix: %s\n", valid: "grafana", invalid: "grafana_", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].name_escaping", document: jqCollector, at: collector, setting: "    name_escaping: %s\n", valid: "underscores", invalid: "escape", absent: true, empty: true, emptyWas: refused},
@@ -167,6 +175,13 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.accept_status[]", of: "in octal", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "with an underscore", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "collectors[].request.retry.statuses[]", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "503", invalid: "600", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "written with a point", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "with an exponent", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "in hex", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "0x1F7", invalid: "0x258", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "in octal", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "with an underscore", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
 		{key: "collectors[].request.allowed_targets[]", document: jqCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.denied_targets[]", document: jqCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
@@ -228,12 +243,53 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].request.accept_status[]", of: "in octal", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "targets[].request.accept_status[]", of: "with an underscore", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "targets[].request.accept_status[]", of: "with a sign and leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "targets[].request.retry.statuses[]", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "503", invalid: "600", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "written with a point", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "with an exponent", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "in hex", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "0x1F7", invalid: "0x258", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "in octal", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "with an underscore", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "with a sign and leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
 		{key: "targets[].params{}", file: inTargetFile, document: oneTarget, at: target, setting: "    params: {%s: one}\n", valid: "param_id", invalid: "tenant", absent: true},
 		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken, numberAlone: `has invalid label name "1"`},
 		{key: "interval", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "30s", invalid: "soon", duration: true, zero: "interval is required"},
 		{key: "targets[].interval", file: inTargetFile, document: oneTarget, at: target, setting: "    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "targets[].request.timeout", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "targets[].request.retry.backoff", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        backoff: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+	}
+	// request.login, a collector's and a static target's: its type is
+	// required; a token_header or token_cookie stands for the token, one
+	// of which is required; the rest are optional, an enum's or a
+	// pattern's "" the key left out.
+	login := func(prefix, document, at, indent string) []schemaKey {
+		logged := func(lines ...string) string {
+			var block strings.Builder
+			for _, line := range lines {
+				block.WriteString(indent)
+				block.WriteString(line)
+				block.WriteByte('\n')
+			}
+			return strings.Replace(document, at, block.String(), 1)
+		}
+		json := logged("login:", "  type: json", "  url: /login", "  token: .t", "  field_files: {password: /p}", "  # login")
+		oauth2 := logged("login:", "  type: oauth2", "  url: https://idp.example/token", "  client_id: x", "  client_secret_file: /s", "  # login")
+		in := func(text string) string { return indent + "  " + text }
+		mark := in("# login\n")
+		return []schemaKey{
+			{key: prefix + ".login.type", document: json, at: in("type: json\n"), setting: in("type: %s\n"), valid: "json", invalid: "form"},
+			{key: prefix + ".login.token_header", document: json, at: in("token: .t\n"), setting: in("token_header: %s\n"), valid: "X-Subject-Token", invalid: `"X Token"`},
+			{key: prefix + ".login.token_cookie", document: json, at: in("token: .t\n"), setting: in("token_cookie: %s\n"), valid: "JSESSIONID", invalid: `"S ID"`},
+			{key: prefix + ".login.header", document: json, at: mark, setting: in("header: %s\n"), valid: "X-Auth-Token", invalid: `"X Token"`, absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.ttl", document: json, at: mark, setting: in("ttl: %s\n"), valid: "15m", invalid: "soon", absent: true, duration: true},
+			{key: prefix + ".login.auth_style", document: oauth2, at: mark, setting: in("auth_style: %s\n"), valid: "params", invalid: "auto", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.scopes[]", document: oauth2, at: mark, setting: in("scopes: [%s]\n"), valid: "metrics", invalid: `"a b"`, absent: true},
+			{key: prefix + ".login.endpoint_params{}", document: oauth2, at: mark, setting: in("endpoint_params: {%s: x}\n"), valid: "audience", invalid: "grant_type", absent: true},
+		}
+	}
+	keys = append(keys, login("collectors[].request", jqCollector, request, "      ")...)
+	for _, row := range login("targets[].request", strings.Replace(oneTarget, target, "    request:\n      # target request\n", 1), "      # target request\n", "      ") {
+		row.file = inTargetFile
+		keys = append(keys, row)
 	}
 	for i := range keys {
 		if keys[i].file == inTargetFile {

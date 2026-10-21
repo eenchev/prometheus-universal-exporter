@@ -80,7 +80,14 @@ the target's scrape read from its file
 A target's own credential is sent instead of the collector's, whose
 `bearer_token_file` or `basic_auth_file` is then not read for that target: a
 collector's credential file that is missing fails only the targets that
-would have sent it.
+would have sent it. An `http` or `graphite` target may also set its own
+[`login`](AUTHENTICATION.md#logging-in-to-a-target), checked as a
+collector's is, which replaces the collector's for that target, and the
+collector's credential with it when both are sent in `Authorization`; a
+target that sets its own credential in the header the collector's login
+sends its token in makes no login. A target's `login` is part of the key
+its answers are cached under, so targets that log in differently share no
+answer.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the
@@ -218,6 +225,15 @@ A target may also set `shard_key`, which the exporter ignores: it is for the
 the target's name to choose the replica that scrapes the target, so targets
 that share a key share a replica.
 
+The exporter discovers no targets: a file with the allocator's
+`discovered_targets` key ([Discovering targets](ALLOCATOR.md#discovering-targets))
+is refused, naming the allocator, since the exporter alone would scrape none
+of what it describes. The allocator writes each discovered target out as a
+target of its own before it hands a replica its share. The file's schema,
+`configs/static-targets.schema.json`, refuses the key too; the allocator's
+file has a schema of its own that takes it,
+[`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json).
+
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
 reports whether each would load, including whether every target names a
@@ -293,7 +309,12 @@ scrapes that start after it.
 Retries come from the collector's `request.retry`, and each key a target's own
 `request.retry` sets replaces the collector's, as the `retry_attempts` and
 `retry_backoff` probe parameters each replace one: a target setting only
-`attempts: 3` keeps the collector's `backoff` and `non_idempotent`. Scrapes go through the same fetch, decode and
+`attempts: 3` keeps the collector's `backoff` and `non_idempotent`. An
+`http` or `graphite` target's `retry.statuses` replaces the collector's list,
+or the default set, whole, as the collector's own replaces the default
+([Retries](REQUESTS.md#retries)); an entry that the `accept_status` in force
+for the target, its own or else the collector's, accepts whole is refused,
+since it could never be retried. Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A static target scrape and an identical `/probe` request share cache
@@ -470,11 +491,11 @@ ServiceMonitor or PodMonitor that does this — see the
 
 ## Debugging a static target
 
-With `--web.enable-probe-debug` (the chart's `server.probeDebug`),
+With `--web.debug=full` (the chart's `server.debug: full`),
 `/static-targets?debug=<name>` scrapes the target of that name once, as its
 schedule would — with its own request settings and credential, within its
 interval — and answers with the same plain-text report as a
-[debug probe](CONFIGURATION.md#debugging-a-probe): the requests, the response,
+[debug probe](CONFIGURATION.md#debug-probes): the requests, the response,
 each stage, the logs, and the series the scrape would have published, with
 the target's labels and `static_target`, and whether `http_exporter_target_up`
 would have been `1` or `0`. The report is bounded as a debug probe's is: a
@@ -487,11 +508,13 @@ curl 'http://exporter:8080/static-targets?debug=legacy_eu'
 ```
 
 A debug scrape publishes nothing: the endpoint keeps serving the target's
-last scheduled result, and nothing is counted in the self-metrics or exported
-over OTLP. It skips the response cache like a debug probe, but waits for a
+last scheduled result, and nothing is counted in the self-metrics but
+`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, but waits for a
 slot of the collector's `max_concurrent_probes` as the scrape would. A name no
 target in force has is answered `404`; `debug` takes one name and cannot be
-combined with `targets` (`400`); without the flag it is `403`.
+combined with `targets` (`400`); below `--web.debug=full` it is `403`. The
+[debug page](CONFIGURATION.md#the-debug-page) makes the same scrape, and can
+run another collector on what it fetched.
 
 ## Exporting over OTLP
 

@@ -39,7 +39,7 @@ func TestOnlyTheBuildsWithASQLDriverLinkIt(t *testing.T) {
 		optIn = append(optIn, modules...)
 	}
 	everyDriver := append(slices.Clone(sqlDefaultModules), optIn...)
-	for _, types := range []string{"graphite", "grpc", "http", "localfile", "sshfile", "graphite,grpc,http,localfile,sshfile"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "localfile", "sshfile", "tlscert", "dns,graphite,grpc,http,localfile,sshfile,tlscert"} {
 		if found := linksAny(linkedPackages(t, types), everyDriver); len(found) > 0 {
 			t.Errorf("REQUEST_TYPES=%s links %s, which only a build with the sql type may", types, strings.Join(found, ", "))
 		}
@@ -145,13 +145,17 @@ func TestCILintsTheBuildWithEveryOptInSQLDriver(t *testing.T) {
 
 // The tests that compare the committed configuration and collector file
 // schemas with the ones the code generates run in the build make schemas
-// generates them in, with the sql type's default drivers alone: a build
-// with an opt-in driver generates a schema that names it, as its loader
-// takes it, which the agreement tests hold it to (builtSchema). So the
-// constraint of their file leaves out the tag of every opt-in driver of the
-// tree, and a driver added to the tree is left out there too.
+// generates them in, without the opt-in request types and with the sql
+// type's default drivers alone: a build with an opt-in type or driver
+// generates a schema that names it, as its loader takes it, which the
+// agreement tests hold it to (builtSchema). So the constraint of their file
+// leaves out the tag of every opt-in type and driver of the tree, and one
+// added to the tree is left out there too.
 func TestTheCommittedSchemaComparisonsRunInTheDefaultBuild(t *testing.T) {
 	terms := []string{"//go:build !select_request_types"}
+	for _, name := range optInRequestTypes(t) {
+		terms = append(terms, "!request_type_"+name)
+	}
 	for _, driver := range slices.Sorted(maps.Keys(sqlOptInModules)) {
 		terms = append(terms, "!sql_driver_"+driver)
 	}

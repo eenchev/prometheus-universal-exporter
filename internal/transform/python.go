@@ -730,7 +730,7 @@ func (t *ScriptTimer) Seconds() (float64, bool) {
 }
 
 // pythonScriptData is what a script gets as data, by decoder: the parsed
-// document of JSON, YAML and graphite; CSV rows, mappings by header or lists
+// document of JSON, YAML, graphite, NDJSON, logfmt, TOML and INI; CSV rows, mappings by header or lists
 // without one; the text of text, HTML and XML; and, for Prometheus
 // exposition, {"metrics": [...]}, each series a mapping of its name, type,
 // help, labels and value — or a histogram's buckets, sum and count, a

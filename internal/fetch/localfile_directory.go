@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_localfile || request_type_sshfile
+//go:build !select_request_types || request_type_localfile || request_type_s3file || request_type_sshfile
 
 package fetch
 
@@ -51,7 +51,8 @@ import (
 //
 // An sshfile collector with request.files reads a directory on a remote host
 // by the same code, through an SFTP session instead of an os.Root
-// (readSourceDirectory, fileSource), so this file carries both types' build
+// (readSourceDirectory, fileSource), and an s3file collector the objects
+// under a prefix of a bucket, so this file carries the three types' build
 // constraint.
 
 const (

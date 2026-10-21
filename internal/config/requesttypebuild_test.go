@@ -27,7 +27,7 @@ func TestARequestTypeLeftOutOfTheBuildIsNamedAsSuch(t *testing.T) {
 	if err == nil {
 		t.Fatal("a type missing from the build must be rejected")
 	}
-	for _, want := range []string{`request.type "http"`, "does not include", "built with: fixture", "request_type_http"} {
+	for _, want := range []string{`request.type "http"`, "does not include", "built with: ", "fixture", "request_type_http"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should mention %q", err, want)
 		}

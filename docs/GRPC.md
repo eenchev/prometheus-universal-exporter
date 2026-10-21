@@ -409,8 +409,8 @@ retry:
 Codes are named as gRPC names them, in any case; an unknown name, and `OK`,
 are refused when the configuration loads. `backoff`, and the bounds a probe's
 budget and a static target's interval put on retries, work as for `http`.
-`retry.non_idempotent` is `http`'s, and refused here; `retry.codes` is
-refused for every other type.
+`retry.non_idempotent` and `retry.statuses`, the HTTP statuses retried, are
+`http`'s, and refused here; `retry.codes` is refused for every other type.
 
 A status that says something rather than that the call failed — `NOT_FOUND`
 for a queue not created yet — can be made an answer with `accept_codes`:

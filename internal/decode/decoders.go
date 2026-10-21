@@ -20,7 +20,9 @@ import (
 )
 
 // Decoded is a response decoded for a transform. Kind names the decoder, and
-// Data holds what it produced: normalized JSON or YAML values, CSV rows, an
+// Data holds what it produced: normalized JSON or YAML values, the same
+// values of NDJSON, logfmt, TOML and INI (ndjson.go, logfmt.go, toml.go,
+// ini.go), CSV rows, an
 // *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
 // Graphite series document (graphite.go), or the body as a string. Raw is the body the decoder read.
 type Decoded struct {
@@ -88,6 +90,10 @@ func detectFormatKeeping(r *fetch.HTTPResponse) (string, *sniffedJSON) {
 		return "prometheus", nil
 	case ct == fetch.GraphiteContentType:
 		return "graphite", nil
+	case ct == "application/x-ndjson" || ct == "application/jsonl":
+		return "ndjson", nil
+	case ct == "application/toml":
+		return "toml", nil
 	}
 	b := bytes.TrimSpace(r.Body)
 	// JSON first: a JSON document may hold "# HELP " in a string, while
@@ -231,6 +237,30 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		return &Decoded{Kind: kind, Data: string(r.Body), Raw: r.Body}, nil
 	case "graphite":
 		return decodeGraphite(r, c)
+	case "ndjson":
+		v, err := decodeNDJSON(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("NDJSON decode: %w", err)
+		}
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
+	case "logfmt":
+		v, err := decodeLogfmt(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("logfmt decode: %w", err)
+		}
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
+	case "toml":
+		v, err := decodeTOML(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("TOML decode: %w", err)
+		}
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
+	case "ini":
+		v, err := decodeINI(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("INI decode: %w", err)
+		}
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
 	default:
 		return nil, fmt.Errorf("unsupported decoder %q", kind)
 	}

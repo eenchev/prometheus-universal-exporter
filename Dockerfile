@@ -9,8 +9,11 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 # REQUEST_TYPES selects the request types built in, as a comma-separated list
-# such as "http". Empty, the default, builds every type.
+# such as "http". Empty, the default, builds every type but the opt-in ones.
 ARG REQUEST_TYPES
+# OPT_IN_REQUEST_TYPES adds the opt-in request types, which the published
+# image leaves out, as a comma-separated list such as "s3file".
+ARG OPT_IN_REQUEST_TYPES
 # SQL_DRIVERS adds the sql request type's opt-in database drivers, as a
 # comma-separated list such as "oracle,snowflake". Empty, the default, the
 # type has its built-in mysql, postgres and sqlserver drivers alone.
@@ -30,7 +33,7 @@ RUN go mod download
 
 COPY . .
 
-RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}")" || exit 1; \
+RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}" "${OPT_IN_REQUEST_TYPES}")" || exit 1; \
     CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \

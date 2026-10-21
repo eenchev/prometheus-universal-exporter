@@ -168,7 +168,8 @@ func TestChartExpandsTheAllocatorsStaticTargetsOnTheExporterPods(t *testing.T) {
 // A probe job's keys are the allocator's: it decodes the probe targets file
 // strictly, so the values schema and the templates take exactly the yaml keys
 // of allocator.ProbeJob, and the schema requires what the allocator refuses
-// to start without, the name, the collector and at least one target.
+// to start without, the name, the collector and at least one target or one
+// discovery source.
 func TestChartProbeJobKeysAreTheAllocatorsKeys(t *testing.T) {
 	var want []string
 	job := reflect.TypeFor[allocator.ProbeJob]()
@@ -198,12 +199,27 @@ func TestChartProbeJobKeysAreTheAllocatorsKeys(t *testing.T) {
 		}
 	}
 	slices.Sort(required)
-	if !slices.Equal(required, []string{"collector", "name", "targets"}) {
-		t.Errorf("values.schema.json's probe job requires %v, want collector, name and targets", required)
+	if !slices.Equal(required, []string{"collector", "name"}) {
+		t.Errorf("values.schema.json's probe job requires %v, want collector and name", required)
 	}
-	targets, _ := properties["targets"].(map[string]any)
-	if targets["minItems"] != float64(1) {
-		t.Errorf("values.schema.json's probe job takes an empty targets list (minItems %v), which the allocator refuses", targets["minItems"])
+	// And at least one target or one discovery source, either of which the
+	// allocator takes.
+	var either []string
+	alternatives, _ := items["anyOf"].([]any)
+	for _, alternative := range alternatives {
+		a, _ := alternative.(map[string]any)
+		list, _ := a["required"].([]any)
+		props, _ := a["properties"].(map[string]any)
+		if len(list) == 1 {
+			key, _ := list[0].(string)
+			if bound, _ := props[key].(map[string]any); bound["minItems"] == float64(1) {
+				either = append(either, key)
+			}
+		}
+	}
+	slices.Sort(either)
+	if !slices.Equal(either, []string{"discovery", "targets"}) {
+		t.Errorf("values.schema.json's probe job needs one of %v not empty, want targets or discovery, without which the allocator refuses it", either)
 	}
 
 	match := regexp.MustCompile(`has \$key \(list((?: "[a-z_]+")+)\)`).FindStringSubmatch(readChartFile(t, "templates/_helpers.tpl"))

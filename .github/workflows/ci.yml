@@ -199,6 +199,15 @@ jobs:
           version: v2.14.0
           args: --build-tags sql_driver_oracle,sql_driver_clickhouse,sql_driver_snowflake,minicore_disabled,sql_driver_vertica
         if: steps.changes.outputs.go == 'true'
+      # Nor are the opt-in request types beside the default build's: lint
+      # the build with all of them, as make lint-opt-in-types does. The tags
+      # are what tools/request-type-tags.sh prints for them; a test keeps the
+      # two in step.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --build-tags request_type_s3file
+        if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.
       - name: gopls check
@@ -223,7 +232,7 @@ jobs:
       # its own too, so code one type needs cannot quietly depend on another.
       - name: Build with each request type on its own
         run: |
-          for type in graphite grpc http localfile sql sshfile; do
+          for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...
@@ -236,6 +245,16 @@ jobs:
         run: |
           tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
           tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$tags" ./internal/fetch/
+        if: steps.changes.outputs.go == 'true'
+      # The opt-in request types are compiled beside the default build's by
+      # no build above, as a build with OPT_IN_REQUEST_TYPES has them: vet,
+      # build and test that build too, the repository's checks among the
+      # tests, whose rows of an opt-in type's schema keys and examples of
+      # its documentation run in a build with it.
+      - name: Build and test with every opt-in request type
+        run: |
+          tags="$(sh tools/request-type-tags.sh '' '' s3file)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' '' s3file)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
         if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter
         if: steps.changes.outputs.chart == 'true'
@@ -409,6 +428,22 @@ jobs:
           fi
           if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]' >/dev/null 2>&1; then
             echo "helm template accepted a probe monitor beside the allocator" >&2
+            exit 1
+          fi
+      - name: Render autoscaling on the exporter's own metrics
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # The exporter's own load and, with the allocator, the static
+          # targets per pod, as Pods metrics; the second without the allocator
+          # is rejected.
+          out="$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set autoscaling.enabled=true --set autoscaling.targetBusy=2 --set autoscaling.targetStaticTargetsPerPod=40)"
+          echo "$out" | grep -q 'name: "http_exporter_busy"'
+          echo "$out" | grep -q 'name: "http_exporter_static_targets"'
+          echo "$out" | grep -q 'averageValue: "40"'
+          echo "$out" | python3 tools/check-manifests.py
+          if helm template test charts/prometheus-universal-exporter --set autoscaling.enabled=true --set autoscaling.targetStaticTargetsPerPod=40 >/dev/null 2>&1; then
+            echo "helm template accepted autoscaling.targetStaticTargetsPerPod without the allocator" >&2
             exit 1
           fi
       - name: Render a configuration file whose first line is indented
@@ -746,12 +781,15 @@ jobs:
       fail-fast: false
       matrix:
         type:
+          - dns
           - graphite
           - grpc
           - http
           - localfile
+          - s3file
           - sql
           - sshfile
+          - tlscert
     env:
       STRICT_OPENMETRICS_PARSER: required
     steps:

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -28,20 +29,22 @@ import (
 // requests sent, the response, each stage and how long it took, the series
 // each metric got and the rules that carried on without theirs, what was
 // logged, and what a probe would have answered. It is for finding out why a
-// collector does not give what it should, from a browser or curl.
+// collector does not give what it should, from a browser or curl. The debug
+// page's runs (debugpage.go) are the same trip, made by the same function
+// (runDebug), and answered as JSON.
 //
-// It shows a target's response, so it answers only with
-// --web.enable-probe-debug, and is otherwise refused 403. The target policy,
-// the trip limits and web.basic_auth apply as to any probe. A debug probe
-// always goes to the target, alone, and leaves nothing behind: it neither
-// reads nor fills the response cache, shares no trip with an identical probe,
-// records no self-metric, queues nothing for OTLP, and logs its failures to
-// its report rather than the exporter's log, where they would take part in
-// the failure log's reckoning of what is failing (failurelog.go). Its
-// scripts, though, run in the collector's Python workers, whose series count
-// what the workers did, a debug probe's runs among them (pythonstats.go). Its
-// report always answers 200, whatever the probe would have answered, which it
-// says.
+// It shows a target's response, so it answers only with --web.debug=full,
+// and is otherwise refused 403 (debuglevel.go). The target policy, the trip
+// limits and web.basic_auth apply as to any probe. A debug probe always goes
+// to the target, alone, and leaves nothing behind: it neither reads nor
+// fills the response cache, shares no trip with an identical probe, records
+// no self-metric but http_exporter_debug_runs_total, queues nothing for
+// OTLP, and logs its failures to its report rather than the exporter's log,
+// where they would take part in the failure log's reckoning of what is
+// failing (failurelog.go). Its scripts, though, run in the collector's
+// Python workers, whose series count what the workers did, a debug probe's
+// runs among them (pythonstats.go). Its report always answers 200, whatever
+// the probe would have answered, which it says.
 //
 // The trace rides in the trip's context (probeTraceFrom), so the stages of
 // collect, several frames down, record into it; a trip without one records
@@ -114,9 +117,6 @@ const (
 	debugHeaderValueLimit = 1 << 10
 	debugHeaderLimit      = 100
 )
-
-// SetProbeDebug enables debug probes, --web.enable-probe-debug.
-func (s *Server) SetProbeDebug(enabled bool) { s.probeDebug = enabled }
 
 // probeDebugRequested reads the debug parameter: absent or false is a
 // normal probe.
@@ -316,10 +316,15 @@ func (s *Server) tripDebug(ctx context.Context, msg string, attrs ...any) {
 	s.logger.Debug(msg, attrs...)
 }
 
-// debugProbe is what a debug probe needs, as probeHandler resolved it.
+// debugProbe is one run of the debug engine (runDebug): a debug probe, a
+// debug scrape of a static target or a run of the debug page, as its handler
+// resolved it.
 type debugProbe struct {
 	upstreamProbe
 	requestURL, method string
+	// kind is what asked for the run, which says how it is logged and
+	// counted (http_exporter_debug_runs_total).
+	kind debugKind
 	// staleKey is the key a probe's stale answer would come from, empty when
 	// the collector has none.
 	staleKey string
@@ -330,93 +335,181 @@ type debugProbe struct {
 	// which says whose the worker statistics are that the probe's scripts
 	// count in (pythonStatsSince).
 	generation uint64
+	// pasted is the response a run of the debug page decodes instead of
+	// fetching one: no request is made (collectJob.pasted).
+	pasted *fetch.HTTPResponse
+	// requester, when set, is the configured collector whose request block
+	// fetches the target while collector decodes and transforms what it
+	// fetched (collectJob.requester); nil when collector makes its own.
+	requester *model.Collector
+	// edited is set when collector is the debug page's own, read from the
+	// YAML it sent rather than taken from the configuration in force.
+	edited bool
+	// source, for a run of the debug page, says what the run read: a pasted
+	// response, a target or a static target's scrape. Empty for a debug
+	// probe or scrape.
+	source string
 }
 
 // whose is what a report is of, in its first line.
 func (p debugProbe) whose() string {
+	if p.kind == debugKindPage {
+		edited := ""
+		if p.edited {
+			edited = "edited "
+		}
+		return fmt.Sprintf("Debug run of %scollector %q, on %s", edited, p.collector.Name, p.source)
+	}
 	if p.static != nil {
 		return fmt.Sprintf("Debug scrape of static target %q, collector %q, target %s", p.static.Name, p.collector.Name, orNone(p.logTarget))
 	}
 	return fmt.Sprintf("Debug probe of collector %q, target %s", p.collector.Name, orNone(p.logTarget))
 }
 
-// serveDebugProbe makes the trip and answers with its report.
-func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debugProbe) {
-	c, name := p.collector, p.collector.Name
+// slotOf is the collector whose trip slot a run takes: the one that makes
+// the request. A pasted response is no trip to anything, and takes none.
+func (p debugProbe) slotOf() *model.Collector {
+	switch {
+	case p.pasted != nil:
+		return nil
+	case p.requester != nil:
+		return p.requester
+	}
+	return p.collector
+}
+
+// debugReport is what one run of the debug engine found: the run, the
+// trace of its trip, what a probe or the scrape would have answered and the
+// series it would have served. The text renderer (report) writes it for
+// /probe?debug=true and /static-targets?debug=<name>, and the JSON one
+// (debugAnswerOf) for the debug page.
+type debugReport struct {
+	probe   debugProbe
+	trace   *probeTrace
+	verdict string
+	answer  *model.MetricSet
+	// ok is set when the trip went through whole: every stage succeeded
+	// and none carried on.
+	ok   bool
+	took time.Duration
+}
+
+// text is the report as plain text.
+func (r *debugReport) text() []byte {
+	return r.trace.report(r.probe, r.verdict, r.answer, r.took)
+}
+
+// runDebug makes a run's trip, with its trace, and reports it. The caller
+// has resolved everything the run needs and checked it as /probe checks a
+// probe's. A probe or a page's fetch is answered at once when the collector
+// that makes the request is at its trip limit; a static target's scrape
+// waits for a slot within its budget, as the scrape itself would.
+func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	start := time.Now()
-	ctx, trace := newProbeTrace(r.Context())
-	var verdict string
-	var answer *model.MetricSet
+	ctx, trace := newProbeTrace(ctx)
 	if p.budget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.budget)
 		defer cancel()
 	}
-	// A probe is answered at once when its collector is at its limit; a
-	// static target's scrape waits for a slot within its interval, as the
-	// scrape itself would.
+	report := &debugReport{probe: p, trace: trace}
 	var full error
-	if p.static != nil {
-		full = s.trips.acquire(ctx, name, maxConcurrentProbes(c))
-	} else if limited := s.trips.tryAcquire(name, maxConcurrentProbes(c)); limited != nil {
-		full = errors.New(limited.message)
+	if slot := p.slotOf(); slot != nil {
+		if p.static != nil {
+			full = s.trips.acquire(ctx, slot.Name, maxConcurrentProbes(slot))
+		} else if limited := s.trips.tryAcquire(slot.Name, maxConcurrentProbes(slot)); limited != nil {
+			full = errors.New(limited.message)
+		}
 	}
 	if full != nil {
-		verdict = "503: " + full.Error() + "; this probe was not sent"
+		report.verdict = "503: " + full.Error() + "; this probe was not sent"
 		if p.static != nil {
-			verdict = "target up 0: " + full.Error() + "; the scrape was not sent"
+			report.verdict = "target up 0: " + full.Error() + "; the scrape was not sent"
 		}
 	} else {
-		log := collectLog{
-			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
-			attrs: []any{"collector", name, "target", p.logTarget},
-		}
-		if p.static != nil {
-			log = collectLog{
-				failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
-				attrs: []any{"target", p.static.Name, "collector", name, "address", p.logTarget},
-			}
-		}
-		verdict, answer = s.debugTrip(ctx, trace, p, log)
+		report.verdict, report.answer, report.ok = s.debugTrip(ctx, trace, p)
 	}
-	if p.static != nil {
-		s.logger.Info("static target debug report served", "static_target", p.static.Name, "collector", name)
-	} else {
-		s.logger.Info("probe debug report served", "collector", name, "target", p.logTarget)
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(trace.report(p, verdict, answer, time.Since(start)))
+	report.took = time.Since(start)
+	return report
 }
 
-// debugTrip makes a debug probe's trip, holding the slot serveDebugProbe
-// took for it, and says what it would have answered. The slot is given back
-// however the trip ends: a panic in a request type, a decoder or a transform
-// would otherwise keep it for good, and after max_concurrent_probes of them
-// every probe of the collector would be refused. The panic is recovered, as a
-// probe's is (probeFlights.run), and the report shows it.
-func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe, log collectLog) (verdict string, answer *model.MetricSet) {
-	defer s.trips.release(p.collector.Name)
+// serveDebugProbe makes the trip of a debug probe or a debug scrape, counts
+// it and answers with its report as text.
+func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debugProbe) {
+	report := s.runDebug(r.Context(), p)
+	s.countDebugRun(p.kind, report.result())
+	if p.static != nil {
+		s.logger.Info("static target debug report served", "static_target", p.static.Name, "collector", p.collector.Name)
+	} else {
+		s.logger.Info("probe debug report served", "collector", p.collector.Name, "target", p.logTarget)
+	}
+	// The report holds what the target sent, its body included: a browser
+	// must show it as text and never sniff it for HTML.
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(report.text()) //nolint:gosec // G705: text/plain with nosniff, never rendered as HTML
+}
+
+// debugLog is how a run's failures are logged, to its report: as a probe's,
+// a static target's scrape's or a page run's.
+func debugLog(p debugProbe) collectLog {
+	switch {
+	case p.kind == debugKindPage:
+		return collectLog{
+			failed: "debug run failed", continuing: "debug run stage failed; continuing", recovery: "debug run recovered",
+			attrs: []any{"collector", p.collector.Name, "target", p.logTarget},
+		}
+	case p.static != nil:
+		return collectLog{
+			failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
+			attrs: []any{"target", p.static.Name, "collector", p.collector.Name, "address", p.logTarget},
+		}
+	}
+	return collectLog{
+		failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
+		attrs: []any{"collector", p.collector.Name, "target", p.logTarget},
+	}
+}
+
+// debugTrip makes a run's trip, holding the slot runDebug took for it, and
+// says what it would have answered and whether it went through whole. The
+// slot is given back however the trip ends: a panic in a request type, a
+// decoder or a transform would otherwise keep it for good, and after
+// max_concurrent_probes of them every probe of the collector would be
+// refused. The panic is recovered, as a probe's is (probeFlights.run), and
+// the report shows it.
+func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe) (verdict string, answer *model.MetricSet, ok bool) {
+	if slot := p.slotOf(); slot != nil {
+		defer s.trips.release(slot.Name)
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			stack := string(debug.Stack())
 			// The stack goes to the exporter's log, where a bug is reported
 			// from; the report says what happened.
 			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", panicText(recovered))
-			s.logger.Error("debug probe panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", panicText(recovered), "stack", stack)
-			verdict, answer = "500: probe failed: internal error: "+panicText(recovered), nil
+			s.logger.Error("debug "+p.kind.String()+" panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", panicText(recovered), "stack", stack)
+			verdict, answer, ok = "500: probe failed: internal error: "+panicText(recovered), nil, false
 			if p.static != nil {
 				verdict = "target up 0: the scrape failed: internal error: " + panicText(recovered)
 			}
 		}
 	}()
-	result := s.collect(ctx, collectJob{
+	job := collectJob{
 		collector: p.collector, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
-		scrape: p.static != nil, log: log,
-		python: s.pythonStatsSince(p.generation, p.collector),
-	})
-	return s.debugVerdict(result, p)
+		scrape: p.static != nil, log: debugLog(p),
+		pasted: p.pasted, requester: p.requester,
+	}
+	// An edited collector runs no Python, and is no collector of the
+	// configuration whose workers would count it.
+	if !p.edited {
+		job.python = s.pythonStatsSince(p.generation, p.collector)
+	}
+	result := s.collect(ctx, job)
+	verdict, answer = s.debugVerdict(result, p)
+	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted
 }
 
 // debugVerdict is what a probe would have answered, as probeTrip and
@@ -508,6 +601,26 @@ func (s *Server) staticDebugVerdict(result collected, p debugProbe) (string, *mo
 // a debug probe is. It publishes nothing: the endpoint keeps serving the
 // target's last scheduled result.
 func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, name string) {
+	p, code, err := s.staticDebugProbe(name)
+	if err != nil {
+		// A credential file that cannot be read is the scrape's failure, as
+		// it is when the schedule scrapes; a name is the caller's mistake.
+		result := debugInvalid
+		if code >= http.StatusInternalServerError {
+			result = debugFailure
+		}
+		s.countDebugRun(debugKindStatic, result)
+		http.Error(w, err.Error(), code)
+		return
+	}
+	p.kind = debugKindStatic
+	s.serveDebugProbe(w, r, p)
+}
+
+// staticDebugProbe resolves a scrape of the static target named name, as its
+// schedule would make it, for a debug scrape or a debug page's run on it; it
+// says with which status to refuse a name it cannot.
+func (s *Server) staticDebugProbe(name string) (debugProbe, int, error) {
 	// The target and its collector are read together, as its scrape reads
 	// them, and with them the generation of the configuration they are in
 	// (followedInForce), which says below whose worker statistics the
@@ -519,17 +632,14 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 	cfg := followed.config
 	target, c := staticDebugTarget(followed, name)
 	if target == nil {
-		http.Error(w, fmt.Sprintf("no static target is named %q", name), http.StatusNotFound)
-		return
+		return debugProbe{}, http.StatusNotFound, fmt.Errorf("no static target is named %q", name)
 	}
 	if c == nil {
-		http.Error(w, fmt.Sprintf("static target %q references unknown collector %q", target.Name, target.Collector), http.StatusNotFound)
-		return
+		return debugProbe{}, http.StatusNotFound, fmt.Errorf("static target %q references unknown collector %q", target.Name, target.Collector)
 	}
 	headers, err := fetch.TargetHeaders(target)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("static target %q: %v", target.Name, err), http.StatusInternalServerError)
-		return
+		return debugProbe{}, http.StatusInternalServerError, fmt.Errorf("static target %q: %w", target.Name, err)
 	}
 	overrides := fetch.TargetOverrides(target)
 	p := debugProbe{
@@ -547,7 +657,7 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 	if model.UsesCache(c) {
 		p.staleKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(target), headers, targetOwnRequest(target)...)
 	}
-	s.serveDebugProbe(w, r, p)
+	return p, 0, nil
 }
 
 // staticDebugTarget is the static target of followed named name, the first
@@ -582,12 +692,19 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	c := p.collector
 	b.WriteString(p.whose())
 	b.WriteString("\n")
-	if p.static != nil {
+	switch {
+	case p.kind == debugKindPage && p.static != nil:
 		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
-		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric and exports nothing over OTLP.\n")
-	} else {
+		b.WriteString(debugPageRunLine)
+	case p.kind == debugKindPage:
 		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
-		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.\n")
+		b.WriteString(debugPageRunLine)
+	case p.static != nil:
+		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
+		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.\n")
+	default:
+		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
+		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.\n")
 	}
 
 	b.WriteString("\nRequests\n")
@@ -601,8 +718,14 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	}
 	for i, req := range requests {
 		via := ""
+		if req.Page > 0 {
+			via = fmt.Sprintf(" (page %d)", req.Page)
+		}
 		if req.Redirect {
-			via = " (redirect)"
+			via += " (redirect)"
+		}
+		if req.Login {
+			via += " (login)"
 		}
 		outcome := req.Outcome
 		if outcome == "" {
@@ -615,6 +738,14 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		if len(req.Withheld) > 0 {
 			// The names only: the values were not sent, and are not shown.
 			fmt.Fprintf(&b, "     not sent: %s — %s\n", strings.Join(req.Withheld, ", "), req.WithheldWhy)
+		}
+	}
+	// Which answers are retried is the setting of the collector that made
+	// the requests, or a static target's, rather than anything the requests
+	// show: it says why an answer was or was not asked for again.
+	if requester := p.slotOf(); requester != nil && len(requests) > 0 {
+		if retries := fetch.RetriesOf(requester, p.overrides); retries != "" {
+			fmt.Fprintf(&b, "  Retries: %s.\n", retries)
 		}
 	}
 
@@ -775,29 +906,54 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 	}
+	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
+		b.WriteString(pagesLine(p))
+	}
 	if len(r.Headers) > 0 {
 		b.WriteString("  Headers\n")
 		writeHeaders(b, r.Headers, "    ")
 	}
 	if d := r.Directory; d != nil {
-		fmt.Fprintf(b, "  Directory %s, %d files read\n", d.Path, len(d.Files))
-		for _, f := range d.Files {
-			if f.Err != nil {
-				fmt.Fprintf(b, "    %s: %v\n", f.Name, f.Err)
-				continue
-			}
-			size := 0
-			if f.Response != nil {
-				size = len(f.Response.Body)
-			}
-			fmt.Fprintf(b, "    %s: %d bytes\n", f.Name, size)
-		}
-		for _, name := range d.Skipped {
-			fmt.Fprintf(b, "    %s: skipped, over request.max_files\n", name)
-		}
+		writeDirectory(b, d)
 		return false
 	}
 	return true
+}
+
+// writeDirectory renders a directory read as its files.
+func writeDirectory(b io.Writer, d *fetch.DirectoryRead) {
+	fmt.Fprintf(b, "  Directory %s, %d files read\n", d.Path, len(d.Files))
+	for _, f := range d.Files {
+		if f.Err != nil {
+			fmt.Fprintf(b, "    %s: %v\n", f.Name, f.Err)
+			continue
+		}
+		size := 0
+		if f.Response != nil {
+			size = len(f.Response.Body)
+		}
+		fmt.Fprintf(b, "    %s: %d bytes\n", f.Name, size)
+	}
+	for _, name := range d.Skipped {
+		fmt.Fprintf(b, "    %s: skipped, over request.max_files\n", name)
+	}
+}
+
+// pagesLine says what of request.pagination's pages the response is: all
+// of them merged, with the status and headers of the first, or the page
+// whose status failed the trip; and that the pages stopped at max_pages.
+func pagesLine(p *fetch.PagesRead) string {
+	line := fmt.Sprintf("  Page %d of request.pagination, whose status the collector does not accept", len(p.Pages))
+	if p.Merged {
+		line = fmt.Sprintf("  %d pages of request.pagination merged into one document; the status and headers are the first page's", len(p.Pages))
+		if len(p.Pages) == 1 {
+			line = "  1 page of request.pagination"
+		}
+	}
+	if p.MoreLeft {
+		line += ", stopped at request.pagination.max_pages with another page to come"
+	}
+	return line + "\n"
 }
 
 // writeBody renders a body, up to debugBodyLimit, text only. The report is
@@ -808,33 +964,53 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 // which the report says, since the rules read the converted text and not the
 // bytes shown.
 func writeBody(b *bytes.Buffer, body []byte, convertedFrom string) {
-	shown, note := body, ""
-	if convertedFrom != "" {
-		if text, err := decode.TextFrom(body, convertedFrom); err == nil {
-			shown, note = text, " in "+convertedFrom+", converted to UTF-8 before decoding and shown here as UTF-8"
-		}
-	}
-	cut := len(shown) > debugBodyLimit
-	if cut {
-		shown = shown[:debugBodyLimit]
-		// A character cut in two at the limit is dropped, not shown broken.
-		for i := 0; i < utf8.UTFMax && len(shown) > 0 && !utf8.Valid(shown); i++ {
-			shown = shown[:len(shown)-1]
-		}
-	}
-	if !utf8.Valid(shown) {
+	shown := shownBody(body, convertedFrom)
+	if !shown.text {
 		fmt.Fprintf(b, "  Body: %d bytes, not text\n", len(body))
 		return
 	}
+	note := ""
+	if shown.convertedFrom != "" {
+		note = " in " + shown.convertedFrom + ", converted to UTF-8 before decoding and shown here as UTF-8"
+	}
 	fmt.Fprintf(b, "  Body: %d bytes%s\n", len(body), note)
-	for _, line := range strings.Split(strings.TrimRight(string(shown), "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(string(shown.shown), "\n"), "\n") {
 		b.WriteString("    ")
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	if cut {
+	if shown.cut {
 		fmt.Fprintf(b, "    ... cut at %d bytes\n", debugBodyLimit)
 	}
+}
+
+// debugBody is a body as a report shows it: up to debugBodyLimit of it,
+// cut said, and when it was converted from another encoding before it was
+// decoded, as the same text in UTF-8.
+type debugBody struct {
+	shown         []byte
+	text, cut     bool
+	convertedFrom string
+}
+
+// shownBody is body as a report shows it (debugBody).
+func shownBody(body []byte, convertedFrom string) debugBody {
+	out := debugBody{shown: body}
+	if convertedFrom != "" {
+		if text, err := decode.TextFrom(body, convertedFrom); err == nil {
+			out.shown, out.convertedFrom = text, convertedFrom
+		}
+	}
+	out.cut = len(out.shown) > debugBodyLimit
+	if out.cut {
+		out.shown = out.shown[:debugBodyLimit]
+		// A character cut in two at the limit is dropped, not shown broken.
+		for i := 0; i < utf8.UTFMax && len(out.shown) > 0 && !utf8.Valid(out.shown); i++ {
+			out.shown = out.shown[:len(out.shown)-1]
+		}
+	}
+	out.text = utf8.Valid(out.shown)
+	return out
 }
 
 // writeTransform renders the series each metric got, the rules that got
@@ -915,22 +1091,33 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 // first debugHeaderLimit of them, each value by no more than its first
 // debugHeaderValueLimit bytes, and how many there are when there are more.
 func writeHeaders(b *bytes.Buffer, h http.Header, indent string) {
+	for _, line := range headerLines(h) {
+		b.WriteString(indent)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+}
+
+// headerLines are headers as a report lists them, a line each (writeHeaders).
+func headerLines(h http.Header) []string {
 	names := make([]string, 0, len(h))
 	for name := range h {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	var lines []string
 	headers := 0
 	for _, name := range names {
 		for _, value := range h[name] {
 			if headers++; headers <= debugHeaderLimit {
-				fmt.Fprintf(b, "%s%s: %s\n", indent, name, shownStart(fetch.RedactHeaderValue(name, value), debugHeaderValueLimit))
+				lines = append(lines, name+": "+shownStart(fetch.RedactHeaderValue(name, value), debugHeaderValueLimit))
 			}
 		}
 	}
 	if headers > debugHeaderLimit {
-		fmt.Fprintf(b, "%s... (%d headers)\n", indent, headers)
+		lines = append(lines, fmt.Sprintf("... (%d headers)", headers))
 	}
+	return lines
 }
 
 // orNone is s, or "(none)" when it is empty.
@@ -940,6 +1127,3 @@ func orNone(s string) string {
 	}
 	return s
 }
-
-// errProbeDebugDisabled answers a debug probe without --web.enable-probe-debug.
-var errProbeDebugDisabled = errors.New("debug reports are not enabled; start the exporter with --web.enable-probe-debug to allow /probe?debug=true and /static-targets?debug=<name> (the chart's server.probeDebug)")

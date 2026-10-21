@@ -207,14 +207,18 @@ func textOnlyKeys(t reflect.Type) map[string][]string {
 // The keys the load holds to text alone are the ones the schemas hold to
 // it, read from the schemas and not listed in the code: a key with allowed
 // values or a pattern, which the schemas make text alone, and the few they
-// say are text themselves. They are named here, so that a key that comes to
+// say are text themselves. One collector on its own, as the debug page
+// reads it (ParseCollector), is held to what an entry of the collectors list
+// is. They are named here, so that a key that comes to
 // be among them, or to leave them, is a change someone has seen: a number
 // or a boolean written there was taken as its text, and is refused.
 func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	collector := []string{
 		"decoder.type", "error_handling.on_decode_error", "error_handling.on_fetch_error", "error_handling.on_transform_error",
 		"metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
-		"request.accept_codes[]", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.forward_headers[]", "request.method", "request.redirect_trusted_hosts[]", "request.retry.codes[]", "request.rpc", "request.type",
+		"request.accept_codes[]", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]",
+		"request.login.auth_style", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type",
+		"request.method", "request.pagination.type", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.retry.codes[]", "request.rpc", "request.transport", "request.type",
 		"response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string
@@ -225,9 +229,12 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		file reflect.Type
 		want []string
 	}{
-		"the configuration":      {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]"}, ofCollectors...)},
-		"a collector file":       {reflect.TypeOf(collectorFile{}), ofCollectors},
-		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check", "targets[].request.method", "targets[].request.retry.codes[]"}},
+		"the configuration": {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]"}, ofCollectors...)},
+		"a collector file":  {reflect.TypeOf(collectorFile{}), ofCollectors},
+		"one collector":     {reflect.TypeOf(model.Collector{}), slices.Clone(collector)},
+		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check",
+			"targets[].request.login.auth_style", "targets[].request.login.header", "targets[].request.login.scopes[]", "targets[].request.login.token_cookie", "targets[].request.login.token_header", "targets[].request.login.type",
+			"targets[].request.method", "targets[].request.retry.codes[]"}},
 	} {
 		got := model.SortedKeys(textOnlyKeys(tc.file))
 		slices.Sort(tc.want)
@@ -235,7 +242,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 			t.Errorf("%s holds to text alone\n%q\nwant\n%q", name, got, tc.want)
 		}
 	}
-	if got := textOnlyKeys(reflect.TypeOf(model.Collector{})); len(got) != 0 {
+	if got := textOnlyKeys(reflect.TypeOf(model.MetricRule{})); len(got) != 0 {
 		t.Errorf("a type that is no file's holds %v to text", got)
 	}
 }

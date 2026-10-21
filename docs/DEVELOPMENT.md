@@ -9,13 +9,15 @@ make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
-make build      # bin/prometheus-universal-exporter, every request type; REQUEST_TYPES=http builds only those listed
+make build      # bin/prometheus-universal-exporter, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file adds s3file
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
+make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
 make ci         # what CI runs, one after another: fmt-check, lint, gopls-check, test, vet,
-                #   build-request-types, test-request-types and helm-test
+                #   build-request-types, test-request-types, the sql drivers' and
+                #   the opt-in request types' builds, and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
@@ -37,7 +39,7 @@ the ones above them in this list:
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile` and `sql`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go` and `sql`'s pools, rows and drivers in `sql*.go` behind their tags, and the file reading `localfile` and `sshfile` share in `filereads.go` and `localfile_directory.go`, behind the tags of both — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` and the opt-in `s3file`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
@@ -649,6 +651,34 @@ into a build in which nothing calls it is what the linter reports as unused
 when it is run with that build's tags
 (`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`).
 
+### Opt-in request types
+
+A type the default build leaves out, `s3file`, lives in its
+`internal/fetch/requesttype_<name>.go` under its own tag alone,
+
+```go
+//go:build request_type_s3file
+```
+
+as do the files only it needs (`s3source.go`) and its tests, so a build
+carries it only when its tag is given: `sh tools/request-type-tags.sh '' ''
+s3file`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
+default build's types, and `REQUEST_TYPES` may name it like any type. Shared
+code it uses names its tag beside the others' (`filereads.go`,
+`localfile_directory.go`). Each type built on its own includes it, in the
+loops of `make build-request-types` and `make test-request-types` and CI's;
+the build with every opt-in type beside the default build's is vetted,
+built, tested (`internal/fetch` and `test/repository`) and linted by `make
+build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,
+as CI does, and a test keeps their lists naming every opt-in type of the
+tree. The default build's tests know an opt-in type's request keys without
+the type (`optInRequestKeys`, `internal/fetch`), and its schema rows
+(`s3fileSchemaKeys`) are compiled in the default build, which checks that
+every constrained key of the schemas has a row, and compared with the
+exporter's verdicts against the schema the binary generates, in a build
+with the type (`built: true`), since the committed schemas, the default
+build's, have no such type.
+
 ### The sql request type
 
 The `sql` type's drivers each live in a file of their own,
@@ -760,8 +790,11 @@ final line end — and a test checks that each still is. A file added to
 [collector files](CONFIGURATION.md#collector-files) and
 `configs/static-targets.schema.json` for the
 [static target file](STATIC-TARGETS.md) are generated from the
-configuration structs. After adding or changing a key, regenerate all three, or
-the test suite fails:
+configuration structs, and the target allocator's
+`configs/allocator-static-targets.schema.json` and
+`configs/probe-targets.schema.json` from the structs it decodes, with their
+rules in `internal/allocator/schema.go`. After adding or changing a key,
+regenerate them all, or the test suite fails:
 
 ```sh
 make schemas
@@ -771,12 +804,15 @@ The committed files are the schemas of a build with every request type and
 the sql type's default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and
-one built with `SQL_DRIVERS` the opt-in drivers it carries, as its loader
-takes them, and a test in every build holds it to that. So the file of those
-comparisons, `test/repository/schema_fullbuild_test.go`, is built without
-`select_request_types` and without any `sql_driver_<name>` tag, a test
-keeping its constraint naming every opt-in driver of the tree; the rest of
-`test/repository` passes in the build with every opt-in driver too.
+one built with an opt-in type or with `SQL_DRIVERS` the opt-in types and
+drivers it carries, as its loader takes them, and a test in every build
+holds it to that. So the file of those comparisons,
+`test/repository/schema_fullbuild_test.go`, is built without
+`select_request_types` and without any `request_type_<name>` tag of an
+opt-in type or `sql_driver_<name>` tag, a test keeping its constraint naming
+every opt-in type and driver of the tree; the rest of `test/repository`
+passes in the build with every opt-in driver, and in the one with every
+opt-in type, too.
 
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
@@ -795,7 +831,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile` and `sql`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql` and `s3file`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so

@@ -54,7 +54,7 @@ func TestAPanickingDebugProbeGivesBackItsSlot(t *testing.T) {
 	cfg := &model.Config{Collectors: []model.Collector{broken}}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "broken", Collector: "broken", Target: "panics://data"}}}
 	server := newStaticServer(t, cfg, file)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 
 	for range 2 {
 		r := debugProbeGet(t, server, "collector=broken&debug=true&target=panics://data")

@@ -41,7 +41,7 @@ func TestAYAMLKeyOfAnySizeFailsTheProbeInAShortError(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	logs := &bytes.Buffer{}
 	server.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	// keyed is a document whose second key is the sequence of so many

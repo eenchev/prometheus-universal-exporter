@@ -205,6 +205,12 @@ func eachNoValueSite(doc *yaml.Node, t reflect.Type, visit func(noValueSite)) {
 				keyPath := joinSchemaPath(path, name)
 				if i, ok := written[name]; ok {
 					value := n.Content[i+1]
+					if value.Anchor != "" {
+						// A value an anchor names is read wherever
+						// its aliases stand too, which it would
+						// leave naming nothing.
+						continue
+					}
 					n.Content[i+1] = here()
 					visit(at(ofKey(name), kind, keyPath, name))
 					n.Content[i+1] = value

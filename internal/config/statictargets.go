@@ -29,6 +29,24 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	if err != nil {
 		return nil, err
 	}
+	return ParseStaticTargets(path, b)
+}
+
+// DiscoveredTargetsKey is the static target file's key for the targets the
+// target allocator discovers (cmd/pue-allocator). Only the allocator reads
+// it: it expands each entry into written targets before a replica is
+// handed its share, so a file the exporter reads never needs it.
+const DiscoveredTargetsKey = "discovered_targets"
+
+// ParseStaticTargets reads the text of a static target document, which
+// path names in messages. A document with discovered_targets is refused:
+// the exporter discovers nothing, and would otherwise scrape none of them
+// without a word.
+func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) {
+	var err error
+	if err = refuseDiscoveredTargets(b); err != nil {
+		return nil, err
+	}
 	if err = refuseNotScalarKeys(b); err != nil {
 		return nil, err
 	}
@@ -47,12 +65,42 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	return &f, nil
 }
 
+// refuseDiscoveredTargets refuses a document whose top level has
+// discovered_targets. A document that is no YAML mapping is left to the
+// decoder, which says what is wrong with it.
+func refuseDiscoveredTargets(b []byte) error {
+	var doc yaml.Node
+	_ = yaml.Unmarshal(b, &doc)
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == DiscoveredTargetsKey {
+			return fmt.Errorf("line %d: %s is read by the target allocator (pue-allocator --static-targets-file), which discovers the targets and hands each replica its share of them as written targets; the exporter discovers no targets, so list them under targets, or run the exporter with the allocator", root.Content[i].Line, DiscoveredTargetsKey)
+		}
+	}
+	return nil
+}
+
 // ValidateStaticTargets checks the document in isolation. ValidateStaticTargetsAgainst
 // applies the checks that need the exporter configuration.
 func ValidateStaticTargets(f *model.StaticTargetFile) error {
 	if len(f.Targets) == 0 {
 		return errors.New("targets must not be empty")
 	}
+	return validateStaticTargets(f)
+}
+
+// ValidateDiscoveringStaticTargets is ValidateStaticTargets for the target
+// allocator's static target file with discovered_targets, whose targets
+// may be empty: the discovered ones may be all it has, and none may have
+// been discovered yet.
+func ValidateDiscoveringStaticTargets(f *model.StaticTargetFile) error {
+	return validateStaticTargets(f)
+}
+
+func validateStaticTargets(f *model.StaticTargetFile) error {
 	// The file's interval is required: a target scraped on a default nobody
 	// wrote down is a scrape rate nobody chose.
 	switch {

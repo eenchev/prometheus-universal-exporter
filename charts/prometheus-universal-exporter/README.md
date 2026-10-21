@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* Decoders for JSON, YAML, XML, CSV, HTML, plain text and Prometheus exposition, with auto-detection
+* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
 * Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
 * Declared metrics with types, descriptions, explicit labels and per-metric error policy
@@ -531,6 +531,35 @@ extraVolumeMounts:
     readOnly: true
 ```
 
+## S3 object collectors
+
+An `s3file` collector reads objects from Amazon S3 or a store that speaks its API. The type is opt-in: the published image does not carry it, so build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=s3file`, push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+The collector's credentials need no mount of the chart's own. On EKS, give the pods the IAM role of their service account (IRSA), which the AWS SDK's default chain takes from the token and role EKS hands the pods, with nothing to rotate:
+
+```yaml
+image:
+  repository: registry.example.com/prometheus-universal-exporter-s3
+  tag: "1.4.0"
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/metrics-reader
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: textfiles
+          request:
+            type: s3file
+            root: /textfiles/prod
+            files: ["*.prom"]
+            region: eu-west-1
+          transform:
+            type: prometheus
+```
+
+and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+
 ## Common configuration
 
 ### Exporter flags
@@ -552,7 +581,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval`, a positive Go duration such as `60s` or `1m30s` | off / `60s` |
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
-| `server.probeDebug` | `--web.enable-probe-debug` | off |
+| `server.debug` | `--web.debug`: `off`, `edit` or `full` | off |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
@@ -595,7 +624,7 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 
 `server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
-`server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, a *Debug report* switch on each form of `/collectors`, and `/static-targets?debug=<name>` for one static target — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
+`server.debug` sets how far collectors can be debugged — see [Debugging collectors](../../docs/CONFIGURATION.md#debugging-collectors). `edit` enables `/debug`, a page where a collector written there, or a configured one, is run on a pasted response, showing each stage of the trip and the series a probe would serve, with nothing put in force and nothing fetched; a collector written on the page never runs Python or reads a file of the pod. `full` adds what shows a target's answer: fetching a target through a configured collector, or scraping a static target, on that page, `/probe?...&debug=true` and `/static-targets?debug=<name>`. Turn `full` on while a collector is being fixed, and off again. Empty and `off` render no flag; anything else fails rendering. `--web.debug` in `extraArgs` fails rendering too.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -732,7 +761,7 @@ priorityClassName: monitoring
 
 ### Autoscaling
 
-`autoscaling` renders an `autoscaling/v2` HorizontalPodAutoscaler, which then sets the Deployment's replica count itself; `replicaCount` is left out of the Deployment so an upgrade does not put it back. It scales on CPU utilization by default, measured against `resources.requests`; `targetMemoryUtilizationPercentage` and further `metrics` can be added, and `behavior` takes the scale-up and scale-down policies. `maxReplicas` below `minReplicas`, or nothing to scale on, fails rendering.
+`autoscaling` renders an `autoscaling/v2` HorizontalPodAutoscaler, which then sets the Deployment's replica count itself; `replicaCount` is left out of the Deployment so an upgrade does not put it back. It scales on CPU utilization by default, measured against `resources.requests`; `targetMemoryUtilizationPercentage`, the exporter's own load, and further `metrics` can be added, and `behavior` takes the scale-up and scale-down policies. `maxReplicas` below `minReplicas`, or nothing to scale on, fails rendering.
 
 ```yaml
 autoscaling:
@@ -744,7 +773,21 @@ autoscaling:
 
 Each replica keeps its own [response cache](../../docs/CONFIGURATION.md#response-caching) and shares only its own identical probes in flight, and the Service spreads probes across replicas. So as replicas are added, the cache answers a smaller share of probes and more of them reach the targets: with a 30s `ttl` and four replicas, a target probed every 15s may be asked up to four times per `ttl` instead of once, and a result kept for `stale_if_error` is only served by the replica that stored it. Where the cache is what spares a target, keep the replica count low, or give Prometheus's scrapes of one target a stable replica — a Service with `sessionAffinity: ClientIP` sends every probe from one Prometheus to one pod.
 
-Autoscaling suits a release that serves probes. It does not suit [static targets](#static-targets): every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
+CPU is a poor measure of an exporter that mostly waits on its targets. `targetBusy` scales on how busy the pods are instead: the average number of probes and static target scrapes in progress per pod, from the exporter's `http_exporter_probes_seconds_total` and `http_exporter_static_targets_scrape_seconds_total`, a number above 0 or a quantity such as `"1500m"`. With the [target allocator](#target-allocator), `targetStaticTargetsPerPod` scales on the static targets per pod, from `http_exporter_static_targets`, a whole number; without it every pod scrapes every static target, so their number per pod does not fall as pods are added, and setting it fails rendering. Each renders a `Pods` metric with an `AverageValue` target, named `busyMetric` (`http_exporter_busy`) and `staticTargetsMetric` (`http_exporter_static_targets`): a metrics adapter must serve them from Prometheus, which must scrape the self-metrics of every pod, as the [self-metrics monitor](#4-configure-prometheus) does. [Autoscaling](../../docs/SELF-METRICS.md#autoscaling) in the self-metrics documentation has the prometheus-adapter rules for the two names, and a KEDA ScaledObject doing the same without an adapter.
+
+```yaml
+allocator:
+  enabled: true
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: null
+  targetBusy: 3
+  targetStaticTargetsPerPod: 200
+```
+
+Autoscaling suits a release that serves probes, or one whose static targets the [target allocator](#target-allocator) splits over the pods. It does not suit [static targets](#static-targets) without it: every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
 
 `podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand, and so does any `minAvailable` that is every replica, as a count or as a percentage rounded up. `maxUnavailable: 0` is valid Kubernetes and is rendered as set, but it allows no voluntary eviction at all, so a drain of a node running the exporter waits for ever. The chart's notes warn about both: `maxUnavailable` of `0`, and `minAvailable` of `replicaCount` or more, or of `100%`.
 
@@ -943,7 +986,7 @@ extraArgs:
   - --some.new-flag=value
 ```
 
-`extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
+`extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. They mount into the exporter's pods; the [target allocator](#target-allocator)'s pods take `allocator.extraVolumes` and `allocator.extraVolumeMounts` instead. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
 
 Three mistakes are rejected while rendering, because each fails in a way that points somewhere other than the values file:
 
@@ -1091,10 +1134,80 @@ allocator:
   the allocator's NetworkPolicy admits the `allocator.networkPolicy.prometheus`
   peers, so list your Prometheus there.
 
-A probe job takes `name`, `collector`, `targets`, `params`, `labels` and
-`shard_key`, the keys of the allocator's probe targets file, which the
-allocator decodes strictly: any other key, such as `target`, and a job without
-a target fail rendering rather than stop the allocator at start.
+A probe job takes `name`, `collector`, `targets`, `params`, `labels`,
+`shard_key`, `discovery` and `target_template`, the keys of the allocator's
+probe targets file, which the allocator decodes strictly: any other key, such
+as `target`, and a job with neither a target nor a discovery source fail
+rendering rather than stop the allocator at start.
+
+A large fleet need not be listed: a probe job's `discovery`, and the
+`discovered_targets` of `allocator.staticTargets.data`, name `file_sd`,
+`http_sd` or `kubernetes` sources whose targets the allocator allocates as
+written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
+
+```yaml
+allocator:
+  enabled: true
+  probeJobs:
+    - name: databases
+      collector: pg_health
+      discovery:
+        - kubernetes:
+            namespaces: [db]
+            label_selector: app.kubernetes.io/name=postgres
+            port: metrics
+          labels:
+            namespace: __meta_kubernetes_namespace
+```
+
+A `kubernetes` source runs the allocator as a ServiceAccount
+`<fullname>-allocator` of its own, with its token mounted, while the
+exporter's keeps `serviceAccount.automount`. With `allocator.rbac.create`, the
+default, the chart lets it `get`, `list` and `watch` EndpointSlices: a Role
+and a RoleBinding in each namespace a source lists, the release's for a source
+that lists none, and a ClusterRole and a ClusterRoleBinding
+`<namespace>-<fullname>-allocator` for a source with `all_namespaces`.
+Without a `kubernetes` source none of this is rendered.
+
+A `file_sd` source reads files in the allocator's pod, and an `http_sd`
+source's `bearer_token_file` and `tls` files are read there too. The
+exporter's `extraVolumes` and `extraVolumeMounts` mount into the exporter's
+pods only; `allocator.extraVolumes` and `allocator.extraVolumeMounts`, in the
+same shapes, mount into the allocator's pods only. A ConfigMap of file_sd
+files, say:
+
+```yaml
+allocator:
+  enabled: true
+  extraVolumes:
+    - name: file-sd
+      configMap:
+        name: websites-sd
+  extraVolumeMounts:
+    - name: file-sd
+      mountPath: /etc/pue-sd
+      readOnly: true
+  probeJobs:
+    - name: websites
+      collector: html_status
+      target_template: https://{{address}}/health
+      discovery:
+        - file_sd:
+            files: [/etc/pue-sd/*.json]
+```
+
+A ConfigMap volume is updated in place when the ConfigMap changes, and the
+source reads its files again every `refresh_interval`, so a change to them
+needs no rollout; a `subPath` mount is never updated. As for the exporter, a
+`mountPath` the allocator's pod already mounts fails rendering, and so does
+one inside it, since those are read-only volumes: the configuration
+directory, `/etc/prometheus-universal-exporter-static-targets` with
+`allocator.staticTargets.data`, `/etc/prometheus-universal-exporter-probe-targets`
+with `allocator.probeJobs`, the token's directory with
+`allocator.tokenSecret.name`, and the service account token's,
+`/var/run/secrets/kubernetes.io/serviceaccount`, while it is mounted, with a
+`kubernetes` source or `serviceAccount.automount`; and so does a path two
+entries share.
 
 `allocator.staticTargets.expandEnv` renders `--static-targets.expand-env` on
 the exporter pods, which then expand `${NAME}` references in their share of
@@ -1118,7 +1231,9 @@ allocator refuses.
 | `allocator.tokenSecret.name` / `key` | `""` / `token` | A Secret holding a shared bearer token: the allocator requires it, the exporter pods send it and the ScrapeConfigs present it. |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
-| `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one, and optionally `params`, `labels` and `shard_key` (`target` or `address`); no other key. |
+| `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |
+| `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount get, list and watch EndpointSlices where the sources list them. |
+| `allocator.extraVolumes` / `extraVolumeMounts` | `[]` | Volumes and mounts of the allocator's pods only, as `extraVolumes` and `extraVolumeMounts` are the exporter's: a `file_sd` source's files, an `http_sd` source's token and TLS files. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
@@ -1189,21 +1304,21 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `probeDebug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
 | `goGC` | object | unset | `percent`, the Go garbage collector's target, rendered as the container's `GOGC` environment variable: a whole number from 1 to 10000, or `"off"` with a Go memory limit in force; empty keeps Go's default, 100. See [Garbage collector](#garbage-collector). |
 | `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings; `terminationGracePeriodSeconds` on the liveness probe only. |
-| `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
+| `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `targetBusy`, `busyMetric`, `targetStaticTargetsPerPod`, `staticTargetsMetric`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
 | `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |
 | `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings, which are rendered with `RollingUpdate` only; see [Replicas](#replicas). |
 | `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context; the pod runs as user, group and `fsGroup` 65532. |

@@ -57,8 +57,8 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		// A problem with a collector that a collector file defines names
 		// that file, which is the one to edit.
 		file := collectorFileOf(c, x.Name)
-		if !namePattern.MatchString(x.Name) {
-			errs = append(errs, inCollectorFile(file, fmt.Errorf("collector %q has invalid name", x.Name)))
+		if err := checkCollectorName(x); err != nil {
+			errs = append(errs, inCollectorFile(file, err))
 		}
 		if seen[x.Name] {
 			errs = append(errs, fmt.Errorf("duplicate collector %q", x.Name))
@@ -77,6 +77,15 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 	// Every expression compiled once, and each stays compiled as long as the
 	// configuration is in force, however many it has.
 	expr.ReserveExpressions(expressionCount(c))
+	return nil
+}
+
+// checkCollectorName refuses a collector whose name is not one a probe can
+// ask for, and Prometheus label values and metric names can carry.
+func checkCollectorName(x *model.Collector) error {
+	if !namePattern.MatchString(x.Name) {
+		return fmt.Errorf("collector %q has invalid name", x.Name)
+	}
 	return nil
 }
 
@@ -249,6 +258,11 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
+// jsonAnswerTypes are the request types whose answer is a JSON document the
+// exporter makes, so their decoder is json and their transform one that
+// reads JSON.
+var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert}
+
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
 // unknown transform and an unknown decoder, and infers the decoder a transform
 // implies.
@@ -276,18 +290,29 @@ func normalizeFormats(x *model.Collector) error {
 		// json reads the answer as it came.
 		x.Decoder.Type = "graphite"
 	}
-	if x.Request.Type == fetch.RequestTypeGRPC {
-		// A call is answered as JSON, whatever else its decoder could be.
+	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
+		// A grpc call, a dns lookup and a tlscert handshake are answered as
+		// JSON, whatever else their decoder could be.
 		switch x.Decoder.Type {
 		case "auto", "json":
 			x.Decoder.Type = "json"
 		default:
-			return fmt.Errorf("collector %q decodes with %s, but a grpc collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type)
+			return fmt.Errorf("collector %q decodes with %s, but a %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, x.Request.Type)
 		}
 		switch x.Transform.Type {
 		case "jq", "yq", "python":
 		default:
-			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a grpc call is answered with; use jq, yq or python", x.Name, x.Transform.Type)
+			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, x.Request.Type)
+		}
+	}
+	if x.Request.Pagination != nil {
+		// The pages are read as JSON to find the next one and their items,
+		// and merged into one JSON document, whatever their Content-Type.
+		switch x.Decoder.Type {
+		case "auto", "json":
+			x.Decoder.Type = "json"
+		default:
+			return fmt.Errorf("collector %q decodes with %s, but request.pagination reads its pages as JSON and merges them into one JSON document; leave decoder.type out, or set json", x.Name, x.Decoder.Type)
 		}
 	}
 	if x.Request.Type == fetch.RequestTypeSQL {
@@ -2063,7 +2088,7 @@ func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 // transform implies none, decodes what it reads.
 func undecidedDecoderWarning(x *model.Collector) string {
 	how := "by the Content-Type header of each response"
-	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile {
+	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile || x.Request.Type == fetch.RequestTypeS3File {
 		how = "by the extension of each file"
 	}
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)

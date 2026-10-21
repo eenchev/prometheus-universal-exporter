@@ -190,3 +190,24 @@ func TestAParamPlaceholderFromTheEnvironmentIsRefused(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// The exporter discovers no targets: a static target file with the target
+// allocator's discovered_targets is refused, naming the allocator, rather
+// than read with its discovered targets quietly left out.
+func TestTheExporterRefusesDiscoveredTargets(t *testing.T) {
+	path := testutil.WriteFile(t, "targets.yaml", `interval: 1m
+targets:
+  - name: legacy
+    collector: c
+    target: http://legacy.example
+discovered_targets:
+  - name: node
+    collector: c
+    discovery:
+      - file_sd: {files: [nodes.json]}
+`)
+	_, err := LoadStaticTargets(path)
+	if err == nil || !strings.Contains(err.Error(), "line 6: discovered_targets is read by the target allocator (pue-allocator --static-targets-file)") {
+		t.Fatalf("got %v, want discovered_targets refused for the allocator's", err)
+	}
+}

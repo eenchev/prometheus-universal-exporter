@@ -329,10 +329,13 @@ extension.
 | `.csv` | CSV |
 | `.html`, `.htm` | HTML |
 | `.graphite`, `.carbon` | Graphite carbon lines, into [series](GRAPHITE.md#the-series-document) |
+| `.ndjson`, `.jsonl` | [NDJSON](CONFIGURATION.md#ndjson-logfmt-toml-and-ini), one JSON value on each line |
+| `.toml` | [TOML](CONFIGURATION.md#ndjson-logfmt-toml-and-ini) |
 
 A file with another extension whose every line is a carbon line — a path, a
 value and a timestamp, some path with a dot or a tag — is read as Graphite
-series too.
+series too. A `.ini` file, and a logfmt log, is read with `decoder.type: ini`
+or `logfmt`: no extension says either.
 
 `decoder.type` overrides the choice, as for `http`. A file
 declares no encoding: one in anything but UTF-8 needs `response.charset`, such

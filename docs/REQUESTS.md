@@ -7,7 +7,10 @@ same request with a URL built for the Graphite render API
 ([Graphite](GRAPHITE.md)), not the scrape Prometheus makes of the exporter. A
 `grpc` collector makes a gRPC call instead, with rules of its own, described in
 [gRPC](GRPC.md); its credentials, TLS keys and probe placeholders work as
-they do here. Each setting
+they do here. A token the target hands out at a login of its own, or an
+OAuth 2.0 client credentials token, is fetched with `request.login`,
+described with the other target credentials in
+[Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). Each setting
 lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
@@ -729,7 +732,7 @@ led: the collector's headers and credentials were not sent there, since
 https://api.example.com is not the origin the request was made to,
 http://api.example.com; list api.example.com in
 request.redirect_trusted_hosts if it is to be sent them`. A
-[debug probe](CONFIGURATION.md#debugging-a-probe) lists every redirect with
+[debug probe](CONFIGURATION.md#debug-probes) lists every redirect with
 the headers it was sent and, under one that was not trusted, the names of the
 headers that were not, a credential of the target URL as `Authorization (the
 target URL's credentials)`.
@@ -764,7 +767,11 @@ rather than silently changing behaviour.
 Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
-`graphite`, `grpc`, [`sshfile`](SSHFILE.md) and [`sql`](SQL.md#the-target) collectors:
+`graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target) and
+[`tlscert`](TLSCERT.md) collectors, which names a [`dns`](DNS.md#target-lists)
+collector may resolve, matched by name alone, and which buckets an
+[`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
+glob, since its target is a bucket:
 
 ```yaml
 request:
@@ -780,7 +787,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile` and `sql` collector refuses the cloud metadata
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
 and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
 credentials of the machine the exporter runs on, to whoever can name it as a
@@ -932,7 +939,8 @@ environment applies to the whole exporter, and is read once, when the exporter
 first connects. In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
 affected, and neither are `sshfile` and `sql` collectors, which connect to
-their hosts directly.
+their hosts directly; `s3file` collectors go through the proxy, by the AWS
+SDK's own client, which reads the same variables.
 
 ## Retries
 
@@ -945,8 +953,9 @@ request:
     backoff: 2s   # fixed delay between attempts
 ```
 
-The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. Two
+The exporter retries transport failures and the HTTP statuses `retry.statuses`
+lists, by default the transient ones: `408`, `425`, `429` and `5xx`. Other
+HTTP statuses are returned immediately. Two
 failures are not retried, since the same request would fail the same way: a
 target the collector's lists [refuse](#restricting-targets) and response
 headers over [their bound](#compression-and-the-response-size). An HTTP/2
@@ -956,8 +965,11 @@ request's answer on the connection; the second such error ends the request.
 A
 connection that breaks while the body is being read — reset, or closed before
 the length it promised — counts as a transport failure and is retried too,
-unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debugging-a-probe)
+unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debug-probes)
 shows such an attempt as its status followed by `then the body broke off`.
+A `401` to a collector that [logs in](AUTHENTICATION.md#logging-in-to-a-target)
+is sent once more with the token of a new login, whatever the method; that
+is no attempt of `retry.attempts`, and is made within the probe's deadline.
 
 Only requests whose method is idempotent are retried — `GET`, `HEAD`,
 `OPTIONS`, `TRACE`, `PUT` and `DELETE` — since sending a `POST` or `PATCH`
@@ -992,9 +1004,56 @@ connection error, noting that the wait before retrying was cut short.
 A status the collector [accepts](#accepting-other-statuses) is its answer and
 is not retried, even a `503`.
 
+`retry.statuses`, for `http` and `graphite` collectors, says which statuses
+are retried. It is written as [`accept_status`](#accepting-other-statuses) is,
+statuses from 100 to 599 and classes such as `5xx`, and refused in the same
+words when an entry is neither. A list replaces the default set rather than
+adding to it, so write the default's statuses that should stay retried. A
+service that answers `404` while it is still starting, and whose `5xx` are
+retried as before:
+
+```yaml
+request:
+  retry:
+    attempts: 3
+    backoff: 2s
+    statuses: [404, 408, 425, 429, "5xx"]   # 404 added to the default
+```
+
+A target whose `500` and `501` say the request itself is wrong, which
+another attempt cannot change, and whose gateway errors are worth asking
+again:
+
+```yaml
+request:
+  retry:
+    attempts: 2
+    statuses: [429, 502, 503, 504]   # 500 and 501 are no longer retried
+```
+
+An empty list, `statuses: []`, retries no status at all, while a connection
+that failed, or broke while its body was read, is retried still; `attempts:
+0` is what turns retries off altogether. An entry every status of which the
+collector accepts is refused when the configuration loads, since an accepted
+status is the answer and that entry could never be retried: `retry.statuses:
+[503]` with `accept_status: ["2xx", 503]`, and `retry.statuses: [200]` with
+no `accept_status`, which accepts every 2xx. A class of which only some
+statuses are accepted is taken, and the others are retried: with
+`retry.statuses: ["5xx"]` and `accept_status: ["2xx", 503]`, a `503` is the
+answer and any other `5xx` is retried. Any other status may be listed, a 2xx
+that `accept_status` leaves out or a 3xx that is not followed among them.
+`retry.statuses` without `attempts` changes nothing until a static target's
+`retry.attempts`, or the `retry_attempts` probe parameter, sets some, as with
+`backoff`. A [static target](STATIC-TARGETS.md) may replace it with its own
+`retry.statuses`; no probe parameter sets it. `--dry-run` lists a collector's
+`retry.statuses` under `request_policies`, and a [debug
+probe](CONFIGURATION.md#debug-probes) says, below its requests, how often
+and on which statuses its request is retried.
+
 A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
-`[UNAVAILABLE]` by default, and has no `non_idempotent`; `retry.codes` is
-refused for every other type. See [gRPC](GRPC.md#errors-and-retries).
+`[UNAVAILABLE]` by default, and has no `non_idempotent` or `statuses`;
+`retry.codes` is refused for every other type, and `retry.statuses` for
+`grpc`. See [gRPC](GRPC.md#errors-and-retries).
 
 ## Accepting other statuses
 
@@ -1029,7 +1088,7 @@ are to the [schema](CONFIGURATION.md#editor-support). In quotes it is text,
 the digits of a status or a class: `"503"`, and `"0503"` and `"+503"`, which
 are 503 too though the schema flags them, while `"503.0"` is refused, and so are a number
 with a fraction, such as `503.5`, and one outside 100 to 599, such as `6e2`,
-naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries). jq and yq rules read the
+naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries), and an entry of `retry.statuses` that is accepted whole is refused. jq and yq rules read the
 status as `$status` and the headers as `$headers`, an object of lower-case
 header names, each with its values joined by `, `:
 `$headers["retry-after"]`. A Python script has them as `response.status_code`
@@ -1038,6 +1097,145 @@ canonical name (`response.headers["Retry-After"]`); `response.header("retry-afte
 joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the call's status
 code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
 `localfile` or `sshfile` collector, which has no status, it is `null`.
+
+## Pagination
+
+An API that pages its answer gives one request only the first page. With
+`request.pagination` an `http` collector fetches the pages after it too and
+merges them into one JSON document: the first page, with the array its items
+are in, `items`, holding the items of every page in order. The decoder, the
+rules and the limits then read that document as the answer, so a collector
+written for one page reads every page unchanged.
+
+```yaml
+request:
+  type: http
+  path: /orgs/acme/repos
+  query:
+    per_page: "100"
+  bearer_token_file: /etc/secrets/github-token
+  pagination:
+    type: link    # follow the Link header's rel="next"
+    items: .      # each page is an array of repositories
+    max_pages: 20
+transform:
+  type: jq
+metrics:
+  - name: github_repos
+    expression: length
+  - name: github_repo_stars
+    items: .[]
+    expression: .stargazers_count
+    labels:
+      - name: repo
+        expression: .name
+```
+
+GitHub answers the first page of `/orgs/acme/repos` with
+
+```text
+Link: <https://api.github.com/organizations/1/repos?per_page=100&page=2>; rel="next",
+      <https://api.github.com/organizations/1/repos?per_page=100&page=7>; rel="last"
+```
+
+and the collector asks for page 2, then each page its `Link` names, until a
+page names none. `github_repos` is the number of repositories on every page,
+not on the first.
+
+`type` says how the next page is found:
+
+| `type` | The next page | Needs |
+| --- | --- | --- |
+| `link` | The URL of the `Link` header's `rel="next"` (RFC 8288), absolute or relative to the page's URL. | — |
+| `next_url` | The URL the jq expression `next` reads from the page, absolute or relative to the page's URL. | `next` |
+| `cursor` | The first page's URL with the value `next` reads from the page in the query parameter `param`. | `next`, `param` |
+| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. | `param` |
+| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. | `param` |
+
+```yaml
+pagination:              # {"data":{"hosts":[...]},"links":{"next":"/api/hosts?page=2"}}
+  type: next_url
+  next: .links.next
+  items: .data.hosts
+```
+
+```yaml
+pagination:              # {"items":[...],"meta":{"next_cursor":"dXNlcjo0Mg=="}}
+  type: cursor
+  next: .meta.next_cursor
+  param: cursor          # ...&cursor=dXNlcjo0Mg==
+  items: .items
+```
+
+```yaml
+pagination:              # /tickets?page=1, ?page=2, ... until a page has no tickets
+  type: page
+  param: page
+  items: .tickets
+```
+
+```yaml
+pagination:              # /events?offset=0, ?offset=50, ... with limit: "50" in request.query
+  type: offset
+  param: offset
+  size: 50
+  items: .events
+```
+
+`items` is a jq path, such as `.items`, `.data.results` or `.data[0].rows`,
+or `.` for a page that is an array; an expression that names no place, such as
+`.items | length`, is refused when the configuration loads. A page whose items
+array is missing or `null` has no items. `next` is any jq expression over the
+page, with `$headers` and `$status` as in a [rule](#accepting-other-statuses),
+so a cursor sent in a header is `$headers["x-next-cursor"]`; it gives the next
+URL or cursor as text, a cursor as a number too, and `null`, `false` or `""`
+when there is no next page. `param` replaces a parameter of that name in the
+target's own query; `request.query` may not set it, since the pagination sets
+it on every page.
+
+The pages end at the first page that names no next one: no `rel="next"`, a
+`next` that gives `null`, `false` or `""`, or, for `page` and `offset`, a page
+whose items array is empty or missing. They end at `max_pages` too, 10 by
+default and at most 1000, the first page included. A trip that stops at
+`max_pages` while the last page named another, or for `page` and `offset` held
+items, is no failure: it is answered with the pages it fetched, counted in
+`http_exporter_pagination_max_pages_reached_total`, and logged at warn level,
+once and then sparingly while it repeats, until a trip fetches every page
+again. Every page fetched is counted in `http_exporter_pages_fetched_total`
+(see [self-metrics](SELF-METRICS.md)).
+
+Every page is a request of the collector's own: the same method, body,
+headers, credentials, TLS settings, retries and redirect rules, and the same
+[`allowed_targets` and `denied_targets`](#restricting-targets), checked on
+each page's connections. A next page is the target's to name, and is sent the
+collector's credentials, so one that leaves the target's origin — its scheme,
+host or port — fails the trip before it is asked for, and so does one that
+names a page fetched already, which would go round in a circle. The probe's
+`timeout`, and the scrape's deadline, cover every page together. The response
+limit (`max_response_bytes`) holds each page, the pages together, and the
+merged document.
+
+The pages are read as JSON: a collector with `request.pagination` decodes with
+`json`, which a `decoder.type` left out becomes, and any other decoder is
+refused when the configuration loads. A first page that is not JSON, or is
+answered with a status the collector does not
+[accept](#accepting-other-statuses), is the answer as it would be without
+pagination, and fails in the `decode` or the `http_status` stage. A later page
+with such a status fails the trip in the `http_status` stage with that page's
+status and body, the error naming the page: `received HTTP status 503 on page 3
+of request.pagination, https://api.example.com/tickets?page=3`. A later page
+that is not JSON, items that are not an array, and a `next` that gives
+something other than text or a number fail it in the fetch stage, naming the
+page. An answer of one page is the page as it came, byte for byte; an answer
+of several is the merged document written again as JSON, its other keys those
+of the first page, its status and headers the first page's.
+
+A [debug probe](CONFIGURATION.md#debug-probes) lists every page's request
+with its number, `(page 2)`, says how many pages the response is merged from,
+and whether the pages stopped at `max_pages`. A static target of the
+collector pages through its own target and path the same way.
+`request.pagination` is the collector's: a static target cannot set it, nor a
+probe parameter change it.
 
 ## TLS
 
@@ -1066,6 +1264,10 @@ refused.
 A client certificate needs both `cert_file` and `key_file`; one without the
 other stops the exporter at startup. The files themselves are read at the first
 request, and again when they change, so a Secret mounted later is picked up.
+
+A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
+code, but for `insecure_skip_verify`: it reports a chain that does not
+verify rather than refusing it.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

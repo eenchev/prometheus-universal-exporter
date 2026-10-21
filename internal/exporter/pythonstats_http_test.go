@@ -338,7 +338,7 @@ func TestAProbeOfARemovedCollectorRunsItsScriptUnderNoName(t *testing.T) {
 			where := fmt.Sprintf("a probe held %s, going on after the collector is back %v", held, goesOnLate)
 			both := pythonDocument(pythonScripted("kept", "metric(name=\"v\", value=1)", ""), pythonScripted("gone", "metric(name=\"v\", value=1)", ""))
 			r := newUninterpreted(t, both, "")
-			r.server.SetProbeDebug(true)
+			r.server.SetDebug(DebugFull)
 			read := func() string {
 				_, body := answerOf(t, r.server, "/self-metrics", prometheus2Accept)
 				return body

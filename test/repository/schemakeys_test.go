@@ -226,6 +226,11 @@ type schemaKey struct {
 	// size marks a key that takes a size, which is put through the ways a
 	// number of bytes is written too (sizeForms).
 	size bool
+	// built marks a row of an opt-in request type, whose collector the
+	// committed schemas, the default build's, have no type for: its
+	// documents are checked against the schemas this binary generates, in
+	// a build with the type (builtKeySchemas).
+	built bool
 	// booleanAlone and numberAlone are what the exporter alone refuses the
 	// key with, written as the boolean true and as the number 1, where the
 	// key takes more than text and what is wrong with that text is not a
@@ -266,6 +271,17 @@ func loadKeySchemas(t *testing.T) keySchemas {
 	return keySchemas{
 		configuration: loadSchema(t), collectorFile: loadSchemaFile(t, collectorFileSchemaFile), targetFile: loadSchemaFile(t, staticTargetsSchemaFile),
 		configurationWas: schemaAsItWas(t, configSchemaFile), collectorFileWas: schemaAsItWas(t, collectorFileSchemaFile), targetFileWas: schemaAsItWas(t, staticTargetsSchemaFile),
+	}
+}
+
+// builtKeySchemas are the schemas this binary generates (builtSchema), and
+// each as it was, for the rows of an opt-in request type, which the
+// committed schemas, the default build's, have no type for.
+func builtKeySchemas(t *testing.T) keySchemas {
+	t.Helper()
+	return keySchemas{
+		configuration: builtSchema(t, configSchemaFile), collectorFile: builtSchema(t, collectorFileSchemaFile), targetFile: builtSchema(t, staticTargetsSchemaFile),
+		configurationWas: schemaAsItWasOf(t, configSchemaFile, builtSchema(t, configSchemaFile)), collectorFileWas: schemaAsItWasOf(t, collectorFileSchemaFile, builtSchema(t, collectorFileSchemaFile)), targetFileWas: schemaAsItWasOf(t, staticTargetsSchemaFile, builtSchema(t, staticTargetsSchemaFile)),
 	}
 }
 
@@ -313,7 +329,13 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 // whatever enabled says.
 func schemaAsItWas(t *testing.T, file string) map[string]any {
 	t.Helper()
-	schema := loadSchemaFile(t, file)
+	return schemaAsItWasOf(t, file, loadSchemaFile(t, file))
+}
+
+// schemaAsItWasOf is schemaAsItWas of schema, the schema of file as the
+// committed one is or as this binary generates it.
+func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[string]any {
+	t.Helper()
 	var walk func(node any)
 	walk = func(node any) {
 		switch x := node.(type) {
@@ -558,7 +580,8 @@ var sizeForms = []struct {
 // schema did and does.
 func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 	t.Helper()
-	schemas := loadKeySchemas(t)
+	committed := loadKeySchemas(t)
+	var built keySchemas
 	builtSchemas := map[keyFile]map[string]any{inConfiguration: builtSchema(t, configSchemaFile), inTargetFile: builtSchema(t, staticTargetsSchemaFile)}
 	verdict := func(accepted bool) string {
 		if accepted {
@@ -567,6 +590,13 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 		return "refuses it"
 	}
 	for _, key := range keys {
+		schemas := committed
+		if key.built {
+			if built.configuration == nil {
+				built = builtKeySchemas(t)
+			}
+			schemas = built
+		}
 		for i, file := range key.files(t, schemas) {
 			name := file.name + "'s " + key.name()
 			expect := func(what, written string, accepted, before bool) (any, error) {

@@ -24105,6 +24105,71 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   fails rendering for `server.debug: on` and for `--web.debug` in
   `extraArgs`, naming `server.debug` (chart § 19).
 
+## 34.156 The HTTP statuses retried
+
+- Without `retry.statuses` an `http` collector with one retry sends a target
+  answering `408`, `425`, `429`, `500`, `503` and `599` two requests, and one
+  answering `404`, `400`, `409` and `302` one; `[404, 503]` retries a `404`
+  and a `503` and no longer a `500` or a `429`; `[4xx]` retries `404`, `418`
+  and `499` and not `503`; `[]` retries no status, while a connection closed
+  before the answer is retried (`TestRetryStatusesReplaceTheDefaultSet`).
+- `retry.statuses` refuses `600`, `99`, `6xx`, `2x`, `ok` and `""` in
+  `accept_status`'s words, naming the collector and the entry, and writes
+  ` 4XX `, `+0503` and `0429` as `4xx`, `503` and `429`; an entry the
+  collector accepts whole is refused, naming it — `503` with `accept_status:
+  [2xx, 503]`, `502` and `5XX` with `[5xx]`, `200` and `2xx` without
+  `accept_status` — while `5xx` with `[2xx, 503]`, `2xx` with `[200]`,
+  `[404, 301, 100]` and `[]` are taken; with `5xx` retried and `503` accepted
+  a `503` is sent once and a `502` twice; `attempts: 11` is refused as before
+  (`TestRetryStatusesAreCheckedAsAcceptStatusIs`).
+- A static target's `retry.statuses` is normalized when its file is loaded,
+  replaces the collector's whole in `Over` and in the overrides a scrape
+  makes, so a `404` is retried and the collector's `502` is not; a target
+  entry that is no status, one the collector's `accept_status` accepts, a
+  target `accept_status` that accepts the collector's entry and one that
+  accepts its own entry are refused naming the target, and a target
+  `accept_status` without `503` takes its own `[503]`
+  (`TestAStaticTargetsRetryStatuses`).
+- `retry.statuses`, listed or empty, is refused for every built request type
+  not retried by HTTP status, in a collector and a static target: for `grpc`
+  as `sets request.retry.statuses, which does not apply to request.type
+  "grpc"; retry.codes says which gRPC status codes are retried`, for the types
+  without retries as any retry key is
+  (`TestRetryStatusesAreRefusedForTypesNotRetriedByHTTPStatus`); a `grpc`
+  collector refuses `[503]` and `[]` (`TestGRPCValidation`), and a
+  `grpc` static target's `statuses: [503]` fails the target file
+  (`TestGRPCStaticTargets`); `retry.codes` on an `http` collector is refused
+  naming `retry.statuses` and its default
+  (`TestTheKeysOfOtherTypesDoNotApplyToHTTP`).
+- A `graphite` collector with `retry.statuses: [404, 503]` sends a target
+  answering `404` two requests and one answering `500` one
+  (`TestGraphiteRetriesTheStatusesRetryStatusesLists`).
+- `RetriesOf` says `up to 2, 1s apart, on a failed connection and on an answer
+  of 408, 425, 429, 5xx that is not accepted` by default, the listed statuses
+  for a list, `on a failed connection alone: retry.statuses is empty` for a
+  target's `[]`, and nothing with no attempts or for a `POST` without
+  `non_idempotent` (`TestRetriesOfSaysWhichStatusesAreRetried`); a debug probe
+  of a collector retrying `[404, 5xx]` shows the `404` attempt, the `200`
+  one and the `Retries:` line below them, and one of a collector without
+  retries no such line (`TestADebugProbeSaysWhichStatusesAreRetried`); the
+  examples' reports, compared with the oracle writer, carry the line as the
+  writer does (`TestTheReportsOfTheExamplesAreWrittenAsTheyWere`).
+- A static target's `retry.statuses` is a counted section of its cache key,
+  `retry_statuses`, so a listed, an empty and an unset list make three keys
+  (`TestATargetsRetryStatusesArePartOfItsCacheKey`).
+- `--dry-run` lists `retry.statuses: [404, "5XX", 4.29e2]` under
+  `request_policies` as `retry_statuses: ["404", "5xx", "429"]`, `[]` as `[]`,
+  and no policy for a collector that leaves it out, and fails a collector
+  whose `retry.statuses: [503]` its `accept_status: [2xx, 503]` accepts, in
+  startup's words (`TestDryRunReportsRetryStatuses`).
+- The schemas take an entry of `collectors[].request.retry.statuses` and
+  `targets[].request.retry.statuses` as `accept_status`'s, `503` and `503.0`,
+  `5.03e2`, `0x1F7`, `0o767`, `5_03` and `+0503`, and refuse `600`, `503.5`,
+  `6e2`, `0x258`, `0o1130`, `6_00` and `-503`, as the exporter does, in the
+  tables of keys (`TestEveryConstrainedKeyOfTheSchemasIsInATable`); a boolean
+  there is refused by both, the exporter once the file is read
+  (`TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -54,6 +54,9 @@ type stubDNS struct {
 	records []stubRecord
 	rcode   int
 	silent  bool
+	// truncate answers every question over UDP with no record, marked
+	// truncated, as a server does an answer too long for UDP.
+	truncate bool
 	// asked is every question, as "name type network".
 	asked []string
 }
@@ -176,13 +179,13 @@ func (s *stubDNS) answer(query []byte, network string) []byte {
 	qtype := binary.BigEndian.Uint16(query[i+1 : i+3])
 	s.mu.Lock()
 	s.asked = append(s.asked, name+" "+dnsTypeName(qtype)+" "+network)
-	records, rcode, silent := s.records, s.rcode, s.silent
+	records, rcode, silent, truncated := s.records, s.rcode, s.silent, s.truncate && network == "udp"
 	s.mu.Unlock()
 	if silent {
 		return nil
 	}
 	var answers [][]byte
-	if rcode == 0 {
+	if rcode == 0 && !truncated {
 		// A CNAME of the name answers any question of it, followed by the
 		// records of its target, as a recursive server answers.
 		owner := name
@@ -214,7 +217,11 @@ func (s *stubDNS) answer(query []byte, network string) []byte {
 	}
 	header := make([]byte, 12)
 	copy(header, query[:2])
-	binary.BigEndian.PutUint16(header[2:], 0x8180|uint16(rcode)) // QR, RD, RA
+	flags := 0x8180 | uint16(rcode) // QR, RD, RA
+	if truncated {
+		flags |= 0x0200 // TC
+	}
+	binary.BigEndian.PutUint16(header[2:], flags)
 	binary.BigEndian.PutUint16(header[4:], 1)
 	binary.BigEndian.PutUint16(header[6:], uint16(len(answers)))
 	out := append(header, query[12:questionEnd]...)
@@ -313,7 +320,6 @@ func TestADNSCollectorAnswersEachRecordTypeAsADocument(t *testing.T) {
 		{"A", "WWW.example.test.", `[{"address":"192.0.2.1"},{"address":"192.0.2.2"}]`},
 		{"aaaa", "www.example.test", `[{"address":"2001:db8::1"}]`},
 		{"CNAME", "alias.example.test", `[{"target":"www.example.test"}]`},
-		{"CNAME", "www.example.test", `[]`},
 		{" mx ", "example.test", `[{"host":"mx1.example.test","preference":10},{"host":"mx2.example.test","preference":20}]`},
 		{"NS", "example.test", `[{"host":"ns1.example.test"}]`},
 		{"TXT", "example.test", `[{"text":"hello"},{"text":"v=spf1 -all"}]`},
@@ -531,5 +537,84 @@ func TestADNSLookupIsTracedForADebugProbe(t *testing.T) {
 	r := requests[0]
 	if r.Method != "QUERY" || r.URL != "dns://"+s.addr+"/www.example.test" || r.Header.Get("Dns-Type") != "A" || r.Header.Get("Dns-Server") != s.addr || r.Header.Get("Dns-Transport") != "udp" || r.Outcome != "1 record" {
 		t.Errorf("traced %+v", r)
+	}
+}
+
+// A CNAME collector asks the CNAME question itself, alone: an alias answers
+// the name its record points to; a name that is no alias — with addresses,
+// with a TXT record alone — and a name that does not exist have no CNAME
+// record, and are not found, as a name without records of the type is for
+// every other type. A server failure fails, naming the server; transport tcp
+// asks over TCP.
+func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
+	s := newStubDNS(t,
+		recName("alias.example.test", dnsTypeCNAME, "www.example.test"),
+		recA("www.example.test", "192.0.2.1"),
+		recTXT("text.example.test", "only text"),
+	)
+	for target, want := range map[string]string{
+		"alias.example.test":   `[{"target":"www.example.test"}]`,
+		"www.example.test":     "not found",
+		"text.example.test":    "not found",
+		"missing.example.test": "not found",
+	} {
+		before := len(s.questions())
+		doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), target)
+		answers, _ := json.Marshal(doc.Answers)
+		got := string(answers)
+		if doc.NotFound {
+			got = "not found"
+		}
+		if err != nil || got != want || doc.Count != len(doc.Answers) || (doc.NotFound && (doc.Count != 0 || doc.Answers == nil)) {
+			t.Errorf("CNAME %s: %+v, %v; want %s", target, doc, err, want)
+		}
+		if asked := s.questions()[before:]; len(asked) != 1 || asked[0] != target+". CNAME udp" {
+			t.Errorf("CNAME %s: the server was asked %q, want the CNAME question alone", target, asked)
+		}
+	}
+	before := len(s.questions())
+	if doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME", func(c *model.Collector) { c.Request.Transport = "tcp" }), "alias.example.test"); err != nil || doc.Count != 1 {
+		t.Errorf("CNAME over tcp: %+v, %v", doc, err)
+	}
+	if asked := s.questions()[before:]; len(asked) != 1 || asked[0] != "alias.example.test. CNAME tcp" {
+		t.Errorf("transport tcp: the server was asked %q", asked)
+	}
+	// An answer marked truncated over UDP is asked again over TCP.
+	s.mu.Lock()
+	s.truncate = true
+	s.mu.Unlock()
+	before = len(s.questions())
+	if doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), "alias.example.test"); err != nil || doc.Count != 1 {
+		t.Errorf("CNAME truncated over udp: %+v, %v", doc, err)
+	}
+	if asked := s.questions()[before:]; strings.Join(asked, ",") != "alias.example.test. CNAME udp,alias.example.test. CNAME tcp" {
+		t.Errorf("a truncated answer: the server was asked %q", asked)
+	}
+	s.mu.Lock()
+	s.rcode, s.truncate = 2, false
+	s.mu.Unlock()
+	if _, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), "alias.example.test"); err == nil || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.addr) || !strings.Contains(err.Error(), "SERVFAIL") {
+		t.Errorf("SERVFAIL: %v", err)
+	}
+	s.mu.Lock()
+	s.rcode, s.silent = 0, true
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := FetchCollector(ctx, "alias.example.test", dnsCollector(t, s.addr, "CNAME"), RequestOverrides{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.addr) {
+		t.Errorf("a server that does not answer: %v", err)
+	}
+}
+
+// Without request.server, a CNAME question goes to the nameservers of
+// /etc/resolv.conf, on port 53, or to the local server when it names none.
+func TestTheSystemsNameserversAreReadForACNAMELookup(t *testing.T) {
+	conf := "# comment\nsearch example.test\nnameserver 10.0.0.53\nnameserver 2001:db8::53\noptions ndots:2\n"
+	if got := strings.Join(dnsSystemServers(conf), " "); got != "10.0.0.53:53 [2001:db8::53]:53" {
+		t.Errorf("servers %q", got)
+	}
+	if got := strings.Join(dnsSystemServers(""), " "); got != "127.0.0.1:53 [::1]:53" {
+		t.Errorf("servers of an empty file %q", got)
 	}
 }

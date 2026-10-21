@@ -112,7 +112,7 @@ a name inside a Kubernetes cluster is written out in full,
   | Record type | Fields |
   | --- | --- |
   | `A`, `AAAA` | `address` |
-  | `CNAME` | `target`, the name the alias leads to at the end of its chain |
+  | `CNAME` | `target`, the name the alias's CNAME record points to |
   | `MX` | `host`, `preference` |
   | `NS` | `host` |
   | `TXT` | `text`, the record's strings joined into one |
@@ -128,9 +128,9 @@ a name inside a Kubernetes cluster is written out in full,
 - `not_found` is `true` when the name does not exist (NXDOMAIN), and when it
   exists without records of the type: the resolver does not tell the two
   apart. `answers` is then empty and `count` 0, and the scrape succeeds, so
-  a rule can say a record is missing. A name that is no alias asked for its
-  `CNAME` is not `not_found`: it has no `CNAME` record to show, and its
-  `answers` are empty.
+  a rule can say a record is missing. For `CNAME` that is any name that is
+  no alias, whatever other records it has: a name with addresses and one
+  with a TXT record alone are `not_found` as one that does not exist is.
 - `duration_seconds` is how long the lookup took, the retries of the
   resolver included.
 
@@ -153,8 +153,27 @@ found from a failure. It does **not** give:
 
 Records whose names are not valid DNS names are left out by the resolver;
 the others are answered. The resolver reads `/etc/hosts` before it asks a
-server for `A`, `AAAA`, `CNAME` and `PTR`, as it does for any other lookup of
-the exporter, `server` or not: a name there is answered from it.
+server for `A`, `AAAA` and `PTR`, as it does for any other lookup of the
+exporter, `server` or not: a name there is answered from it.
+
+### CNAME
+
+Go's resolver has no lookup of a name's CNAME record alone: it asks for the
+name's addresses beside it, and cannot tell a name that is no alias from
+one that does not exist. So a `CNAME` question is sent by the exporter
+itself: one question of type `CNAME`, recursion desired, over `udp` — sent
+again every 2 seconds while no answer comes, and asked again over TCP when
+the answer is marked truncated — or over `tcp` alone. It goes to `server`,
+or without one to the `nameserver` lines of `/etc/resolv.conf` in their
+order, on port 53, `127.0.0.1` and `::1` when the file names none; the next
+is asked when one fails, or does not answer within 5 seconds. The file's
+`search`, `options` (`timeout`, `attempts`, `rotate`, `ndots`) and
+`/etc/hosts` are not read for it. The answer's `CNAME` record of the name
+is the `target`; a resolver answers the question with that record alone, so
+an alias of an alias gives the next name of the chain, not its end. A
+response code other than `NOERROR` and `NXDOMAIN` fails the scrape, naming
+it: `resolving CNAME www.example.com on 10.0.0.53:53: server misbehaving
+(SERVFAIL)`.
 
 ## Target lists
 

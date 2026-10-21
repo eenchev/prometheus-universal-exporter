@@ -1749,8 +1749,8 @@ of objects, one a row, of its columns by name. Its keys:
 
 A `dns` collector resolves the probe's `target`, a DNS name, and hands its
 records to the transforms as a JSON document. The lookup MUST be Go's own
-resolver (`net.Resolver` with `PreferGo`), so the type needs no library. Its
-keys:
+resolver (`net.Resolver` with `PreferGo`), so the type needs no library,
+but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -1776,20 +1776,29 @@ keys:
   dot), `record_type`, `server` (`host:port`, `""` for the system's
   resolver), `transport`, `not_found`, `count`, `duration_seconds` and
   `answers`, one object a record with the fields of its type alone:
-  `address` (A, AAAA); `target` (CNAME, the canonical name, present only
-  when it differs from the name); `host` and `preference` (MX); `host` (NS);
+  `address` (A, AAAA); `target` (CNAME, the name the CNAME record of the
+  name points to); `host` and `preference` (MX); `host` (NS);
   `text`, the record's strings joined (TXT); `target`, `port`, `priority`
   and `weight` (SRV); `name` (PTR). Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
 - A name that does not exist, or has no records of the type, MUST be an
-  answer: `not_found` true, `answers` empty and `count` 0. A server failure,
+  answer: `not_found` true, `answers` empty and `count` 0. For `CNAME` that
+  MUST be every name without a CNAME record, whatever other records it has. A server failure,
   a refusal, a malformed answer and a server that does not answer MUST fail
   the scrape in the `dns` stage, naming the record type, the name and the
   server asked, not the system's; a lookup cut short by the scrape's
   deadline MUST wrap the context's error. TTLs and response codes are not
   given by the resolver and MUST NOT be invented.
+- A `CNAME` lookup MUST send one question of type `CNAME` and no other,
+  over the transport as above (UDP sent again while no answer comes, TCP
+  for an answer marked truncated), to `server`, or without it to the
+  `nameserver` lines of `/etc/resolv.conf` in order, port 53, `127.0.0.1`
+  and `::1` when there are none, the next asked when one fails or does not
+  answer within 5 seconds. `/etc/hosts` and the file's other lines MUST NOT
+  be read for it. A response code other than `NOERROR` and `NXDOMAIN` MUST
+  fail the scrape, naming the code.
 - The target lists MUST be matched against the name by name alone, never
   by what it resolves to: a denied name, and with `allowed_targets` one that
   matches none of its names, MUST be refused with `403` before the server is

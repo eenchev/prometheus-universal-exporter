@@ -216,7 +216,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	collector := []string{
 		"decoder.type", "error_handling.on_decode_error", "error_handling.on_fetch_error", "error_handling.on_transform_error",
 		"metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
-		"request.accept_codes[]", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.forward_headers[]", "request.method", "request.pagination.type", "request.record_type", "request.redirect_trusted_hosts[]", "request.retry.codes[]", "request.rpc", "request.transport", "request.type",
+		"request.accept_codes[]", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]", "request.method", "request.pagination.type", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.retry.codes[]", "request.rpc", "request.transport", "request.type",
 		"response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string

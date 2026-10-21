@@ -578,8 +578,8 @@ number and which the exporter MUST refuse.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns` and
-`tlscert` are implemented;
+data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
+`tlscert` and `s3file` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -626,11 +626,16 @@ added without deciding which types it belongs to.
 Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
-type.
+type but the opt-in ones. An opt-in type is one whose libraries few
+deployments want in the binary, `s3file` and the AWS SDK it links: no build
+MAY carry it unless asked for it by its tag, and the source MUST list the
+opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
-  `//go:build !select_request_types || request_type_<name>`. Code and imports
+  `//go:build !select_request_types || request_type_<name>`, or, for an
+  opt-in type, exactly `//go:build request_type_<name>`, so that its tag
+  adds it to a default build and to a selective one alike. Code and imports
   that only that type needs MUST live behind the same constraint, and so MUST
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
@@ -654,7 +659,12 @@ type.
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
   that driver. `dns` and `tlscert` MUST import nothing outside the standard library,
   and the test MUST find none of the other types' modules in a build of
-  either.
+  either. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
+  find them in a build of `s3file` alone and its S3 client and
+  configuration in a default build with it, and none of them in the default
+  build or a build of any other one type; the `snowflake` driver links the
+  AWS SDK too, which only its own build may.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -663,16 +673,23 @@ type.
 - The source MUST keep a list of every type in the tree, whether or not the
   build carries it. A collector naming a type that exists but was left out of
   the build MUST be rejected with a message saying so, listing the types the
-  build carries and naming the tag that would include it; a name that is no
+  build carries and naming the tag that would include it, and, for an opt-in
+  type, saying that it is one, which the default build and the published
+  image leave out, and naming `OPT_IN_REQUEST_TYPES`; a name that is no
   type at all keeps the unknown-type message.
 - `tools/request-type-tags.sh` MUST turn a comma-separated `REQUEST_TYPES` list
   into those tags, printing nothing for an empty list and failing on a name
   that is not a type in the tree, and a second list, `SQL_DRIVERS`, into the
   `sql_driver_<name>` tags of the `sql` type's opt-in drivers, failing on a
   name that is no opt-in driver of the tree — a default driver included —
-  and on drivers with a `REQUEST_TYPES` that leaves `sql` out. The
-  Dockerfile's `REQUEST_TYPES` and `SQL_DRIVERS` build arguments and the
-  Makefile's variables of those names MUST all use it.
+  and on drivers with a `REQUEST_TYPES` that leaves `sql` out, and a third
+  list, `OPT_IN_REQUEST_TYPES`, into the `request_type_<name>` tags of
+  opt-in types, added to the default build's types or to those
+  `REQUEST_TYPES` lists, failing on a name that is no opt-in type of the
+  tree, a type of every build included. `REQUEST_TYPES` MUST take an opt-in
+  type as any other. The Dockerfile's `REQUEST_TYPES`, `SQL_DRIVERS` and
+  `OPT_IN_REQUEST_TYPES` build arguments and the Makefile's variables of
+  those names MUST all use it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
   log line, as `sql_drivers`, empty in a build without the type.
@@ -687,7 +704,14 @@ type.
   `make test-sql-drivers`, which `make ci` includes, MUST run the same; CI
   MUST lint that build with golangci-lint too, as `make lint-sql-drivers`,
   which `make ci` includes, does; a test MUST keep these lists naming every
-  opt-in driver of the tree.
+  opt-in driver of the tree. CI MUST likewise vet, build, lint and test (the
+  `internal/fetch` and `test/repository` packages) a build with every
+  opt-in type beside the default build's types, as `make
+  build-opt-in-types`, `make lint-opt-in-types` and `make
+  test-opt-in-types`, which `make ci` includes, do, and a test MUST keep
+  their lists naming every opt-in type of the tree; each single-type
+  selection, an opt-in type's included, is vetted, built and tested as
+  below.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, over the exporter's packages
   when they are to run (§ 34.33), which `make test-request-types` runs over
@@ -710,11 +734,15 @@ type.
   apart from the message above for a collector that names it: a `/probe`
   parameter that only left-out types accept is a parameter no type accepts
   and MUST be ignored as one, and the schema the binary prints (§ 24.3)
-  lists only its own types. The committed schemas are those of a build with
-  every type and the sql type's default drivers alone, and the test that
-  compares them with what the code generates MUST run in that build alone,
-  not in one with an opt-in sql driver, whose schema names that driver as
-  its loader takes it.
+  lists only its own types. The committed schemas are those of a default
+  build, of every type but the opt-in ones and the sql type's default
+  drivers alone, and the test that compares them with what the code
+  generates MUST run in that build alone, not in one with an opt-in type or
+  sql driver, whose schema names that type or driver as its loader takes it.
+  An opt-in type's request keys are struct keys, in every build's schema;
+  the default build's test that every request key belongs to a type MUST
+  know them without the type, and a test in a build with the type MUST keep
+  that list the type's own.
 
 #### `http`
 
@@ -1804,6 +1832,79 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   the version, the number of certificates and whether the chain verified,
   or the error, as its outcome. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
+
+#### `s3file`
+
+An `s3file` collector reads an object, or every matching object under a
+prefix, from a bucket of Amazon S3 or of a store that speaks the S3 API, the
+probe's `target` naming the bucket, and MUST present what it read exactly as
+`localfile` presents a file: the same path rules, the same reading of one
+file and of a directory (§ 5.1a), the same response. It is an opt-in type
+(§ 5.1, Selecting request types at build time): only a build asked for it
+carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `root` | none | **Required.** As `localfile`'s, an absolute directory, read as the key prefix of the objects under it: `/a/b` is the keys that start with `a/b/`. `/`, every key of the bucket, MUST be taken. |
+| `path`, `files`, `max_files`, `max_total_bytes`, `max_age`, `max_response_bytes` | as `localfile` | With `localfile`'s rules; an object's key is `root`'s prefix and the file's path under it joined. |
+| `region` | the AWS SDK's, else `us-east-1` | Letters, digits, `-` and `_`. |
+| `endpoint` | AWS's | An `http://` or `https://` URL of a host, with a port or not, and no user, path, query or fragment. |
+| `path_style` | `false` | The bucket in the URL's path rather than its host. |
+| `access_key_id_file`, `secret_access_key_file` | none | Both or neither. |
+| `session_token_file` | none | Only with the two above. |
+| `allowed_targets`, `denied_targets` | none | Bucket names and globs of them; an address or a network MUST be refused at load. |
+
+- The credential files MUST be read at every request, not at load, as every
+  credential file is, their surrounding whitespace taken off; a file that is
+  missing, unreadable or empty MUST fail the scrape naming the key and the
+  file, never its content. A placeholder in one, or one written with blanks
+  alone, MUST be refused at load: `""` is the key left out. `--dry-run`
+  MUST read them as a request would and list what a scrape would fail on as
+  warnings of the `config` check, without failing it; startup and reloads
+  MUST NOT read them. Without them, the credentials MUST be the AWS SDK's
+  default chain: the environment, a web identity token, the shared files,
+  the container's and the instance's role. A client of the S3 API, and the
+  credentials its chain found, MUST be shared by the scrapes of collectors
+  with the same region, endpoint, path style and credential files, and
+  dropped when no collector in force has those settings.
+- The target MUST be a bucket name, written as it is or after `s3://`, with
+  a `/` after it or not: 3 to 63 lower-case letters, digits, dots and
+  hyphens, starting and ending with a letter or a digit, without `..`. It is
+  required: a probe without one MUST be answered `400`, a static target
+  without one refused at load. A target with a key, a query, a user or
+  another scheme, or that is no bucket name, MUST be answered `400` before
+  anything is sent. A bucket `denied_targets` matches, or, with
+  `allowed_targets` set, that it does not, MUST be refused with `403`
+  before anything is sent and counted in
+  `http_exporter_targets_refused_total`.
+- One object MUST be read with a HeadObject and then a GetObject, and read
+  again, once, when the GetObject finds its size or modification time other
+  than the HeadObject said, as `localfile` reads a file that changes under
+  the read. An object missing to the HeadObject MUST be followed by a
+  HeadBucket, so that a missing bucket fails the scrape saying the bucket
+  does not exist; an answer of `403` MUST fail it saying access was denied
+  and which permissions the credentials need. Every request MUST be sent
+  once, without the SDK's retries, within the probe's deadline. A failed
+  read MUST be reported in the `s3` stage, naming the key as the file under
+  `root` and the bucket as `s3://<bucket>`.
+- A collector with `files` MUST list the objects directly under `root`'s
+  prefix with ListObjectsV2 and the delimiter `/`, in pages of at most 256
+  asked for one at a time as `localfile` lists a directory in batches, and
+  read the objects whose name, the key after the prefix, matches, as
+  `localfile` reads a directory's files: a key below a further `/` and the
+  key of the prefix itself MUST NOT be read. A listing's description of an
+  object MUST stand in for its HeadObject until a GetObject finds the object
+  changed since. A prefix no key has MUST be read as an empty directory. A
+  store that answers 16 pages in a row with no entry while saying more
+  follow MUST fail the read saying so.
+- An object's response MUST be `localfile`'s, with `ETag`, the object's
+  entity tag, among its headers. A debug probe's request section MUST show
+  `READ` and the object's `s3://bucket/key` URL, or the prefix's ending in
+  `/`, and never a credential; the verbose `url` label MUST be that URL,
+  path parameters as their placeholders, and `http_method` MUST be `READ`.
+- A static target MAY set `path` and `timeout`, the path held to the rules
+  of a file's.
+- Only the type's files, behind its tag alone, MAY import the AWS SDK.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -5857,7 +5958,8 @@ waited at `max_per_target` and that failed there or at `max_targets`; and
 returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
-targets count in `http_exporter_targets_refused_total`.
+targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
+collector's refused buckets.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
 for `http` collectors, `0` for one without `request.pagination`, per
@@ -7691,7 +7793,9 @@ and `request.denied_targets`, lists of host names, globs of host names
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
 entry that is none of these, such as one with a scheme, a port or a path,
 MUST be refused at load; another request type setting either MUST be refused
-as any key of another type is. A name entry MAY hold letters, digits, dots,
+as any key of another type is. An `s3file` collector's lists name buckets,
+whose target is one (§ 5.1, `s3file`), and are held to the rules of names
+alone. A name entry MAY hold letters, digits, dots,
 hyphens and underscores, a hyphen first or last included. An entry MUST be
 written in ASCII: one with any character outside it — an internationalised
 name in its own letters, a full-width spelling, a space outside ASCII beside

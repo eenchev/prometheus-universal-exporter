@@ -267,6 +267,21 @@ type RequestConfig struct {
 	RecordType string `yaml:"record_type,omitempty"`
 	Server     string `yaml:"server,omitempty"`
 	Transport  string `yaml:"transport,omitempty"`
+	// Region, Endpoint and PathStyle belong to the s3file type, with Root,
+	// Path and the directory keys above: the region requests are signed
+	// for, the URL of an S3-compatible store in place of AWS's, and whether
+	// the bucket is named in the URL's path rather than its host.
+	// AccessKeyIDFile, SecretAccessKeyFile and SessionTokenFile are the
+	// files of static credentials, read at each request; without them the
+	// AWS SDK's default chain finds credentials (fetch/requesttype_s3file.go).
+	// Left out of a collector written as YAML when empty, as the sql keys
+	// are.
+	Region              string `yaml:"region,omitempty"`
+	Endpoint            string `yaml:"endpoint,omitempty"`
+	PathStyle           bool   `yaml:"path_style,omitempty"`
+	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
+	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
+	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
 }
 
 // DNSRecordTypes are the values of a dns collector's request.record_type.

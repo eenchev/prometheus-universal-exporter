@@ -95,9 +95,12 @@ The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `LXML_VERSION`,
 defaults. Override them with `docker build --build-arg NAME=value`.
 
 `REQUEST_TYPES` is a build argument too, but not a pinned version: empty by
-default, which builds every request type, or a comma-separated list such as
-`http` to build only those. See
+default, which builds every request type but the opt-in ones, or a
+comma-separated list such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
+`OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
+leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)).
+`SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
 
@@ -214,3 +217,30 @@ Snowflake's. CI vets, builds and
 tests a build with all four opt-in drivers, which no other build compiles
 (see [Development](DEVELOPMENT.md#the-sql-request-type)). The stand-in
 database of the tests (`internal/sqltest`) uses `database/sql/driver` alone.
+
+The [`s3file`](S3FILE.md) request type, which a build carries only when
+`OPT_IN_REQUEST_TYPES` names it, has four direct dependencies of its own,
+all of the AWS SDK for Go v2: `github.com/aws/aws-sdk-go-v2`, the SDK's
+core, for its configuration and credential types (`aws`);
+`github.com/aws/aws-sdk-go-v2/config`, which finds the region and the
+credentials by the SDK's default chain — the environment, a web identity
+token, the shared files, the container's or the instance's role — and
+brings the credential providers and the STS, SSO and instance metadata
+clients they use; `github.com/aws/aws-sdk-go-v2/service/s3`, the S3 client
+that signs and sends the HeadObject, GetObject, HeadBucket and
+ListObjectsV2 requests; and `github.com/aws/smithy-go`, the SDK's runtime,
+whose `APIError` tells a missing bucket by its error code. They were in
+`go.mod` already, as indirect dependencies of the `snowflake` driver, at
+the same versions. Only the type's two files, built under its tag alone
+(`internal/fetch/requesttype_s3file.go` and `s3source.go`), import them,
+so the default build and the published image link none of the AWS SDK, and
+a test (`TestOnlyTheTypesThatNeedThemLinkTheirModules`) keeps it so, finding
+the S3 client in a build with the type and no AWS module in one without
+it; the `snowflake` driver links the AWS SDK too, its S3 client among it,
+which is that driver's build to carry
+(`TestOnlyTheBuildsWithASQLDriverLinkIt`). Measured as the image builds,
+they add about 6.7 MB: 37.0 MB for the default build with `s3file`
+against 30.3 MB without it. CI vets, builds, lints and tests a build with
+it beside the default build's types, and each build of one type, `s3file`
+among them. The stand-in store of the tests is an `httptest` server answering
+the calls a read makes, in the tests themselves, with no SDK code.

@@ -94,6 +94,8 @@ func targetHint(c *model.Collector, required bool) string {
 		hint = "a file or directory under its root"
 	case fetch.RequestTypeSSHFile:
 		hint = "host or host:port"
+	case fetch.RequestTypeS3File:
+		hint = "the bucket, or s3://bucket"
 	case fetch.RequestTypeSQL:
 		hint = "the database server, host or host:port"
 		if c.Request.Driver == fetch.SQLDriverSnowflake {

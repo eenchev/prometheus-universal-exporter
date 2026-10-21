@@ -2159,9 +2159,10 @@ may be 64 KiB; the exporter answers a longer one `431`.
 
 #### Choosing request types at build time
 
-Every build of the exporter carries every request type, and so does the
-published image. A build can instead carry only the types it needs, which keeps
-the other types' code, and the libraries only they use, out of the binary:
+Every build of the exporter carries every request type but the opt-in ones,
+and so does the published image. A build can instead carry only the types it
+needs, which keeps the other types' code, and the libraries only they use, out
+of the binary:
 
 ```sh
 make build REQUEST_TYPES=http
@@ -2173,7 +2174,7 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `go build .` writes it to the current directory.
 
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
-means every type. A name that is not a request type fails the build, and so does
+means every type but the opt-in ones. A name that is not a request type fails the build, and so does
 a selection that names none. The script turns the list into Go build tags —
 `select_request_types` plus `request_type_<name>` per type — which is all
 `go build -tags select_request_types,request_type_http` needs by hand.
@@ -2195,11 +2196,29 @@ HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns` and
-`tlscert` need nothing outside the standard library. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+`tlscert` need nothing outside the standard library; the opt-in `s3file`
+links the AWS SDK, below. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
 drivers](SQL.md#building-with-more-drivers)).
+
+An opt-in type is one no build carries unless asked, the default build and
+the published image among them: `s3file`, which links the AWS SDK, about
+6.7 MB. `OPT_IN_REQUEST_TYPES` adds one to the types a build carries,
+whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like any
+type:
+
+```sh
+make build OPT_IN_REQUEST_TYPES=s3file
+docker build --build-arg OPT_IN_REQUEST_TYPES=s3file -t exporter:s3file .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file)" .
+```
+
+Its tag alone, `request_type_s3file`, adds it to a default build. A collector
+of an opt-in type is refused by a build without it with a message that says
+the type is opt-in and how to build with it ([Building with
+s3file](S3FILE.md#building-with-s3file)).
 
 ### When a metric cannot be extracted
 

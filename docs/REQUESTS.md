@@ -765,8 +765,10 @@ Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
 `graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target) and
-[`tlscert`](TLSCERT.md) collectors, and which names a [`dns`](DNS.md#target-lists)
-collector may resolve, matched by name alone:
+[`tlscert`](TLSCERT.md) collectors, which names a [`dns`](DNS.md#target-lists)
+collector may resolve, matched by name alone, and which buckets an
+[`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
+glob, since its target is a bucket:
 
 ```yaml
 request:
@@ -934,7 +936,8 @@ environment applies to the whole exporter, and is read once, when the exporter
 first connects. In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
 affected, and neither are `sshfile` and `sql` collectors, which connect to
-their hosts directly.
+their hosts directly; `s3file` collectors go through the proxy, by the AWS
+SDK's own client, which reads the same variables.
 
 ## Retries
 

@@ -12,10 +12,17 @@ import (
 
 // Every request key must belong to at least one type. A field added to
 // RequestConfig without deciding which types accept it would be rejected for
-// all of them; this makes that decision impossible to forget.
+// all of them; this makes that decision impossible to forget. The keys of an
+// opt-in type the build left out are claimed by it all the same
+// (optInRequestKeys).
 func TestEveryRequestKeyBelongsToAType(t *testing.T) {
 	claimed := map[string]bool{"type": true}
 	targetClaimed := map[string]bool{}
+	for _, keys := range optInRequestKeys {
+		for _, key := range keys {
+			claimed[key] = true
+		}
+	}
 	for _, rt := range RequestTypes {
 		for _, key := range rt.Fields {
 			claimed[key] = true

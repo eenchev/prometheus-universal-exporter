@@ -350,7 +350,7 @@ func requestTypesInTheTree(t *testing.T) []string {
 
 // requestTypeLoop matches a shell loop over the request types, as ci.yml and
 // the Makefile write it.
-var requestTypeLoop = regexp.MustCompile(`(?m)\bfor type in ([a-z ]+); do\b`)
+var requestTypeLoop = regexp.MustCompile(`(?m)\bfor type in ([a-z0-9 ]+); do\b`)
 
 // CI vets, builds and tests each request type on its own, so each of its
 // loops names every internal/fetch/requesttype_<name>.go.
@@ -558,12 +558,13 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 // `make build` compiled every package and kept nothing, while the docs gave
 // it as the way to build the exporter with only some request types. It
 // builds the main package into bin/, under the name the image gives the
-// binary, with the tags of REQUEST_TYPES and SQL_DRIVERS, and the docs that
+// binary, with the tags of REQUEST_TYPES, SQL_DRIVERS and
+// OPT_IN_REQUEST_TYPES, and the docs that
 // give it say where the binary lands. The target allocator, cmd/pue-allocator,
 // is built beside it with the same tags, and the image carries both.
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
-	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$tags" -o bin/$(APP) . && go build -tags "$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)`
+	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)' '$(OPT_IN_REQUEST_TYPES)')" && go build -tags "$tags" -o bin/$(APP) . && go build -tags "$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)`
 	if got := strings.TrimSpace(recipes["build"]); got != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}

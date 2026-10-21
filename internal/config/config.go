@@ -2088,7 +2088,7 @@ func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 // transform implies none, decodes what it reads.
 func undecidedDecoderWarning(x *model.Collector) string {
 	how := "by the Content-Type header of each response"
-	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile {
+	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile || x.Request.Type == fetch.RequestTypeS3File {
 		how = "by the extension of each file"
 	}
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)

@@ -20,11 +20,16 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build build-request-types build-sql-drivers ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
+.PHONY: build build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
-# example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
+# example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
+# but the opt-in ones.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
+# OPT_IN_REQUEST_TYPES adds the opt-in request types, comma-separated, which
+# no build carries unless asked: `make build OPT_IN_REQUEST_TYPES=s3file`.
+# See docs/S3FILE.md.
+OPT_IN_REQUEST_TYPES ?=
 # SQL_DRIVERS adds the sql request type's opt-in database drivers,
 # comma-separated, for example `make build SQL_DRIVERS=oracle,snowflake`: any
 # of oracle, clickhouse, snowflake and vertica. Empty, the default, the sql
@@ -36,7 +41,7 @@ SQL_DRIVERS ?=
 # target allocator's, bin/$(ALLOCATOR), with the same request types: the
 # allocator checks the configuration it serves with the exporter's loader.
 build:
-	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)')" && go build -tags "$$tags" -o bin/$(APP) . && go build -tags "$$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)' '$(OPT_IN_REQUEST_TYPES)')" && go build -tags "$$tags" -o bin/$(APP) . && go build -tags "$$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)
 
 # What ci.yml's build steps run: every package compiled, then each request
 # type vetted and built on its own, so code one type needs cannot quietly
@@ -44,7 +49,7 @@ build:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http localfile sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -70,6 +75,28 @@ lint-sql-drivers: lint-version
 test-sql-drivers:
 	tags="$$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$$tags" ./internal/fetch/
 
+# What ci.yml's build step of the opt-in request types runs: every package
+# vetted and built with every type of the default build and every opt-in
+# type besides, which no other build compiles together, as a build with
+# OPT_IN_REQUEST_TYPES is. A test keeps the list naming every opt-in type in
+# the tree.
+build-opt-in-types:
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
+
+# golangci-lint over the build with every opt-in request type, as ci.yml's
+# third lint step runs it: no other lint run compiles them beside the
+# default build's types.
+lint-opt-in-types: lint-version
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file)" && golangci-lint run --build-tags "$$tags"
+
+# The internal/fetch and repository tests of the build with every opt-in
+# request type, as ci.yml runs them: the opt-in types' tests beside the
+# default build's, and their documentation's examples and schema rows,
+# which a build of one type's tests reach only through make. Once and
+# without -race.
+test-opt-in-types:
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file)" && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
+
 # Opt-in: the sql request type against real databases, which the
 # PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
 # (host:port), each with its _USER and _PASSWORD; a database without its
@@ -93,7 +120,7 @@ test:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http localfile sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \
@@ -489,4 +516,4 @@ helm-test: helm-version
 		fi; \
 	done
 
-ci: fmt-check lint lint-sql-drivers gopls-check test vet build-request-types test-request-types build-sql-drivers test-sql-drivers helm-test
+ci: fmt-check lint lint-sql-drivers lint-opt-in-types gopls-check test vet build-request-types test-request-types build-sql-drivers test-sql-drivers build-opt-in-types test-opt-in-types helm-test

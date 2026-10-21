@@ -531,6 +531,35 @@ extraVolumeMounts:
     readOnly: true
 ```
 
+## S3 object collectors
+
+An `s3file` collector reads objects from Amazon S3 or a store that speaks its API. The type is opt-in: the published image does not carry it, so build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=s3file`, push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+The collector's credentials need no mount of the chart's own. On EKS, give the pods the IAM role of their service account (IRSA), which the AWS SDK's default chain takes from the token and role EKS hands the pods, with nothing to rotate:
+
+```yaml
+image:
+  repository: registry.example.com/prometheus-universal-exporter-s3
+  tag: "1.4.0"
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/metrics-reader
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: textfiles
+          request:
+            type: s3file
+            root: /textfiles/prod
+            files: ["*.prom"]
+            region: eu-west-1
+          transform:
+            type: prometheus
+```
+
+and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+
 ## Common configuration
 
 ### Exporter flags

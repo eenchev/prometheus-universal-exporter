@@ -21,7 +21,8 @@ import (
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
 // statement on a database, dns resolves a name, tlscert reads the
-// certificates of a TLS handshake. The
+// certificates of a TLS handshake, s3file reads an object from S3 or a
+// store that speaks its API. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -49,13 +50,22 @@ const (
 	RequestTypeSQL       = "sql"
 	RequestTypeDNS       = "dns"
 	RequestTypeTLSCert   = "tlscert"
+	RequestTypeS3File    = "s3file"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File}
+
+// optInRequestTypes are the types of knownRequestTypes that a default build
+// leaves out, as it leaves out the sql type's opt-in drivers: s3file links
+// the AWS SDK, which few deployments want in the binary. A build carries one
+// only when asked, with its request_type_<name> tag, and its file is built
+// under that tag alone. A test keeps the list in step with the files'
+// constraints.
+var optInRequestTypes = []string{RequestTypeS3File}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -250,9 +260,15 @@ func ReadFiles(c *model.Collector) (paths []string, read string) {
 //
 //	//go:build !select_request_types || request_type_<name>
 //
-// A default build carries every type. Building with -tags
-// select_request_types,request_type_http carries only the listed ones; the
-// others, and everything only they import, are left out of the binary.
+// A default build carries every type but the opt-in ones (optInRequestTypes),
+// whose files are built under their own tag alone:
+//
+//	//go:build request_type_<name>
+//
+// so -tags request_type_s3file is a default build with s3file added. Building
+// with -tags select_request_types,request_type_http carries only the listed
+// ones; the others, and everything only they import, are left out of the
+// binary.
 //
 // The map is a variable, rather than being built once, only so a test can
 // register a fixture type to exercise the per-type rules with more than one
@@ -305,6 +321,9 @@ func ValidateRequest(c *model.Collector) error {
 		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: %s` to its request block)", c.Name, supportedRequestTypes(), suggestedRequestType())
 	}
 	rt, ok := RequestTypes[c.Request.Type]
+	if !ok && slices.Contains(optInRequestTypes, c.Request.Type) {
+		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. %s is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=%s (make build, or the Dockerfile's build argument), which adds the tag request_type_%s", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type, c.Request.Type, c.Request.Type)
+	}
 	if !ok && slices.Contains(knownRequestTypes, c.Request.Type) {
 		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. Use a build that includes it: the default build includes every type, and a build with -tags select_request_types needs request_type_%s in its tags too", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type)
 	}

@@ -1,4 +1,4 @@
-//go:build !select_request_types && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
+//go:build !select_request_types && !request_type_s3file && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
 
 package repository
 
@@ -46,8 +46,8 @@ func TestCommittedCollectorFileSchemaIsCurrent(t *testing.T) {
 //
 // The committed schemas are those of the default build, which make schemas
 // runs: the file's build constraint keeps these comparisons out of a build
-// with an opt-in sql driver, whose schema names that driver too, as its
-// loader takes it (TestTheCommittedSchemaComparisonsRunInTheDefaultBuild).
+// with an opt-in request type or sql driver, whose schema names that type
+// or driver too, as its loader takes it (TestTheCommittedSchemaComparisonsRunInTheDefaultBuild).
 func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 	committed, err := os.ReadFile(configSchemaFile)
 	if err != nil {

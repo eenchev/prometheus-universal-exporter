@@ -165,7 +165,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 var requestTypeFamilies = map[string][]string{
 	"http_exporter_scrape_grpc_status_code": {"grpc"},
 	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql"},
+	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql", "s3file"},
 	"http_exporter_pages_fetched_total":                {"http"},
 	"http_exporter_pagination_max_pages_reached_total": {"http"},
 	"http_exporter_sshfile_connections":                {"sshfile"},

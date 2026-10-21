@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -13,10 +14,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Request types are chosen at build time. A default build carries every type;
-// -tags select_request_types,request_type_<name>,... carries only the named
-// ones. Each type lives in requesttype_<name>.go behind
-// `//go:build !select_request_types || request_type_<name>`, and
+// Request types are chosen at build time. A default build carries every type
+// but the opt-in ones; -tags select_request_types,request_type_<name>,...
+// carries only the named ones. Each type lives in requesttype_<name>.go
+// behind `//go:build !select_request_types || request_type_<name>`, an
+// opt-in type behind `//go:build request_type_<name>` alone, and
 // requesttype_none.go fails a selective build that names no type at all.
 
 const requestTypeGuardFile = "requesttype_none.go"
@@ -54,8 +56,19 @@ func buildConstraint(t *testing.T, file string) string {
 	return ""
 }
 
+// selectionConstraint is the constraint a type's file, and its own tests'
+// file, carries: an opt-in type's names its tag alone, so a default build
+// leaves it out.
+func selectionConstraint(name string) string {
+	if slices.Contains(optInRequestTypes, name) {
+		return "//go:build request_type_" + name
+	}
+	return "//go:build !select_request_types || request_type_" + name
+}
+
 // Every type's file carries exactly the constraint that makes the scheme work,
-// and knownRequestTypes names exactly the types that have a file.
+// and knownRequestTypes names exactly the types that have a file. The
+// opt-in types are among them.
 func TestEveryRequestTypeFileHasItsSelectionConstraint(t *testing.T) {
 	names := requestTypeFiles(t)
 	known := append([]string(nil), knownRequestTypes...)
@@ -63,10 +76,14 @@ func TestEveryRequestTypeFileHasItsSelectionConstraint(t *testing.T) {
 	if !reflect.DeepEqual(names, known) {
 		t.Fatalf("request type files %v, but knownRequestTypes is %v", names, known)
 	}
+	for _, name := range optInRequestTypes {
+		if !slices.Contains(knownRequestTypes, name) {
+			t.Errorf("the opt-in type %s is not in knownRequestTypes", name)
+		}
+	}
 	for _, name := range names {
 		file := "requesttype_" + name + ".go"
-		want := "//go:build !select_request_types || request_type_" + name
-		if got := buildConstraint(t, file); got != want {
+		if got, want := buildConstraint(t, file), selectionConstraint(name); got != want {
 			t.Errorf("%s: constraint %q, want %q", file, got, want)
 		}
 	}
@@ -110,8 +127,20 @@ func TestBuildTagsSelectTheRequestTypeFiles(t *testing.T) {
 	}
 	all := included()
 	for _, name := range knownRequestTypes {
-		if !all["requesttype_"+name+".go"] {
-			t.Errorf("a default build leaves out %s", name)
+		if got, want := all["requesttype_"+name+".go"], !slices.Contains(optInRequestTypes, name); got != want {
+			t.Errorf("a default build compiles %s: %v, want %v (an opt-in type is left out)", name, got, want)
+		}
+	}
+	// An opt-in type's tag adds it to a default build, and to a selective
+	// one, as any type's does.
+	for _, name := range optInRequestTypes {
+		withIt := included("request_type_" + name)
+		if !withIt["requesttype_"+name+".go"] || !withIt["requesttype_http.go"] || withIt[requestTypeGuardFile] {
+			t.Errorf("-tags request_type_%s compiles %v", name, withIt)
+		}
+		alone := included("select_request_types", "request_type_"+name)
+		if !alone["requesttype_"+name+".go"] || alone["requesttype_http.go"] || alone[requestTypeGuardFile] {
+			t.Errorf("-tags select_request_types,request_type_%s compiles %v", name, alone)
 		}
 	}
 	if all[requestTypeGuardFile] {
@@ -143,8 +172,7 @@ func TestRequestTypeTestFilesCarryTheirTypesConstraint(t *testing.T) {
 		if _, err := os.Stat(file); err != nil {
 			continue
 		}
-		want := "//go:build !select_request_types || request_type_" + name
-		if got := buildConstraint(t, file); got != want {
+		if got, want := buildConstraint(t, file), selectionConstraint(name); got != want {
 			t.Errorf("%s: constraint %q, want %q", file, got, want)
 		}
 	}

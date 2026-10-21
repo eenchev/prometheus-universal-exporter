@@ -185,6 +185,12 @@ func checkCorpusFile(r *rand.Rand, cfg *model.Config) *model.StaticTargetFile {
 		}
 		// A name alone is the only target of these a dns collector takes.
 		t.Target = oneOf(r, "http://target.invalid:8080", "http://target.invalid:8080", "target.invalid:9090", "target.invalid:9090", "target.invalid", "target.invalid", "/srv/metrics/a.txt", "", "::")
+		// An s3file target is a bucket, which none of those is: a target
+		// of such a collector names one, mostly, so that a build of that
+		// type alone reaches what the check refuses after the address.
+		if c := model.CollectorByName(cfg, t.Collector); c != nil && c.Request.Type == fetch.RequestTypeS3File && r.IntN(4) > 0 {
+			t.Target = "metrics-bucket"
+		}
 		if r.IntN(8) == 0 {
 			t.Request.Method = "POST"
 		}

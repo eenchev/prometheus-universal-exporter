@@ -21,6 +21,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeSQL:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.database, its args or its label values names them`,
 	RequestTypeDNS:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeTLSCert:   `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeS3File:    `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -41,8 +42,8 @@ var placeWords = []struct{ field, word string }{
 // For every request type of the build, the refusal of a parameter nothing
 // uses names every place a placeholder of such a collector is filled in,
 // and no place its type does not have: a graphite collector's expressions,
-// and no body; a grpc collector's message and metadata values; a localfile
-// or sshfile collector's path and nothing else of the request; a sql
+// and no body; a grpc collector's message and metadata values; a localfile,
+// sshfile or s3file collector's path and nothing else of the request; a sql
 // collector's database and args. The
 // collector has a placeholder in each request key its type takes of those
 // that are filled, so a type that starts filling another place fails here

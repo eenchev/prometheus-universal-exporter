@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_localfile || request_type_sshfile
+//go:build !select_request_types || request_type_localfile || request_type_s3file || request_type_sshfile
 
 package fetch
 
@@ -17,12 +17,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// localfile and sshfile read files the same way, one from the exporter's own
-// filesystem and the other from a remote host's over SFTP: confined to
+// localfile, sshfile and s3file read files the same way, from the exporter's
+// own filesystem, from a remote host's over SFTP and from a bucket over the
+// S3 API: confined to
 // request.root, only regular files, read again when they change under the
 // read, refused past the response limit or max_age, and presented to the
 // pipeline as a response with no status. What they read from is a fileSource:
-// an os.Root for localfile (rootSource), an SFTP session for sshfile. A
+// an os.Root for localfile (rootSource), an SFTP session for sshfile, a
+// bucket for s3file (s3source.go). A
 // directory is read by the same code too (localfile_directory.go).
 
 // fileSource is a tree of files that every read is confined to. Names are
@@ -70,10 +72,11 @@ var afterLocalFileRead atomic.Pointer[func(string)]
 // tried before the scrape gives up on it.
 const localFileAttempts = 2
 
-// validateFileRequest holds the rules localfile and sshfile share: root is
-// required, absolute, not localfile's filesystem root, and stored cleaned;
-// sshfile's may be /, which on a host is often the directory of an account
-// confined to it (a chroot), and is the host's alone in any case; max_age
+// validateFileRequest holds the rules localfile, sshfile and s3file share:
+// root is required, absolute, not localfile's filesystem root, and stored
+// cleaned; sshfile's may be /, which on a host is often the directory of an
+// account confined to it (a chroot), and is the host's alone in any case,
+// and s3file's, which is a bucket's every key; max_age
 // is not negative; and path, with its placeholders, names a file under root.
 // typeName is the type the message for a missing root names.
 func validateFileRequest(x *model.Collector, typeName string) error {
@@ -85,7 +88,7 @@ func validateFileRequest(x *model.Collector, typeName string) error {
 		return fmt.Errorf("collector %q request.root %q must be an absolute path", x.Name, root)
 	}
 	root = filepath.Clean(root)
-	if root == string(filepath.Separator) && typeName != RequestTypeSSHFile {
+	if root == string(filepath.Separator) && typeName == RequestTypeLocalFile {
 		return fmt.Errorf("collector %q request.root must not be the filesystem root; name the narrowest directory that holds the files", x.Name)
 	}
 	x.Request.Root = root

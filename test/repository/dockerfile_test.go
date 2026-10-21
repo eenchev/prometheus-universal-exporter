@@ -85,8 +85,8 @@ func TestTheImageUserIsNumeric(t *testing.T) {
 	}
 }
 
-// tools/request-type-tags.sh turns REQUEST_TYPES, and SQL_DRIVERS, into
-// build tags for the Dockerfile and the Makefile.
+// tools/request-type-tags.sh turns REQUEST_TYPES, SQL_DRIVERS and
+// OPT_IN_REQUEST_TYPES into build tags for the Dockerfile and the Makefile.
 func TestRequestTypeTagsScript(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
@@ -155,6 +155,41 @@ func TestRequestTypeTagsScript(t *testing.T) {
 			t.Errorf("%q: got %q err=%v stderr=%q, want %q", lists, got, err, stderr, want)
 		}
 	}
+	// A third list adds the opt-in request types, which no build carries
+	// unless asked: to the default build's types, or to those REQUEST_TYPES
+	// lists, which may name one too. A type of every build, and one that
+	// does not exist, are refused.
+	withOptIn := func(types, drivers, optIn string) (string, string, error) {
+		cmd := exec.Command("sh", "tools/request-type-tags.sh", types, drivers, optIn)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return strings.TrimSpace(stdout.String()), stderr.String(), err
+	}
+	for lists, want := range map[[3]string]string{
+		{"", "", "s3file"}:                 "request_type_s3file",
+		{"", "", "s3file,s3file"}:          "request_type_s3file",
+		{"http", "", "s3file"}:             "select_request_types,request_type_http,request_type_s3file",
+		{"s3file", "", ""}:                 "select_request_types,request_type_s3file",
+		{"s3file", "", "s3file"}:           "select_request_types,request_type_s3file",
+		{"", "snowflake", "s3file"}:        "sql_driver_snowflake,minicore_disabled,request_type_s3file",
+		{"sql,s3file", "oracle", "s3file"}: "select_request_types,request_type_sql,request_type_s3file,sql_driver_oracle",
+	} {
+		got, stderr, err := withOptIn(lists[0], lists[1], lists[2])
+		if err != nil || got != want {
+			t.Errorf("%q: got %q err=%v %s, want %q", lists, got, err, stderr, want)
+		}
+	}
+	for optIn, want := range map[string]string{
+		"http":  `the request type "http" is in every build and needs no OPT_IN_REQUEST_TYPES entry`,
+		"s3":    `no opt-in request type "s3"`,
+		"none":  `no opt-in request type "none"`,
+		"s3fil": `no opt-in request type "s3fil"`,
+	} {
+		if got, stderr, err := withOptIn("", "", optIn); err == nil || !strings.Contains(stderr, want) {
+			t.Errorf("%q: got %q err=%v stderr=%q, want %q", optIn, got, err, stderr, want)
+		}
+	}
 }
 
 func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
@@ -162,7 +197,7 @@ func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
 	if err != nil {
 		t.Skipf("no Dockerfile to check: %v", err)
 	}
-	for _, want := range []string{"ARG REQUEST_TYPES\n", "ARG SQL_DRIVERS\n", `sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}"`, `-tags "${tags}"`} {
+	for _, want := range []string{"ARG REQUEST_TYPES\n", "ARG SQL_DRIVERS\n", "ARG OPT_IN_REQUEST_TYPES\n", `sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}" "${OPT_IN_REQUEST_TYPES}"`, `-tags "${tags}"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("the Dockerfile is missing %q", want)
 		}

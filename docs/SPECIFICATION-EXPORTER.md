@@ -24036,6 +24036,59 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - The collectors page hints an s3file collector's target as the bucket, or
   s3://bucket, and required (TestTheCollectorsPageHintsAnS3FileTarget).
 
+## 34.155 One debugging feature at two levels
+
+- `--web.debug` takes `off`, `edit`, `full` and `FULL` at `--dry-run`, and
+  `on`, `true` and an empty value are command-line errors (exit 2, before
+  `--dry-run`) saying the level is none of `off`, `edit` or `full` (§ 42.17).
+- The level reaches the server: with the flag left out `/debug` answers `404`
+  and a debug probe `403`; at `edit` `/debug` answers `200` and a debug probe
+  `403`; at `full` both are served, the debug probe of an unknown collector
+  answered `400` (§ 42.17).
+- At `edit` a debug probe and `/static-targets?debug=<name>` are answered
+  `403` naming `--web.debug=full`, the probe's refusal saying that `edit`
+  runs on pasted responses only, and neither reaches the target (§ 42.17).
+- A debug probe's report is answered with `X-Content-Type-Options: nosniff`
+  (§ 42.17).
+- A configured collector run by name on a pasted body at `edit` makes no
+  request, has a report naming it a debug run of the collector, not an
+  edited one, on a pasted response, and answers the series a probe of it
+  answers for the same response (§ 42.17).
+- A configured collector's python transform runs on a pasted body at `edit`
+  and counts one run in the collector's own worker statistics (§ 42.17).
+- At `full` the debug page scrapes a static target once with its own
+  credential, which the report withholds, answers `target up 1` with the
+  series labelled with the target's labels and `static_target`, runs a
+  written collector on the same scrape, answers `404` for an unknown target
+  and publishes nothing; at `edit` the scrape is `403` naming
+  `--web.debug=full` without reaching the target (§ 42.17).
+- At `edit` a fetch is refused `403` for a written collector and for a
+  configured one alike, without reaching the target; at `full` a configured
+  collector fetches through itself, with its own credential, and a written
+  collector without `request_from` is answered `400` (§ 42.17).
+- `http_exporter_debug_runs_total` is absent with debugging off; at `edit` it
+  has `kind="page"` alone, counting two successes, one failure and three
+  invalid runs — a collector the loader refuses, a run with no source and a
+  fetch the level refuses; at `full` it counts a debug probe's success and
+  two invalid ones — a wrong parameter and an unknown collector — a debug
+  scrape's success and an unknown name's invalid one, and a page run's
+  fetch, and none of the collector's families nor
+  `http_exporter_probes_seconds_total` (§ 42.17).
+- A page run past the 4 in progress is answered `503` and counted a
+  `failure` (§ 42.17).
+- The collectors page links each collector as `debug?collector=<name>` at
+  `edit`, with the link carrying the form's target at `full`, links nothing
+  with debugging off, and no form asks `/probe` for a debug report (§ 23,
+  § 42.17).
+- A debug probe and the debug page's run of the same collector both show a
+  header value of a megabyte by its first 1,024 bytes and its length, the
+  page's JSON `response` too, with the second line saying what a probe would
+  have answered (§ 42.17).
+- The chart renders `--web.debug=edit` and `--web.debug=full` for
+  `server.debug` `edit` and `full`, nothing for the default and `off`, and
+  fails rendering for `server.debug: on` and for `--web.debug` in
+  `extraArgs`, naming `server.debug` (chart § 19).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

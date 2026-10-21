@@ -25,5 +25,7 @@ func (*requestLogin) set(*http.Request) {}
 
 func (*requestLogin) sends(string) bool { return false }
 
+func (*requestLogin) carried(*http.Request) bool { return false }
+
 // LoginFingerprint is "" in a build where no static target can log in.
 func LoginFingerprint(*model.LoginConfig) string { return "" }

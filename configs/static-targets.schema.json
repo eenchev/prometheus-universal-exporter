@@ -846,12 +846,9 @@
                     "type": "string"
                   },
                   "url": {
-                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path such as /api/login resolved against the target, so each target is logged in to. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
-                    "type": [
-                      "string",
-                      "number",
-                      "boolean"
-                    ]
+                    "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
+                    "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                    "type": "string"
                   }
                 },
                 "type": "object"

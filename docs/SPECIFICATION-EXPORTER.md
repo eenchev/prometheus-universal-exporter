@@ -25259,10 +25259,13 @@ no login made for that request.
 
 Where a login goes MUST be the configuration's alone. `url` MUST be an
 absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
-reference resolved against the target, its scheme, host and port, without
-the target's credentials, query or fragment; it MUST hold no credentials,
-fragment or placeholder, and a reference naming a host without a scheme
-(`//host/...`) MUST be refused. The login request MUST be held to the
+path from the root (starting with `/`), with a query if need be, resolved
+against the target's scheme, host and port alone: the target's path, query,
+credentials and fragment MUST NOT play a part in where the login goes or in
+which token is kept. A relative reference that does not start with `/`
+(`login`, `../login`, `?x`) MUST be refused at load, and in the schema. It
+MUST hold no credentials, fragment or placeholder, and a reference naming a
+host without a scheme (`//host/...`) MUST be refused. The login request MUST be held to the
 collector's `allowed_targets` and `denied_targets` (§ 26.1), and a login URL
 they refuse MUST fail the trip as a failed login, not as a refused target. A
 login MUST NOT follow a redirect. It MUST be made with `login.tls` when set,
@@ -25277,9 +25280,12 @@ but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own
 deadline, and the login MUST NOT be cut short by the request that began it
-going away. A login that fails while the token kept has not expired MUST
+going away or reaching its deadline: it MUST run within a bound of its own,
+30 seconds, and a request that stops waiting MUST NOT fail it. A login that fails while the token kept has not expired MUST
 leave that token in use, counted as a failure. A target that answers `401`
-MUST have the token it was sent dropped, unless a newer one replaced it
+to a request that carried the token — the last request of a followed
+redirect, which MUST NOT be taken for a refusal of the token when a hop to
+another origin left it behind — MUST have the token it was sent dropped, unless a newer one replaced it
 meanwhile, and the request MUST be sent once more with the token of a new
 login, whatever its method; that request MUST NOT be one of
 `retry.attempts`, and MUST be made within the trip's deadline. At most 1000
@@ -25295,6 +25301,10 @@ shown anywhere: not its body, a file's content or the token. An error of a
 `token` or `expires_in` expression MUST say the kind of value it gave and
 never the value. A debug report MUST list a login request, marked as one,
 with its headers redacted as every request's are and without its body. A
+debug run (§ 42.17) MUST use the token kept and keep the one its login
+gives, the collector's, but its logins MUST NOT be counted in
+`http_exporter_logins_total` or `http_exporter_login_failures_total`, unless
+a request that is no debug run's waited for the same login. A
 static target's `login` MUST be part of its cache key, and the debug page
 MUST refuse a collector written on it that sets `login`.
 

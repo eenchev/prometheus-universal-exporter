@@ -929,8 +929,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		// token, which may have been revoked or expired early: it is
 		// dropped and the request sent once more with a token from a new
 		// login. That is no attempt of request.retry's, and is made within
-		// the request's deadline.
-		if resp.StatusCode == http.StatusUnauthorized {
+		// the request's deadline. A 401 from where a redirect led without
+		// the token, to another origin, refused no token, and is answered
+		// as any other.
+		if resp.StatusCode == http.StatusUnauthorized && login.carried(resp.Request) {
 			again, err := login.again(requestContext)
 			if err != nil {
 				return nil, err

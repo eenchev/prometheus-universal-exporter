@@ -687,3 +687,120 @@ func TestALoginRequestIsTraced(t *testing.T) {
 		t.Errorf("traced %+v, want the login and then the request", requests)
 	}
 }
+
+// A shared login runs under its own bound, not the deadline of the request
+// that began it: a request that gives up before the login ends leaves it to
+// one still waiting, which gets the token within its own deadline, and the
+// login is not counted as failed.
+func TestASharedLoginOutlivesTheRequestThatBeganIt(t *testing.T) {
+	freshLogins(t)
+	server := newLoginServer(t, func(w http.ResponseWriter, n int64) {
+		time.Sleep(300 * time.Millisecond)
+		tokenAnswer(0)(w, n)
+	}, bearer("tok1"))
+	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() {
+		_, err := FetchCollector(short, server.URL+"/data", c, RequestOverrides{}, nil)
+		first <- err
+	}()
+	// The waiter asks once the first request's login is under way.
+	for server.logins.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	long, cancelLong := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLong()
+	response, err := FetchCollector(long, server.URL+"/data", c, RequestOverrides{}, nil)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Errorf("the waiter got %v, %+v; want the token of the login the short request began", err, response)
+	}
+	if err := <-first; err == nil {
+		t.Error("the 100ms request succeeded; want it to fail at its own deadline")
+	}
+	if made, failed := logins.counts("api"); server.logins.Load() != 1 || made != 1 || failed != 0 {
+		t.Errorf("made %d logins, counted %d made and %d failed; want one login, not failed", server.logins.Load(), made, failed)
+	}
+}
+
+// A relative login.url is a path from the root, resolved against the
+// target's scheme, host and port alone: the target's path and query choose
+// neither where the secrets go nor a token of their own. One relative to the
+// target's path is refused at load.
+func TestARelativeLoginURLKeepsOnlyTheTargetsOrigin(t *testing.T) {
+	freshLogins(t)
+	server := newLoginServer(t, tokenAnswer(0), bearer("tok1"))
+	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+	for _, path := range []string{"/~mallory/x/data", "/other/data?y=2", "/data"} {
+		if response, err := FetchCollector(context.Background(), server.URL+path, c, RequestOverrides{}, nil); err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("fetch %s: %v, %+v", path, err, response)
+		}
+	}
+	if server.logins.Load() != 1 || logins.size() != 1 {
+		t.Errorf("made %d logins and kept %d tokens for three paths of one target, want one of each at /login", server.logins.Load(), logins.size())
+	}
+	for _, relative := range []string{"login", "./login", "../login", "?x=1"} {
+		col := testutil.Collector("api", "text")
+		col.Request.Login = &model.LoginConfig{Type: "json", URL: relative, Token: ".access_token", FieldFiles: map[string]string{"password": "/run/p"}}
+		if err := ValidateRequest(&col); err == nil || !strings.Contains(err.Error(), "relative to the target's path") {
+			t.Errorf("login.url %q: got %v, want it refused as relative to the target's path", relative, err)
+		}
+	}
+}
+
+// A 401 from where a redirect led without the token, another origin, is no
+// refusal of the token: it is the answer, and no login is made again.
+func TestA401FromARedirectWithoutTheTokenMakesNoNewLogin(t *testing.T) {
+	freshLogins(t)
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer elsewhere.Close()
+	server := newLoginServer(t, tokenAnswer(0), func(r *http.Request) bool { return false })
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			server.Config.Handler.ServeHTTP(w, r)
+			return
+		}
+		http.Redirect(w, r, elsewhere.URL+"/data", http.StatusFound)
+	}))
+	defer redirecting.Close()
+	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+	c.Request.FollowRedirects = true
+	response, err := FetchCollector(context.Background(), redirecting.URL+"/data", c, RequestOverrides{}, nil)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("fetch: %v, %+v; want the 401", err, response)
+	}
+	if n := server.logins.Load(); n != 1 {
+		t.Errorf("made %d logins, want 1: the 401 came from a hop the token was not sent to", n)
+	}
+}
+
+// A debug run's login is not counted in the collector's self-metrics, but
+// the token it fetched is the collector's, kept for the requests after it.
+func TestADebugRunsLoginIsNotCounted(t *testing.T) {
+	freshLogins(t)
+	server := newLoginServer(t, tokenAnswer(0), bearer("tok1"))
+	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+	ctx, _ := WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, server.URL+"/data", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if made, failed := logins.counts("api"); made != 0 || failed != 0 {
+		t.Errorf("counted %d logins and %d failures of a debug run, want none", made, failed)
+	}
+	if _, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := server.logins.Load(); n != 1 {
+		t.Errorf("made %d logins, want 1: the debug run's token is kept for the collector", n)
+	}
+
+	logins.reset()
+	failing := newLoginServer(t, func(w http.ResponseWriter, _ int64) { w.WriteHeader(http.StatusForbidden) }, bearer("tok1"))
+	if _, err := FetchCollector(ctx, failing.URL+"/data", c, RequestOverrides{}, nil); err == nil {
+		t.Fatal("a refused login succeeded")
+	}
+	if made, failed := logins.counts("api"); made != 0 || failed != 0 {
+		t.Errorf("counted %d logins and %d failures of a debug run's failed login, want none", made, failed)
+	}
+}

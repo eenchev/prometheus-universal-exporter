@@ -42,8 +42,9 @@ import (
 //     grant (RFC 6749 § 4.4), with golang.org/x/oauth2's clientcredentials.
 //
 // Where a login goes is the configuration's alone, never a probe's: login.url
-// is absolute, fixed for the collector, or a path resolved against the
-// target, the only part of it a probe chooses. Either way the login request
+// is absolute, fixed for the collector, or a path from the root resolved
+// against the target's scheme, host and port, the only part of it a probe
+// chooses. Either way the login request
 // is held to the collector's allowed_schemes, allowed_targets and
 // denied_targets as the request is, follows no redirect, and is sent with
 // login.tls, or the collector's request.tls, never with what a probe
@@ -74,8 +75,11 @@ const loginAnswerLimit = 1 << 20
 // a probe chooses the target.
 const maxLoginEntries = 1000
 
-// loginTimeout bounds a login made for a request without a deadline. A
-// probe's and a static target's always have one.
+// loginTimeout bounds a login. A login is shared by every request that needs
+// its token while it is made, so it runs under a bound of its own rather
+// than the deadline of the request that began it: a probe with a short
+// timeout, or a debug probe, would otherwise cut it short for every request
+// waiting on it, each of which still returns at its own deadline.
 const loginTimeout = 30 * time.Second
 
 // loginNow is the clock a token's lifetime is read by; a test sets it.
@@ -173,10 +177,12 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string) 
 }
 
 // checkLoginURL checks login.url: an absolute http or https URL with a host,
-// of a scheme the collector allows, or a reference relative to the target —
-// a path, with a query if need be. Neither holds credentials, a fragment or
-// a placeholder: the URL is the configuration's, and nothing of a probe's
-// is put in it.
+// of a scheme the collector allows, or a path from the root, with a query if
+// need be, resolved against the target's scheme, host and port. A path
+// relative to the target's own would let the target's path, which a probe
+// chooses, choose where the secrets go, and give each path a token of its
+// own. Neither holds credentials, a fragment or a placeholder: the URL is the
+// configuration's, and nothing of a probe's is put in it.
 func checkLoginURL(raw string, allowedSchemes []string) error {
 	if strings.TrimSpace(raw) == "" {
 		return errors.New("is required: the URL the login is sent to, absolute or a path resolved against the target")
@@ -197,6 +203,9 @@ func checkLoginURL(raw string, allowedSchemes []string) error {
 	if u.Scheme == "" {
 		if u.Host != "" || strings.HasPrefix(raw, "//") {
 			return errors.New("names a host without a scheme; write an absolute URL, such as https://idp.example/token, or a path resolved against the target")
+		}
+		if !strings.HasPrefix(raw, "/") {
+			return fmt.Errorf("%q is relative to the target's path; write a path from the root, such as /api/login, which is resolved against the target's scheme, host and port alone, or an absolute URL", RedactURL(u, MaskQueryValues))
 		}
 		return nil
 	}
@@ -340,8 +349,8 @@ func checkTargetLogin(c *model.Collector, t *model.StaticTarget) error {
 }
 
 // loginURL is where l is sent for a request to target: login.url when it is
-// absolute, and otherwise login.url resolved against the target, without the
-// target's credentials, query or fragment.
+// absolute, and otherwise login.url, a path from the root (checkLoginURL),
+// on the target's scheme, host and port; nothing else of the target is kept.
 func loginURL(l *model.LoginConfig, target string) (*url.URL, error) {
 	ref, err := url.Parse(l.URL)
 	if err != nil {
@@ -354,8 +363,10 @@ func loginURL(l *model.LoginConfig, target string) (*url.URL, error) {
 	if err != nil || base.Host == "" {
 		return nil, errors.New("the target is not a URL the login's relative request.login.url can be resolved against")
 	}
-	base.User, base.RawQuery, base.ForceQuery, base.Fragment, base.RawFragment = nil, "", false, "", ""
-	return base.ResolveReference(ref), nil
+	if !strings.HasPrefix(l.URL, "/") {
+		return nil, errors.New("request.login.url is neither absolute nor a path from the root")
+	}
+	return (&url.URL{Scheme: base.Scheme, Host: base.Host}).ResolveReference(ref), nil
 }
 
 // loginFingerprint identifies a login block: two that differ in anything
@@ -458,6 +469,28 @@ func (r *requestLogin) set(req *http.Request) {
 	if r != nil {
 		req.Header.Set(r.header, r.value)
 	}
+}
+
+// carried reports whether req, the request a target answered — the last of
+// its redirects — carried the request's token.
+func (r *requestLogin) carried(req *http.Request) bool {
+	if r == nil || req == nil {
+		return false
+	}
+	for _, value := range req.Header.Values(r.header) {
+		if value == r.value {
+			return true
+		}
+		// A cookie may be sent beside others in the one Cookie header.
+		if strings.EqualFold(r.header, "Cookie") {
+			for cookie := range strings.SplitSeq(value, ";") {
+				if strings.TrimSpace(cookie) == r.value {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // sends reports whether the request's login sends name, so the collector's
@@ -820,6 +853,15 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 	return out, nil
 }
 
+// debugRun reports whether ctx is a debug run's — a debug probe, a debug
+// scrape of a static target or a debug page's fetch — whose trips record
+// their requests (WithRequestTrace) and count in no self-metric of the
+// collector's (§ 42.17).
+func debugRun(ctx context.Context) bool {
+	_, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	return ok
+}
+
 // loginCache holds the tokens logins gave, and how many logins each
 // collector made and how many failed, for its self-metrics.
 type loginCache struct {
@@ -848,6 +890,9 @@ type loginCall struct {
 	done  chan struct{}
 	value string
 	err   error
+	// counted says the login is counted in the collector's self-metrics:
+	// made for a request that is no debug run's, or waited for by one.
+	counted bool
 }
 
 var logins = &loginCache{entries: map[string]*loginEntry{}, made: map[string]uint64{}, failed: map[string]uint64{}}
@@ -863,10 +908,11 @@ func loginRefreshAt(start, expires time.Time) time.Time {
 
 // get returns the token kept under key while it is fresh, and otherwise
 // makes the login, once for every request that asks while it is made. The
-// login is made apart from the request that began it, within that request's
-// deadline, so a probe that goes away leaves it to those still waiting. A
-// login that fails while the token kept has not expired leaves that token
-// in use, counted as a failed login.
+// login is made apart from the request that began it, within loginTimeout,
+// so a probe that goes away, or whose deadline is near, leaves it to those
+// still waiting; each waits within its own deadline. A login that fails
+// while the token kept has not expired leaves that token in use, counted as
+// a failed login.
 func (c *loginCache) get(ctx context.Context, key, collector, fingerprint string, login func(context.Context) (loginToken, error)) (string, error) {
 	c.mu.Lock()
 	now := loginNow()
@@ -883,23 +929,24 @@ func (c *loginCache) get(ctx context.Context, key, collector, fingerprint string
 		return value, nil
 	}
 	call := e.call
+	counted := !debugRun(ctx)
 	if call == nil {
 		call = &loginCall{done: make(chan struct{})}
 		e.call = call
-		c.made[collector]++
-		detached := context.WithoutCancel(ctx)
-		var cancel context.CancelFunc
-		if deadline, ok := ctx.Deadline(); ok {
-			detached, cancel = context.WithDeadline(detached, deadline)
-		} else {
-			detached, cancel = context.WithTimeout(detached, loginTimeout)
-		}
+		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginTimeout)
 		go func() {
 			defer cancel()
 			start := loginNow()
 			token, err := login(detached)
 			c.finish(e, call, start, token, err)
 		}()
+	}
+	// A debug run uses and fills the token kept, which is the collector's,
+	// but its login is not counted (§ 42.17), unless a request that is no
+	// debug run's waits for it too.
+	if counted && !call.counted {
+		call.counted = true
+		c.made[collector]++
 	}
 	c.mu.Unlock()
 	select {
@@ -916,7 +963,7 @@ func (c *loginCache) finish(e *loginEntry, call *loginCall, start time.Time, tok
 	if err != nil {
 		// A collector a reload removed meanwhile has no counts left to
 		// raise (follow).
-		if _, followed := c.made[e.collector]; followed {
+		if _, followed := c.made[e.collector]; followed && call.counted {
 			c.failed[e.collector]++
 		}
 		if e.value != "" && (e.expires.IsZero() || loginNow().Before(e.expires)) {

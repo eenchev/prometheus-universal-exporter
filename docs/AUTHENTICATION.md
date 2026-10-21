@@ -240,9 +240,14 @@ of its own, which replaces the collector's for it:
 - **`url` absolute**, such as an identity provider's token endpoint, is the
   same for every target the collector is asked about, whatever a probe
   says; one token serves them all.
-- **`url` a path**, such as `/api/v2/login`, is resolved against the target
-  — its scheme, host and port, without its credentials or query — so each
-  target is logged in to on its own, and keeps its own token. The secrets
+- **`url` a path** from the root, such as `/api/v2/login`, is put on the
+  target's scheme, host and port, so each target is logged in to on its
+  own, and keeps its own token. The rest of the target — its path, query and
+  credentials — plays no part: a probe of `https://appliance.example/a/b/`
+  logs in at `https://appliance.example/api/v2/login`, as one of
+  `https://appliance.example/` does, with the same token. A path relative to
+  the target's own, such as `login` or `../login`, is refused at load: it
+  would let the path a probe names choose where the secrets go. The secrets
   then go to whichever target a probe names, as `basic_auth_file`'s do:
   restrict the collector's targets with
   [`allowed_targets`](REQUESTS.md#restricting-targets).
@@ -272,7 +277,10 @@ passed: a token of an hour at 54 minutes, one of five minutes at four and a
 half, one of a minute at 30 seconds.
 
 Probes that need a token while it is being fetched wait for that one login
-rather than each making one, each within its own deadline. A login that
+rather than each making one, each within its own deadline. The login has a
+bound of its own, 30 seconds, whatever the deadline of the probe that began
+it: a probe with a short timeout that gives up, or goes away, leaves the
+login to those still waiting, and is no failed login. A login that
 fails while the token kept has not yet expired leaves that token in use, and
 is counted as a failed login; once it has expired, the probe fails.
 
@@ -280,7 +288,10 @@ A target that answers `401` has the token it was sent dropped, and the
 request is sent once more with the token of a new login, whatever its
 method. That second request is not one of `retry.attempts`, and is made
 within the probe's deadline; a `401` to it is the probe's answer, failing
-in the `http_status` stage. A `403` is not taken for a token gone bad.
+in the `http_status` stage. A `403` is not taken for a token gone bad. Nor
+is a `401` from where a [followed redirect](REQUESTS.md#what-a-followed-redirect-carries)
+led without the token, such as another origin, which is not sent it: that
+`401` is the probe's answer, and no new login is made.
 
 At most 1000 tokens are kept, across collectors, the one used longest ago
 dropped first; a reload drops the tokens of a login it changes or removes.
@@ -321,7 +332,10 @@ A [debug probe](CONFIGURATION.md#debugging-collectors) lists the login
 request, marked `(login)`, before the request it was made for, with its
 headers shown as every request's are, a credential's value withheld, and
 never its body; it shows no login when the token was kept from an earlier
-one. [`--dry-run`](CONFIGURATION.md#dry-run) lists the login
+one. The token is the collector's: a debug probe, a debug scrape of a
+static target and a debug page's fetch use the token kept, and keep the one
+their login gives for the probes after them, but their logins are not
+counted in those self-metrics. [`--dry-run`](CONFIGURATION.md#dry-run) lists the login
 under `request_policies`, with its header and prefix filled in, the files
 its secrets are read from and never what they hold, and a field or endpoint
 parameter whose name reads as a credential's without its value; a secret

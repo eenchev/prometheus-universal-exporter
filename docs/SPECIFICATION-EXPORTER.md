@@ -24486,6 +24486,51 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   IPv6 one in brackets, and 127.0.0.1 and ::1 when it names none
   (TestTheSystemsNameserversAreReadForACNAMELookup).
 
+## 34.161 Discovery pages, names and timeouts, and a verified chain's expiry
+
+- The kubernetes source asks for EndpointSlices with `limit=100` from an API
+  server that refuses any other page size, and follows the `continue`
+  tokens through four pages, one request each
+  (`TestKubernetesListsInPagesOf100`).
+- A page of `kubernetesPageSize` EndpointSlices as the API server sends
+  them, each of the controller's 100 endpoints with every name at its
+  longest, fits in the 16 MiB an answer may hold and reads back, while 500
+  such slices would not (`TestAKubernetesPageOfTheWorstCaseFits`).
+- A `timeout` left out is `10s`, or the `refresh_interval` when that is
+  shorter, for `http_sd` and `kubernetes`, and is accepted; a written one is
+  taken as it is; an `http_sd` source asked every second with no timeout
+  gives up on an answer that takes 3s
+  (`TestAnUnsetTimeoutIsCutToTheRefreshInterval`).
+- A kubernetes listing of four pages of 400ms each fails with a 1s timeout:
+  the timeout bounds the whole listing, not each request
+  (`TestAKubernetesListingIsBoundedWhole`).
+- A discovered target's name is the entry's and the address escaped
+  (`10.0.0.5:9100` as `10_0_0_5_3A9100`, IPv6 in brackets, host names with
+  `-`), and an address with an upper-case letter, `_`, `/` or longer than
+  the bound is cut and followed by `_X` and 16 hex digits of its SHA-256;
+  every name is a static target's name (`TestDiscoveredNames`).
+- Every address of up to 5 characters of `a9.:-[]`, and 100000 random
+  longer ones, is escaped to a name that reads back to the address, and no
+  two share one (`TestEscapedAddressesReadBack`).
+- No two different addresses share a discovered name, `a.b` against `a-b`
+  and `a_b`, `[::1]:80` against `::1:80`, case and length included, and
+  every name is a static target's name
+  (`FuzzDiscoveredNamesAreInjective`).
+- A discovered target is not renamed when another that looked like it
+  (`a-b.example` beside `a.b.example`) goes away, and one whose name the
+  file gives a written target takes the `_X` digest form and keeps it
+  (`TestADiscoveredTargetKeepsItsName`).
+- A tlscert server sending a leaf, its intermediate and an expired
+  cross-sign of the root gives, with the root trusted, the chain's earliest
+  expiry from the verified chain, the root's, which expires before the
+  leaf, earliest_from verified; untrusted, from the presented
+  certificates, the cross-sign's and negative, earliest_from presented;
+  the three certificates are listed either way.
+- A tlscert chain that verifies by two chains, an intermediate signed by
+  two trusted roots, gives the chain's earliest expiry of the chain that
+  holds longer, its intermediate's, not the other intermediate's earlier
+  one.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

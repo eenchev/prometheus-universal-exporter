@@ -24189,6 +24189,100 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   there is refused by both, the exporter once the file is read
   (`TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes`).
 
+## 34.157 Logging in to an HTTP target
+
+- A json login posts the fields of `fields` and of `field_files`, those read
+  from their files and trimmed, reads the token with `token` and sends it as
+  a bearer token; a second request makes no second login, and the login is
+  counted for the collector (§ 42.6a).
+- A token read from a header of the login's answer is sent in `login.header`
+  after `login.prefix`, and one read from a cookie the answer sets is sent
+  back as that cookie, fetched again once a tenth of its `Max-Age` is left.
+- A token lasting 100 seconds is kept at 69 seconds and fetched again at 71,
+  30 seconds before it expires; a login that fails then, the token not yet
+  expired, leaves the token in use and is counted as a failure; once it has
+  expired, the failing login fails the request in the `login` stage, naming
+  the status. The test moves the login's clock.
+- A target answering `401` has the token dropped and a POST sent once more
+  with a new login's token, though `retry.attempts` is 0; a target refusing
+  every token is asked twice and answers with its `401`.
+- A login answered `403` fails the request in the `login` stage with the
+  status and the start of the answer, a credential in it masked, without the
+  secrets the login sent, and the target is not asked; a `token` expression
+  that fails says so without the answer's values.
+- A login answered with a redirect fails, naming it, and the host it names
+  is never asked, `follow_redirects` set or not.
+- Twenty requests needing a token at once wait for one login (run under the
+  race detector).
+- A relative `login.url` is resolved against each target, without its
+  credentials or query, each target logged in to once; an absolute one that
+  the collector's `denied_targets` refuses fails the request in the `login`
+  stage, and is no refusal of the target.
+- A login to a server whose certificate does not verify fails though the
+  probe sets `insecure_skip_verify`, and goes through with
+  `login.tls.insecure_skip_verify`.
+- An oauth2 login sends the client's id and secret as a Basic credential, or
+  as form parameters with `auth_style: params`, `grant_type`
+  `client_credentials`, the scopes and the endpoint parameters; a `401` of
+  the target makes one new login, and the token is fetched again 30 seconds
+  before its `expires_in` of 300 runs out.
+- A token endpoint answering `invalid_client` fails the request in the
+  `login` stage with its status, code and description, without the secret,
+  counted as a failed login.
+- A static target's own bearer token is sent instead of the collector's
+  login, which is then not made; a static target's own login replaces the
+  collector's, with its own secrets.
+- A login block is checked at load, naming the collector and the key: no
+  type or an unknown one, no url, a url with credentials, a placeholder, a
+  scheme other than http and https or one `allowed_schemes` refuses, or a
+  host without a scheme; none or two of `token`, `token_header` and
+  `token_cookie`; a `token` that does not compile; no `field_files`; a field
+  in both maps; a key of the other kind; a header that is no header name or
+  whose name does not read as a credential's; `token_cookie` with `header`;
+  a negative `ttl`; a login in `Authorization` beside `bearer_token_file`, or
+  beside a `request.headers` entry of its header; for oauth2, both or neither
+  of `client_id` and `client_id_file`, no `client_secret_file`, an endpoint
+  parameter the grant sets, a scope with a blank, an unknown `auth_style`. A
+  login in `X-Auth-Token` beside `basic_auth_file` is taken; a static
+  target's login beside its own bearer token is refused.
+- Following a configuration keeps the tokens of a login in force, drops
+  those of a login that changed, and forgets the counts of a collector
+  removed.
+- At most 1000 tokens are kept, the one used longest ago dropped first.
+- A debug trace records the login request, marked as one, before the request
+  it was made for.
+- A graphite collector logs in as an http one does, and a graphite static
+  target's login is checked.
+- A grpc collector's `request.login` is refused as a key of another type.
+- A probe of a collector that logs in is answered with the target's answer
+  to the token and counted in `http_exporter_logins_total`; a failed login
+  fails the probe in the `login` stage, logged so, counted in
+  `http_exporter_login_failures_total`, and the secret is in neither the log
+  nor the answer.
+- `http_exporter_logins_total` and `http_exporter_login_failures_total` are
+  families of the http and graphite types alone, at 0 for an http collector
+  without a login.
+- A debug probe's report lists the login request marked `(login)` before the
+  request, with `Authorization` redacted, and shows neither the secret nor the
+  token.
+- Static targets logging in at different URLs have different cache keys, and
+  a target without a login has no login section in its key.
+- The debug page refuses a collector written on it that sets `request.login`,
+  naming it, and shows nothing of the secret file.
+- `--dry-run` lists a collector's login under `request_policies` with its
+  header and prefix filled in, its files and a credential-named field's
+  value withheld, warns of a missing secret file, and fails a login startup
+  refuses, as startup words it.
+- The committed schema and the exporter agree on login blocks: the keys
+  each kind takes and requires, the token's one source, and `header` and
+  `prefix` beside `token_cookie`; a header that does not read as a
+  credential's, a URL with credentials, a login beside a bearer token file
+  and a token that does not compile pass the schema and are refused by the
+  exporter.
+- Each of `request.login`'s constrained keys, a collector's and a static
+  target's, is a row of the schema key tables: left out, written "",
+  written well and badly.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

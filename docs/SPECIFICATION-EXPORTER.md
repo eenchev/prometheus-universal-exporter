@@ -24752,6 +24752,34 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   static target file is put in force alone, the restored files are reloaded
   with theirs, and a reload in place keeps it (§ 42.14e).
 
+## 34.164 Kubernetes pages that adapt to the byte bound
+
+- A Kubernetes listing whose pages of 100 objects are over the per-page
+  byte bound but whose pages of 25 fit asks for the first page with
+  `limit=100`, `50` and `25`, then the next pages at `25`, lists every
+  object once, is told of the limits 50 and 25, and traces the refused
+  pages as `200 OK, a page of <n> larger than <bound> bytes`.
+- A page refused in the middle of a listing is asked for again with the
+  continue token it was first asked for with, and every object is listed
+  once, in order.
+- A single object over the bound fails the listing with ErrPageTooLarge,
+  saying a page of a single one of the objects is larger than the bound,
+  after the limit fell to 1; the objects before it were handed on.
+- A listing whose refused pages each take 300ms runs out of its 750ms
+  deadline while the page asked for again with `limit=25` is answered:
+  the pages asked for again are bounded by the listing's deadline.
+- A `kubernetes` collector with a 5000-byte response limit lists 30
+  Deployments whose pages of 100, 50 and 25 are over it in pages of 12,
+  each object counted once, and its debug trace shows every request with
+  its limit and continue token and why a refused page was asked for again;
+  a single Deployment over the limit fails the scrape as a limit exceeded
+  saying so.
+- The allocator's kubernetes source lists 60 EndpointSlices of 300
+  endpoints, about 18 MiB, in pages of 50 after the page of 100 was
+  refused (`limit=100`, `limit=50`, `limit=50` with the continue token),
+  finds every endpoint, and logs the fall to smaller pages once at debug
+  level with the page size 50.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -22,8 +22,8 @@ import (
 // method, sshfile reads a file from another host over SFTP, sql runs a
 // statement on a database, dns resolves a name, tlscert reads the
 // certificates of a TLS handshake, s3file reads an object from S3 or a
-// store that speaks its API. The
-// type is required rather than defaulted so that no configuration means
+// store that speaks its API, kubernetes lists objects from a Kubernetes API
+// server. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields: the request keys it accepts. A key another type owns is an error
@@ -42,22 +42,23 @@ import (
 
 // The request types in the source tree.
 const (
-	RequestTypeHTTP      = "http"
-	RequestTypeLocalFile = "localfile"
-	RequestTypeGraphite  = "graphite"
-	RequestTypeGRPC      = "grpc"
-	RequestTypeSSHFile   = "sshfile"
-	RequestTypeSQL       = "sql"
-	RequestTypeDNS       = "dns"
-	RequestTypeTLSCert   = "tlscert"
-	RequestTypeS3File    = "s3file"
+	RequestTypeHTTP       = "http"
+	RequestTypeLocalFile  = "localfile"
+	RequestTypeGraphite   = "graphite"
+	RequestTypeGRPC       = "grpc"
+	RequestTypeSSHFile    = "sshfile"
+	RequestTypeSQL        = "sql"
+	RequestTypeDNS        = "dns"
+	RequestTypeTLSCert    = "tlscert"
+	RequestTypeS3File     = "s3file"
+	RequestTypeKubernetes = "kubernetes"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links

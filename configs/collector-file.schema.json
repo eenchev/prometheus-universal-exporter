@@ -818,6 +818,175 @@
                 "if": {
                   "properties": {
                     "type": {
+                      "const": "kubernetes"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "allOf": [
+                    {
+                      "if": {
+                        "anyOf": [
+                          {
+                            "not": {
+                              "required": [
+                                "group"
+                              ]
+                            }
+                          },
+                          {
+                            "properties": {
+                              "group": {
+                                "const": ""
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "resource": {
+                            "not": {
+                              "const": "secrets"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "all_namespaces": {
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "all_namespaces"
+                        ]
+                      },
+                      "then": {
+                        "not": {
+                          "properties": {
+                            "namespaces": {
+                              "minItems": 1
+                            }
+                          },
+                          "required": [
+                            "namespaces"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "not": {
+                          "properties": {
+                            "api_server": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "api_server"
+                          ]
+                        }
+                      },
+                      "then": {
+                        "not": {
+                          "properties": {
+                            "bearer_token_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token_file"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "api_server": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "api_server"
+                        ]
+                      },
+                      "then": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "bearer_token_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "bearer_token_file"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "tls": {
+                                "properties": {
+                                  "cert_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "cert_file"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "tls"
+                            ]
+                          }
+                        ],
+                        "properties": {
+                          "tls": {
+                            "properties": {
+                              "insecure_skip_verify": {
+                                "not": {
+                                  "const": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "resource": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "resource"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
                       "const": "localfile"
                     }
                   },
@@ -986,7 +1155,7 @@
                 }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert and docs/S3FILE.md for s3file.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file and docs/KUBERNETES.md for kubernetes.",
             "properties": {
               "accept_codes": {
                 "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
@@ -1020,6 +1189,10 @@
                   "boolean"
                 ]
               },
+              "all_namespaces": {
+                "description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false.",
+                "type": "boolean"
+              },
               "allowed_schemes": {
                 "items": {
                   "type": [
@@ -1045,6 +1218,11 @@
                   ]
                 },
                 "type": "array"
+              },
+              "api_server": {
+                "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster.",
+                "pattern": "^$|^https://[^/?#@]+(/[^?#]*)?$",
+                "type": "string"
               },
               "args": {
                 "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders.",
@@ -1243,6 +1421,18 @@
                 "pattern": "^$|^https?://[^/?#@]+/?$",
                 "type": "string"
               },
+              "field_selector": {
+                "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "files": {
                 "description": "localfile, sshfile and s3file: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
                 "items": {
@@ -1280,6 +1470,18 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "group": {
+                "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name.",
+                "maxLength": 253,
+                "not": {
+                  "enum": [
+                    "core",
+                    "v1"
+                  ]
+                },
+                "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                "type": "string"
               },
               "headers": {
                 "additionalProperties": {
@@ -1325,6 +1527,18 @@
               },
               "known_hosts_file": {
                 "description": "sshfile, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "label_selector": {
+                "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -1889,6 +2103,11 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "max_objects": {
+                "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_open_connections": {
                 "description": "sshfile: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections.",
                 "minimum": 0,
@@ -1903,7 +2122,7 @@
                     "minimum": 1024
                   }
                 ],
-                "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+                "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -1965,6 +2184,15 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "namespaces": {
+                "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account.",
+                "items": {
+                  "maxLength": 63,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "type": "array"
               },
               "options": {
                 "additionalProperties": {
@@ -2231,6 +2459,12 @@
                 "pattern": "^$|^[A-Za-z0-9_-]+$",
                 "type": "string"
               },
+              "resource": {
+                "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md.",
+                "maxLength": 63,
+                "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              },
               "retry": {
                 "additionalProperties": false,
                 "properties": {
@@ -2416,6 +2650,7 @@
                   "graphite",
                   "grpc",
                   "http",
+                  "kubernetes",
                   "localfile",
                   "sql",
                   "sshfile",
@@ -2442,6 +2677,12 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "version": {
+                "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1.",
+                "maxLength": 63,
+                "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
               }
             },
             "required": [

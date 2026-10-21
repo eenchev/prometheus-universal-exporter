@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,13 +14,14 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // serviceAccountDir is where Kubernetes mounts a pod's service account:
 // its token, the cluster's CA and the pod's namespace. Tests point it at a
 // directory of their own.
-var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+var serviceAccountDir = kubeapi.ServiceAccountDir
 
 // kubernetesPageSize is how many EndpointSlices one listing request asks
 // for; the rest follow with the answer's continue token. A page must fit in
@@ -38,7 +36,7 @@ var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 // a large cluster's listing reached. TestAKubernetesPageOfTheWorstCaseFits
 // builds such a page. A cluster that raises --max-endpoints-per-slice makes
 // larger slices than this allows for.
-const kubernetesPageSize = 100
+const kubernetesPageSize = kubeapi.PageSize
 
 // endpointSliceList is the part of a discovery.k8s.io/v1 EndpointSliceList
 // the allocator reads.
@@ -87,27 +85,26 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 	// pages could take many times it.
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
-	if host == "" || port == "" {
-		return nil, errors.New("KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set: the allocator does not run in a Kubernetes pod, so it cannot reach the API server")
+	server, err := kubeapi.InClusterServer()
+	if err != nil {
+		return nil, fmt.Errorf("%w: the allocator does not run in a Kubernetes pod, so it cannot reach the API server", err)
 	}
-	token, err := readToken(filepath.Join(serviceAccountDir, "token"))
+	token, err := readToken(filepath.Join(serviceAccountDir, kubeapi.TokenFile))
 	if err != nil {
 		return nil, fmt.Errorf("the service account token: %w", err)
 	}
 	namespaces := k.Namespaces
 	if !k.AllNamespaces && len(namespaces) == 0 {
-		raw, err := os.ReadFile(filepath.Join(serviceAccountDir, "namespace"))
-		if err != nil || strings.TrimSpace(string(raw)) == "" {
-			return nil, fmt.Errorf("the allocator's own namespace cannot be read from %s; list kubernetes.namespaces", filepath.Join(serviceAccountDir, "namespace"))
+		namespace, err := kubeapi.OwnNamespace(serviceAccountDir)
+		if err != nil {
+			return nil, fmt.Errorf("the allocator's own namespace cannot be read from %s; list kubernetes.namespaces", filepath.Join(serviceAccountDir, kubeapi.NamespaceFile))
 		}
-		namespaces = []string{strings.TrimSpace(string(raw))}
+		namespaces = []string{namespace}
 	}
-	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: model.TLSConfig{CAFile: filepath.Join(serviceAccountDir, "ca.crt")}}, false, timeout)
+	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: model.TLSConfig{CAFile: filepath.Join(serviceAccountDir, kubeapi.CAFile)}}, false, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("the cluster's CA: %w", err)
 	}
-	server := "https://" + net.JoinHostPort(host, port)
 	paths := []string{"/apis/discovery.k8s.io/v1/endpointslices"}
 	if !k.AllNamespaces {
 		paths = paths[:0]
@@ -119,14 +116,11 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 	var out []discovered
 	seen := map[string]bool{}
 	for _, path := range paths {
-		next := ""
-		for {
-			list, err := listEndpointSlices(ctx, client, server+path, k.LabelSelector, next, token)
-			if err != nil {
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					return nil, fmt.Errorf("listing the EndpointSlices took longer than the timeout, %s: %w", timeout, err)
-				}
-				return nil, err
+		listing := kubeapi.Listing{Client: client, Server: server, Path: path, Token: token, What: "EndpointSlices", LabelSelector: k.LabelSelector, PageSize: kubernetesPageSize, MaxPageBytes: maxDiscoveryAnswerBytes}
+		err := listing.List(ctx, func(raw []byte) (string, error) {
+			var list endpointSliceList
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return "", fmt.Errorf("listing EndpointSlices at %s: not an EndpointSliceList: %w", server+path, err)
 			}
 			for i := range list.Items {
 				if !k.takes(list.Items[i].AddressType) {
@@ -140,54 +134,21 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 					d.Labels = mapLabels(d.Labels, mapping)
 					out = append(out, d)
 					if len(out) > limit {
-						return nil, fmt.Errorf("the EndpointSlices hold more than the %d targets max_targets allows", limit)
+						return "", fmt.Errorf("the EndpointSlices hold more than the %d targets max_targets allows", limit)
 					}
 				}
 			}
-			if next = list.Metadata.Continue; next == "" {
-				break
+			return list.Metadata.Continue, nil
+		})
+		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("listing the EndpointSlices took longer than the timeout, %s: %w", timeout, err)
 			}
+			return nil, err
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out, nil
-}
-
-// listEndpointSlices asks for one page of a listing.
-func listEndpointSlices(ctx context.Context, client *http.Client, address, selector, next, token string) (*endpointSliceList, error) {
-	query := url.Values{"limit": {strconv.Itoa(kubernetesPageSize)}}
-	if selector != "" {
-		query.Set("labelSelector", selector)
-	}
-	if next != "" {
-		query.Set("continue", next)
-	}
-	// The address is the API server's, from the pod's environment, which
-	// Kubernetes sets.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address+"?"+query.Encode(), nil) // #nosec G704 -- the cluster's API server
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req) // #nosec G704 -- the cluster's API server
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("listing EndpointSlices at %s answered %s: %s", address, resp.Status, strings.TrimSpace(string(body)))
-	}
-	raw, err := readBounded(resp.Body, "a page of EndpointSlices")
-	if err != nil {
-		return nil, err
-	}
-	var list endpointSliceList
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("listing EndpointSlices at %s: not an EndpointSliceList: %w", address, err)
-	}
-	return &list, nil
 }
 
 // sliceTargets are the targets of one EndpointSlice: each address of each

@@ -16,6 +16,31 @@ serviceAccount:
   automount: false
   annotations: {}
   name: ""
+# The exporter's own access to the Kubernetes API, for collectors of
+# request.type kubernetes (docs/KUBERNETES.md). Off, the exporter's pods
+# mount no service account token, unless serviceAccount.automount does, and
+# the chart grants their account nothing. On, the pods mount their token and
+# the chart lets the exporter's ServiceAccount list, and only list, the
+# resources each rule names, apiGroups ("" for the core group) and
+# resources: a Role and a RoleBinding in each namespace of namespaces, the
+# release's when it is empty, or with clusterWide a ClusterRole and a
+# ClusterRoleBinding <namespace>-<fullname>, which a collector with
+# all_namespaces, or of a cluster-scoped resource such as nodes, needs. No
+# rule may name "*", nor the core group's secrets, which no kubernetes
+# collector may list.
+#
+#   kubernetesAccess:
+#     enabled: true
+#     rules:
+#       - apiGroups: [apps]
+#         resources: [deployments]
+#       - apiGroups: [""]
+#         resources: [pods]
+kubernetesAccess:
+  enabled: false
+  clusterWide: false
+  namespaces: []
+  rules: []
 service:
   enabled: true
   # ClusterIP, NodePort or LoadBalancer. Not ExternalName, a DNS alias with no

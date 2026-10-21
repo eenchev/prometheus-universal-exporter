@@ -85,6 +85,8 @@ jobs:
               - 'internal/expr/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
               - 'internal/model/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -116,6 +118,7 @@ jobs:
               - 'internal/exporter/**'
               - 'internal/expr/**'
               - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
@@ -232,7 +235,7 @@ jobs:
       # its own too, so code one type needs cannot quietly depend on another.
       - name: Build with each request type on its own
         run: |
-          for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do
+          for type in dns graphite grpc http kubernetes localfile s3file sql sshfile tlscert; do
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...
@@ -678,6 +681,8 @@ jobs:
               - 'internal/expr/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
               - 'internal/model/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -709,6 +714,7 @@ jobs:
               - 'internal/exporter/**'
               - 'internal/expr/**'
               - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
@@ -785,6 +791,7 @@ jobs:
           - graphite
           - grpc
           - http
+          - kubernetes
           - localfile
           - s3file
           - sql
@@ -854,6 +861,8 @@ jobs:
               - 'internal/expr/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
               - 'internal/model/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -885,6 +894,7 @@ jobs:
               - 'internal/exporter/**'
               - 'internal/expr/**'
               - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
@@ -1012,6 +1022,8 @@ jobs:
               - 'internal/expr/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
               - 'internal/model/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1043,6 +1055,7 @@ jobs:
               - 'internal/exporter/**'
               - 'internal/expr/**'
               - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'

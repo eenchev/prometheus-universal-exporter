@@ -151,13 +151,15 @@ func TestOnlyTestsHoldTheShutdownDelay(t *testing.T) {
 
 // internalLayers is the order of the internal packages: each may import only
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
-var internalLayers = []string{"allocapi", "model", "expr", "fetch", "decode", "transform", "config", "allocclient", "exporter", "allocator"}
+var internalLayers = []string{"allocapi", "model", "kubeapi", "expr", "fetch", "decode", "transform", "config", "allocclient", "exporter", "allocator"}
 
 // testOnly are the internal packages only tests import: testutil, with the
 // package within it, alloctest, that measures allocations, grpctest, the
-// grpc request type's test server, sshtest, the sshfile request type's, and
-// sqltest, the sql request type's stand-in database.
-var testOnly = map[string]bool{"testutil": true, "grpctest": true, "sshtest": true, "sqltest": true}
+// grpc request type's test server, sshtest, the sshfile request type's,
+// sqltest, the sql request type's stand-in database, and kubetest, the
+// stand-in Kubernetes API server of the kubernetes request type and of
+// internal/kubeapi.
+var testOnly = map[string]bool{"testutil": true, "grpctest": true, "sshtest": true, "sqltest": true, "kubetest": true}
 
 // The internal packages stay layered, and the test-only ones stay out of the
 // binary.

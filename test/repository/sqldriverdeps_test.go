@@ -39,7 +39,7 @@ func TestOnlyTheBuildsWithASQLDriverLinkIt(t *testing.T) {
 		optIn = append(optIn, modules...)
 	}
 	everyDriver := append(slices.Clone(sqlDefaultModules), optIn...)
-	for _, types := range []string{"dns", "graphite", "grpc", "http", "localfile", "sshfile", "tlscert", "dns,graphite,grpc,http,localfile,sshfile,tlscert"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "localfile", "sshfile", "tlscert", "dns,graphite,grpc,http,kubernetes,localfile,sshfile,tlscert"} {
 		if found := linksAny(linkedPackages(t, types), everyDriver); len(found) > 0 {
 			t.Errorf("REQUEST_TYPES=%s links %s, which only a build with the sql type may", types, strings.Join(found, ", "))
 		}

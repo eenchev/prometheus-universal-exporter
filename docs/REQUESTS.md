@@ -794,6 +794,10 @@ credentials of the machine the exporter runs on, to whoever can name it as a
 probe's target. A collector that must reach it lists its address, or a network
 holding it, in `allowed_targets`; a name that resolves to it is not enough.
 
+A [`kubernetes`](KUBERNETES.md#no-target) collector takes neither list, and
+no target: it lists what its configuration names, from the API server the
+configuration names.
+
 Each entry is a host name, a glob of one, an IP address or a CIDR network,
 without a scheme, port or path; a name is letters, digits, dots, hyphens and
 underscores, so `my_service` and `*.svc_local` can be listed. An entry is
@@ -1282,7 +1286,9 @@ request, and again when they change, so a Secret mounted later is picked up.
 
 A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
 code, but for `insecure_skip_verify`: it reports a chain that does not
-verify rather than refusing it.
+verify rather than refusing it. A [`kubernetes`](KUBERNETES.md#outside-the-cluster)
+collector takes it only beside `api_server`, also without
+`insecure_skip_verify`, since it sends the API server a token.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

@@ -261,7 +261,7 @@ func applyLimitDefaults(l *model.Limits) {
 // jsonAnswerTypes are the request types whose answer is a JSON document the
 // exporter makes, so their decoder is json and their transform one that
 // reads JSON.
-var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert}
+var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes}
 
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
 // unknown transform and an unknown decoder, and infers the decoder a transform
@@ -291,8 +291,9 @@ func normalizeFormats(x *model.Collector) error {
 		x.Decoder.Type = "graphite"
 	}
 	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
-		// A grpc call, a dns lookup and a tlscert handshake are answered as
-		// JSON, whatever else their decoder could be.
+		// A grpc call, a dns lookup, a tlscert handshake and a kubernetes
+		// listing are answered as JSON, whatever else their decoder could
+		// be.
 		switch x.Decoder.Type {
 		case "auto", "json":
 			x.Decoder.Type = "json"

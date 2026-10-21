@@ -114,14 +114,14 @@ func optInRequestTypes(t *testing.T) []string {
 // it, links the gRPC and protobuf modules only when the type is grpc, the
 // SSH and SFTP modules only when it is sshfile, and the AWS SDK only when
 // it is s3file; a build of graphite, http and localfile together links none
-// of them, nor does one of dns and tlscert, which need nothing outside the
-// standard library; and the default build, of every type but the opt-in
+// of them, nor does one of dns, tlscert and kubernetes, which need nothing
+// outside the standard library; and the default build, of every type but the opt-in
 // s3file, links gRPC's and SSH's and no AWS SDK, which only a build asking
 // for s3file (OPT_IN_REQUEST_TYPES) links. go list is asked of the main package, the exporter as it ships;
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range []string{"dns", "graphite", "grpc", "http", "localfile", "s3file", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,tlscert"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "localfile", "s3file", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,kubernetes,tlscert"} {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestType string

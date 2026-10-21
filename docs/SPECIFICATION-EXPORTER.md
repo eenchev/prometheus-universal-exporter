@@ -596,7 +596,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert` and `s3file` are implemented;
+`tlscert`, `s3file` and `kubernetes` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -674,9 +674,10 @@ opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns` and `tlscert` MUST import nothing outside the standard library,
-  and the test MUST find none of the other types' modules in a build of
-  either. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  that driver. `dns`, `tlscert` and `kubernetes` MUST import nothing
+  outside the standard library and the module's own packages — no
+  Kubernetes client library — and the test MUST find none of the other
+  types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
   configuration in a default build with it, and none of them in the default
@@ -1951,6 +1952,86 @@ carries it. Its keys:
   of a file's.
 - Only the type's files, behind its tag alone, MAY import the AWS SDK.
 
+#### `kubernetes`
+
+A `kubernetes` collector lists the objects of one resource of a Kubernetes
+API server, built in or custom, and hands them to the transforms as a JSON
+document. The listing MUST be made over the API's REST interface with the
+standard library alone, through `internal/kubeapi`, the code the target
+allocator's Kubernetes discovery (§ 42.14d) lists EndpointSlices with. Its
+keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `resource` | none | **Required.** A resource's plural name: lower-case letters, digits and `-`, at most 63 characters; one with `/`, a subresource, MUST be refused at load. |
+| `group` | the core group | An API group's name, a lower-case DNS subdomain of at most 253 characters; `core` and `v1` MUST be refused at load, the core group being left out. |
+| `version` | `v1` | Lower-case letters, digits and `-`, at most 63 characters. |
+| `namespaces` | the exporter's own | Each a namespace's name; one listed twice MUST be refused at load. |
+| `all_namespaces` | `false` | The listing across the cluster; with `namespaces` MUST be refused at load. |
+| `label_selector`, `field_selector` | none | Sent as written; blanks alone MUST be refused at load. |
+| `max_objects` | 10000 | Zero or more, `0` the default; negative MUST be refused at load. |
+| `max_response_bytes` | 10 MiB | As every type's response limit (below). |
+| `api_server` | the exporter's own cluster's | An `https` URL with a host, a path or not, and no user, query or fragment; anything else MUST be refused at load. |
+| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it. With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
+
+- The core group's `secrets` MUST be refused at load, by the exporter and
+  by the schema (§ 24.3): their values would pass through the transforms.
+- A collector MUST take no target: a probe with a `target` MUST be
+  answered `400` before anything is listed, and a static target that names
+  one MUST be refused at load; a probe without one is complete. A probe
+  MUST take `timeout` and `param_<name>` parameters, and a static target's
+  request block `timeout`; `allowed_targets` and `denied_targets` MUST be
+  refused at load, there being no target to hold to them.
+- Without `api_server`, the API server MUST be the one of the cluster the
+  exporter runs in, at `https://` and the address in
+  `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`, its certificate
+  verified against `ca.crt` of the service account directory,
+  `/var/run/secrets/kubernetes.io/serviceaccount`, and the directory's
+  `token` sent as a bearer token; without those variables a scrape MUST
+  fail saying the exporter does not run in a pod. With `api_server`, the
+  server MUST be verified against `tls.ca_file` and the system's roots, and
+  `bearer_token_file`'s token or the client certificate sent. The token
+  and the TLS files MUST be read at every scrape, so a rotated one is used;
+  `--dry-run` MUST read those of a collector with `api_server` as a scrape
+  would and warn of one a scrape would fail on, without failing the check.
+- Without `namespaces` and `all_namespaces`, the namespace listed MUST be
+  the exporter's own, read from the service account directory's
+  `namespace` at every scrape; with `api_server` the scrape MUST fail
+  saying to list `namespaces`. The path listed MUST be
+  `/api/<version>/namespaces/<namespace>/<resource>` for the core group and
+  `/apis/<group>/<version>/namespaces/<namespace>/<resource>` for the
+  others, without `/namespaces/<namespace>` for `all_namespaces`, one
+  listing a namespace in the order of `namespaces`.
+- A listing MUST ask for pages with `limit=100` and follow each page's
+  `metadata.continue` to the last, sending `labelSelector` and
+  `fieldSelector` as written when they are set. The whole listing MUST take
+  at most the scrape's deadline, 30 seconds without one.
+- The answer MUST be a JSON document of `kind`, the list's kind without
+  its `List` suffix, `api_version`, `count` and `items`, the objects in the
+  order listed, each as the API server sent it without its
+  `metadata.managedFields`; a listing of no objects has `items` empty and,
+  when the API server named no kind, the collector's group and version as
+  `api_version`.
+- More objects than `max_objects` MUST fail the scrape as a limit exceeded.
+  A page larger than the response limit, and objects that come to more
+  than it without their managed fields, MUST fail the scrape as a limit
+  exceeded, and so MUST a document larger than it.
+- A failed listing MUST be reported in the `kubernetes` stage. An API
+  server's answer other than `200` MUST fail the scrape naming the
+  resource, its group and version, the namespace or the cluster, the
+  status and the Status object's message, and for `401` that the token is
+  not taken, for `403` that the service account needs `list` on the
+  resource and the chart's `kubernetesAccess.rules` that grant it, for
+  `404` how to name a resource and that a cluster-scoped one is listed with
+  `all_namespaces`. The token MUST NOT appear in an error.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each page's `GET` and URL, its
+  query's values masked, its `Authorization` masked, and its status. The
+  verbose `url` label MUST be `kubernetes:` and the path of the listing
+  across the cluster, or with `api_server` its URL before that path, and
+  `http_method` MUST be `LIST`.
+
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
 a trip that fails. Omitting `cache`, or setting both to `0s`, MUST disable
@@ -2478,16 +2559,18 @@ this order, without cycles:
 1. `allocapi`: what the target allocator and an exporter in allocator mode
    say to each other (§ 42.14d).
 2. `model`: the shared data types.
-3. `expr`: expression compilation and its caches.
-4. `fetch`: request types, probe parameters and transports.
-5. `decode`: response decoding and charset conversion.
-6. `transform`: transforms, metric rules and the Python worker pool.
-7. `config`: loading, validating and reloading the configuration and target
+3. `kubeapi`: listing objects from a Kubernetes API server, which the
+   `kubernetes` request type and the target allocator share.
+4. `expr`: expression compilation and its caches.
+5. `fetch`: request types, probe parameters and transports.
+6. `decode`: response decoding and charset conversion.
+7. `transform`: transforms, metric rules and the Python worker pool.
+8. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-8. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
-9. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
+10. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-10. `allocator`: the target allocator (§ 42.14d).
+11. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.
@@ -2495,8 +2578,10 @@ nothing else of it there.
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
-stand-in database of the `sql` tests, MUST NOT be imported outside tests and
-MUST import nothing but the standard library. `internal/testutil` MAY hold
+stand-in database of the `sql` tests, and `internal/kubetest`, the stand-in
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, MUST
+NOT be imported outside tests and MUST import nothing but the standard
+library. `internal/testutil` MAY hold
 helpers shared by the tests of several packages and MUST NOT be imported
 outside tests; nor may the package within it,
 `internal/testutil/alloctest`, the tests' measure of allocations (§ 34), which
@@ -26547,7 +26632,8 @@ optional `bearer_token_file` read again at every refresh and a `tls` block
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
-`KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
+`KUBERNETES_SERVICE_PORT`, made by `internal/kubeapi` as the `kubernetes`
+request type's are (§ 5.1), verified with the service account's `ca.crt`,
 with its token read again at every listing, in pages of 100 (`limit=100`,
 following each `continue` token), the whole listing, every page of every
 namespace, bounded by its `timeout`, in each of

@@ -49,7 +49,7 @@ build:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes localfile s3file sql sshfile tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -120,7 +120,7 @@ test:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http localfile s3file sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes localfile s3file sql sshfile tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \

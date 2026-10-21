@@ -510,6 +510,15 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.record_type":                     {"type": "string", "pattern": optionalPattern(sqlDriverName(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
 		"collectors[].request.server":                          {"not": onlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
 		"collectors[].request.transport":                       {"enum": optionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
+		"collectors[].request.resource":                        {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
+		"collectors[].request.group":                           {"type": "string", "pattern": optionalPattern(model.KubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
+		"collectors[].request.version":                         {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},
+		"collectors[].request.namespaces":                      {"items": map[string]any{"type": "string", "pattern": model.KubernetesNamePattern, "maxLength": 63}, "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account."},
+		"collectors[].request.all_namespaces":                  {"description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false."},
+		"collectors[].request.label_selector":                  {"not": onlyBlanks(), "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out."},
+		"collectors[].request.field_selector":                  {"not": onlyBlanks(), "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out."},
+		"collectors[].request.max_objects":                     {"minimum": 0, "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000."},
+		"collectors[].request.api_server":                      {"type": "string", "pattern": optionalPattern(`^https://[^/?#@]+(/[^?#]*)?$`), "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster."},
 		"collectors[].request.max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},
 		"collectors[].request.connections":                     {"description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections."},
 		"collectors[].request.connections.max_per_target":      {"minimum": 0, "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools."},
@@ -606,7 +615,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].limits.max_output_bytes":       leastOutputRule(),
 		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms."},
 		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
-		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
+		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
 		"collectors[].request.headers":               {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
 		"collectors[].request.forward_headers":       {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
 		"collectors[].request.forward_headers[]":     forwardHeaderEntry(),
@@ -837,16 +846,17 @@ func labelSchemaRule() map[string]any {
 // key of text written "" is as missing as left out, to the exporter and so
 // here (writtenKey). A grpc collector also says where its message types come
 // from, descriptors, unless it calls the health service, whose types are
-// built in (fetch.validateDescriptorKeys), and a tlscert collector's tls
-// block takes no insecure_skip_verify true (tlscertRule).
+// built in (fetch.validateDescriptorKeys), a tlscert collector's tls
+// block takes no insecure_skip_verify true (tlscertRule), and a kubernetes
+// collector names its resource and keeps to its rules (kubernetesRule).
 func requestSchemaRule() map[string]any {
-	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert and docs/S3FILE.md for s3file."}
+	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file and docs/KUBERNETES.md for kubernetes."}
 	grpc := writtenKey("rpc")
 	grpc["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
 	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired(), fetch.RequestTypeTLSCert: tlscertRule()}[name]
+		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired(), fetch.RequestTypeTLSCert: tlscertRule(), fetch.RequestTypeKubernetes: kubernetesRule()}[name]
 		if required != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
@@ -885,6 +895,32 @@ func paginationRule() map[string]any {
 // verify is reported and never refused.
 func tlscertRule() map[string]any {
 	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
+}
+
+// kubernetesRule is what a kubernetes collector's request is held to, as
+// the exporter holds it (fetch.validateKubernetesRequest): resource,
+// written with something other than "", and not the core group's secrets;
+// namespaces or all_namespaces, not both; bearer_token_file only beside
+// api_server, and beside api_server a credential, bearer_token_file or
+// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
+// to the exporter, so each is "written" when it is something else
+// (writtenKey).
+func kubernetesRule() map[string]any {
+	rule := writtenKey("resource")
+	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
+	rule["allOf"] = []any{
+		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
+		map[string]any{
+			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
+			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
+		},
+		map[string]any{"if": map[string]any{"not": writtenKey("api_server")}, "then": map[string]any{"not": writtenKey("bearer_token_file")}},
+		map[string]any{"if": writtenKey("api_server"), "then": map[string]any{
+			"anyOf":      []any{writtenKey("bearer_token_file"), map[string]any{"properties": map[string]any{"tls": writtenKey("cert_file")}, "required": []string{"tls"}}},
+			"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}},
+		}},
+	}
+	return rule
 }
 
 // sshfileRequired is what an sshfile collector's request requires, as the
@@ -979,7 +1015,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
 		"targets[].name":      {"pattern": optionalPattern(targetNameRE.String()), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"minLength": 1, "description": "The collector of the configuration that scrapes this target."},
-		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one."},
+		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one. A kubernetes collector takes none: leave it out."},
 		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},

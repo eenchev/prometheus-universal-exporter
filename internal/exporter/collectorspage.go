@@ -107,6 +107,10 @@ func targetHint(c *model.Collector, required bool) string {
 		}
 	case fetch.RequestTypeTLSCert:
 		hint = "host or host:port"
+	case fetch.RequestTypeKubernetes:
+		// A kubernetes collector lists what its configuration names, and
+		// takes no target at all.
+		return "none: leave it out"
 	}
 	if !required {
 		hint += " (optional)"

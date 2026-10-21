@@ -41,15 +41,21 @@ type certSpec struct {
 	ca                  bool
 	client              bool
 	serial              int64
+	// key is the certificate's key, a new one when nil: a cross-signed
+	// certificate shares its subject and key with the one it stands in for.
+	key *ecdsa.PrivateKey
 }
 
 // makeCert makes a certificate of spec, signed by parent, or self-signed
 // when parent is nil.
 func makeCert(t *testing.T, spec certSpec, parent *testCert) *testCert {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	key := spec.key
+	if key == nil {
+		var err error
+		if key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
+			t.Fatal(err)
+		}
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(spec.serial),
@@ -457,4 +463,101 @@ func TestATLSCertHandshakeIsTracedAndItsFilesChecked(t *testing.T) {
 	if warnings := FileWarnings(missing, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "request.tls") {
 		t.Errorf("warnings %v", warnings)
 	}
+}
+
+// writeRoots writes certs to one PEM file, for ca_file.
+func writeRoots(t *testing.T, certs ...*testCert) string {
+	t.Helper()
+	var data []byte
+	for _, c := range certs {
+		data = append(data, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.der})...)
+	}
+	file := filepath.Join(t.TempDir(), "roots.pem")
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// The chain's earliest expiry is of the chain a client verifies by, root
+// included, when the presented chain verifies, so that a server still
+// sending an expired cross-sign of its root, as Let's Encrypt's servers
+// sent DST Root CA X3, does not hold it in the past; when the chain does
+// not verify, it is of the presented certificates, and earliest_from says
+// which. The certificates are the presented ones either way.
+func TestATLSCertChainsEarliestExpiryIsOfTheVerifiedChain(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	day := 24 * time.Hour
+	oldRoot := makeCert(t, certSpec{cn: "Old Root", notBefore: now.Add(-20 * 365 * day), notAfter: now.Add(-400 * day), ca: true, serial: 1}, nil)
+	// The root expires before the leaf, so the verified chain ends with it.
+	root := makeCert(t, certSpec{cn: "Test Root", notBefore: now.Add(-day), notAfter: now.Add(30 * day), ca: true, serial: 2}, nil)
+	crossSign := makeCert(t, certSpec{cn: "Test Root", notBefore: now.Add(-5 * 365 * day), notAfter: now.Add(-365 * day), ca: true, serial: 3, key: root.key}, oldRoot)
+	intermediate := makeCert(t, certSpec{cn: "Test Intermediate", notBefore: now.Add(-day), notAfter: now.Add(365 * day), ca: true, serial: 4}, root)
+	leaf := makeCert(t, certSpec{cn: "www", dns: []string{"www.example.test"}, notBefore: now.Add(-day), notAfter: now.Add(90 * day), serial: 5}, intermediate)
+	addr, _ := tlsServer(t, []*testCert{leaf, intermediate, crossSign}, nil, true)
+	saved := tlsCertNow
+	tlsCertNow = func() time.Time { return now }
+	t.Cleanup(func() { tlsCertNow = saved })
+
+	for _, tc := range []struct {
+		name     string
+		settings model.TLSConfig
+		verified bool
+		earliest time.Time
+		from     string
+	}{
+		{"trusted", model.TLSConfig{CAFile: writeRoots(t, root), ServerName: "www.example.test"}, true, root.cert.NotAfter, "verified"},
+		{"untrusted", model.TLSConfig{ServerName: "www.example.test"}, false, crossSign.cert.NotAfter, "presented"},
+	} {
+		doc, err := handshakeDoc(t, tlsCertCollector(t, tc.settings), addr)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if doc.Verified != tc.verified || doc.Chain == nil || doc.Chain.Length != 3 || len(doc.Certificates) != 3 || doc.Certificates[2].SubjectCN != "Test Root" || doc.Certificates[2].SecondsUntilExpiry != -365*24*3600 {
+			t.Errorf("%s: verified %v, chain %+v, certificates %+v", tc.name, doc.Verified, doc.Chain, doc.Certificates)
+			continue
+		}
+		if doc.Chain.EarliestNotAfter != tc.earliest.Unix() || doc.Chain.SecondsUntilEarliestExpiry != tc.earliest.Unix()-now.Unix() || doc.Chain.EarliestFrom != tc.from {
+			t.Errorf("%s: chain %+v, want the earliest %d from %q", tc.name, doc.Chain, tc.earliest.Unix(), tc.from)
+		}
+	}
+}
+
+// A chain that verifies by two chains ends when the later of them does,
+// each at the first of its certificates to expire: here the intermediate
+// cross-signed by the second root, after the first root's intermediate.
+func TestATLSCertChainVerifiedByTwoChainsEndsWithTheLaterOne(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	day := 24 * time.Hour
+	first := makeCert(t, certSpec{cn: "First Root", notBefore: now.Add(-day), notAfter: now.Add(10 * 365 * day), ca: true, serial: 1}, nil)
+	second := makeCert(t, certSpec{cn: "Second Root", notBefore: now.Add(-day), notAfter: now.Add(10 * 365 * day), ca: true, serial: 2}, nil)
+	byFirst := makeCert(t, certSpec{cn: "Test Intermediate", notBefore: now.Add(-day), notAfter: now.Add(30 * day), ca: true, serial: 3}, first)
+	bySecond := makeCert(t, certSpec{cn: "Test Intermediate", notBefore: now.Add(-day), notAfter: now.Add(60 * day), ca: true, serial: 4, key: byFirst.key}, second)
+	leaf := makeCert(t, certSpec{cn: "www", dns: []string{"www.example.test"}, notBefore: now.Add(-day), notAfter: now.Add(90 * day), serial: 5}, byFirst)
+	addr, _ := tlsServer(t, []*testCert{leaf, byFirst, bySecond}, nil, true)
+	saved := tlsCertNow
+	tlsCertNow = func() time.Time { return now }
+	t.Cleanup(func() { tlsCertNow = saved })
+
+	doc, err := handshakeDoc(t, tlsCertCollector(t, model.TLSConfig{CAFile: writeRoots(t, first, second), ServerName: "www.example.test"}), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !doc.Verified || doc.Chain == nil || doc.Chain.EarliestNotAfter != bySecond.cert.NotAfter.Unix() || doc.Chain.SecondsUntilEarliestExpiry != 60*24*3600 || doc.Chain.EarliestFrom != "verified" {
+		t.Errorf("verified %v %q, chain %+v; want the earliest %d", doc.Verified, doc.VerifyError, doc.Chain, bySecond.cert.NotAfter.Unix())
+	}
+	// Both chains verify, so the rule had two to choose from.
+	chains, err := verifyTLSCertChain([]*x509.Certificate{leaf.cert, byFirst.cert, bySecond.cert}, certPoolOf(first.cert, second.cert), "www.example.test", now)
+	if err != nil || len(chains) != 2 {
+		t.Errorf("%d chains, %v", len(chains), err)
+	}
+}
+
+// certPoolOf is a pool of certs.
+func certPoolOf(certs ...*x509.Certificate) *x509.CertPool {
+	pool := x509.NewCertPool()
+	for _, c := range certs {
+		pool.AddCert(c)
+	}
+	return pool
 }

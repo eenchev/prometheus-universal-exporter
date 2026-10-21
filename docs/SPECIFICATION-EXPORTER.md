@@ -1844,13 +1844,24 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   `tls_version` and `cipher_suite` as the handshake settled them,
   `verified`, `verify_error`, `duration_seconds`, the first certificate's
   `not_after` and `seconds_until_expiry`, `chain` (`length`,
-  `earliest_not_after`, `seconds_until_earliest_expiry`) and
-  `certificates`, the chain as presented, each with `subject_cn`,
+  `earliest_not_after`, `seconds_until_earliest_expiry`, `earliest_from`)
+  and `certificates`, the chain as presented, each with `subject_cn`,
   `subject`, `issuer_cn`, `issuer`, `serial` (lower-case hexadecimal),
   `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
   `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
   `seconds_until_expiry` (negative once expired), `is_ca`,
   `signature_algorithm` and `sha256_fingerprint`.
+- `chain.length` MUST be the number of certificates presented. When the
+  chain verifies, `chain.earliest_not_after` MUST be, over the chains the
+  verification built from the server's certificate to a trusted root, the
+  latest of each chain's earliest `not_after`, its root included, and
+  `earliest_from` MUST be `verified`; a presented certificate on none of
+  those chains, such as an expired cross-signed root, MUST NOT count. When
+  it does not verify, `earliest_not_after` MUST be the earliest `not_after`
+  of the presented certificates and `earliest_from` MUST be `presented`.
+  `seconds_until_earliest_expiry` MUST be `earliest_not_after` less the
+  time of the scrape. `verified`, `verify_error` and `certificates` MUST be
+  of the presented chain either way.
 - STARTTLS is not supported: the handshake MUST start at the connection's
   first byte.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a

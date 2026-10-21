@@ -11793,9 +11793,10 @@ Tests MUST show:
   when none is set, succeeds, and the installed helm reports the pinned
   version.
 - `make helm-version` accepts a helm reporting the pinned version, with or
-  without a `+g<commit>` suffix, and refuses the release line alone, another
-  patch release and another minor, saying which helm it found, which CI
-  runs, and `make helm-install`.
+  without a `+g<commit>` suffix, and the release line alone (`v4.3`) for a
+  `.0` pin (`v4.3.0`), and refuses the release line for another patch pin
+  (`v4.3.1`), another patch release, another minor or major, saying which
+  helm it found, which CI runs, and `make helm-install`.
 - `make helm-test` and the chart steps of `ci.yml`, read as the shell reads
   them — loops expanded over their words, a render kept in a variable, a
   pipeline in a condition — make the same checks: the same helm command
@@ -27225,11 +27226,14 @@ it.
 renders, the same values that must be rejected, the same lines looked for in
 what is rendered — and no other, and a test MUST compare the two, so that a
 clean local run means a clean CI run and the reverse. `make helm-test` MUST
-refuse any helm but the pinned release, and `make helm-install` MUST install
-one it accepts: built from source with `go install`, helm reports only its
-release line (`v4.3`) unless the version is set at link time as helm's own
-release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
-target MUST pass that flag with the pinned version.
+refuse any helm but the pinned release, reading a version without a patch,
+the release line a helm built from source reports (`v4.3`), as its `.0`
+release (`v4.3.0`) and comparing any other whole, and `make helm-install`
+MUST install one it accepts: built from source with `go install`, helm
+reports only its release line (`v4.3`) unless the version is set at link time
+as helm's own release build sets it
+(`-X helm.sh/helm/v4/internal/version.version`), so the target MUST pass that
+flag with the pinned version.
 
 `make ci` MUST run every go command the CI workflow's jobs run, beside
 the `go mod download` that fills their module cache, and reach every make

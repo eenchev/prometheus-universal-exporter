@@ -1964,8 +1964,10 @@ helm-test` refuses another installed release, since helm releases word the
 schema's errors and render details differently — a chart test that passes
 with one can fail with another. `make helm-install` installs it with `go
 install`, setting the version at link time as helm's release build does: built
-from source without that, helm reports only its release line, `v4.3`, and `make
-helm-test` would refuse the helm just installed. (Homebrew's `helm` works too
+from source without that, helm reports only its release line, `v4.3`. `make
+helm-test` reads a release line alone as its `.0` release, so a helm built
+from source passes a `v4.3.0` pin, and refuses it against a `v4.3.1` one;
+a version with a patch is compared whole, `v4.3.1` against `v4.3.0` too. (Homebrew's `helm` works too
 when its version matches.) To move to a newer helm, change `HELM_VERSION` and
 the workflows' `version:` together.
 

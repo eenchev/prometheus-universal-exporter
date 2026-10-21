@@ -218,19 +218,28 @@ VULNCHECK_PACKAGES := . ./cmd/... ./tools/...
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(VULNCHECK_PACKAGES)
 
+# The installed helm has to be the pinned release. A helm built from source
+# without the version stamped in (helm-install) reports only its release line,
+# "v4.3", which is read as its .0 release, v4.3.0: that is what a source build
+# of a .0 pin reports, though the line alone cannot tell which patch of it was
+# built. A version with a patch is compared whole, so v4.3.1 is no v4.3.0.
 helm-version:
 	@command -v helm >/dev/null 2>&1 || { \
 		echo "helm is not installed; run: make helm-install" >&2; exit 1; }
 	@have=$$(helm version --short | sed 's/+.*//'); \
-	if [ "$$have" != '$(HELM_VERSION)' ]; then \
+	full=$$have; \
+	case "$$have" in v*.*.*) ;; v*.*) full=$$have.0 ;; esac; \
+	if [ "$$full" != '$(HELM_VERSION)' ]; then \
 		echo "helm is $$have but CI runs $(HELM_VERSION); run: make helm-install" >&2; \
 		exit 1; \
 	fi
 
 # `go install` builds helm from its source, where the version helm reports is
 # the release line, "v4.3", until a release build stamps the full one into it;
-# helm's own Makefile does that with this -X. Without it helm-version, which
-# stays strict, would refuse the helm this target has just installed.
+# helm's own Makefile does that with this -X. helm-version takes a release
+# line alone as its .0 release, so such a helm of a .0 pin passes without the
+# stamp, but one of any other pin would not, and with it helm reports the
+# version it is.
 helm-install:
 	go install -ldflags "-X helm.sh/helm/v4/internal/version.version=$(HELM_VERSION)" helm.sh/helm/v4/cmd/helm@$(HELM_VERSION)
 

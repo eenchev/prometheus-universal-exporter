@@ -65,7 +65,8 @@ collectors:
 
 The `tls` block is the one `http`, `grpc` and `sql` take
 ([TLS](REQUESTS.md#tls)), read by the same code, but for
-`insecure_skip_verify`, which is refused: no certificate is refused anyway.
+`insecure_skip_verify`, which is refused, by the exporter and by the
+configuration's schema: no certificate is refused anyway.
 Its files are read at every handshake, so a Secret mounted after the
 exporter starts is used, and [`--dry-run`](CONFIGURATION.md#dry-run) reads
 them as a handshake would, warning of a CA file that is missing or holds no

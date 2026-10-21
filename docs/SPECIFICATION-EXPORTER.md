@@ -1796,7 +1796,7 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` MUST be refused at load. The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
+| `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` true MUST be refused at load, and by the schema (§ 24.3). The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
 | `allowed_targets`, `denied_targets` | none | As for `http`: the host's name before the connection, and the address the connection is made to. |
 
 - A target MUST be `host`, `host:port` or `[v6]:port`, port 443 when left

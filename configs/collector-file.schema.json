@@ -959,6 +959,31 @@
                     ]
                   }
                 }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "tlscert"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "tls": {
+                      "properties": {
+                        "insecure_skip_verify": {
+                          "not": {
+                            "const": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             ],
             "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert and docs/S3FILE.md for s3file.",

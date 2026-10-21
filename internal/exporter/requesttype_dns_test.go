@@ -153,3 +153,58 @@ func TestTheCollectorsPageNamesADNSTarget(t *testing.T) {
 		t.Errorf("the page does not say what the target is:\n%s", body)
 	}
 }
+
+// A dns collector's label values take the probe's param_<name> parameters,
+// as every type's do: the lookup is the same, and the series carry the
+// value the probe gave.
+func TestADNSCollectorsLabelValuesTakeProbeParameters(t *testing.T) {
+	address := dnsResponder(t)
+	server := labelServer(t, `collectors:
+  - name: records
+    request:
+      type: dns
+      server: `+address+`
+    transform:
+      type: jq
+    metrics:
+      - name: dns_records
+        expression: .count
+        labels:
+          - name: env
+            value: "{{param_env:dev}}"
+`)
+	for query, want := range map[string]string{
+		"/probe?collector=records&target=www.example.test&param_env=prod": `dns_records{env="prod"} 2`,
+		"/probe?collector=records&target=www.example.test":                `dns_records{env="dev"} 2`,
+	} {
+		recorder := probeOnce(t, server, query, nil)
+		if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %d %v, want %s", query, recorder.Code, got, want)
+		}
+	}
+}
+
+// A python transform reads a dns collector's document as data, the records
+// a list of objects.
+func TestAPythonTransformReadsADNSDocument(t *testing.T) {
+	requirePython(t)
+	address := dnsResponder(t)
+	server := labelServer(t, `collectors:
+  - name: records
+    request:
+      type: dns
+      server: `+address+`
+    transform:
+      type: python
+      script: |
+        for answer in data["answers"]:
+            metric(name="dns_address", type="gauge", value=1, labels={"address": answer["address"]})
+        metric(name="dns_found", type="gauge", value=0 if data["not_found"] else 1)
+    metrics: []
+`)
+	recorder := probeOnce(t, server, "/probe?collector=records&target=www.example.test", nil)
+	want := []string{`dns_address{address="192.0.2.1"} 1`, `dns_address{address="192.0.2.2"} 1`, "dns_found 1"}
+	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("%d %v, want %v", recorder.Code, got, want)
+	}
+}

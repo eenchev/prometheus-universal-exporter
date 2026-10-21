@@ -785,7 +785,8 @@ func labelSchemaRule() map[string]any {
 // key of text written "" is as missing as left out, to the exporter and so
 // here (writtenKey). A grpc collector also says where its message types come
 // from, descriptors, unless it calls the health service, whose types are
-// built in (fetch.validateDescriptorKeys).
+// built in (fetch.validateDescriptorKeys), and a tlscert collector's tls
+// block takes no insecure_skip_verify true (tlscertRule).
 func requestSchemaRule() map[string]any {
 	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert and docs/S3FILE.md for s3file."}
 	grpc := writtenKey("rpc")
@@ -793,7 +794,7 @@ func requestSchemaRule() map[string]any {
 	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired()}[name]
+		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired(), fetch.RequestTypeTLSCert: tlscertRule()}[name]
 		if required != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
@@ -824,6 +825,14 @@ func paginationRule() map[string]any {
 			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": writtenKey("param")},
 		},
 	}
+}
+
+// tlscertRule is what a tlscert collector's request is held to beyond its
+// keys, as the exporter holds it (fetch.validateTLSCertRequest): its tls
+// block takes no insecure_skip_verify true, since a chain that does not
+// verify is reported and never refused.
+func tlscertRule() map[string]any {
+	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
 }
 
 // sshfileRequired is what an sshfile collector's request requires, as the

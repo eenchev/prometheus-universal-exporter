@@ -115,3 +115,58 @@ func TestADebugProbeOfATLSCertCollector(t *testing.T) {
 		}
 	}
 }
+
+// A tlscert collector's label values take the probe's param_<name>
+// parameters, as every type's do.
+func TestATLSCertCollectorsLabelValuesTakeProbeParameters(t *testing.T) {
+	target := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(target.Close)
+	server := labelServer(t, `collectors:
+  - name: certs
+    request:
+      type: tlscert
+    transform:
+      type: jq
+    metrics:
+      - name: tls_cert_verified
+        expression: if .verified then 1 else 0 end
+        labels:
+          - name: env
+            value: "{{param_env:dev}}"
+`)
+	host := strings.TrimPrefix(target.URL, "https://")
+	for query, want := range map[string]string{
+		"/probe?collector=certs&target=" + host + "&param_env=prod": `tls_cert_verified{env="prod"} 0`,
+		"/probe?collector=certs&target=" + host:                     `tls_cert_verified{env="dev"} 0`,
+	} {
+		recorder := probeOnce(t, server, query, nil)
+		if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %d %v, want %s", query, recorder.Code, got, want)
+		}
+	}
+}
+
+// A python transform reads a tlscert collector's document as data, the
+// chain a list of objects.
+func TestAPythonTransformReadsATLSCertDocument(t *testing.T) {
+	requirePython(t)
+	target := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(target.Close)
+	server := labelServer(t, `collectors:
+  - name: certs
+    request:
+      type: tlscert
+    transform:
+      type: python
+      script: |
+        for cert in data["certificates"]:
+            metric(name="tls_cert_is_ca", type="gauge", value=1 if cert["is_ca"] else 0, labels={"serial": cert["serial"]})
+        metric(name="tls_cert_verified", type="gauge", value=1 if data["verified"] else 0)
+    metrics: []
+`)
+	recorder := probeOnce(t, server, "/probe?collector=certs&target="+strings.TrimPrefix(target.URL, "https://"), nil)
+	want := []string{`tls_cert_is_ca{serial="` + target.Certificate().SerialNumber.Text(16) + `"} 1`, "tls_cert_verified 0"}
+	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("%d %v, want %v", recorder.Code, got, want)
+	}
+}

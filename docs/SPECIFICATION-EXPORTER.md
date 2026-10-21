@@ -24431,6 +24431,50 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   reading a file, and `-h` lists them (TestSchemaFlagsPrintTheSchemas,
   TestVersionAndHelp).
 
+## 34.160 One allocator with discovery, kept targets, logins and CNAME lookups
+
+- A kubernetes source takes the IPv4 EndpointSlices by default and with
+  `address_type: IPv4`, the IPv6 ones with `IPv6`, and every slice, FQDN
+  ones included, with `any`, so a dual-stack Service gives each pod once;
+  each target has `__meta_kubernetes_endpointslice_address_type`, and
+  another `address_type` is refused at load
+  (`TestKubernetesTakesTheSlicesOfItsAddressType`,
+  `TestDiscoveryIsCheckedAtLoad`).
+- A reload changing only a source's `refresh_interval`, or a kubernetes
+  source's `label_selector`, keeps its targets in the bundles and the service
+  discovery answer until the new source answers; a first failure of the new
+  source keeps them and is counted beside the old source's counts, its
+  answer then replaces them, and a source given another name starts with
+  none (`TestAChangedSourceKeepsItsTargetsUntilItAnswers`).
+- A shared login outlives the request that began it: a request with a
+  100 ms deadline begins a login the target answers in 300 ms, a request
+  with 5 s waits for it and gets the token, the first fails at its own
+  deadline, and one login is counted, none failed
+  (TestASharedLoginOutlivesTheRequestThatBeganIt).
+- A relative login.url is a path from the root on the target's scheme,
+  host and port: three paths of one target make one login and keep one
+  token, and login, ./login, ../login and ?x=1 are refused at load as
+  relative to the target's path (TestARelativeLoginURLKeepsOnlyTheTargetsOrigin);
+  the committed schema refuses login and ../login and takes /, as the
+  exporter does (TestSchemaAndExporterAgreeOnALogin).
+- A 401 from another origin a followed redirect led to, without the token,
+  is the answer, and makes no second login
+  (TestA401FromARedirectWithoutTheTokenMakesNoNewLogin).
+- A debug run's login, made or failed, is counted in neither
+  http_exporter_logins_total nor http_exporter_login_failures_total, and the
+  token it fetched serves the collector's next request without a login
+  (TestADebugRunsLoginIsNotCounted).
+- A dns CNAME collector asks the CNAME question alone, of the stand-in
+  server: an alias answers its record's target; a name with an A record, one
+  with a TXT record alone and one that does not exist are not_found with no
+  records; transport tcp asks over TCP; an answer marked truncated over UDP
+  is asked again over TCP; SERVFAIL fails naming the server and the code; a
+  server that never answers fails at the deadline
+  (TestADNSCNAMELookupAsksForTheCNAMERecordAlone).
+- The nameservers of a resolv.conf are read as host:port on port 53, an
+  IPv6 one in brackets, and 127.0.0.1 and ::1 when it names none
+  (TestTheSystemsNameserversAreReadForACNAMELookup).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

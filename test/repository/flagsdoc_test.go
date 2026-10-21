@@ -10,26 +10,31 @@ import (
 	"testing"
 )
 
-// The README's command-line table lists every flag the exporter has, and
-// nothing it does not.
-func TestReadmeListsEveryFlag(t *testing.T) {
+// The flag reference, docs/FLAGS.md, lists every flag the exporter has, and
+// nothing it does not. The README links it rather than carrying a second
+// table, since a subject has one home: a table in each would drift apart.
+func TestFlagReferenceListsEveryFlag(t *testing.T) {
 	help := helpText(t)
 	var flags []string
 	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help, -1) {
 		flags = append(flags, match[1])
 	}
-	raw, err := os.ReadFile("README.md")
+	flagRow := regexp.MustCompile("(?m)^\\| `--([a-z.-]+)`")
+	raw, err := os.ReadFile("docs/FLAGS.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var documented []string
-	for _, match := range regexp.MustCompile("(?m)^\\| `--([a-z.-]+)`").FindAllStringSubmatch(string(raw), -1) {
+	for _, match := range flagRow.FindAllStringSubmatch(string(raw), -1) {
 		documented = append(documented, match[1])
 	}
 	sort.Strings(flags)
 	sort.Strings(documented)
 	if len(flags) == 0 || strings.Join(flags, " ") != strings.Join(documented, " ") {
 		t.Fatalf("flags:      %v\ndocumented: %v", flags, documented)
+	}
+	if rows := flagRow.FindAllString(read(t, "README.md"), -1); len(rows) > 0 {
+		t.Errorf("README.md has flag rows %q; flags belong in docs/FLAGS.md, which the README links", rows)
 	}
 }
 

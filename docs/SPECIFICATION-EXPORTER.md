@@ -10152,8 +10152,8 @@ status captured:
 
 ## 34.49 Configuration schema tests
 
-See § 24.3. In addition, the README's command-line table lists exactly the flags
-the exporter has. No Markdown document in the repository names a flag of the
+See § 24.3. In addition, the flag table of `docs/FLAGS.md` lists exactly the
+flags the exporter has, and the README has no flag rows (§ 35). No Markdown document in the repository names a flag of the
 exporter's prefixes (`--web.`, `--log.`, `--config.`, `--probe.`, `--python.`,
 `--runtime.`, `--static-targets`) that the exporter does not have (§ 30).
 
@@ -24581,10 +24581,16 @@ The documentation MUST be split by audience rather than gathered in one file.
 The repository README is what someone reads before deciding to use the exporter
 and while starting it for the first time, so it MUST carry only what serves
 that: what the exporter is, how the probe pattern works, a minimal configuration
-and the commands to run it, the endpoints, the command-line flags, and an index
-of everything else. It MUST NOT carry reference material — decoder and transform
-detail, caching, transport settings, authentication models, operator manifests —
-because a README that answers every question stops answering the first one.
+and the commands to run it, a short account of the endpoints, and an index of
+everything else. It MUST NOT carry reference material — decoder and transform
+detail, caching, transport settings, authentication models, operator manifests,
+the table of endpoints and the table of command-line flags — because a README
+that answers every question stops answering the first one. The endpoints, with
+what each takes and answers, MUST live in `docs/ENDPOINTS.md`, and every flag
+of the exporter, with its default, in `docs/FLAGS.md`, which a test MUST hold
+to exactly the flags the exporter has (§ 34.49); the README MUST link both and
+name `--help`. The target allocator's flags MUST live on its own page,
+`docs/ALLOCATOR.md`, which `docs/FLAGS.md` MUST link.
 
 What the exporter is MUST cover every source it reads, not the first one it
 learned: the README's tagline and the sources paragraph after it MUST each name

@@ -124,7 +124,7 @@ func TestADebugProbeShowsEveryPage(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := reposTarget(t, 3, nil)
 	server := modeServer(t, reposCollector(2))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	r := debugProbeGet(t, server, "collector=repos&debug=true&target="+url.QueryEscape(target.URL))
 	assertContains(t, r.Body.String(),
 		"1. GET "+target.URL+"/orgs/acme/repos (page 1) -> 200 OK",

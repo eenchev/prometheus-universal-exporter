@@ -77,7 +77,7 @@ func TestTheNewDecodersFeedAJQTransform(t *testing.T) {
 				t.Fatalf("answered %d: %s", r.Code, r.Body)
 			}
 			assertContains(t, r.Body.String(), tc.want...)
-			server.SetProbeDebug(true)
+			server.SetDebug(DebugFull)
 			kind := tc.decoder
 			if kind == "auto" {
 				kind = map[string]string{"application/x-ndjson": "ndjson", "application/toml": "toml"}[tc.contentType]

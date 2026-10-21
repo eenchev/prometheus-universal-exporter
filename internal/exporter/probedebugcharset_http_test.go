@@ -28,7 +28,7 @@ func TestADebugProbeShowsTheResponseAsTheTargetSentIt(t *testing.T) {
 	c := debugCollector("dbg")
 	c.Metrics[0].Labels = []model.LabelRule{{Name: "name", Expression: ".name"}}
 	server := modeServer(t, c)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, body,
 		"Content-Type: application/json; charset=windows-1251",
@@ -52,7 +52,7 @@ func TestADebugProbeSaysNothingOfAConversionThatDidNotHappen(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, body, "Content-Type: application/json;charset=UTF-8", "Body: 8 bytes\n")
 	if strings.Contains(body, "converted") {

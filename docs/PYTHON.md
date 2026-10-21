@@ -20,7 +20,7 @@ without the header, or a default, `response.header("x-mode", "")`.
 credentials included: `https://user:password@host/api?token=abc` reaches the
 script as written, not redacted as the exporter's logs show it. Do not print
 it or put it in a label as it is. What a script prints is logged at debug
-level and shown in [debug reports](CONFIGURATION.md#debugging-a-probe), and a
+level and shown in [debug reports](CONFIGURATION.md#debug-probes), and a
 label is kept by Prometheus. When a script needs the host, take it apart
 first, for example `urllib.parse.urlsplit(target).hostname`.
 
@@ -47,7 +47,7 @@ definitions dynamically through `metric(...)`.
 
 A rule under `metrics` makes no series there: it names one the script makes,
 by the `name` the script gives it, and that is all it says. A
-[debug probe](CONFIGURATION.md#debugging-a-probe)'s report lists the rule
+[debug probe](CONFIGURATION.md#debug-probes)'s report lists the rule
 among those that gave no series when the script made none of that name; the
 rule has its [`http_exporter_rule_failures_total`](SELF-METRICS.md) series,
 which stays `0`, since a rule that makes no series fails none; and each of

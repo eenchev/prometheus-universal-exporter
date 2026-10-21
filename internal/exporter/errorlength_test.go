@@ -183,7 +183,7 @@ func TestAPanicOfAMegabyteIsReportedWithinTheBound(t *testing.T) {
 	broken.Request = model.RequestConfig{Type: "panics", Path: "/data"}
 	static := model.StaticTarget{Name: "broken", Collector: "broken", Target: "panics://data"}
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{broken}}, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{static}})
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	get := func(path string) string {
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))

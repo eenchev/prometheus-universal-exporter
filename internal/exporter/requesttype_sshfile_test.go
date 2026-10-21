@@ -201,7 +201,7 @@ func TestAReloadClosesTheSSHConnectionsOnlyAChangedCollectorUsed(t *testing.T) {
 func TestADebugProbeOfAnSSHFileCollector(t *testing.T) {
 	h := newSSHHost(t)
 	server, _ := h.exporter(t)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	key, err := os.ReadFile(h.keyFile)
 	if err != nil {
 		t.Fatal(err)

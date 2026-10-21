@@ -729,7 +729,7 @@ led: the collector's headers and credentials were not sent there, since
 https://api.example.com is not the origin the request was made to,
 http://api.example.com; list api.example.com in
 request.redirect_trusted_hosts if it is to be sent them`. A
-[debug probe](CONFIGURATION.md#debugging-a-probe) lists every redirect with
+[debug probe](CONFIGURATION.md#debug-probes) lists every redirect with
 the headers it was sent and, under one that was not trusted, the names of the
 headers that were not, a credential of the target URL as `Authorization (the
 target URL's credentials)`.
@@ -961,7 +961,7 @@ request's answer on the connection; the second such error ends the request.
 A
 connection that breaks while the body is being read — reset, or closed before
 the length it promised — counts as a transport failure and is retried too,
-unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debugging-a-probe)
+unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debug-probes)
 shows such an attempt as its status followed by `then the body broke off`.
 
 Only requests whose method is idempotent are retried — `GET`, `HEAD`,
@@ -1176,7 +1176,7 @@ page. An answer of one page is the page as it came, byte for byte; an answer
 of several is the merged document written again as JSON, its other keys those
 of the first page, its status and headers the first page's.
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) lists every page's request
+A [debug probe](CONFIGURATION.md#debug-probes) lists every page's request
 with its number, `(page 2)`, says how many pages the response is merged from,
 and whether the pages stopped at `max_pages`. A static target of the
 collector pages through its own target and path the same way.

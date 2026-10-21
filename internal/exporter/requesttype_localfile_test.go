@@ -328,7 +328,7 @@ func TestADebugProbeOfALocalFileCollector(t *testing.T) {
 	root := t.TempDir()
 	testutil.WriteIn(t, root, "app.prom", promFile)
 	server := fileServer(t, fileCollector("files", root, "app.prom"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector=files&debug=true", nil))
 	body := recorder.Body.String()

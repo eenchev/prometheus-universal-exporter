@@ -358,7 +358,7 @@ as browsers do. An unknown name in `response.charset` fails to load; an
 unknown name in the `Content-Type` header, or in the XML declaration of a
 document decoded as XML, fails the `decode` stage, naming it.
 Transforms and Python scripts see the converted body, and its `Content-Type`
-says `charset=utf-8`. A [debug report](#debugging-a-probe) shows the response
+says `charset=utf-8`. A [debug report](#debug-probes) shows the response
 as the target sent it, and says what its body was converted from.
 
 What still is not valid UTF-8 after that — a target that says UTF-8 and is
@@ -2312,7 +2312,7 @@ series ([Reading CSV: what to expect](#reading-csv-what-to-expect) lists
 what takes a column away); a rule that is not required still says nothing of
 a value's column that is gone. While writing a collector leave its rules
 required, so that a column that is gone is reported, and read the header the
-target sends in a [debug probe](#debugging-a-probe).
+target sends in a [debug probe](#debug-probes).
 
 The error of a `css` or an `xpath` rule names its metric first, and, where
 the failure belongs to one of the things the rule selected, which: an item
@@ -3817,7 +3817,7 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
 Once the exporter starts writing an answer, the client has 30 seconds to read
 it, on every endpoint. An answer can be megabytes — a passed-through
 exposition, the static targets, the verbose self-metrics, a
-[debug report](#debugging-a-probe) — and a client that asked for one and
+[debug report](#debug-probes) — and a client that asked for one and
 stopped reading would otherwise hold the request, and the answer in memory,
 for as long as it kept the connection open. After 30 seconds its connection is
 closed, which the log notes at `debug` level only. The time a probe takes to
@@ -4168,10 +4168,126 @@ changed and changed back, or removed and brought back, while an earlier probe
 was at the target makes a trip of its own, and its result is cached and its
 failure logged as any probe's of a collector in force.
 
-## Debugging a probe
+## Debugging collectors
 
-When a collector does not give what it should, add `&debug=true` to the probe
-and read what happened, step by step, in a browser or with curl:
+When a collector does not give what it should, run it and read what
+happened, step by step: the requests, the response, each stage, what was
+logged and the series a probe would have answered. One flag, `--web.debug`
+(the Helm chart's `server.debug`), sets how far that goes:
+
+| `--web.debug` | What is served |
+|---------------|----------------|
+| `off`, the default | Nothing: `/debug` is not there (`404`), and `debug=true` on `/probe` and `debug=<name>` on `/static-targets` are answered `403`. |
+| `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
+| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). |
+
+Any other value stops the exporter at startup, as any wrong flag does
+(exit status 2). Every run, whichever asked for it, is made by the same
+engine and reported in the same terms: as plain text by the two URLs, and as
+JSON by the page, which shows the text report too. Each is counted in
+`http_exporter_debug_runs_total{kind, result}`
+([Self-metrics](SELF-METRICS.md#debug-runs)), and in no collector's
+self-metrics.
+
+Use `edit` where the people who can open the exporter's pages may write and
+try collectors but should not see what the targets answer: the page runs
+only on what they paste. Turn `full` on while a collector is being fixed
+against its real target, and off again: a report shows what the target sent,
+and a secret under a header name that does not read as one, or in the body,
+is shown as the target sent it.
+[Debugging](AUTHENTICATION.md#debugging-collectors) says what each level lets
+a visitor of the exporter's pages do.
+
+### The debug page
+
+`/debug` runs one collector and shows the series a probe would answer, the
+stages, what was logged, the requests sent and the response read and,
+folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
+and, with *Run as you type* on, a moment after each edit. The landing page
+links it, and `/collectors` links each collector into it, the collector
+chosen and, at `full`, with the target entered in the collector's form.
+
+The collector run is one of two:
+
+- **Written on the page**: the YAML of one collector, as it is written under
+  `collectors:` — a mapping that starts with `name`, without the dash. It is
+  read as a configuration's collectors are: the same keys, the same checks,
+  and a mistake is reported in the words a load would use, with line numbers
+  counted from the collector's first line. `${NAME}` references are left as
+  they are written, whatever `--config.expand-env` says. It is never put in
+  force, and its own request block never makes a request.
+- **Configured**: one of the configuration in force, chosen by name, run as
+  it is configured, its Python included: its script is the operator's, and
+  reads whatever a target sends on every probe, which is what a pasted body
+  stands for.
+
+It reads one of three responses:
+
+- **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
+  200 unless given, and other headers. No request is made. The status must be
+  one the collector's `request.accept_status` accepts, and the body is held
+  to its response limit, as a fetched response would be.
+- **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
+  it, through a configured collector — the one run, when it is configured,
+  or the one chosen to fetch through — with its request block,
+  [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
+  credentials, `accept_status` and
+  [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
+  parameters entered on the page. A collector written on the page decodes
+  and transforms what the chosen one fetched. A collector run on what
+  another fetched reads what an `http` collector fetches only.
+- **A static target's scrape**, at `full` only: made once as its schedule
+  makes it, with the target's own settings and credentials, its interval as
+  the budget and its labels on the series, as
+  [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target)
+  makes it. Nothing is published. It is read by the collector run, the
+  target's own when that is chosen.
+
+A collector written on the page may do nothing past the response, since what
+it is given runs on the server:
+
+- **Python is never run.** A collector with `transform.type: python` or a
+  `pre_script` is refused, at `full` as at `edit`; put it in the
+  configuration and run it by name.
+- **Only `http` collectors**, since the other request types read files,
+  hosts and databases with the server's own credentials, and **no file of
+  the server's**: `request.basic_auth_file`, `request.bearer_token_file` and
+  the `request.tls` files are refused. A pasted response needs no
+  credential, and a fetched target gets the configured collector's.
+
+A run takes as long as a probe may — the timeout on the page, sent as
+Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
+target's interval — and at most 4 runs of the page are in progress at once;
+one more is answered `503`. A run reads and fills no cache, counts in no
+collector's self-metrics but the [Python worker
+series](SELF-METRICS.md#python-workers) of a configured collector's script,
+and logs one `debug run served` line at `info`. The page is behind
+`web.basic_auth` when that is configured;
+[Debugging](AUTHENTICATION.md#debugging-collectors) says how a run is kept
+from being sent by another site.
+
+The page posts each run to `POST /debug/run` as JSON, which a script can do
+too:
+
+```sh
+curl -s http://exporter:8080/debug/run \
+  -H 'Content-Type: application/json' -H 'X-Debug-Run: run' \
+  -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
+```
+
+A run sends `collector`, the YAML, or `configured`, a name; and `body` with
+`content_type`, `status` and `headers`, or `target` with `request_from`, the
+collector to fetch through, and `params`, or `static_target`. It answers
+`200` with `ok`, `verdict` (what a probe would have answered), `series`
+(Prometheus text), `requests`, `response`, `stages`, `notes` and `report`,
+the text report. A collector refused is answered `422` with `error`, a
+malformed run `400`, one too large `413`, a fetch or a scrape below `full`
+`403`.
+
+### Debug probes
+
+At `full`, add `&debug=true` to a probe and read the report in a browser or
+with curl:
 
 ```sh
 curl 'http://exporter:8080/probe?collector=app_json&target=https://api.example.com&debug=true'
@@ -4180,7 +4296,7 @@ curl 'http://exporter:8080/probe?collector=app_json&target=https://api.example.c
 ```text
 Debug probe of collector "app_json", target https://api.example.com
 Took 184ms. A probe would have answered 502: metric queue_len failed: ...
-A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.
+A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.
 
 Requests
   1. GET https://api.example.com/v1/status?tenant=<redacted> -> 200 OK in 162ms
@@ -4290,11 +4406,9 @@ each metric name and the exposition one for each series, up to
 `limits.max_metrics`, and a directory one for each file read, up to
 `request.max_files`, and for each file skipped.
 
-The [collectors page](AUTHENTICATION.md#probing-from-the-browser) at
-`/collectors` offers the same report with a *Debug report* switch on each
-form, shown only when debug probes are enabled. A
-[static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged at
-`/static-targets?debug=<name>`.
+A [static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged
+at `/static-targets?debug=<name>`, and the [debug page](#the-debug-page)
+shows the same report for its runs.
 
 The report always answers `200` with `text/plain`, whatever the probe would
 have answered. It takes the same parameters as the probe. For debug, `true`,
@@ -4303,8 +4417,9 @@ any other value is answered `400`.
 
 A debug probe always goes to the target, and leaves nothing behind. It does
 not read or fill the response cache, it does not share an identical probe in
-flight, and it is not counted in the self-metrics or exported over OTLP,
-which is what the report's line "records no self-metric" says. One thing is
+flight, and it is not exported over OTLP or counted in the self-metrics but
+`http_exporter_debug_runs_total`, which is what the report's line "records
+no self-metric but http_exporter_debug_runs_total" says. One thing is
 counted all the same: a Python script it runs is run by the collector's
 workers, and the [Python worker series](SELF-METRICS.md#python-workers)
 count what the workers did, a debug probe's runs among them. Its
@@ -4317,11 +4432,9 @@ A trip that panics — a bug, in a request type, a decoder or a transform — is
 reported as the `500` a probe would have answered, with the panic's message,
 and logged with its stack; its slot is given back as after any other trip.
 
-The report shows what the target answered, so debug probes are off unless the
-exporter runs with `--web.enable-probe-debug` (the Helm chart's
-`server.probeDebug`). Without the flag `debug=true` is answered `403`. When
-`web.basic_auth` is configured, a debug probe needs the same credentials as a
-probe. The report redacts:
+Below `--web.debug=full`, `debug=true` is answered `403`, before the target
+is contacted. When `web.basic_auth` is configured, a debug probe needs the
+same credentials as a probe. The report, and the page's JSON alike, redacts:
 
 - every query value, in the requests listed and in the errors that quote a
   URL alike. The query is otherwise shown as it was sent: each pair where it
@@ -4336,78 +4449,7 @@ probe. The report redacts:
   a whole word of it, as in `X-Sig` or `X-Db-Pwd`.
 
 Request bodies are not shown. A secret under any other header name, or in
-the response itself, is shown as the target sent it, so turn the flag on
-while a collector is being written or fixed, not for good.
-
-## Playground
-
-With `--web.enable-playground` (the Helm chart's `server.enablePlayground`),
-`/playground` is a page for writing a collector. Its editor takes the YAML of
-one collector, as it is written under `collectors:` — a mapping that starts
-with `name`, without the dash — and each run shows the series a probe would
-answer, the stages, what was logged and, folded away, the run's
-[debug report](#debugging-a-probe). It runs when *Run* is pressed and, with
-*Run as you type* on, a moment after each edit. The landing page and
-`/collectors` link it. Without the flag the page is not there (`404`).
-
-The collector is read as a configuration's collectors are: the same keys,
-the same checks, and a mistake is reported in the words a load would use,
-with line numbers counted from the collector's first line. It is never put
-in force: a run reads and fills no cache, counts in no collector's
-self-metrics, and logs one `playground run served` line at `info`. Runs are
-counted in `http_exporter_playground_runs_total`
-([Self-metrics](SELF-METRICS.md#playground-runs)). `${NAME}` references are
-left as they are written, whatever `--config.expand-env` says.
-
-A run reads one of two responses:
-
-- **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
-  200 unless given, and other headers. No request is made. The status must
-  be one the collector's `request.accept_status` accepts, and the body is
-  held to its response limit, as a fetched response would be.
-- **A target**, with `--web.enable-probe-debug` as well (the answer shows the
-  target's response, as a debug report does): fetched through a collector of
-  the configuration in force, chosen on the page, exactly as
-  `/probe?debug=true` fetches it through that collector — its request block,
-  [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
-  credentials, `accept_status` and
-  [`max_concurrent_probes`](#limiting-concurrent-probes), with the probe
-  parameters entered on the page. The collector being written decodes and
-  transforms what comes back; its own request block makes no request. Only
-  an `http` collector can be chosen.
-
-What a run may do is limited to the response, since what it is given runs
-on the server:
-
-- **Python is never run.** A collector with `transform.type: python` or a
-  `pre_script` is refused; try a script with a debug probe of a configured
-  collector instead.
-- **Only `http` collectors**, since the other request types read files,
-  hosts and databases with the server's own credentials, and **no file of
-  the server's**: `request.basic_auth_file`, `request.bearer_token_file` and
-  the `request.tls` files are refused. A pasted response needs no
-  credential, and a fetched target gets the configured collector's.
-
-A run takes as long as a probe may — the timeout on the page, sent as
-Prometheus's scrape timeout, within `--probe.default-timeout` — and at most
-4 runs are in progress at once. The page is behind `web.basic_auth` when
-that is configured; [The playground](AUTHENTICATION.md#the-playground)
-says how a run is kept from being sent by another site.
-
-The page posts each run to `POST /playground/run` as JSON, which a script
-can do too:
-
-```sh
-curl -s http://exporter:8080/playground/run \
-  -H 'Content-Type: application/json' -H 'X-Playground: run' \
-  -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
-```
-
-It answers `200` with `ok`, `verdict` (what a probe would have answered),
-`series` (Prometheus text), `stages`, `notes` and `report`; a fetch sends
-`request_from`, `target` and `params` in place of `body`, `content_type`,
-`status` and `headers`. A collector refused is answered `422` with `error`,
-a malformed run `400`, one too large `413`.
+the response itself, is shown as the target sent it.
 
 ## Readiness
 

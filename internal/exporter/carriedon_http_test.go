@@ -456,7 +456,7 @@ func TestADebugProbeReportsTheStageAProbeCarriedOnPast(t *testing.T) {
 				tc.setup(&carried, model.ErrorPolicyLog)
 				carried.Cache.StaleIfError = model.Duration(staleIfError)
 				server := flightServer(t, carried)
-				server.SetProbeDebug(true)
+				server.SetDebug(DebugFull)
 				response := probeOnce(t, server, probePath("carried", tc.target(t), "&debug=true"), nil)
 				report := response.Body.String()
 				if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" {

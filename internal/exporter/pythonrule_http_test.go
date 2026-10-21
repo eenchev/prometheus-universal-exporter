@@ -35,7 +35,7 @@ func TestAPythonRuleNamesASeriesOfTheScript(t *testing.T) {
 	}
 	cut := []model.LabelRule{{Name: "note", Expression: "note", Truncate: true}}
 	server := modeServer(t, scripted(model.MetricRule{Name: "up", Labels: cut}, model.MetricRule{Name: "absent"}))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	query := "collector=scripted&target=" + url.QueryEscape(target.URL)
 	answer := probeOnce(t, server, "/probe?"+query, nil)
 	if answer.Code != http.StatusOK {

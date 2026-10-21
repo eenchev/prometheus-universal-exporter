@@ -196,7 +196,7 @@ not the exporter has static targets or is probed:
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `http_exporter_static_targets_scrape_seconds_total` | counter | Seconds spent on static target scrapes, each from its start to its end, waiting for a slot under `max_concurrent_probes` or `--probe.max-concurrent` included, a scrape answered from the cache or a reload made another target's too; not one the shutdown cut short. |
-| `http_exporter_probes_seconds_total` | counter | Seconds spent serving probes, each from its start to its answer being ready, the probes counted in `http_exporter_scrapes_total`: a cache hit, a probe that [shared](#shared-probes) another's trip and one a limit turned away too; not a refused request, such as one with no collector, nor a [debug probe](CONFIGURATION.md#debugging-a-probe). |
+| `http_exporter_probes_seconds_total` | counter | Seconds spent serving probes, each from its start to its answer being ready, the probes counted in `http_exporter_scrapes_total`: a cache hit, a probe that [shared](#shared-probes) another's trip and one a limit turned away too; not a refused request, such as one with no collector, nor a [debug probe](CONFIGURATION.md#debug-probes). |
 
 Each scrape or probe adds the time it took when it ends, the time its
 collector's `http_exporter_scrape_duration_seconds` reports. Their rate is
@@ -339,16 +339,19 @@ once. It belongs to none of the probes sharing it: in the
 on the request whichever probe started it, also when that probe's caller went
 away and the trip answered the others.
 
-## Playground runs
+## Debug runs
 
 | Family | Type | Meaning |
 | --- | --- | --- |
-| `http_exporter_playground_runs_total` | counter | Collectors run in the [playground](CONFIGURATION.md#playground), by `result`: `success`, `failure` (it ran, and a stage failed or carried on) or `invalid` (the collector was refused before it ran). Present only with `--web.enable-playground`. |
+| `http_exporter_debug_runs_total` | counter | Runs of the [debugging](CONFIGURATION.md#debugging-collectors) engine, by `kind` — `probe` for `/probe?...&debug=true`, `static` for `/static-targets?debug=<name>`, `page` for the [debug page](CONFIGURATION.md#the-debug-page) — and `result`: `success` (the trip went through whole), `failure` (it ran, or was taken and could not run — a trip slot or the page's 4 runs taken — and did not go through whole: a stage failed or carried on) or `invalid` (it was refused before it ran: a wrong parameter, collector, target name or run, or a source the level does not allow). Present only with `--web.debug` at `edit` or `full`, with the kinds the level serves: `page` alone at `edit`, all three at `full`. |
 
-A run counts in nothing else here, in no collector's families, though a run
-that fetches a target holds a trip slot of the collector it fetches through
-while it runs, as a [debug probe](CONFIGURATION.md#debugging-a-probe) does,
-which `http_exporter_probes_in_flight` and `http_exporter_trips_in_flight` show.
+A debug probe that `--web.debug` does not allow, or whose `debug` value is not
+a boolean, is not counted: it is no run. A run counts in nothing else here,
+in no collector's families, but for the [Python worker
+series](#python-workers) of a configured collector's script. A run that
+fetches a target holds a trip slot of the collector it fetches through while
+it runs, as a [debug probe](CONFIGURATION.md#debug-probes) does, which
+`http_exporter_probes_in_flight` and `http_exporter_trips_in_flight` show.
 
 ## Resource metrics
 
@@ -638,8 +641,10 @@ Every label is from a fixed set, and a collector without Python has none of
 these series. The counters are kept whether or not verbose mode is on, so
 turning it on through a reload shows what was counted before it was on.
 They count what the workers did, whoever asked: the scripts of a
-[debug probe](CONFIGURATION.md#debugging-a-probe), which is counted in no
-other self-metric, run in the collector's workers and are counted here.
+[debug probe](CONFIGURATION.md#debug-probes) or of a configured
+collector run on the [debug page](CONFIGURATION.md#the-debug-page), which
+are counted in no other self-metric but `http_exporter_debug_runs_total`,
+run in the collector's workers and are counted here.
 
 They are the collector's, and follow a reload as its
 [other counters](#collector-metrics) do. A reload that removes the collector

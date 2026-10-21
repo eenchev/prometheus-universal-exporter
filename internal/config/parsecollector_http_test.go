@@ -14,7 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The playground's collector is read as the loader reads an entry of the
+// The debug page's collector is read as the loader reads an entry of the
 // collectors list: each mistake in the words the loader has for it, at its
 // line, whether the YAML decoder, the schema's kinds or the validation finds
 // it.
@@ -54,7 +54,7 @@ func TestParseCollectorReportsWhatTheLoaderReports(t *testing.T) {
 			return "line " + strconv.Itoa(n+1)
 		})
 		if !strings.Contains(loadErr.Error(), want) {
-			t.Errorf("%s: the playground says\n  %s\nthe loader\n  %s", name, err, loadErr)
+			t.Errorf("%s: the debug page says\n  %s\nthe loader\n  %s", name, err, loadErr)
 		}
 	}
 }

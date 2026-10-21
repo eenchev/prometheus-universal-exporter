@@ -126,7 +126,7 @@ func TestADNSCollectorProbe(t *testing.T) {
 // name is answered 400 before anything is asked.
 func TestADebugProbeOfADNSCollector(t *testing.T) {
 	server, address := dnsExporter(t)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := probeOnce(t, server, "/probe?debug=true&collector=records&target=www.example.test", nil).Body.String()
 	for _, want := range []string{"1. QUERY dns://" + address + "/www.example.test -> 2 records", "Dns-Type: A", "Dns-Transport: udp", `"address":"192.0.2.1"`} {
 		if !strings.Contains(body, want) {

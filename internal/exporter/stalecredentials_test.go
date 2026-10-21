@@ -94,7 +94,7 @@ func TestARefusedTargetGetsNoStaleResult(t *testing.T) {
 		t.Fatalf("a refused trip answered %d:\n%s", refused.Code, refused.Body)
 	}
 	// A debug probe says the same.
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	report := probeOnce(t, server, probe+"&debug=true", nil).Body.String()
 	if !strings.Contains(report, "A probe would have answered 403: collector flaky refused the target") || !strings.Contains(report, "(no stale result: the target policy refused the target)") {
 		t.Fatalf("the debug report:\n%s", report)

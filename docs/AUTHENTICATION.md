@@ -157,45 +157,67 @@ scrape timeout Prometheus would send, so a target that never answers ends
 in the exporter's own error after it rather than a page waiting for ever.
 A credential left blank is not sent at all.
 
-When the exporter runs with `--web.enable-probe-debug`, each form also has a
-*Debug report* switch. Switched on, the form sends `debug=true` and shows the
-[debug report](CONFIGURATION.md#debugging-a-probe) of the trip in place of the
-metrics, with the status a probe would have answered above it, green or red
-as the probe would have been. Without the flag there is no switch.
+When the exporter runs with `--web.debug` at `edit` or `full`, each collector
+also has a *Debug* link, which opens the
+[debug page](CONFIGURATION.md#the-debug-page) with the collector chosen and,
+at `full`, the target entered in the form, to see the whole trip. Without the
+flag there is no link.
 
 The page itself is behind the exporter's Basic Auth when that is on, and the
 browser sends the same credential with each probe. Since exporter Basic Auth
 and `forward_authorization` cannot be combined, the `Authorization` header is
 never asked to carry both.
 
-### The playground
+### Debugging collectors
 
-With `--web.enable-playground`, [`/playground`](CONFIGURATION.md#playground)
-runs a collector written in the browser, and is behind the exporter's Basic
-Auth like the other pages. It is for whoever may already change the
-exporter's configuration, and it is kept from reaching further than that:
+`--web.debug` turns on [debugging](CONFIGURATION.md#debugging-collectors) at
+one of two levels, and the difference between them is what a visitor of the
+exporter's pages is shown of the targets:
+
+- **`edit`** serves `/debug`, where a collector is run on a response the
+  visitor pastes. Nothing is fetched and no target is contacted, so the page
+  never shows what a target answers: a visitor learns only what the
+  collector makes of what they pasted. `/probe?debug=true` and
+  `/static-targets?debug=<name>` stay refused (`403`).
+- **`full`** adds what shows a target's answer: the page fetching a target
+  through a configured collector or scraping a static target, and the two
+  debug URLs. A report shows the response as the target sent it — its body,
+  and every header whose name does not read as a credential's — so a visitor
+  sees whatever the targets the configured collectors can reach answer,
+  with those collectors' credentials sent, though never shown. Turn it on
+  while a collector is being fixed, not for good.
+
+Both are behind the exporter's Basic Auth like the other pages, and are for
+whoever may already change the exporter's configuration. What a run may do
+is kept from reaching further than that:
 
 - **Another site's page.** A browser sends the exporter's Basic Auth
   credential with any request to the exporter, one a page of another site
-  makes included. Each run therefore carries an `X-Playground` header and a
-  JSON body, neither of which such a page can send without first asking the
-  exporter (a CORS preflight), which the exporter never allows; a run without
-  the header is answered `403`, and one the browser marks as coming from
-  another site (`Sec-Fetch-Site`) too. The page cannot be framed.
-- **The server's files and credentials.** A collector that names a file —
-  `basic_auth_file`, `bearer_token_file`, a TLS file — is refused, and so is
-  any request type but `http`, since the others read files, hosts and
-  databases with the server's keys. `${NAME}` references are not expanded, so
-  the environment stays unseen. A pasted response makes no request at all.
-- **Requests to anywhere.** A target is only fetched through a collector of
-  the configuration in force, with its target policy and its credentials, as
-  a debug probe of it would be — nothing a probe could not already reach —
-  and only with `--web.enable-probe-debug`, since the answer shows the
-  target's response. Nothing of the browser's request, its `Authorization`
-  or cookies, is forwarded.
-- **Code.** Python is never run. An expression of the other transforms runs
-  on the server against the response, bounded by the probe's deadline, the
-  collector's limits and 4 runs at a time.
+  makes included. Each run of the page therefore carries an `X-Debug-Run`
+  header and a JSON body, neither of which such a page can send without
+  first asking the exporter (a CORS preflight), which the exporter never
+  allows; a run without the header is answered `403`, and one the browser
+  marks as coming from another site (`Sec-Fetch-Site`) too. The page cannot
+  be framed. The debug URLs only read, with `GET`, and answer `text/plain`
+  with `nosniff`, which a browser never runs as a page.
+- **The server's files and credentials.** A collector written on the page
+  that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file — is
+  refused, and so is any request type but `http`, since the others read
+  files, hosts and databases with the server's keys. `${NAME}` references in
+  it are not expanded, so the environment stays unseen. A pasted response
+  makes no request at all. A configured collector run by name is the
+  operator's own: on a pasted response it makes no request either.
+- **Requests to anywhere.** A target is only fetched, at `full`, through a
+  collector of the configuration in force, with its target policy and its
+  credentials, as a debug probe of it would be — nothing a probe could not
+  already reach. Nothing of the browser's request, its `Authorization` or
+  cookies, is forwarded.
+- **Code.** A collector written on the page never runs Python, at either
+  level. A configured collector runs its own script, as it does on every
+  probe, on whatever the visitor pasted: input chosen by someone else, as a
+  target's answer is on every probe. An expression of the other transforms
+  runs on the server against the response, bounded by the probe's deadline,
+  the collector's limits and 4 runs of the page at a time.
 
 ## Credentials from a Kubernetes Secret
 

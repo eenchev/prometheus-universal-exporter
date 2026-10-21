@@ -968,8 +968,8 @@ func responseLimit(c *model.Collector) int64 {
 }
 
 // ResponseLimit is responseLimit, for a response that was not fetched: the
-// playground holds a pasted body to the limit a fetched one would be held to
-// (exporter/playground.go).
+// debug page holds a pasted body to the limit a fetched one would be held to
+// (exporter/debugpage.go).
 func ResponseLimit(c *model.Collector) int64 { return responseLimit(c) }
 
 // maxResponseLimit is the largest response limit there is (responseLimit).

@@ -204,7 +204,7 @@ Transforms see no status (`$status` is `null`, Python's
 `response.status_code` `None`) and the header
 `Content-Type: application/json`.
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) shows the handshake in
+A [debug probe](CONFIGURATION.md#debug-probes) shows the handshake in
 its request section — the server, the name sent as SNI, whether a client
 certificate was presented, and how it ended:
 

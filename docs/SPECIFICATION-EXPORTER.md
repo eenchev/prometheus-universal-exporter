@@ -5916,7 +5916,7 @@ http_exporter_otlp_points_dropped_total
 http_exporter_otlp_export_duration_seconds
 http_exporter_otlp_last_export_success_timestamp_seconds
 
-http_exporter_playground_runs_total
+http_exporter_debug_runs_total
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
@@ -6425,7 +6425,7 @@ Implement:
 ```text
 /
 /collectors
-/playground
+/debug
 /health
 /ready
 /self-metrics
@@ -6453,17 +6453,16 @@ Recommended behavior:
   `Authorization` header and never in the URL, and not at all when left
   blank. Credential fields MUST NOT be named form fields, so a submission
   without the page's script leaves them out. A credential the collector's configuration holds MUST be named by kind
-  and its value MUST NOT appear on the page. With `--web.enable-probe-debug`,
-  and only then, each form MUST offer a *Debug report* switch, a checkbox
-  named `debug` with the value `true`, so the form asks for a debug report
-  (§ 42.17) with or without the page's script; the page MUST then show the
-  status the probe would have answered, from the report, rather than the
-  report's own `200`.
-- `/playground`, with `--web.enable-playground` only, and `/playground/run`,
-  which its runs post to: § 42.17a. With the flag, `/` and `/collectors` MUST
+  and its value MUST NOT appear on the page. With `--web.debug` at `edit` or
+  `full`, and only then, each collector MUST link the debug page (§ 42.17)
+  as `debug?collector=<name>`, and at `full` the link MUST carry the target
+  entered in the form as `target`; no form MUST ask `/probe` for a debug
+  report.
+- `/debug`, with `--web.debug` at `edit` or `full` only, and `/debug/run`,
+  which its runs post to: § 42.17. With the flag, `/` and `/collectors` MUST
   link the page; without it, neither path is served (`404`) and neither page
   links it.
-- Both pages, and the playground's, MUST be protected like `/probe` when the exporter's Basic
+- Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
   Authentication is on (§ 42.5), since they list the collectors, MUST escape
   what they show, MUST NOT be cached, MUST NOT be framed by another site
   (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
@@ -6500,7 +6499,8 @@ Recommended behavior:
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
   requires MUST answer `400` naming the collector and the request type. With
-  `debug=true` it MUST answer a report of the trip instead (§ 42.17).
+  `debug=true` and `--web.debug=full` it MUST answer a report of the trip
+  instead (§ 42.17).
 
 `/probe`, the self-metrics path and the static targets path MUST compress
 their answer with gzip when the request's `Accept-Encoding` accepts `gzip` (or
@@ -8233,7 +8233,7 @@ Provide clear CLI flags, for example:
 --python.max-workers=0
 --runtime.memory-limit-ratio=0
 --web.enable-lifecycle
---web.enable-probe-debug
+--web.debug=off
 --web.shutdown-timeout=15s
 --web.shutdown-delay=0s
 --version
@@ -11042,9 +11042,9 @@ Tests MUST show:
 
 Tests MUST show:
 
-- Without `--web.enable-probe-debug`, `debug=true` is answered `403` naming
-  the flag, and the target is not contacted; a `debug` value that is not a
-  boolean is `400`; `debug=false` is a probe.
+- Below `--web.debug=full`, at `off` and at `edit`, `debug=true` is answered
+  `403` naming `--web.debug=full`, and the target is not contacted; a `debug`
+  value that is not a boolean is `400`; `debug=false` is a probe.
 - A report lists the request with its credentials, query values and
   credential-named response headers redacted, the response body, each stage,
   the series by metric, the rules that gave none and the rule that carried
@@ -11063,10 +11063,11 @@ Tests MUST show:
   probe would have served is named.
 - A `grpc` collector's call is listed with its method and code and its
   answer as JSON; a `localfile` collector's read is listed as the file.
-- The chart renders the flag with `server.probeDebug`, not by default, and
+- The chart renders `--web.debug` with `server.debug`, not by default, and
   refuses it in `extraArgs`.
-- The collectors page has a *Debug report* switch, sending `debug=true`, on
-  each form with the flag, and none without it.
+- The collectors page links each collector into the debug page with
+  `--web.debug` on, carrying the form's target at `full`, and has no link
+  without it; no form asks `/probe` for a debug report.
 
 ## 34.70 Review fixes: stale answers, logged bodies, redaction and static target debug tests
 
@@ -11094,7 +11095,7 @@ Tests MUST show:
   parameter stay two OTLP series; two targets differing only in a
   credential's value, shown alike, are still two in the failure log, each
   first failure logged.
-- `/static-targets?debug=<name>` is `403` without the flag, `404` for an
+- `/static-targets?debug=<name>` is `403` at `off` and at `edit`, `404` for an
   unknown name and `400` for an empty, repeated or combined parameter; it
   scrapes with the target's own credential, which the report withholds,
   shows the labelled series, and publishes and counts nothing.
@@ -20935,10 +20936,10 @@ A debug report bounds every line but the body's (§ 42.17):
 - A static target's debug report shows a header value of a megabyte by its
   first 1,024 bytes and its length and a header line of 12 kB by its first
   8,192, with the series the scrape would have published as they were.
-- The collectors page's form, with its `debug` switch on, is answered with a
-  report whose second line is `Took ... A probe would have answered 200 with
-  1 series.` and whose megabyte of a header value is shown by its first
-  1,024 bytes.
+- A debug probe and the debug page's run of the same collector are each
+  answered with a report whose second line is `Took ... A probe would have
+  answered 200 with 1 series.` and whose megabyte of a header value is shown
+  by its first 1,024 bytes, in the page's JSON `response` too.
 - The report of a directory at the end of a path of 4 kB, with two files
   read and three skipped, lists the directory, the files and the skipped
   files as it did, and differs from what it was in one line alone: the log's
@@ -23716,7 +23717,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   of `0m` or `lots`, and `targetBusy` with an empty `busyMetric`
   (`make helm-test` and ci.yml render and refuse the same).
 
-## 34.153 NDJSON, logfmt, TOML and INI decoders, and the playground
+## 34.153 NDJSON, logfmt, TOML and INI decoders, and the debug page
 
 - An NDJSON body is the list of the values of its lines, each made as the
   json decoder makes a document, big whole numbers included; blank lines and
@@ -23773,15 +23774,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   and arrays of tables and into INI sections; NDJSON and TOML left to the
   response are chosen by their Content-Type, and a debug probe names the
   decoder (§ 6).
-- A collector run in the playground on a pasted response answers, as its
-  series, what `/probe` answers for the same collector and response to the
-  byte, with the stages, the verdict and a report naming it a playground run
-  that sent no request; the test fails when the run does not go through the
-  probe's trip.
+- A collector written on the debug page and run on a pasted response
+  answers, as its series, what `/probe` answers for the same collector and
+  response to the byte, with the stages, the verdict, a report naming it a
+  debug run of an edited collector that sent no request, and the pasted
+  response in the JSON's `response`; the test fails when the run does not go
+  through the probe's trip.
 - A pasted response the collector's `accept_status` does not accept fails at
   `http_status`, and one over its response limit fails as a fetched one
   does; the test fails when a pasted body skips either.
-- A playground collector the loader would refuse is answered `422` with the
+- A written collector the loader would refuse is answered `422` with the
   loader's message — an unknown key at its line, a bad value, a bad
   expression, a list entry, a whole configuration, an empty document, a
   second document — and nothing runs.
@@ -23790,48 +23792,46 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the words, and at the line one further down, the loader reports for the
   same collector under `collectors:`; the test fails when the collector is
   not held to the schema's kinds.
-- Neither `ParseCollector` nor a playground run expands `${NAME}`, and
-  `ParseCollector` returns the refusal it was given before checking the
+- Neither `ParseCollector` nor a run of the debug page expands `${NAME}`,
+  and `ParseCollector` returns the refusal it was given before checking the
   collector.
-- The playground refuses with `422` a python transform and a `pre_script`
-  (with an interpreter that would fail any script), a `localfile`
-  collector, and `bearer_token_file`, `basic_auth_file` and `tls` files,
-  and no answer shows what such a file holds; the test fails when Python is
-  let through.
+- The debug page refuses with `422`, at `full` too, a written python
+  transform and `pre_script` (with an interpreter that would fail any
+  script), a `localfile` collector, and `bearer_token_file`,
+  `basic_auth_file` and `tls` files, and no answer shows what such a file
+  holds; the test fails when Python is let through.
 - A body over 1 MiB, a collector over 256 KiB and a request over 2 MiB are
-  answered `413`; both responses, neither, a status that is no status, a bad
-  header name, an unknown key and a `target` parameter `400`.
-- Without `--web.enable-playground` `/playground` and `/playground/run`
-  answer `404` and neither `/` nor `/collectors` links the playground; with
-  it both link it.
+  answered `413`; two sources, neither, two collectors, none, a status that
+  is no status, a bad header name, an unknown key, a `target` parameter,
+  `params` with `static_target` and an unknown configured collector `400`.
+- With `--web.debug` off `/debug` and `/debug/run` answer `404` and neither
+  `/` nor `/collectors` links the debug page; at `edit` and at `full` both
+  link it and a run runs.
 - With `web.basic_auth` the page and a run answer `401` without the
   credential and run with it.
-- A run without `X-Playground`, or marked `Sec-Fetch-Site` `cross-site` or
+- A run without `X-Debug-Run`, or marked `Sec-Fetch-Site` `cross-site` or
   `same-site`, is answered `403`, one with a form or text body `415`, a
   `GET` `405`; one without `Sec-Fetch-Site` runs.
-- A fetch needs `--web.enable-probe-debug` (`403` naming it), goes through
-  the configured collector named in `request_from` with its bearer token —
-  not the playground collector's — and the forwarded `header_<name>`, sends
-  the target neither the browser's cookie nor `X-Playground`, is refused by
-  that collector's `allowed_targets` without reaching the target, and
-  answers `400` for an unknown collector and a missing target; the test
-  fails when the playground collector makes the request.
-- Playground runs count in `http_exporter_playground_runs_total` by
-  `success`, `failure` and `invalid`, and in none of the collector's
-  families nor `http_exporter_probes_seconds_total`; without the flag the
-  family is absent.
-- A run past the 4 in progress is answered `503`, and runs once a slot is
-  free.
+- A fetch is refused at `edit` (`403` naming `--web.debug=full`) without
+  reaching the target; at `full` it goes through the configured collector
+  named in `request_from` with its bearer token — not the written
+  collector's — and the forwarded `header_<name>`, sends the target neither
+  the browser's cookie nor `X-Debug-Run`, lists the request, its
+  credential redacted, and the response in the JSON, is refused by that
+  collector's `allowed_targets` without reaching the target, and answers
+  `400` for an unknown collector, a missing target and a written collector
+  without `request_from`; a configured collector fetches through itself;
+  the test fails when the written collector makes the request.
+- A run past the 4 in progress is answered `503` and counted a failure, and
+  runs once a slot is free.
 - The page names no URL but the documentation and a placeholder, has no
   `<link>`, `src=`, `@import`, `url(` or absolute link, posts its runs to
-  `playground/run` relative to itself with `X-Playground`, and offers the
-  fetch, with the http collectors, only with `--web.enable-probe-debug`.
-- `/playground` and `/playground/run` are refused as `--web.self-metrics-path`.
+  `debug/run` relative to itself with `X-Debug-Run`, offers the configured
+  collectors at every level, and the fetch and the static target's scrape
+  only at `full`.
+- `/debug` and `/debug/run` are refused as `--web.self-metrics-path`.
 - A run's notes give the load's warning, a decoder left to each response,
   before the line the run logged for a rule under `error_mode: log`.
-- The chart renders `--web.enable-playground` with
-  `server.enablePlayground: true` and not by default, and fails rendering
-  for the flag in `extraArgs`, naming `server.enablePlayground`.
 
 ## 34.154 The dns, tlscert and opt-in s3file request types
 
@@ -24294,7 +24294,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`, `/playground`, `/playground/run`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -24755,7 +24755,7 @@ checks on its own endpoints MUST be compared the same way.
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
-when enabled, `/playground` and `/playground/run`. The
+when enabled, `/debug` and `/debug/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -26561,18 +26561,41 @@ drift when daylight saving changes. The workflow's cron is evaluated in UTC,
 which has no daylight saving, so its hour MUST be chosen to fall mid-morning in
 Sofia in both halves of the year.
 
-## 42.17 Debug probes
+## 42.17 Debugging collectors
+
+One flag, `--web.debug`, MUST set how far collectors can be debugged: `off`,
+the default; `edit`; or `full`, in any case. Any other value MUST be a
+command-line error (exit 2, before `--dry-run` or startup). There MUST be no
+other flag for any part of it.
+
+- At `off`, `/debug` and `/debug/run` MUST answer `404`, and a debug probe
+  and a debug scrape `403`.
+- At `edit`, the exporter MUST serve the debug page, `/debug` (below), on pasted
+  responses only: nothing a target answers may be shown. A debug probe, a
+  debug scrape and a page's run that would fetch a target or scrape a static
+  target MUST be answered `403` naming `--web.debug=full`, without
+  contacting the target.
+- At `full`, the exporter MUST serve the debug page with every source, debug
+  probes and debug scrapes.
+
+Every run — a debug probe, a debug scrape, a run of the page — MUST be made
+by one engine, given the collector and what it reads, and reported in one
+structure: the requests, the response, the stages, what was logged, what a
+probe or the scrape would have answered and the series it would have served.
+A debug probe and a debug scrape MUST answer it as the text report below,
+and the debug page as JSON with the same report beside it.
 
 `/probe` MUST accept `debug`: `true`, `1` or empty turn a probe into a debug
 probe, `false` or `0` leave it a probe, and any other value MUST be answered
-`400`. A debug probe MUST be answered `403` naming `--web.enable-probe-debug`
-unless the exporter was started with that flag, off by default, before
-anything else about the probe is checked and without contacting the target.
-It MUST be authenticated like a probe (§ 42.5).
+`400`. A debug probe MUST be answered `403` naming `--web.debug=full` unless
+the exporter runs with `--web.debug=full`, at `edit` too, before anything
+else about the probe is checked and without contacting the target. It MUST
+be authenticated like a probe (§ 42.5).
 
 A debug probe MUST make one trip exactly as a probe would, through the
 target policy (§ 26.1), the trip limits (§ 42.13b) and the probe's deadline,
-and MUST answer `200` with a `text/plain` report of it:
+and MUST answer `200` with a `text/plain` report of it, with
+`X-Content-Type-Options: nosniff`, since it holds what the target sent:
 
 - the status and reason a probe would have answered, and where
   `cache.stale_if_error` would have answered with the last good result, that
@@ -26652,9 +26675,9 @@ share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
 A debug probe MUST NOT read or fill the response cache, share a trip with a
-probe in flight (§ 42.13a), be counted in any self-metric but the Python
-worker series (below), or be queued for
-OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
+probe in flight (§ 42.13a), be counted in any self-metric but
+`http_exporter_debug_runs_total` (below) and the Python worker series, or be
+queued for OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
@@ -26681,16 +26704,16 @@ by the rule below: they contain, in any case, `auth`, `cookie`,
 `session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
 `pass` as a whole word.
 
-With the same flag, `/static-targets?debug=<name>` MUST scrape the static
+With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request
 settings, headers and credentials, its interval as the budget, and waiting for
 a slot of the collector's `max_concurrent_probes` — and answer the same
 report, saying what the scrape would have published: `http_exporter_target_up`
 `1` or `0`, why, whether a stale result would stand in, and the series with the
 target's labels and `static_target`. It MUST NOT publish anything on the
-endpoint, count in a self-metric but the Python worker series (above) or be
-exported over OTLP, and MUST skip the
-response cache. Without the flag it MUST be answered `403`; a name no target
+endpoint, count in a self-metric but `http_exporter_debug_runs_total` and the
+Python worker series (above) or be exported over OTLP, and MUST skip the
+response cache. Below `full` it MUST be answered `403`; a name no target
 in force has `404`; more than one `debug` value, an empty one, or `debug`
 together with `targets`, `400`.
 
@@ -26731,80 +26754,109 @@ not parse, MUST quote it with its userinfo withheld and every query value
 masked, wherever the error is shown: a log line, a probe's answer or a debug
 report. The error MUST still unwrap to what it was.
 
-### 42.17a The playground
-
-With `--web.enable-playground`, off by default, the exporter MUST serve
-`/playground`, a page for writing a collector, and take its runs at `POST
-/playground/run`; without the flag both MUST answer `404`. Both MUST be
+At `edit` and `full` the exporter MUST serve `/debug`, a page for running a
+collector, and take its runs at `POST /debug/run`. Both MUST be
 authenticated like a probe (§ 42.5). The page MUST be one document whose
 style and script are inline, loading nothing from anywhere, with the
 headers, escaping and layout of the other pages (§ 23), and MUST post its
 runs relative to itself, so it works under a proxy's path prefix. It MUST
 run a collector on demand and a moment after an edit, a run cancelling the
-one before it.
+one before it, and MUST start from the collector, and at `full` the target
+or the static target, its URL names (`collector`, `target`,
+`static_target`), as the collectors page links it. It MUST offer the
+configured collectors at every level, and the fetch and the static target's
+scrape at `full` only.
 
-A run MUST be a JSON object of `collector`, the YAML of one collector as it
-is written under `collectors:`, and either a pasted response — `body`, with
-`content_type`, `status` (200 when left out, else 100 to 599) and `headers`
-— or `request_from`, a collector of the configuration in force, and
-`target`; `params` are probe parameters, as `/probe` takes them, without
-`target`, `collector` or `debug`. A run that is not that object, or sends
-both or neither response, MUST be answered `400`; a request over 2 MiB, a
-collector over 256 KiB or a body over 1 MiB, `413`; a method other than
-`POST`, `405`. Every refusal MUST be a JSON object with `error`.
+A run MUST be a JSON object of the collector — `collector`, the YAML of one
+collector as it is written under `collectors:`, or `configured`, the name of
+one of the configuration in force, not both — and one source: a pasted
+response — `body`, with `content_type`, `status` (200 when left out, else
+100 to 599) and `headers` — or `target`, with `request_from`, a collector of
+the configuration in force, and `params`, probe parameters, as `/probe` takes
+them, without `target`, `collector` or `debug`; or `static_target`, the name
+of a static target, without `params`. A run that is not that object, names
+two collectors or none, or sends two sources or none, MUST be answered
+`400`, and so MUST a configured collector or a `request_from` the
+configuration does not have; a request over 2 MiB, a collector over 256 KiB
+or a body over 1 MiB, `413`; a method other than `POST`, `405`; a static
+target no target in force has, `404`. Every refusal MUST be a JSON object
+with `error`.
 
-A run MUST carry the `X-Playground` header and `Content-Type:
+A run MUST carry the `X-Debug-Run` header and `Content-Type:
 application/json`, which a page of another site cannot send without a CORS
 preflight the exporter never allows: without the header, or with a
 `Sec-Fetch-Site` other than `same-origin` or `none`, it MUST be answered
 `403`, and with another content type `415`, before the collector is read.
 
-The collector MUST be read as the loader reads an entry of the collectors
-list — the same decoding, the same checks of each value's kind against the
-schema, the same validation — and a collector the loader would refuse MUST
-be answered `422` with the loader's message, its line numbers counted from
-the collector's first line. `${NAME}` references MUST NOT be expanded,
-whatever `--config.expand-env` says, and reading it MUST NOT size the
-expression caches, which are the configuration in force's. Before it is
-checked, the playground MUST refuse with `422`, saying why: a collector that
-runs Python (`transform.type: python` or `transform.pre_script`), which
-MUST NOT be run; one whose `request.type` is not `http`; and one that sets
-`request.basic_auth_file`, `request.bearer_token_file` or a
-`request.tls` file. Nothing a file holds MUST reach the answer.
+A collector written on the page MUST be read as the loader reads an entry of
+the collectors list — the same decoding, the same checks of each value's
+kind against the schema, the same validation — and one the loader would
+refuse MUST be answered `422` with the loader's message, its line numbers
+counted from the collector's first line. `${NAME}` references MUST NOT be
+expanded, whatever `--config.expand-env` says, and reading it MUST NOT size
+the expression caches, which are the configuration in force's. Before it is
+checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
+why: a collector that runs Python (`transform.type: python` or
+`transform.pre_script`), which MUST NOT be run; one whose `request.type` is
+not `http`; and one that sets `request.basic_auth_file`,
+`request.bearer_token_file` or a `request.tls` file. Nothing a file holds
+MUST reach the answer. Its own request block MUST NOT make a request.
+
+A configured collector MUST be run as it is configured, its Python
+included, at `edit` as at `full`: its scripts are the operator's, and read
+what a target sends on every probe, as they read a pasted body here. Its
+scripts MUST run in its own workers and count in its Python worker series,
+as a debug probe's do.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
-probe makes (§ 42.17): the collector's `accept_status`, its response limit,
-which a body over fails as a fetched one does, the decode, the transform and
-the validation under the collector's limits. A fetch MUST need
-`--web.enable-probe-debug` as well, since the answer shows the target's
-response, and be answered `403` naming it otherwise. It MUST be made
-exactly as a debug probe of `request_from` would make it, which MUST be an
-`http` collector (`400` otherwise, and for one the configuration does not
-have, a target missing or a parameter wrong, as `/probe` answers them):
-through that collector's request block, target policy (§ 26.1),
-credentials, `accept_status`, forwarded `header_<name>` parameters and trip
-limits (§ 42.13b), and with nothing of the browser's request — its
-`Authorization`, cookies or other headers — forwarded. The playground
-collector's own request block MUST make no request; it decodes, transforms
-and validates what was fetched.
+probe makes: the collector's `accept_status`, its response limit, which a
+body over fails as a fetched one does, the decode, the transform and the
+validation under the collector's limits. A fetch, at `full` only, MUST be
+made exactly as a debug probe of the collector that fetches would make it:
+the configured collector run, or the one `request_from` names, which a
+written collector MUST name (`400` otherwise) — through its request block,
+target policy (§ 26.1), credentials, `accept_status`, forwarded
+`header_<name>` parameters and trip limits (§ 42.13b), and with nothing of
+the browser's request — its `Authorization`, cookies or other headers —
+forwarded; a target missing or a parameter wrong MUST be answered as
+`/probe` answers them. A static target's scrape, at `full` only, MUST be
+made as `/static-targets?debug=<name>` makes it, and answered as what the
+scrape would have published, its series with the target's labels and
+`static_target`; nothing MUST be published. A collector run on what
+another collector fetched — a written one, or one other than the static
+target's — MUST be given what an `http` collector fetched only (`400`
+otherwise), and decodes, transforms and validates it.
 
 A run MUST be bounded by the probe's deadline (§ 3.2a), and by
-`--probe.default-timeout`'s default when that is `0`; at most 4 runs MUST be
-in progress at once, a run past them answered `503`. A run MUST be answered
-`200` with a JSON object of `ok`, true when every stage succeeded and none
-carried on; `verdict`, what a probe would have answered, as a debug report
-says it; `series`, the exposition a probe would have served, to the byte;
-`stages` and `notes`, the stages and the warnings the load would give with
-every line the run logged; and `report`, the run's debug report (§ 42.17),
-whose first line names it a playground run and what it read.
+`--probe.default-timeout`'s default when that is `0`, or a static target's
+by its interval; at most 4 runs of the page MUST be in progress at once, a
+run past them answered `503`. A run MUST be answered `200` with a JSON
+object of `ok`, true when every stage succeeded and none carried on;
+`verdict`, what a probe or the scrape would have answered, as the text
+report says it; `series`, the exposition a probe would have served, to the
+byte; `requests` and `response`, what was sent and read, redacted and
+bounded as the text report redacts and bounds them; `stages` and `notes`,
+the stages and the warnings the load would give with every line the run
+logged; and `report`, the text report of a debug probe, whose first line names it a
+debug run, the collector, whether it was written on the page, and what it
+read.
 
 The collector MUST NOT be put in force. A run MUST NOT read or fill the
 response cache, share a trip, reach the failure log or the exporter's log
 but for one `info` line per run, be queued for OTLP, or be counted in any
-collector's self-metrics or in `http_exporter_probes_seconds_total`. It MUST
-be counted in `http_exporter_playground_runs_total{result}`, from 0, with
-`success`, `failure` (it ran and did not go through whole) and `invalid`
-(the collector was refused before it ran), which MUST be present with the
-playground on and absent without it. A run that panics MUST be reported as
-`500: probe failed: internal error: <panic>` and logged with its stack, and
-a fetch MUST give back its trip slot however it ends.
+collector's self-metrics, but a configured collector's Python worker series,
+or in `http_exporter_probes_seconds_total`. A run that panics MUST be
+reported as `500: probe failed: internal error: <panic>` and logged with its
+stack, and a fetch MUST give back its trip slot however it ends.
+
+Every run MUST be counted in
+`http_exporter_debug_runs_total{kind, result}`, from 0: `kind` is `probe`,
+`static` or `page`; `result` is `success` when the trip went through whole,
+`failure` when it ran, or was taken and could not run for a trip slot or
+the page's bound, and did not, and `invalid` when it was refused before it
+ran for what it asked: a parameter, a collector, a static target's name, a
+run's form or headers, or a source the level does not allow. A debug probe
+or scrape the level does not serve, or whose `debug` value is not a
+boolean, is no run, and MUST NOT be counted. The family MUST be absent at
+`off`, and present with the kinds the level serves: `page` alone at `edit`,
+every kind at `full`.

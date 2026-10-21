@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -555,5 +556,52 @@ func TestDryRunReportsALabelExpressionOfBlanks(t *testing.T) {
 	}
 	if start := runCLI(t, "--config.file="+config); start.code != 1 || !strings.Contains(start.stderr, `label \"site\" expression \"  \" is nothing but blanks`) {
 		t.Fatalf("startup exit=%d\n%s", start.code, start.stderr)
+	}
+}
+
+// --web.debug takes off, edit or full, in any case, and nothing else, which
+// is a command-line error before --dry-run.
+func TestTheDebugLevelIsACommandLineChoice(t *testing.T) {
+	for _, level := range []string{"off", "edit", "full", "FULL"} {
+		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--web.debug="+level)
+		if out.code == 2 || strings.Contains(out.stderr, "web.debug") {
+			t.Errorf("--web.debug=%s: exit=%d stderr=%s", level, out.code, out.stderr)
+		}
+	}
+	for _, args := range [][]string{{"--web.debug=on"}, {"--dry-run", "--config.file=configs/config.example.yaml", "--web.debug=true"}, {"--web.debug="}} {
+		out := runCLI(t, args...)
+		if out.code != 2 || !strings.Contains(out.stderr, "is not a level; use off, edit or full") || out.stdout != "" {
+			t.Errorf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+}
+
+// The level is the server's: off serves no debug page, edit serves it and
+// refuses a debug probe, and full serves both.
+func TestTheDebugLevelReachesTheServer(t *testing.T) {
+	get := func(p *exporterProcess, path string) int {
+		resp, err := http.Get("http://" + p.address + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for level, want := range map[string][2]int{
+		"":     {http.StatusNotFound, http.StatusForbidden},
+		"edit": {http.StatusOK, http.StatusForbidden},
+		"full": {http.StatusOK, http.StatusBadRequest},
+	} {
+		var args []string
+		if level != "" {
+			args = append(args, "--web.debug="+level)
+		}
+		p := startHeldExporter(t, args...)
+		// A debug probe of a collector that does not exist is refused 400
+		// when debug probes are served, and 403 when they are not.
+		if page, probe := get(p, "/debug"), get(p, "/probe?collector=nobody&debug=true"); page != want[0] || probe != want[1] {
+			t.Errorf("--web.debug=%s: /debug %d, the debug probe %d, want %v", level, page, probe, want)
+		}
+		_ = p.cmd.Process.Kill()
 	}
 }

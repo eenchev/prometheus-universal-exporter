@@ -97,7 +97,7 @@ func TestATLSCertCollectorProbe(t *testing.T) {
 // 403, before anything is dialed.
 func TestADebugProbeOfATLSCertCollector(t *testing.T) {
 	server, target := tlscertExporter(t)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	host := strings.TrimPrefix(target.URL, "https://")
 	body := probeOnce(t, server, "/probe?debug=true&collector=certs&target="+host, nil).Body.String()
 	for _, want := range []string{"1. HANDSHAKE tls://" + host + " -> TLS 1.3, 1 certificate, verified", "Tls-Server-Name: example.com", `"verified":true`} {

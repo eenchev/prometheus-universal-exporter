@@ -187,7 +187,7 @@ func TestTheCollectorsPageShowsAGRPCTarget(t *testing.T) {
 func TestADebugProbeOfAGRPCCollector(t *testing.T) {
 	upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: queueAnswer})
 	server := grpcExporter(t, false, "0s")
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	recorder := probeOnce(t, server, "/probe?debug=true&collector=queue_stats&param_queue=orders&target="+url.QueryEscape(upstream.Addr), nil)
 	body := recorder.Body.String()
 	for _, want := range []string{

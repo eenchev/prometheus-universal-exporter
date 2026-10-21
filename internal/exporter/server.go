@@ -30,19 +30,16 @@ type Server struct {
 	// is each target's latest result, by name, and staticFetched when the
 	// data in it came from the target, for its age (statictargetsendpoint.go).
 	staticTargetsPath string
-	// probeDebug allows debug probes, --web.enable-probe-debug
-	// (probedebug.go).
-	probeDebug bool
-	// playground serves /playground and /playground/run,
-	// --web.enable-playground; playgroundSlots bounds the runs in progress,
-	// and playgroundRunCounts counts them (playground.go).
-	playground          bool
-	playgroundSlots     chan struct{}
-	playgroundRunCounts playgroundRuns
-	staticMu            sync.Mutex
-	staticResults       map[string]model.MetricSet
-	staticFetched       map[string]time.Time
-	staticLastSuccess   map[string]time.Time
+	// debug is the level of --web.debug (debuglevel.go); debugSlots bounds
+	// the debug page's runs in progress (debugpage.go), and debugRunCounts
+	// counts every run of the debug engine.
+	debug             DebugLevel
+	debugSlots        chan struct{}
+	debugRunCounts    debugRuns
+	staticMu          sync.Mutex
+	staticResults     map[string]model.MetricSet
+	staticFetched     map[string]time.Time
+	staticLastSuccess map[string]time.Time
 	// staticGeneration counts the results published, under staticMu, and
 	// staticView is the endpoint's merge of them, rebuilt when a result is
 	// published or the targets change (statictargetsendpoint.go).
@@ -172,7 +169,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload", playgroundPath, playgroundRunPath:
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -246,8 +243,8 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
-// targets path, /health, /ready and /-/reload, and with the playground on
-// /playground and /playground/run. Whatever answers, its client has
+// targets path, /health, /ready and /-/reload, and with --web.debug on
+// /debug and /debug/run. Whatever answers, its client has
 // AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -265,11 +262,11 @@ func (s *Server) Handler() http.Handler {
 	// Only / itself: any other unknown path is still a 404.
 	mux.HandleFunc("GET /{$}", protected(s.landingHandler))
 	mux.HandleFunc("GET /collectors", protected(s.collectorsHandler))
-	// Without --web.enable-playground the playground's paths are not found,
-	// as any other path the exporter does not serve.
-	if s.playground {
-		mux.HandleFunc("GET "+playgroundPath, protected(s.playgroundPageHandler))
-		mux.HandleFunc(playgroundRunPath, protected(s.playgroundRunHandler))
+	// With --web.debug off the debug page's paths are not found, as any
+	// other path the exporter does not serve.
+	if s.debug != DebugOff {
+		mux.HandleFunc("GET "+debugPagePath, protected(s.debugPageHandler))
+		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
 	}
 	return s.writeBounded(mux)
 }
@@ -306,9 +303,19 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if debug && !s.probeDebug {
-		http.Error(w, errProbeDebugDisabled.Error(), http.StatusForbidden)
+	if debug && !s.debugServes(debugKindProbe) {
+		http.Error(w, s.debugReportsRefused(), http.StatusForbidden)
 		return
+	}
+	// A debug probe refused below for what it asked is counted invalid; one
+	// that is served counts as its trip ended (serveDebugProbe).
+	served := false
+	if debug {
+		defer func() {
+			if !served {
+				s.countDebugRun(debugKindProbe, debugInvalid)
+			}
+		}()
 	}
 	// One target and one collector, neither longer than a probe parameter may
 	// be (probeparams.go): nothing below reads a second value, and nothing
@@ -393,13 +400,14 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 				collector: c, target: target, logTarget: logTarget, overrides: overrides,
 				forwarded: forwarded, budget: budget, budgetSource: budgetSource,
 			},
-			requestURL: requestURL, method: method, generation: followed.generation,
+			requestURL: requestURL, method: method, generation: followed.generation, kind: debugKindProbe,
 		}
 		if model.UsesCache(c) {
 			// The key the same probe without debug has: debug is no
 			// parameter of the request (probeKeyQuery).
 			p.staleKey = s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
 		}
+		served = true
 		s.serveDebugProbe(w, r, p)
 		return
 	}

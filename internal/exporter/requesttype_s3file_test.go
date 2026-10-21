@@ -138,7 +138,7 @@ collectors:
 			t.Errorf("missing %q:\n%s", want, metrics)
 		}
 	}
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	body := probeOnce(t, server, "/probe?debug=true&collector=objects&target=metrics", nil).Body.String()
 	if !strings.Contains(body, "1. READ s3://metrics/exports/app.prom -> read in") || strings.Contains(body, "secret") {
 		t.Errorf("the debug report does not show the read, or shows the secret:\n%s", body)

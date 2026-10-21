@@ -46,15 +46,16 @@ type collectJob struct {
 	// trip counts in no statistics itself, rec's, as a debug probe does not
 	// (pythonstats.go).
 	python *transform.PythonStats
-	// pasted is the response a playground run decodes instead of fetching
-	// one (playground.go): no request is made, and the body is held to the
+	// pasted is the response a debug page's run decodes instead of fetching
+	// one (debugpage.go): no request is made, and the body is held to the
 	// collector's response limit as a fetched one is.
 	pasted *fetch.HTTPResponse
 	// requester, when set, is the collector whose request block fetches the
 	// target — with its target policy, credentials and accept_status — while
-	// collector decodes and transforms the response: a playground run that
-	// fetches from a target sets it to the configured collector it names. For
-	// every other trip it is nil, and collector makes the request.
+	// collector decodes and transforms the response: a debug page's run of
+	// one collector on what another fetched sets it to the configured
+	// collector that fetches. For every other trip it is nil, and collector
+	// makes the request.
 	requester *model.Collector
 }
 
@@ -591,7 +592,7 @@ func (n *sharedRuleNames) telling(attrs []any, c *model.Collector, name, express
 }
 
 // fetchedNote is a response as a debug probe's stages show it; pasted is a
-// playground run's response, which was not fetched.
+// response pasted on the debug page, which was not fetched.
 func fetchedNote(r *fetch.HTTPResponse, pasted bool) string {
 	switch {
 	case pasted:

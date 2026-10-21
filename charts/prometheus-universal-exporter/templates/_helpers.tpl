@@ -24,8 +24,7 @@
   "--python.max-workers" "set server.pythonMaxWorkers instead"
   "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
-  "--web.enable-probe-debug" "set server.probeDebug instead"
-  "--web.enable-playground" "set server.enablePlayground instead"
+  "--web.debug" "set server.debug instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead"
   "--allocator.url" "set allocator.enabled instead, which points the exporter at the chart's allocator"
@@ -394,6 +393,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "server.logLevel %q must be debug, info, warn or error" $level) -}}
 {{- end -}}
 {{- $level -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.debug" -}}
+{{- /* Empty and off leave the flag out: debugging is off by default. */ -}}
+{{- $level := .Values.server.debug | default "" | toString -}}
+{{- if not (has $level (list "" "off" "edit" "full")) -}}
+{{- fail (printf "server.debug %q must be off, edit or full" $level) -}}
+{{- end -}}
+{{- if has $level (list "edit" "full") -}}
+{{- $level -}}
+{{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.probeTimeoutOffset" -}}
 {{- /* Empty leaves the flag out: the exporter's default applies, and an image

@@ -207,7 +207,7 @@ func textOnlyKeys(t reflect.Type) map[string][]string {
 // The keys the load holds to text alone are the ones the schemas hold to
 // it, read from the schemas and not listed in the code: a key with allowed
 // values or a pattern, which the schemas make text alone, and the few they
-// say are text themselves. One collector on its own, as the playground
+// say are text themselves. One collector on its own, as the debug page
 // reads it (ParseCollector), is held to what an entry of the collectors list
 // is. They are named here, so that a key that comes to
 // be among them, or to leave them, is a change someone has seen: a number

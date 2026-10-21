@@ -165,7 +165,7 @@ func TestADebugScrapeOfAStaticTargetCountsForItsCollectorThroughAReloadThatKeeps
 	kept := pythonScripted("kept", workerScript, "")
 	targets := "interval: 1m\ntargets:\n  - name: scraped\n    collector: kept\n    target: " + target.URL + "\n    request:\n      bearer_token_file: " + credential + "\n"
 	r := newUninterpreted(t, pythonDocument(kept), targets)
-	r.server.SetProbeDebug(true)
+	r.server.SetDebug(DebugFull)
 	scrape := func(between func()) {
 		t.Helper()
 		debug := probeAsync(context.Background(), r.server, "/static-targets?debug=scraped", nil)
@@ -226,7 +226,7 @@ func TestADebugScrapeOfAStaticTargetCountsForItsCollectorThroughAReloadThatKeeps
 func TestADebugProbeOfACollectorThatIsThereCountsItsScriptsForItAndNothingElse(t *testing.T) {
 	target := textTarget(t, "value=42\n")
 	r := newUninterpreted(t, pythonDocument(pythonScripted("scripted", workerScript, "")), staticDocument("scraped", "scripted", target.URL))
-	r.server.SetProbeDebug(true)
+	r.server.SetDebug(DebugFull)
 	if got := probeOnce(t, r.server, probePath("scripted", target.URL, "&debug=true"), nil); !strings.Contains(got.Body.String(), "the interpreter did not start") {
 		t.Fatalf("the debug probe did not run its script: %d %s", got.Code, got.Body)
 	}

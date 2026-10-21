@@ -153,7 +153,7 @@ var kindsByFile = sync.OnceValue(func() map[reflect.Type]*valueKinds {
 		reflect.TypeOf(model.Config{}):           kindsOf(configSchema()),
 		reflect.TypeOf(collectorFile{}):          kindsOf(collectorFileSchema()),
 		reflect.TypeOf(model.StaticTargetFile{}): kindsOf(staticTargetsSchema()),
-		// One collector on its own, as the playground reads it
+		// One collector on its own, as the debug page reads it
 		// (ParseCollector): what an entry of a collector file's list takes.
 		reflect.TypeOf(model.Collector{}): kindsOf(collectorFileSchema()).key(collectorFileKey).entry(),
 	}

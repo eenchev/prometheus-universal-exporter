@@ -226,7 +226,7 @@ A failed lookup is reported in the `dns` stage and follows
 status (`$status` is `null`, Python's `response.status_code` `None`) and the
 header `Content-Type: application/json`.
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) shows the lookup in its
+A [debug probe](CONFIGURATION.md#debug-probes) shows the lookup in its
 request section, with how it ended — the number of records, `not found`, or
 the error:
 

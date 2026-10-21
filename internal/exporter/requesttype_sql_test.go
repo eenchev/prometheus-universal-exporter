@@ -166,7 +166,7 @@ func TestASQLCollectorsSelfMetrics(t *testing.T) {
 // the JSON the transforms read.
 func TestADebugProbeOfASQLCollector(t *testing.T) {
 	e := newSQLExporter(t)
-	e.server.SetProbeDebug(true)
+	e.server.SetDebug(DebugFull)
 	for _, connection := range []string{"new", "reused"} {
 		body := probeOnce(t, e.server, "/probe?debug=true&collector=jobs&target=db.example&param_queue=hidden-queue", nil).Body.String()
 		for _, want := range []string{

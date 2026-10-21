@@ -309,7 +309,7 @@ object over the size limit counts in
 `http_exporter_series_limit_exceeded_total`, a bucket the target lists
 refuse in `http_exporter_targets_refused_total`, answered `403`.
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) shows the read in its
+A [debug probe](CONFIGURATION.md#debug-probes) shows the read in its
 request section by the object's `s3://` URL, and never a credential:
 
 ```text

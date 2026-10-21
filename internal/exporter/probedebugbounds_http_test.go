@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -218,7 +219,7 @@ func TestACutShowsNothingTheReportWithholds(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	partial := regexp.MustCompile(`<[a-z]{0,8}\.\.\. \(`)
 	const mask = "<redacted>"
 
@@ -355,12 +356,11 @@ func TestTheReportsOfTheExamplesAreWrittenAsTheyWere(t *testing.T) {
 	}
 }
 
-// The collectors page asks for the report with the probe its form makes,
-// debug=true beside the collector and the target, and is answered by the
-// same writer: a header value of a megabyte is shown by its first 1,024
-// bytes and its length, and the second line, which the page reads for what
-// a probe would have answered, is as it was.
-func TestTheCollectorsPagesDebugReportIsBoundedAsAProbesIs(t *testing.T) {
+// A debug probe and the debug page's run of the same collector are reported
+// by the same writer: a header value of a megabyte is shown by its first
+// 1,024 bytes and its length, in the text report and in the page's JSON
+// alike, and the second line says what a probe would have answered.
+func TestTheDebugPagesReportIsBoundedAsAProbesIs(t *testing.T) {
 	testutil.CaptureLogs(t)
 	size := alloctest.UnlessRaced(1<<20-2048, 1<<16)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -369,25 +369,22 @@ func TestTheCollectorsPagesDebugReportIsBoundedAsAProbesIs(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	server := modeServer(t, debugCollector("dbg"))
-	server.SetProbeDebug(true)
-	page := getPage(t, server, "/collectors")
-	requireContains(t, page,
-		`<form class="probe" action="probe" method="get" autocomplete="off">`,
-		`<input type="hidden" name="collector" value="dbg">`,
-		`type="text" name="target"`,
-		`<input type="checkbox" name="debug" value="true" role="switch">`,
-		`/would have answered (\d{3})/`,
-	)
-	// The request the page's script makes of the form's fields.
+	server.SetDebug(DebugFull)
 	form := url.Values{"collector": {"dbg"}, "target": {target.URL}, "debug": {"true"}}
 	response := probeOnce(t, server, "/probe?"+form.Encode(), http.Header{"X-Prometheus-Scrape-Timeout-Seconds": {"30"}})
-	report := response.Body.String()
-	lines := strings.SplitN(report, "\n", 3)
-	if response.Code != http.StatusOK || len(lines) != 3 || !regexp.MustCompile(`^Took \S+\. A probe would have answered 200 with 1 series\.$`).MatchString(lines[1]) {
-		t.Fatalf("answered %d:\n%.400s", response.Code, report)
+	answer := postRun(t, server, map[string]any{"configured": "dbg", "target": target.URL}, http.StatusOK)
+	shown := "X-Long: " + strings.Repeat("h", debugHeaderValueLimit) + fmt.Sprintf("... (%d bytes)", size)
+	for name, report := range map[string]string{"the debug probe": response.Body.String(), "the page's run": answer.Report} {
+		lines := strings.SplitN(report, "\n", 3)
+		if len(lines) != 3 || !regexp.MustCompile(`^Took \S+\. A probe would have answered 200 with 1 series\.$`).MatchString(lines[1]) {
+			t.Fatalf("%s:\n%.400s", name, report)
+		}
+		assertContains(t, report, "\n    "+shown+"\n")
+		if longest, long := longestLine(report); longest > 2*debugHeaderValueLimit || len(report) > 8<<10 {
+			t.Errorf("%s is %d bytes and its longest line %d, %.80q", name, len(report), longest, long)
+		}
 	}
-	assertContains(t, report, "\n    X-Long: "+strings.Repeat("h", debugHeaderValueLimit)+fmt.Sprintf("... (%d bytes)\n", size))
-	if longest, long := longestLine(report); longest > 2*debugHeaderValueLimit || len(report) > 8<<10 {
-		t.Errorf("the report is %d bytes and its longest line %d, %.80q", len(report), longest, long)
+	if answer.Response == nil || !slices.Contains(answer.Response.Headers, shown) {
+		t.Errorf("the page's response: %+v", answer.Response)
 	}
 }

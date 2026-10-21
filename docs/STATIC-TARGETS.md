@@ -470,11 +470,11 @@ ServiceMonitor or PodMonitor that does this — see the
 
 ## Debugging a static target
 
-With `--web.enable-probe-debug` (the chart's `server.probeDebug`),
+With `--web.debug=full` (the chart's `server.debug: full`),
 `/static-targets?debug=<name>` scrapes the target of that name once, as its
 schedule would — with its own request settings and credential, within its
 interval — and answers with the same plain-text report as a
-[debug probe](CONFIGURATION.md#debugging-a-probe): the requests, the response,
+[debug probe](CONFIGURATION.md#debug-probes): the requests, the response,
 each stage, the logs, and the series the scrape would have published, with
 the target's labels and `static_target`, and whether `http_exporter_target_up`
 would have been `1` or `0`. The report is bounded as a debug probe's is: a
@@ -487,11 +487,13 @@ curl 'http://exporter:8080/static-targets?debug=legacy_eu'
 ```
 
 A debug scrape publishes nothing: the endpoint keeps serving the target's
-last scheduled result, and nothing is counted in the self-metrics or exported
-over OTLP. It skips the response cache like a debug probe, but waits for a
+last scheduled result, and nothing is counted in the self-metrics but
+`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, but waits for a
 slot of the collector's `max_concurrent_probes` as the scrape would. A name no
 target in force has is answered `404`; `debug` takes one name and cannot be
-combined with `targets` (`400`); without the flag it is `403`.
+combined with `targets` (`400`); below `--web.debug=full` it is `403`. The
+[debug page](CONFIGURATION.md#the-debug-page) makes the same scrape, and can
+run another collector on what it fetched.
 
 ## Exporting over OTLP
 

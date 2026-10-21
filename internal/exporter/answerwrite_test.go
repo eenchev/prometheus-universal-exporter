@@ -65,7 +65,7 @@ func TestEveryAnswerIsWrittenUnderADeadline(t *testing.T) {
 	target := textTarget(t, "value=1\n")
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}},
 		&model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: target.URL}}})
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	server.scrapeStaticTargets(t.Context(), 0)
 	probe := "/probe?collector=text&target=" + url.QueryEscape(target.URL)
 	for _, endpoint := range []struct {

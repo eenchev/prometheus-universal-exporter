@@ -153,11 +153,8 @@ spec:
             {{- if .Values.server.enableLifecycle }}
             - --web.enable-lifecycle
             {{- end }}
-            {{- if .Values.server.probeDebug }}
-            - --web.enable-probe-debug
-            {{- end }}
-            {{- if .Values.server.enablePlayground }}
-            - --web.enable-playground
+            {{- with (include "prometheus-universal-exporter.debug" .) }}
+            - {{ printf "--web.debug=%s" . | quote }}
             {{- end }}
             {{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}
             - {{ printf "--probe.timeout-offset=%s" . | quote }}

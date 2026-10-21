@@ -427,7 +427,7 @@ file as a `localfile` one: no status (`$status` is `null`, Python's
 `response.status_code` `None`), and `Content-Type` from the extension,
 `Content-Length` and `Last-Modified`.
 
-A [debug probe](CONFIGURATION.md#debugging-a-probe) shows the read in its
+A [debug probe](CONFIGURATION.md#debug-probes) shows the read in its
 request section — the host and the file as an `sftp://` URL, the account, and
 whether the connection was made for the probe or kept from an earlier
 scrape — and never a credential:

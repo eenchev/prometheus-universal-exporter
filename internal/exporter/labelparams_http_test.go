@@ -688,7 +688,7 @@ func TestAStaticTargetsParamsFillALabelValue(t *testing.T) {
 func TestADebugProbeAndTheCollectorsPageKnowALabelParameter(t *testing.T) {
 	target := newLabelTarget(t)
 	server := labelServer(t, tenantStatusConfig)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	got := labelProbe(t, server, target, "tenant_status", "&param_tenant=acme&debug=1", false)
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `status_up{region="eu",source="api-acme",tenant="acme"} 1`) || strings.Contains(got.Body.String(), `"{{param_tenant}}"`) {
 		t.Fatalf("the debug report: %d\n%s", got.Code, got.Body.String())

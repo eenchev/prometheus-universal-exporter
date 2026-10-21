@@ -234,7 +234,7 @@ func TestARuleOfAnEscapedNameIsToldOfByItsNameAsWritten(t *testing.T) {
 	document += "  - name: mapped\n    name_escaping: underscores\n    request:\n      type: http\n      path: /json\n    transform:\n      type: jq\n    metrics:\n      - name: http.server.duration\n        expression: .duration\n        labels:\n          - name: service.name\n            expression: .service\n            value_map: {api: API}\n" +
 		"  - name: cut\n    name_escaping: values\n    limits:\n      max_label_value_length: 7\n    request:\n      type: http\n      path: /json\n    transform:\n      type: python\n      script: |\n        metric(name=\"http.server.duration\", value=data[\"duration\"], labels={\"service.name\": \"a\" * 40})\n    metrics:\n      - name: http.server.duration\n        labels:\n          - name: service.name\n            expression: unread\n            truncate: true\n"
 	server := namedServer(t, document, "")
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	query := "&target=" + url.QueryEscape(target.URL)
 
 	if r := probeOnce(t, server, "/probe?collector=plain"+query, nil); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "http_server_duration 0.25\n") {

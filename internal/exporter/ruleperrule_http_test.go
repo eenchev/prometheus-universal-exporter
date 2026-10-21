@@ -891,7 +891,7 @@ func TestADebugProbeReportsEachRuleOfAMetricName(t *testing.T) {
 	}))
 	t.Cleanup(jobs.Close)
 	server := modeServer(t, diskCollector("disks", model.ErrorModeLog), queues)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 
 	report := debugProbeGet(t, server, "collector=disks&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, report,
@@ -980,7 +980,7 @@ func TestADebugProbeShowsARuleWithoutANameAsThat(t *testing.T) {
 				t.Fatalf("answered %d: %s", answer.Code, answer.Body)
 			}
 			assertContains(t, logs.String(), tc.log)
-			server.SetProbeDebug(true)
+			server.SetDebug(DebugFull)
 			report := debugProbeGet(t, server, "collector=pr&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 			assertContains(t, report, carriedOn+strings.Join(tc.want, "\n")+"\n\nLogs\n")
 		})
@@ -1013,7 +1013,7 @@ func TestRulesOfOneNameUnderIgnoreAreCountedAndNotLogged(t *testing.T) {
 	table := wholeDisks()
 	table.used[1], table.free[2] = "", "n/a"
 	target.serve(table)
-	server.SetProbeDebug(true)
+	server.SetDebug(DebugFull)
 	report := debugProbeGet(t, server, "collector=disks&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
 	assertContains(t, report,
 		"  Rules that carried on without some series\n"+

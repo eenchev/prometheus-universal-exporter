@@ -88,7 +88,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 	}{
 		"defaults": {
 			want:  []string{"replicas: 1\n", "runAsUser: 65532", `"--runtime.memory-limit-ratio=0.8"`, "timeoutSeconds: 3", "failureThreshold: 5", "failureThreshold: 3"},
-			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.enable-probe-debug", "--web.enable-playground", "kind: ServiceMonitor", "kind: NetworkPolicy"},
+			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.debug", "kind: ServiceMonitor", "kind: NetworkPolicy"},
 		},
 		"limits": {
 			args: []string{"--set", "server.probeMaxConcurrent=64", "--set", "server.pythonMaxWorkers=8", "--set", "goMemLimit.ratio=0.6"},
@@ -176,13 +176,18 @@ func TestChartRendersItsOptions(t *testing.T) {
 			args: []string{"--set", "serviceAccount.create=false"},
 			want: []string{"serviceAccountName: default\n      automountServiceAccountToken: false"},
 		},
-		"probe debug": {
-			args: []string{"--set", "server.probeDebug=true"},
-			want: []string{"- --web.enable-probe-debug\n"},
+		"debugging at edit": {
+			args:  []string{"--set", "server.debug=edit"},
+			want:  []string{"- \"--web.debug=edit\"\n"},
+			avoid: []string{"--web.debug=full"},
 		},
-		"playground": {
-			args: []string{"--set", "server.enablePlayground=true"},
-			want: []string{"- --web.enable-playground\n"},
+		"debugging at full": {
+			args: []string{"--set", "server.debug=full"},
+			want: []string{"- \"--web.debug=full\"\n"},
+		},
+		"debugging off": {
+			args:  []string{"--set", "server.debug=off"},
+			avoid: []string{"--web.debug"},
 		},
 		"session affinity": {
 			args: []string{"--set", "service.sessionAffinity=ClientIP"},
@@ -314,8 +319,8 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"the self monitor without the Service":         {[]string{"--set", "service.enabled=false", "--api-versions", "monitoring.coreos.com/v1/ServiceMonitor"}, "selfMetrics.type service"},
 		"a zero watch interval":                        {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0s"}, "watchConfigInterval"},
 		"a zero compound watch interval":               {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
-		"probe debug as an extra":                      {[]string{"--set", "extraArgs[0]=--web.enable-probe-debug"}, "server.probeDebug"},
-		"the playground as an extra":                   {[]string{"--set", "extraArgs[0]=--web.enable-playground"}, "server.enablePlayground"},
+		"debugging as an extra":                        {[]string{"--set", "extraArgs[0]=--web.debug=full"}, "server.debug"},
+		"a debug level that is none":                   {[]string{"--set", "server.debug=on"}, "server.debug"},
 		"a pod label the chart sets":                   {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
 		"a spread without a topology key":              {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
 		// The chart renders the collector and target parameters itself; a

@@ -10,18 +10,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The playground (exporter/playground.go) runs a collector written in a
+// The debug page (exporter/debugpage.go) runs a collector written in a
 // browser against a response, without putting it in force. The collector is
 // read here, as the loader reads one of the collectors list, so that what the
-// playground accepts the configuration accepts and the other way round, and
+// debug page accepts the configuration accepts and the other way round, and
 // a mistake is reported in the words, and at the line, a load would report it.
 // Three things a load does are not done:
 //
 //   - ${NAME} references are never expanded, whatever --config.expand-env
-//     says: the playground's answer would show the exporter's environment;
+//     says: the debug page's answer would show the exporter's environment;
 //   - no file the collector names is opened, as WithoutNamedFiles loads;
 //   - the expression caches are not sized for it (expr.ReserveExpressions),
-//     which is the configuration in force's to do: a playground collector
+//     which is the configuration in force's to do: a debug page's collector
 //     sizing them to its own few expressions would have the configuration's
 //     compiled again and again.
 
@@ -29,7 +29,7 @@ import (
 // collectors: — a mapping that starts with its name — and checks it as Load
 // checks a collector of the configuration. refuse, when not nil, is given the
 // collector as written, before it is checked, and may refuse it: the
-// playground refuses what it does not run. The configuration returned holds
+// debug page refuses what it does not run. The configuration returned holds
 // the collector alone, its defaults filled in, with the warnings a load would
 // give for it.
 func ParseCollector(document []byte, refuse func(*model.Collector) error) (*model.Config, error) {

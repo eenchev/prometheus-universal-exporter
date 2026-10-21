@@ -564,13 +564,17 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 	if err != nil {
 		return loginToken{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	// u is login.url from the configuration, resolved against the target
+	// (loginURL), and logIn holds the request to the collector's target
+	// policy (withTargetPolicy) before it is sent; a probe cannot set or
+	// change it.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload)) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
 		return loginToken{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
 		return loginToken{}, RedactURLErrors(err)
 	}

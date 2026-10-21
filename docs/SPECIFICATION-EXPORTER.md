@@ -24367,6 +24367,61 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   schema requires a name, a collector and targets or discovery
   (`TestChartProbeJobKeysAreTheAllocatorsKeys`).
 
+## 34.159 The allocator's extra volumes and its own schemas
+
+- `allocator.extraVolumes` and `allocator.extraVolumeMounts` are rendered
+  into the allocator's pod after its own volumes and mounts, as given, and
+  not into the exporter's, whose `extraVolumes` stay its own; by default
+  the allocator's pod has its configuration volume alone, and without the
+  allocator nothing is rendered (TestChartMountsTheAllocatorsExtraVolumes).
+- An `allocator.extraVolumeMounts` entry at or inside the configuration
+  directory, the static target and probe targets directories while the
+  allocator reads them, the token's directory with a token, or the service
+  account token's directory while a `kubernetes` source or
+  `serviceAccount.automount` mounts it, and two entries of one path, fail
+  rendering with the schema and without it, compared cleaned; the values
+  schema refuses one inside the configuration directory itself; each of
+  those directories while it is not mounted, a path beside one and one
+  climbing out again render
+  (TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready).
+- The values schema takes `allocator.extraVolumes` and
+  `allocator.extraVolumeMounts` exactly as `extraVolumes` and
+  `extraVolumeMounts` (TestChartSchemaTakesTheAllocatorsExtraVolumesAsTheExportersOwn).
+- `configs/allocator-static-targets.schema.json` and
+  `configs/probe-targets.schema.json` are what the allocator generates, and
+  say where they are published (TestCommittedAllocatorSchemasAreCurrent).
+- The allocator's static target schema takes `discovered_targets` beside
+  `targets`, alone and beside `targets: []`, and the exporter's example
+  target file, while the exporter's schema refuses `discovered_targets`
+  (TestTheAllocatorsStaticTargetSchemaTakesDiscoveredTargets).
+- The two schemas refuse a table of files the allocator refuses at load:
+  no targets and no entries, an entry without a name, collector or
+  discovery, with `target`, a `shard_key` other than `address` or a
+  template without `{{address}}`, a source of two kinds or none, with an
+  unknown key, a file of no format, an `ftp` or credentialed URL, a
+  certificate without a key, no or a bad port, a bad namespace, namespaces
+  beside `all_namespaces`, a reserved or `__` label; a probe targets file
+  without jobs, a job without a name, a collector or a target or source, a
+  parameter of the allocator's, an `instance` label and an unknown key
+  (TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses).
+- The schemas declare exactly the keys of `allocator.ProbeFile`, of
+  `allocator.DiscoveryConfig` with each kind's own, in a probe job and in an
+  entry, and of a `discovered_targets` entry a static target's keys but
+  `target`, with `name`, `shard_key`, `target_template` and `discovery`;
+  the chart's values schema declares a probe job's keys, its discovery
+  source's included, as `configs/probe-targets.schema.json` does
+  (TestTheAllocatorsSchemasDeclareTheDecodersKeys).
+- The allocator takes, as a key, every key the schema declares of a
+  `discovered_targets` entry, and refuses `target`, `targets` and an
+  unknown key (TestTheAllocatorTakesTheKeysTheSchemaDeclaresOfAnEntry).
+- Every probe targets and static target example of `docs/ALLOCATOR.md` is
+  valid against its schema, and the page shows both schemas' modelines
+  (TestTheAllocatorsExamplesMatchItsSchemas).
+- `pue-allocator --static-targets-file-schema` and
+  `--probe-targets-file-schema` print the schemas and exit 0 without
+  reading a file, and `-h` lists them (TestSchemaFlagsPrintTheSchemas,
+  TestVersionAndHelp).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

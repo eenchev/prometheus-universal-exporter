@@ -24704,7 +24704,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   holds longer, its intermediate's, not the other intermediate's earlier
   one.
 
-## 34.162 Virtual hosts for logins and pages, the helm version, the flag reference and the kubernetes type
+## 34.162 Virtual hosts for logins and pages, the helm version and the flag reference
 
 - A relative `login.url` is posted with the request's `Host` override, the
   collector's `request.headers` `Host` or a static target's, json and oauth2
@@ -24929,6 +24929,45 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - End to end, a probe answers a jq histogram rule's histograms per method in the text format, buckets, sum and count exactly, and in OpenMetrics, beside a gauge (TestAProbeAnswersAHistogramRulesHistograms).
 - A histogram rule's histograms are exported to OTLP as histogram data points of the rule's bounds, per-bucket counts, the count and the sum (TestAHistogramRulesHistogramsAreExportedAsOTLPHistograms).
 - The schema and the exporter take a histogram block alike on a jq or csv histogram rule with 1 to 100 buckets and refuse it alike with 101 or no buckets, without buckets, with a bucket of text or an unknown key, on a gauge or a rule without a type, and on a prometheus or a python rule; a bound out of order, twice, +Inf or NaN, a label le, and type: histogram without the block pass the schema and are refused by the exporter (TestSchemaAndExporterAgreeOnHistogramBlocks).
+
+## 34.168 Documentation that names every request type
+
+- Every list marked `<!-- request-types: all -->` names every request type
+  of `internal/fetch/requesttype_<name>.go`, the opt-in ones included, as
+  the marker's format writes it, and every list marked
+  `<!-- request-types: default -->` names every type of a default build and
+  no opt-in one; `docs/CONFIGURATION.md` holds two such lists,
+  `docs/STATIC-TARGETS.md`, `docs/REQUESTS.md` and `docs/SELF-METRICS.md`
+  one each, and a marker without its end fails (§ 35)
+  (TestMarkedListsNameEveryRequestType).
+- The check of marked lists finds a type missing from a list, a type
+  missing from the format the marker gives, a default list naming an opt-in
+  type or missing a default one, and passes complete lists
+  (TestTheRequestTypeListCheckFindsWhatIsMissing).
+- Every request type but `http` has its page, `docs/<NAME>.md`, which § 35
+  requires by name and which the README's index and the related pages of
+  `docs/CONFIGURATION.md` link (TestEveryRequestTypeHasItsPage).
+- The code layout of `docs/DEVELOPMENT.md` names every package of
+  `go list ./...` and every file of the root package that is not a test
+  (TestTheCodeLayoutNamesEveryPackage).
+- Read from the registrations in `internal/fetch`, the types § 26.1 lets
+  set target lists, the targets § 42.14 and `docs/STATIC-TARGETS.md` give
+  their own credentials, and the types `docs/TLSCERT.md` says take the
+  `tls` block are exactly those whose registration lists `allowed_targets`,
+  a target's `bearer_token`, and `tls` (§ 35)
+  (TestSentencesNameTheRequestTypesThatTakeAKey).
+- Spec § 1's formats, the chart README's opening and the comment on
+  `model.DecoderConfig` name every decoder of `model.DecoderTypes`
+  (TestDecoderListsNameEveryDecoder).
+- The chart README's opening names every request type of the tree and
+  `Chart.yaml`'s description every type of a default build, and a type the
+  test has no chart name for fails it (SPECIFICATION-CHART.md § 33.13)
+  (TestTheChartDescribesEverySource).
+- `docs/ENDPOINTS.md` has a row for every path `internal/exporter/server.go`
+  routes, `/debug/run` among them, and for the self-metrics and static
+  targets paths at their defaults (TestEndpointsListEveryRoute).
+- The headings of § 34 are numbered `34.<number>` in order, each after a
+  blank line (TestSpecTestSectionsAreNumberedInOrder).
 
 # 35. Documentation requirements
 

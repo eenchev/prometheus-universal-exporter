@@ -651,7 +651,10 @@ since the default NetworkPolicy admits any Prometheus-labelled pod of the
 cluster, which without the token could heartbeat as a replica and be handed
 targets. The `emptyDir` survives a container restart but not the pod's
 replacement: a new pod starts with no bundle, not ready, and waits for the
-allocator. A restarted container starts with the bundle its exporter
+allocator, answering every endpoint but `/health` and `/ready` with `503`
+until the first bundle brings its `web.basic_auth`, the self-metrics
+included (see
+[Configuration from the target allocator](CONFIGURATION.md#configuration-from-the-target-allocator)). A restarted container starts with the bundle its exporter
 installed there, and with nothing else: a `config.yaml` put into the
 directory by other means is removed. Each probe job
 becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A

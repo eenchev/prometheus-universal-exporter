@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -158,8 +159,8 @@ func valueTarget(t *testing.T) string {
 }
 
 // An exporter in allocator mode with an empty cache directory starts at
-// once and serves its endpoints, unready, with /probe answering 503 with a
-// sentence that names the allocator; the first bundle makes it ready and
+// once, unready, with /probe and every other endpoint but /health and
+// /ready answering 503 with a sentence that names the allocator; the first bundle makes it ready and
 // probes are answered from it, and the bundle is in the cache directory. Its
 // first signal sends a heartbeat saying it is shutting down at once, before
 // --web.shutdown-delay is over.
@@ -174,8 +175,12 @@ func TestAllocatorModeIsUnreadyUntilTheFirstBundle(t *testing.T) {
 	if code, body := p.get(t, probe); code != http.StatusServiceUnavailable || body != "no configuration yet: waiting for the allocator at "+a.server.URL+"\n" {
 		t.Fatalf("/probe before the bundle: %d %q", code, body)
 	}
-	if code, _ := p.get(t, "/self-metrics"); code != http.StatusOK {
-		t.Fatalf("/self-metrics before the bundle: %d", code)
+	// The bundle carries web.basic_auth: until it comes, nothing but
+	// /health and /ready is served.
+	for _, path := range []string{"/self-metrics", "/", "/collectors"} {
+		if code, body := p.get(t, path); code != http.StatusServiceUnavailable || body != "no configuration yet: waiting for the allocator at "+a.server.URL+"\n" {
+			t.Fatalf("%s before the bundle: %d %q", path, code, body)
+		}
 	}
 	if hb := <-a.heartbeats; hb.Member != "pod-0" || hb.Advertise != "10.0.0.7:8080" || hb.Generation != "" {
 		t.Fatalf("the first heartbeat: %+v", hb)
@@ -431,5 +436,46 @@ func TestStoppingTheAllocatorClientWaitsForItsRun(t *testing.T) {
 	case <-stopped:
 	case <-time.After(30 * time.Second):
 		t.Fatal("stop did not return once the bundle was in force")
+	}
+}
+
+// An exporter in allocator mode that starts with a bundle in its cache
+// directory has the bundle's web.basic_auth from the start: it is not
+// awaiting a configuration, and asks for the credential before the
+// allocator has answered, here while it cannot be reached at all.
+func TestAllocatorModeResumingFromItsCacheAsksForTheCredentialAtOnce(t *testing.T) {
+	a := newAllocatorStandIn(t)
+	a.serve(map[string]string{"config.yaml": "web:\n  basic_auth:\n    enabled: true\n    username: exporter\n    password: s3cret\n" + allocatorTestConfig})
+	mode := &allocatorMode{url: a.server.URL, cacheDir: t.TempDir(), member: "pod-0", advertise: "10.0.0.7:8080"}
+	logger := newLogger("error", io.Discard)
+	manager, cached := mode.startManager(logger, "python3", nil, nil, false)
+	_, stop, err := mode.startClient(manager, cached, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, "the first bundle to be in force", func() bool { return !manager.Awaiting() })
+	stop()
+	a.server.Close()
+
+	restarted, cached := mode.startManager(logger, "python3", nil, nil, false)
+	if cached == "" || restarted.Awaiting() {
+		t.Fatalf("started again with the bundle: generation %q, awaiting %v", cached, restarted.Awaiting())
+	}
+	server := exporter.NewServer(restarted, "python3", logger)
+	get := func(path string, header http.Header) int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header = header
+		server.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, path := range []string{"/self-metrics", "/", "/collectors"} {
+		if code := get(path, http.Header{}); code != http.StatusUnauthorized {
+			t.Errorf("%s without the credential: %d", path, code)
+		}
+	}
+	credential := http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte("exporter:s3cret"))}}
+	if code := get("/self-metrics", credential); code != http.StatusOK {
+		t.Errorf("/self-metrics with the credential: %d", code)
 	}
 }

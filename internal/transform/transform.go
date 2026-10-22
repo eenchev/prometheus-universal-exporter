@@ -1989,12 +1989,14 @@ func xpathValue[N comparable](nodes xpathNodes[N], node N, e *xpath.Expr) (value
 	return nil, false
 }
 
-// xpathText is a computed value as label text: a number as Go writes it
-// shortest, a boolean as true or false.
+// xpathText is a computed value as label text: a number as a jq or yq label
+// writes it (labelNumber), so that count(//item) * 2000000 is 4000000 and not
+// Go's shortest 4e+06, and the same number reads the same whichever language
+// computed it; a boolean as true or false.
 func xpathText(value any) string {
 	switch v := value.(type) {
 	case float64:
-		return strconv.FormatFloat(v, 'g', -1, 64)
+		return labelNumber(v)
 	case bool:
 		return strconv.FormatBool(v)
 	case string:

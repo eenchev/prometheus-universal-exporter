@@ -291,9 +291,6 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	if !readOnly(w, r, "use GET or HEAD to probe a target") {
 		return
 	}
-	if s.awaitingConfiguration(w) {
-		return
-	}
 	start := time.Now()
 	// A debug probe is refused before anything else when it is not enabled,
 	// so the refusal does not depend on the rest of the probe being right.

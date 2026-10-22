@@ -11,19 +11,25 @@ import (
 // An exporter in allocator mode (--allocator.url) that starts without a
 // bundle in its cache directory has no configuration until the allocator
 // serves it one. Its manager then holds an empty one and says it is awaiting
-// (config.NewAwaitingManager): the endpoints are served, /ready answers 503
-// and /probe 503 with a sentence that says what it waits for, the static
-// targets endpoint has no targets and the self-metrics are served. The first
-// bundle put in force ends it, whatever reload put it in force.
+// (config.NewAwaitingManager): /health answers, /ready answers 503, and
+// every other endpoint — /probe, the static targets, the self-metrics, the
+// landing and collectors pages, the debug page and /-/reload — answers 503
+// with a sentence that says what it waits for. The bundle carries
+// web.basic_auth, so until one is in force nothing says which requests to
+// let in, and none is (basicAuthMiddleware). The self-metrics would show the
+// allocator's sync errors while waiting, but they are what the credential
+// protects; the exporter's log has those errors. The first bundle put in
+// force ends it, whatever reload put it in force; one in the cache directory
+// that loads at start is in force from the start.
 
-// SetAwaitingReason sets what /probe answers while the manager is awaiting
-// its first configuration: a plain sentence naming what it waits for, such
-// as the allocator's URL. /ready says only that there is no configuration
-// yet: it is never authenticated.
+// SetAwaitingReason sets what the endpoints answer while the manager is
+// awaiting its first configuration: a plain sentence naming what it waits
+// for, such as the allocator's URL. /ready says only that there is no
+// configuration yet: it is never authenticated.
 func (s *Server) SetAwaitingReason(reason string) { s.awaitingReason = reason }
 
-// awaitingConfiguration answers a probe 503 while the manager is awaiting
-// its first configuration, and reports whether it did.
+// awaitingConfiguration answers a request 503 while the manager is
+// awaiting its first configuration, and reports whether it did.
 func (s *Server) awaitingConfiguration(w http.ResponseWriter) bool {
 	if !s.manager.Awaiting() {
 		return false

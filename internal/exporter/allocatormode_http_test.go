@@ -3,6 +3,7 @@
 package exporter
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,18 +17,22 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// An exporter in allocator mode that starts without a bundle serves its
-// endpoints while it awaits the first (allocatormode.go): /ready and /probe
-// answer 503, /probe with the sentence it was given, the static targets
-// endpoint has none and the self-metrics are served. The first
-// configuration put in force makes it ready, and probes are answered.
+// An exporter in allocator mode that starts without a bundle awaits the
+// first (allocatormode.go): /health answers, /ready answers 503, and every
+// other endpoint answers 503 with the sentence it was given, whatever the
+// method. The bundle carries web.basic_auth, and the landing page, the
+// collectors page, the self-metrics, the static targets, the debug page and
+// /-/reload were served to anyone until it came. The first configuration put
+// in force makes it ready, and its credential is asked for.
 func TestAnExporterAwaitingItsConfigurationAnswers503UntilOneIsInForce(t *testing.T) {
 	dir := t.TempDir()
 	manager := config.NewAwaitingManager(filepath.Join(dir, "config.yaml"), slog.Default())
 	manager.SetTargets(filepath.Join(dir, "static-targets.yaml"), nil)
 	manager.AllowAbsentTargets()
 	server := NewServer(manager, "python3", slog.Default())
-	server.SetAwaitingReason("no configuration yet: waiting for the allocator at http://pue-allocator:8080")
+	server.SetDebug(DebugFull)
+	const waiting = "no configuration yet: waiting for the allocator at http://pue-allocator:8080"
+	server.SetAwaitingReason(waiting)
 	get := func(path string) *httptest.ResponseRecorder { return probeOnce(t, server, path, nil) }
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("value=7\n")) }))
 	defer target.Close()
@@ -36,27 +41,38 @@ func TestAnExporterAwaitingItsConfigurationAnswers503UntilOneIsInForce(t *testin
 	if r := get("/ready"); r.Code != http.StatusServiceUnavailable || r.Body.String() != "not ready: no configuration yet: waiting for the allocator\n" {
 		t.Errorf("/ready: %d %q", r.Code, r.Body.String())
 	}
-	if r := get(probe); r.Code != http.StatusServiceUnavailable || r.Body.String() != "no configuration yet: waiting for the allocator at http://pue-allocator:8080\n" {
-		t.Errorf("/probe: %d %q", r.Code, r.Body.String())
-	}
-	if r := get("/static-targets"); r.Code != http.StatusOK || strings.Contains(r.Body.String(), "http_exporter_target_up") {
-		t.Errorf("/static-targets: %d %q", r.Code, r.Body.String())
-	}
-	if r := get("/self-metrics"); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "http_exporter_build_info") {
-		t.Errorf("/self-metrics: %d", r.Code)
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, probe}, {http.MethodPost, probe}, {http.MethodGet, "/static-targets"}, {http.MethodGet, "/self-metrics"},
+		{http.MethodGet, "/"}, {http.MethodGet, "/collectors"}, {http.MethodGet, "/debug"}, {http.MethodPost, "/debug/run"},
+		{http.MethodPost, "/-/reload"}, {http.MethodPut, "/-/reload"}, {http.MethodGet, "/-/reload"},
+	} {
+		r := get(request.path)
+		if request.method != http.MethodGet {
+			r = httptest.NewRecorder()
+			server.Handler().ServeHTTP(r, httptest.NewRequest(request.method, request.path, strings.NewReader("{}")))
+		}
+		if r.Code != http.StatusServiceUnavailable || r.Body.String() != waiting+"\n" {
+			t.Errorf("%s %s: %d %q", request.method, request.path, r.Code, r.Body.String())
+		}
 	}
 	if r := get("/health"); r.Code != http.StatusOK {
 		t.Errorf("/health: %d", r.Code)
 	}
 
-	testutil.WriteIn(t, dir, "config.yaml", "collectors:\n  - name: a\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: a_value\n        expression: 'value=(\\d+)'\n")
+	testutil.WriteIn(t, dir, "config.yaml", "web:\n  basic_auth:\n    enabled: true\n    username: exporter\n    password: s3cret\ncollectors:\n  - name: a\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: a_value\n        expression: 'value=(\\d+)'\n")
 	if err := manager.Reload("allocator"); err != nil {
 		t.Fatal(err)
 	}
 	if r := get("/ready"); r.Code != http.StatusOK {
 		t.Errorf("/ready once configured: %d %q", r.Code, r.Body.String())
 	}
-	if r := get(probe); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "a_value 7") {
+	for _, path := range []string{probe, "/self-metrics", "/"} {
+		if r := get(path); r.Code != http.StatusUnauthorized {
+			t.Errorf("%s once configured, without the credential: %d %q", path, r.Code, r.Body.String())
+		}
+	}
+	credential := http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte("exporter:s3cret"))}}
+	if r := probeOnce(t, server, probe, credential); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "a_value 7") {
 		t.Errorf("/probe once configured: %d %q", r.Code, r.Body.String())
 	}
 }

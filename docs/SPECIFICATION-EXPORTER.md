@@ -5339,7 +5339,9 @@ language's syntax for it. A Python script's label values passed to `metric()`
 MUST be written the same way: a number or a boolean as its text, `None` and
 the empty string as no label (§ 16.2), and a list, tuple, set or dict
 refused with an error naming the label, as MUST be `labels` that is not a
-mapping.
+mapping. An XPath label that computes a number, a label that is
+one `sum()` included, MUST be written as a jq label's number is, so the same
+number is the same label whichever language computed it.
 
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, capture group or source label, an empty CSV
@@ -6714,7 +6716,9 @@ Implement:
 Recommended behavior:
 
 - `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
-  build and linking the endpoints and `/collectors`. Only `/` itself MUST be
+  build and linking the endpoints and `/collectors`; with the lifecycle API
+  on it MUST list `/-/reload` with every method the endpoint takes, `POST`
+  and `PUT`, and no other. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -23673,10 +23677,13 @@ Allocator mode (§ 42.14e):
   what it put in place; a refused reload runs the restore and reloads the old
   pair; a failed replacement reloads nothing.
 - An exporter awaiting its configuration answers `/ready` 503 `not ready: no
-  configuration yet: waiting for the allocator`, `/probe` 503 with the
-  sentence naming the allocator's URL, the static targets endpoint with no
-  targets, and serves `/self-metrics` and `/health`; once a reload puts a
-  configuration in force `/ready` is 200 and the probe is answered.
+  configuration yet: waiting for the allocator`, serves `/health`, and
+  answers every other endpoint — `/probe` by GET and POST, the static
+  targets, `/self-metrics`, `/`, `/collectors`, `/debug`, `/debug/run` and
+  `/-/reload` by POST, PUT and GET — 503 with the sentence naming the
+  allocator's URL; once a reload puts a configuration with `web.basic_auth`
+  in force `/ready` is 200, the endpoints ask for the credential, and the
+  probe is answered with it.
 - An exporter made with a configuration answers `/ready` 200 and does not
   answer probes 503 for awaiting one, whatever awaiting reason it was given.
 - The allocator self-metrics carry the generation in force, the last sync
@@ -25910,7 +25917,11 @@ credential ends the username at the first colon (RFC 7617), so no client
 could present it. A password MAY hold one. A file MUST be read again when its
 size or modification time changes, so a rotated Secret takes effect without a
 restart or reload; one that can no longer be read MUST make every protected
-request fail with `500`, logged, rather than admit it. The username and
+request fail with `500` rather than admit it, and MUST be logged as a
+repeated failure is (§ 25.1): one error, the requests that fail after it at
+debug level and at error level once per repeat interval, and the first
+request that reads the file again logged as the recovery. It MUST NOT log a
+line at error level for each request. The username and
 password MUST both be compared in constant time whatever the first
 comparison found, and the time taken MUST NOT depend on the length of either
 the presented or the configured value: each MUST be compared as a digest of
@@ -25924,7 +25935,10 @@ When enabled, the exporter MUST require valid Basic Authentication for
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
 when enabled, `/debug` and `/debug/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
-liveness and readiness probes can operate without credentials.
+liveness and readiness probes can operate without credentials. In allocator mode, until the first bundle,
+which carries `web.basic_auth`, is in force, every one of them MUST answer
+`503` instead (§ 42.14e): what the credential protects MUST NOT
+be served before the exporter knows whether one is required.
 
 Exporter-side Basic Authentication MUST be mutually exclusive with the
 Authorization bridge. Configuration validation MUST reject an enabled
@@ -27501,13 +27515,16 @@ installed bundle also `..data`, the links through it, and `config.yaml` and
 `static-targets.yaml`, such as files put there by hand; with one, a
 `config.yaml` or `static-targets.yaml` that does not link through `..data`.
 Other files MUST be left alone. Without an installed bundle, or with one
-that does not load (logged as a warning), the exporter MUST serve its
-endpoints with an empty configuration: `/ready` MUST answer `503` with `not
-ready: no configuration yet: waiting for the allocator`, `/probe` MUST answer
-`503` with `no configuration yet: waiting for the allocator at <url>`, the
-static targets endpoint MUST have no targets, the self-metrics MUST be
-served, and no reload status (§ 22.0b) MUST be reported until a
-configuration is in force. Only a reload that puts a configuration in force
+that does not load (logged as a warning), the exporter MUST hold an empty
+configuration: `/health` MUST answer, `/ready` MUST answer `503` with `not
+ready: no configuration yet: waiting for the allocator`, every other
+endpoint — `/probe`, the self-metrics, the static targets endpoint, the
+landing and collectors pages, the debug page and its runs, and `/-/reload` —
+MUST answer `503` with `no configuration yet: waiting for the allocator at
+<url>` before anything else, whatever the method, since `web.basic_auth`
+comes with the bundle and none of them MUST be served without the
+credential the bundle may ask for; and no reload status (§ 22.0b) MUST be
+reported until a configuration is in force. Only a reload that puts a configuration in force
 MUST end that state. `--dry-run` with `--allocator.url` MUST check the
 bundle in the cache directory, fail when there is none, fail a `config.yaml`
 there that is not an installed bundle, and change nothing. On shutdown the

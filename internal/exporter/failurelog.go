@@ -123,6 +123,8 @@ func newFailureLog() *failureLog {
 //     (staticClashKey): the target's name and the metric's;
 //   - a metric name the OTLP export had as two kinds under one resource
 //     (otlpNameClashKey): the resource's key and the name.
+//   - the exporter's own Basic Auth credential that cannot be read
+//     (webAuthKey), which has no parts: there is one.
 //
 // So a probe whose target reads as a static target's name is a probe, a
 // directory's file named schedule, stale or rule is a file, and a target
@@ -135,6 +137,7 @@ const (
 	addressSubject  = 'a'
 	endpointSubject = 'e'
 	exportSubject   = 'o'
+	webAuthSubject  = 'w'
 )
 
 // failureAspect is what of a subject a failure is, when it is not the
@@ -242,6 +245,11 @@ func staticClashKey(target, metric string) subjectKey {
 func otlpNameClashKey(resource, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric)}
 }
+
+// webAuthKey is the key of the exporter's own web.basic_auth credential that
+// cannot be read. It is of no collector, and no reload forgets it: the next
+// request that reads the credential recovers it, or fails it again.
+var webAuthKey = subjectKey{bytes: subjectBytes(webAuthSubject, "")}
 
 // subjectBytes are the bytes of the key of a subject of kind with the
 // parts, and of the aspect of it when there is one: the digest of the

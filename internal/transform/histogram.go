@@ -2,10 +2,10 @@ package transform
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -104,25 +104,31 @@ func findHistogram(out *model.MetricSet, rule *model.MetricRule, fold *histogram
 
 // histogramKey is the key of a set of labels, the same for two sets that are
 // one series to Prometheus: in the order of their names, without a label of
-// an empty value, which is no label at all.
+// an empty value, which is no label at all. Each name and each value is
+// written after its length, so no two sets have one key whatever bytes they
+// hold: a value read from a response may hold any byte, as one that is not
+// UTF-8 is repaired only after the transform, so no byte can end one.
 func histogramKey(labels map[string]string) string {
 	names := make([]string, 0, len(labels))
+	size := 0
 	for name, value := range labels {
 		if value != "" {
 			names = append(names, name)
+			size += len(name) + len(value) + 2*binary.MaxVarintLen64
 		}
 	}
 	sort.Strings(names)
-	var b strings.Builder
+	b := make([]byte, 0, size)
 	for _, name := range names {
-		// Neither byte is in a label name, and a value is written after
-		// its name's, so no two sets have one key.
-		b.WriteString(name)
-		b.WriteByte(0xff)
-		b.WriteString(labels[name])
-		b.WriteByte(0xfe)
+		b = appendKeyPart(b, name)
+		b = appendKeyPart(b, labels[name])
 	}
-	return b.String()
+	return string(b)
+}
+
+// appendKeyPart writes part to a key after its length.
+func appendKeyPart(dst []byte, part string) []byte {
+	return append(binary.AppendUvarint(dst, uint64(len(part))), part...)
 }
 
 // newHistogramSeries is a histogram of rule with labels that has counted

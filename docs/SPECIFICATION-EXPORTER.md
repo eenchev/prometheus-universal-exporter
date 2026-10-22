@@ -3632,6 +3632,8 @@ The parser MUST follow expfmt's rules:
   summary, histogram and untyped are errors.
 - Summary and histogram series are grouped by their labels without `quantile`
   and `le`, regardless of label order, and those two labels MUST be floats.
+  Two different label sets MUST be two series whatever bytes their values
+  hold, a value that is not UTF-8 among them.
 - Metric and label names MAY be quoted UTF-8, including the braces form
   `{"my.metric", key="value"} 1` for a metric name that is not a bare name.
   `__name__` is reserved, and a label name may appear once per sample.
@@ -4817,9 +4819,11 @@ MUST be counted in every bucket and `+Inf` in `+Inf` alone. NaN, a value that
 is no number and a missing value MUST be handled by the rule's `error_mode`
 and `required` as any rule's value is, the histogram counting the others
 under `log` and `ignore`. The values of one set of label values, a label with
-an empty value being none, MUST make one histogram, the histograms in the
-order of their first values; each MUST take one series of
-`limits.max_metrics` when its first value comes, and the values none. A rule
+an empty value being none, MUST make one histogram, and two different sets
+two whatever bytes the values hold, a value that is not UTF-8 among them;
+the histograms are in the order of their first values, and each MUST take
+one series of `limits.max_metrics` when its first value comes, and the
+values none. A rule
 that reads no value at all — an expression that gives none, items, nodes or
 elements selected none, no match, no rows — MUST make one histogram of count
 0 with every bucket and the sum 0 when its labels are all static, and none

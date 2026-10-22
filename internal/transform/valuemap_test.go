@@ -321,6 +321,19 @@ func TestLabelValueMapsOfOneNameMustAgree(t *testing.T) {
 	if err := CheckLabelValueMapsAgree(&named); err != nil {
 		t.Fatal(err)
 	}
+	// Under name_escaping a name may hold a NUL: worker\x00up's label
+	// state and worker's label up\x00state are two labels of two metrics.
+	nul := model.Collector{Name: "c", NameEscaping: NameEscapingUnderscores, Metrics: []model.MetricRule{rule(map[string]string{"1": "running"}), rule(map[string]string{"1": "up"})}}
+	nul.Metrics[0].Name, nul.Metrics[0].Labels[0].Name = "worker\x00up", "state"
+	nul.Metrics[1].Name, nul.Metrics[1].Labels[0].Name = "worker", "up\x00state"
+	for i := range nul.Metrics {
+		if err := CheckMetricRule(&nul, &nul.Metrics[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := CheckLabelValueMapsAgree(&nul); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A rule whose expression gives text or an object says what it got in the

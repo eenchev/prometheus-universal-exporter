@@ -2066,7 +2066,9 @@ in one are one histogram's, as they are one series to Prometheus. The labels
 are grouped by the values their expressions give: a label's `value_map` or
 `truncate: true` that makes two sets alike afterwards leaves two histograms
 of one series, which fails the scrape as a duplicate series, so map such
-values in the expression instead.
+values in the expression instead. Two sets that differ are two histograms
+whatever bytes their values hold: a value that is not UTF-8 is grouped by
+its bytes as read, before the exporter repairs it.
 
 A value that cannot be counted is handled by the rule's
 [`error_mode`](#when-a-metric-cannot-be-extracted), as any rule's value is: a

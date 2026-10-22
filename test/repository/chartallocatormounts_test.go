@@ -30,11 +30,11 @@ func TestChartMountsTheAllocatorsExtraVolumes(t *testing.T) {
 	helm := requireHelm(t)
 	docs := manifests(t, helm, "--set", "allocator.enabled=true")
 	pod := path(manifest(t, docs, allocatorDeployment), "spec", "template", "spec")
-	if got := volumeNames(path(pod, "volumes")); !reflect.DeepEqual(got, []string{"config"}) {
-		t.Errorf("by default the allocator's pod has the volumes %v, want config alone", got)
+	if got := volumeNames(path(pod, "volumes")); !reflect.DeepEqual(got, []string{"config", "token"}) {
+		t.Errorf("by default the allocator's pod has the volumes %v, want config and token alone", got)
 	}
-	if got := volumeNames(path(pod, "containers", "0", "volumeMounts")); !reflect.DeepEqual(got, []string{"config"}) {
-		t.Errorf("by default the allocator's container mounts %v, want config alone", got)
+	if got := volumeNames(path(pod, "containers", "0", "volumeMounts")); !reflect.DeepEqual(got, []string{"config", "token"}) {
+		t.Errorf("by default the allocator's container mounts %v, want config and token alone", got)
 	}
 
 	args := append([]string{"--set", "allocator.enabled=true",
@@ -42,8 +42,8 @@ func TestChartMountsTheAllocatorsExtraVolumes(t *testing.T) {
 		"--set-json", `extraVolumeMounts=[{"name":"exporter-only","mountPath":"/data"}]`}, allocatorFileSD...)
 	docs = manifests(t, helm, args...)
 	pod = path(manifest(t, docs, allocatorDeployment), "spec", "template", "spec")
-	if got := volumeNames(path(pod, "volumes")); !reflect.DeepEqual(got, []string{"config", "file-sd"}) {
-		t.Errorf("the allocator's pod has the volumes %v, want config and then file-sd", got)
+	if got := volumeNames(path(pod, "volumes")); !reflect.DeepEqual(got, []string{"config", "token", "file-sd"}) {
+		t.Errorf("the allocator's pod has the volumes %v, want config, token and then file-sd", got)
 	}
 	if got := text(path(named(path(pod, "volumes"), "file-sd"), "configMap", "name")); got != "websites-sd" {
 		t.Errorf("the allocator's file-sd volume is of the ConfigMap %q, want websites-sd", got)
@@ -52,8 +52,8 @@ func TestChartMountsTheAllocatorsExtraVolumes(t *testing.T) {
 	if text(path(mount, "mountPath")) != "/etc/pue-sd" || text(path(mount, "readOnly")) != "true" {
 		t.Errorf("the allocator's container does not mount file-sd read-only at /etc/pue-sd: %v", scalars(mount))
 	}
-	if got := volumeNames(path(pod, "containers", "0", "volumeMounts")); !reflect.DeepEqual(got, []string{"config", "file-sd"}) {
-		t.Errorf("the allocator's container mounts %v, want config and then file-sd", got)
+	if got := volumeNames(path(pod, "containers", "0", "volumeMounts")); !reflect.DeepEqual(got, []string{"config", "token", "file-sd"}) {
+		t.Errorf("the allocator's container mounts %v, want config, token and then file-sd", got)
 	}
 	exporter := path(manifest(t, docs, "Deployment/test-prometheus-universal-exporter"), "spec", "template", "spec")
 	if named(path(exporter, "volumes"), "file-sd") != nil || named(path(exporter, "containers", "0", "volumeMounts"), "file-sd") != nil {
@@ -89,7 +89,7 @@ func volumeNames(node *yaml.Node) []string {
 // schema refuses one inside the configuration directory by itself, by the
 // exporter's pattern. A directory is taken only while the pod mounts it: the
 // static target and probe targets directories while the allocator reads
-// those files, the token's with a token, the service account token's while
+// those files, the token's always, the service account token's while
 // that token is mounted.
 func TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready(t *testing.T) {
 	helm := requireHelm(t)
@@ -97,7 +97,10 @@ func TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready(t *testi
 	const static = "allocator:\n  staticTargets:\n    data: |\n      interval: 1m\n      targets:\n        - name: legacy\n          collector: example\n          target: http://legacy.example:8080\n"
 	const probes = "allocator:\n  probeJobs: [{name: websites, collector: example, targets: ['https://shop.example']}]\n"
 	const kubernetes = "allocator:\n  probeJobs: [{name: pods, collector: example, discovery: [{kubernetes: {port: metrics}}]}]\n"
-	const token = "allocator:\n  tokenSecret: {name: allocator-token}\n"
+	// The token's directory is mounted with the generated Secret as with a
+	// named one.
+	const token = ""
+	const namedToken = "allocator:\n  tokenSecret: {name: allocator-token}\n"
 	const automount = "serviceAccount: {automount: true}\n"
 	for name, tc := range map[string]struct {
 		values, mount string
@@ -118,6 +121,8 @@ func TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready(t *testi
 		"inside the probe targets directory": {probes, "/etc/prometheus-universal-exporter-probe-targets/sd", false,
 			`which is inside the probe targets directory /etc/prometheus-universal-exporter-probe-targets, a read-only ConfigMap volume`},
 		"the token directory": {token, "/var/run/prometheus-universal-exporter/allocator-token", false,
+			`which the chart already mounts as the allocator token directory /var/run/prometheus-universal-exporter/allocator-token`},
+		"the token directory of a named Secret": {namedToken, "/var/run/prometheus-universal-exporter/allocator-token", false,
 			`which the chart already mounts as the allocator token directory /var/run/prometheus-universal-exporter/allocator-token`},
 		"inside the token directory": {token, "/var/run/prometheus-universal-exporter/allocator-token/ca.crt", false,
 			`which is inside the allocator token directory /var/run/prometheus-universal-exporter/allocator-token, a read-only Secret volume`},
@@ -156,7 +161,6 @@ func TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready(t *testi
 	for name, mount := range map[string]string{
 		"the static target directory without static targets": "/etc/prometheus-universal-exporter-static-targets",
 		"the probe targets directory without probe jobs":     "/etc/prometheus-universal-exporter-probe-targets/sd",
-		"the token directory without a token":                "/var/run/prometheus-universal-exporter/allocator-token",
 		"the service account token without one mounted":      "/var/run/secrets/kubernetes.io/serviceaccount",
 		"beside the configuration directory":                 "/etc/prometheus-universal-exporter-sd",
 		"out of the configuration directory again":           "/etc/prometheus-universal-exporter/a/../../pue-sd",

@@ -22,13 +22,11 @@ spec:
       {{- with $scrape.refreshInterval }}
       refreshInterval: {{ . }}
       {{- end }}
-      {{- with $root.Values.allocator.tokenSecret.name }}
       authorization:
         type: Bearer
         credentials:
-          name: {{ . | quote }}
+          name: {{ include "prometheus-universal-exporter.allocatorTokenSecretName" $root | quote }}
           key: {{ $root.Values.allocator.tokenSecret.key | default "token" | quote }}
-      {{- end }}
   {{- with $scrape.interval }}
   scrapeInterval: {{ . }}
   {{- end }}

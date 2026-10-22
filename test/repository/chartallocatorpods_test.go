@@ -128,8 +128,8 @@ func TestChartMonitorsTheAllocatorsOwnMetrics(t *testing.T) {
 		text(path(endpoints[0], "interval")) != "30s" || text(path(endpoints[0], "scrapeTimeout")) != "10s" || text(path(monitor, "metadata", "labels", "release")) != "main" {
 		t.Errorf("the allocator's ServiceMonitor does not scrape /metrics on port http with the interval, timeout and labels given")
 	}
-	if len(endpoints) == 1 && path(endpoints[0], "authorization") != nil {
-		t.Error("the allocator's ServiceMonitor presents a token nobody set")
+	if len(endpoints) == 1 && text(path(endpoints[0], "authorization", "credentials", "name")) != "test-prometheus-universal-exporter-allocator-token" {
+		t.Error("the allocator's ServiceMonitor does not present the token the chart generated")
 	}
 	if _, found := docs["ServiceMonitor/test-prometheus-universal-exporter-self"]; !found {
 		t.Error("beside the allocator's ServiceMonitor the self-metrics monitor is left out")

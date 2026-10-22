@@ -630,7 +630,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `goMemLimit.enabled` / `goMemLimit.ratio` | `--runtime.memory-limit-ratio` | on / `0.8` |
 | `config` | `--config.file`, without the allocator | the chart's ConfigMap |
 | `allocator.enabled` | `--allocator.url`, `--allocator.cache-dir`, `--allocator.member`, `--allocator.advertise`; see [Target allocator](#target-allocator) | off |
-| `allocator.tokenSecret` | `--allocator.token-file`, with `allocator.enabled` | unset |
+| `allocator.tokenSecret` | `--allocator.token-file`, with `allocator.enabled` | a generated Secret |
 | `allocator.staticTargets.expandEnv` | `--static-targets.expand-env`, with `allocator.enabled` | off |
 
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. Its host may be empty, as in `:8080`, a wildcard such as `0.0.0.0:8080` or `[::]:8080`, or a pod address; a loopback host — `127.x.x.x`, `localhost` or `[::1]` — fails rendering, since neither the kubelet's probes nor the Service reach it. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
@@ -1171,10 +1171,44 @@ allocator:
   static targets, reading every pod's share;
 * with `allocator.serviceMonitor.enabled`, a `ServiceMonitor`
   `<fullname>-allocator` scraping the allocator's own `/metrics` through its
-  Service, and only that Service, presenting `allocator.tokenSecret`'s token
-  as `Bearer` credentials when one is set. It needs the ServiceMonitor CRD;
+  Service, and only that Service, presenting the allocator's token as
+  `Bearer` credentials. It needs the ServiceMonitor CRD;
   the allocator's NetworkPolicy admits the `allocator.networkPolicy.prometheus`
   peers, so list your Prometheus there.
+
+### The allocator's token
+
+The allocator always requires a bearer token: it refuses every request but
+its probes without it, the exporter pods send it, and the ScrapeConfigs and
+the allocator's ServiceMonitor present it. Without one, any pod the
+allocator's NetworkPolicy admits — by default a pod labelled
+`app.kubernetes.io/name: prometheus` in any namespace — could heartbeat as a
+member, be handed a share of the targets, and have Prometheus probe it with
+the exporter's credential. With `allocator.tokenSecret.name` empty, the
+default, the chart renders a Secret `<fullname>-allocator-token` holding a
+random token under `allocator.tokenSecret.key` (`token`). An upgrade reads
+the token back from that Secret, so it stays the same. `helm template`, and
+a client-side `--dry-run`, cannot read the cluster, so each of their renders
+generates a new token: applied, the Secret changes, the allocator and the
+exporter pods read the new token from their mounted file once the kubelet
+updates it, within about a minute, and requests between the two updates
+are refused until both have it. To keep one token whatever renders the
+chart, create the Secret yourself and name it:
+
+```sh
+kubectl create secret generic pue-allocator-token --from-literal=token="$(head -c 32 /dev/urandom | base64)"
+```
+
+```yaml
+allocator:
+  tokenSecret:
+    name: pue-allocator-token
+```
+
+The chart then generates none. The allocator does not compare a member's
+advertised address with the address its heartbeat comes from: a service mesh
+sidecar or a proxy in between would make them differ for every pod, and the
+token already keeps out a pod that does not have it.
 
 A probe job takes `name`, `collector`, `targets`, `params`, `labels`,
 `shard_key`, `discovery` and `target_template`, the keys of the allocator's
@@ -1262,8 +1296,8 @@ needs no rollout; a `subPath` mount is never updated. As for the exporter, a
 one inside it, since those are read-only volumes: the configuration
 directory, `/etc/prometheus-universal-exporter-static-targets` with
 `allocator.staticTargets.data`, `/etc/prometheus-universal-exporter-probe-targets`
-with `allocator.probeJobs`, the token's directory with
-`allocator.tokenSecret.name`, and the service account token's,
+with `allocator.probeJobs`, the token's directory, and the service account
+token's,
 `/var/run/secrets/kubernetes.io/serviceaccount`, while it is mounted, with a
 `kubernetes` source or `serviceAccount.automount`; and so does a path two
 entries share.
@@ -1287,7 +1321,7 @@ allocator refuses.
 | `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 10s)` plus 10 seconds. |
 | `allocator.maxMembers` | `1000` | `--members.max`: how many live members the allocator takes; the heartbeat of a new pod beyond them is refused until one stops heartbeating. Keep it above the most exporter pods the autoscaler runs. |
 | `allocator.logLevel` | `info` | `debug`, `info`, `warn` or `error`. |
-| `allocator.tokenSecret.name` / `key` | `""` / `token` | A Secret holding a shared bearer token: the allocator requires it, the exporter pods send it and the ScrapeConfigs present it. |
+| `allocator.tokenSecret.name` / `key` | `""` / `token` | The Secret holding the shared bearer token, which the allocator always requires, the exporter pods send and the ScrapeConfigs present; empty, the chart generates one (see [The allocator's token](#the-allocators-token)). |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
 | `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |

@@ -23860,8 +23860,9 @@ The exporter's tests and the target allocator's run when a file each needs chang
   compound `allocator.settle` (SPECIFICATION-CHART.md § 33.10c).
 - `allocator.serviceMonitor.enabled` renders a ServiceMonitor of the
   allocator's `/metrics` on port `http` selecting the allocator's Service and
-  not the exporter's, with the interval, timeout and labels given, the token
-  as Bearer credentials only with `allocator.tokenSecret`, the self-metrics
+  not the exporter's, with the interval, timeout and labels given, the
+  token, the generated one or `allocator.tokenSecret`'s, as Bearer
+  credentials, the self-metrics
   monitor beside it, nothing by default or without the allocator, and a
   timeout longer than its interval failing rendering
   (SPECIFICATION-CHART.md § 33.10c).

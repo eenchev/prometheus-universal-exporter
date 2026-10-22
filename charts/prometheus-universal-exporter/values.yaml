@@ -748,11 +748,16 @@ allocator:
   maxMembers: 1000
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
-  # An optional shared bearer token, from a Secret in the release's namespace:
-  # the allocator then refuses a request without it, the exporter pods send it,
-  # and the ScrapeConfig below presents it to fetch the probe targets. A forged
-  # heartbeat could otherwise pull targets to a pod of its own. Empty name: no
-  # token.
+  # The shared bearer token, always required: the allocator refuses a request
+  # without it, the exporter pods send it, and the ScrapeConfigs and the
+  # allocator's ServiceMonitor below present it. Without one, any pod the
+  # NetworkPolicy admits as a Prometheus peer could heartbeat as a member,
+  # be handed targets, and be probed by Prometheus with the exporter's
+  # credential. name names a Secret of yours in the release's namespace, the
+  # token under key. Empty, the chart generates a Secret
+  # <fullname>-allocator-token with a random token, read back from the
+  # cluster on upgrade so it stays the same; helm template and a client-side
+  # dry run cannot read the cluster, so each of their renders has a new one.
   tokenSecret:
     name: ""
     key: token
@@ -846,7 +851,7 @@ allocator:
   # inside it, since those are read-only volumes in which no mount point can
   # be created: the configuration directory, the static target and probe
   # targets directories while the allocator reads those files, the token's
-  # directory with tokenSecret, and the service account token's directory,
+  # directory, and the service account token's directory,
   # /var/run/secrets/kubernetes.io/serviceaccount, while that token is
   # mounted. So is a path two entries share.
   extraVolumes: []
@@ -872,7 +877,7 @@ allocator:
       whenUnsatisfiable: ScheduleAnyway
   # A Prometheus Operator ServiceMonitor for the allocator's own /metrics,
   # selecting the allocator's Service only, and presenting tokenSecret's token
-  # as Bearer credentials when one is set. It needs the Prometheus Operator's
+  # as Bearer credentials. It needs the Prometheus Operator's
   # ServiceMonitor CRD. interval and scrapeTimeout are Prometheus durations;
   # empty leaves them out. labels are added to the ServiceMonitor, for a
   # Prometheus serviceMonitorSelector.

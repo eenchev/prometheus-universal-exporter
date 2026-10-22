@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/url"
+	"strconv"
 
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
@@ -75,11 +77,22 @@ func sqlServerConfig(spec *sqlConnectSpec) (msdsn.Config, error) {
 }
 
 func connectSQLServer(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, error) {
+	connector, err := sqlServerConnector(spec)
+	if err != nil {
+		return nil, err
+	}
+	return connector.Connect(ctx)
+}
+
+// sqlServerConnector is the driver's connector of a connection made with
+// spec.
+func sqlServerConnector(spec *sqlConnectSpec) (*mssql.Connector, error) {
 	config, err := sqlServerConfig(spec)
 	if err != nil {
 		return nil, err
 	}
 	connector := mssql.NewConnectorConfig(config)
+	connector.SessionInitSQL = sqlServerTextSize(spec.limit)
 	// The prelogin answer is read in clear unless the connection is TLS
 	// from its first byte (strict), so the guard reads it for every other
 	// setting; it refuses a server that cannot encrypt for encrypt false
@@ -89,7 +102,25 @@ func connectSQLServer(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, e
 		guard:            config.Encryption != msdsn.EncryptionStrict,
 		allowUnencrypted: config.Encryption != msdsn.EncryptionOff,
 	}
-	return connector.Connect(ctx)
+	return connector, nil
+}
+
+// sqlServerTextSize is the statement each connection runs when it is made
+// and before each use (mssql.Connector.SessionInitSQL), setting TEXTSIZE so
+// that the server sends at most twice the response limit, and two bytes, of
+// a varchar(max), nvarchar(max), varbinary(max), text, ntext or image value:
+// go-mssqldb reads such a value whole, as long as it is, before the limit
+// applies. The server cuts a longer value there, and a cut value is over the
+// limit as the exporter reads it, whatever it held: nvarchar text is two
+// bytes a character as sent and one at least as read, so it is refused by
+// the limit on the rows' values and never read cut. Other values are 8000
+// bytes at most, but xml and CLR types, which TEXTSIZE does not cover.
+// Empty, with no limit, the driver's own unlimited TEXTSIZE stays.
+func sqlServerTextSize(limit int64) string {
+	if limit <= 0 {
+		return ""
+	}
+	return "SET TEXTSIZE " + strconv.FormatInt(min(limit, (math.MaxInt32-2)/2)*2+2, 10)
 }
 
 // sqlServerDialer hands the driver's connections to the exporter's dialer,

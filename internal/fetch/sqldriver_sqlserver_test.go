@@ -295,3 +295,28 @@ func TestOnlyTheSQLServerConfigurationOfLoginOnlyEncryptionChanged(t *testing.T)
 		}
 	}
 }
+
+// A SQL Server connection sets TEXTSIZE to twice the response limit and two
+// bytes, so that the server cuts a varchar(max), nvarchar(max) or
+// varbinary(max) value longer than that rather than the driver reading it
+// whole, and a cut value is still over the limit as the exporter reads it;
+// with no limit the driver's own unlimited TEXTSIZE stays, and the largest
+// limit asks for the most TEXTSIZE takes.
+func TestASQLServerConnectionHasTheServerCutValuesFarOverTheResponseLimit(t *testing.T) {
+	spec := sqlSpec(t, "1433", nil, nil)
+	spec.limit = 1 << 20
+	connector, err := sqlServerConnector(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connector.SessionInitSQL != "SET TEXTSIZE 2097154" {
+		t.Errorf("the connection runs %q", connector.SessionInitSQL)
+	}
+	spec.limit = 0
+	if connector, err = sqlServerConnector(spec); err != nil || connector.SessionInitSQL != "" {
+		t.Errorf("with no limit the connection runs %q (%v)", connector.SessionInitSQL, err)
+	}
+	if got := sqlServerTextSize(maxResponseLimit); got != "SET TEXTSIZE 2147483646" {
+		t.Errorf("the largest limit: %q", got)
+	}
+}

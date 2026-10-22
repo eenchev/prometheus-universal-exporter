@@ -84,6 +84,10 @@ type sqlDriver struct {
 	// run runs a statement on conn as the driver can make it read-only and
 	// bounded in time (sqlReadOnlyTx and the others); done ends it.
 	run func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (rows *sql.Rows, done func(), err error)
+	// messageTooLarge, when set, recognises the driver's refusal of a
+	// message from the server larger than the connection allows, which
+	// connect sets from the response limit (sqlConnectSpec.limit).
+	messageTooLarge func(err error) bool
 	// rowsError, when set, puts a failure reading the rows that only the
 	// driver can recognise in the operator's words (Snowflake).
 	rowsError func(err error) error
@@ -138,7 +142,19 @@ type sqlConnectSpec struct {
 	// appName is the name the connection gives itself where the driver
 	// sends one (sqlAppName).
 	appName string
+	// limit is the collector's response limit, 0 for none: a driver that can
+	// be told the most it reads of the server at once is told the limit and
+	// sqlMessageSlack beside it, so that a row larger than the limit is
+	// refused before it is read whole rather than after.
+	limit int64
 }
+
+// sqlMessageSlack is what a driver bounded by the response limit may read of
+// one message beside the limit: what the protocol adds to a row's values, a
+// length for each, NULLs among them, which the limit does not count, and a
+// description of a wide result or a long error message. A row within the
+// limit and this much is read, and then refused by the limit on its values.
+const sqlMessageSlack = 1 << 20
 
 // sqlAppName is the name the exporter's connections give themselves where a
 // driver sends one, so that a database administrator can tell them apart.

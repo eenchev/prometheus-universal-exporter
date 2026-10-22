@@ -457,7 +457,9 @@ func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, er
 // sqlBase is what a pool depends on of a collector's configuration and of a
 // static target's request, besides the target: the account and credential
 // files, the database as written, the options, the TLS settings, the
-// connection settings and the policy. A collector's pools whose base the
+// connection settings, the policy and the response limit, which bounds what
+// a driver reads of the server at once where the driver can be told
+// (sqlConnectSpec.limit). A collector's pools whose base the
 // configuration in force no longer gives are closed (sqlPoolCache.follow).
 type sqlBase struct {
 	driver                                 string
@@ -468,6 +470,7 @@ type sqlBase struct {
 	tls     model.TLSConfig
 	conns   sqlConnSettings
 	policy  *targetPolicy
+	limit   int64
 }
 
 // sqlConnSettings are the connection settings, with their defaults.
@@ -492,6 +495,7 @@ func sqlBaseOf(c *model.Collector, overrides RequestOverrides) sqlBase {
 		tls:            r.TLS,
 		conns:          sqlConnSettingsOf(r.Connections, overrides.SQLConnections),
 		policy:         policyOf(c),
+		limit:          responseLimit(c),
 	}
 	var options strings.Builder
 	for _, name := range model.SortedKeys(r.Options) {

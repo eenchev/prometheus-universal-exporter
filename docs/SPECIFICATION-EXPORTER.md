@@ -1690,7 +1690,20 @@ of objects, one a row, of its columns by name. Its keys:
   other value as 8 bytes, each with its column's name's length, a `NULL`
   nothing — MUST fail the scrape as a limit, the statement
   ended before its rows are closed so that the driver reads none of the
-  rest. The rows MUST be read by a `csv` transform by column name, one row
+  rest. A driver reads a row whole before the limit sees any of it, so the
+  limit MUST bound what a driver reads of the server at once where the
+  driver can be told: `postgres` MUST refuse a message from the server
+  larger than the limit and 1 MiB beside it from its length, before reading
+  it, failing the scrape as a limit in the limit's words (`the server sent a
+  message larger than the response limit of N bytes ...`), where pgx would
+  read one of up to 1 GiB; `sqlserver` MUST set `TEXTSIZE` on each
+  connection, when it is made and before each use, to twice the limit and two
+  bytes, so that the server cuts a longer `varchar(max)`, `nvarchar(max)`,
+  `varbinary(max)`, `text`, `ntext` or `image` value, a cut value being over
+  the limit as read and so never handed on. What no driver can be told — a
+  `mysql` row, up to the server's `max_allowed_packet`; a SQL Server `xml` or
+  CLR-type value; the opt-in drivers' rows and blocks of rows — is read
+  before the limit applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
   at a time as a CSV file's with a header, and by `jq`, `yq` and `python` as
   the list; `decoder.type` other than its default, any other transform and
   any `response` setting MUST be refused at load, with no warning that the

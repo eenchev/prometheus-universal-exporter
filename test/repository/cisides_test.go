@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -490,5 +491,98 @@ func TestEveryFilterACIStepRunsUnderMatchesCIItself(t *testing.T) {
 		if !matchesAny(patterns, workflow) {
 			t.Errorf("ci.yml's %s filter does not match %s, so a change to the steps it runs alone would skip them", output, workflow)
 		}
+	}
+}
+
+// repositoryTestFiles are the files the tests of test/repository read, as
+// far as their sources name them: every existing path of the repository a
+// string literal of test/repository's Go files names relative to the root,
+// where TestMain runs them, a glob's matches for one that names a directory
+// before its first glob character, and every file under a directory one names. The root itself,
+// paths outside it, git's directory and the untracked vendor copy name no
+// file of the repository a change could touch.
+func repositoryTestFiles(t *testing.T) []string {
+	t.Helper()
+	sources, err := filepath.Glob("test/repository/*.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no Go files found in test/repository: %v", err)
+	}
+	files := map[string]bool{}
+	for _, source := range sources {
+		parsed, err := parser.ParseFile(token.NewFileSet(), source, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(literal.Value)
+			if err != nil || value == "" || filepath.IsAbs(value) || strings.ContainsAny(value, "\n\x00") {
+				return true
+			}
+			named := filepath.Clean(value)
+			if named == "." || leavesDir(named) {
+				return true
+			}
+			matches := []string{named}
+			if at := strings.IndexAny(named, "*?["); at >= 0 {
+				// A glob is read as a path when it names a directory before
+				// its first glob character, as docs/*.md does: a "*" alone is
+				// a wildcard of the chart's rules or of a host name.
+				if !strings.Contains(named[:at], "/") {
+					return true
+				}
+				if matches, err = filepath.Glob(named); err != nil {
+					return true
+				}
+			}
+			for _, match := range matches {
+				// Most literals are no path; only one that exists names a
+				// file.
+				if _, err := os.Lstat(match); err != nil {
+					continue
+				}
+				switch top, _, _ := strings.Cut(filepath.ToSlash(match), "/"); top {
+				case ".git", "vendor":
+					continue
+				}
+				if err := addTree(files, match); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return true
+		})
+	}
+	return slices.Sorted(maps.Keys(files))
+}
+
+// goFilterMisses are the files the repository tests read that none of the go
+// filter's patterns match.
+func goFilterMisses(patterns, read []string) []string {
+	return slices.DeleteFunc(slices.Clone(read), func(file string) bool { return matchesAny(patterns, file) })
+}
+
+// The job test runs test/repository when the go filter names a change, so
+// every file those tests read must match it: .github/dependabot.yml, the
+// pre-commit hook, LICENSE and .artifacthub-repo.yml were once read by them
+// and matched by nothing, and a pull request breaking one of them alone
+// passed CI with the Go suite skipped.
+func TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead(t *testing.T) {
+	read := repositoryTestFiles(t)
+	for _, want := range []string{".githooks/pre-commit", "LICENSE", ".github/dependabot.yml", "docs/RELEASING.md"} {
+		if !slices.Contains(read, want) {
+			t.Errorf("%s was not found among the files the repository tests read; the reader has stopped finding them", want)
+		}
+	}
+	patterns := ciFilters(t)["go"]
+	for _, file := range goFilterMisses(patterns, read) {
+		t.Errorf("ci.yml's go filter matches no pattern for %s, which test/repository reads: a change to it alone would merge with the Go suite skipped", file)
+	}
+	// And the check tells a filter that lost a pattern apart.
+	without := slices.DeleteFunc(slices.Clone(patterns), func(pattern string) bool { return filterMatch(pattern, "LICENSE") })
+	if !slices.Contains(goFilterMisses(without, read), "LICENSE") {
+		t.Error("a go filter without a pattern for LICENSE was not found to miss it")
 	}
 }

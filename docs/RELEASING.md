@@ -52,9 +52,9 @@ An `exporter/prometheus-universal-exporter-vMAJOR.MINOR.PATCH` tag runs
 `release.yml`, which, once CI has passed on the tagged commit, runs the test
 suite against the Python and libraries the
 image ships (the Dockerfile's `PYTHON_VERSION`, `LXML_VERSION`,
-`PYYAML_VERSION` and `PYTHON_DATEUTIL_VERSION`, as CI does), publishes the
-container image to GHCR, builds the cross-platform archives, and creates a
-GitHub Release containing them and
+`PYYAML_VERSION` and `PYTHON_DATEUTIL_VERSION`, as CI does), builds the
+cross-platform archives and the container image, and then publishes them: the
+image to GHCR and a GitHub Release containing the archives and
 `prometheus-universal-exporter-<version>-sha256sums.txt`, their SHA-256
 checksums:
 
@@ -71,6 +71,31 @@ for each of `linux` and `darwin` on `amd64` and `arm64`, holds the two
 binaries, `prometheus-universal-exporter` and `pue-allocator`, and
 `config.example.yaml`. A patch to an older line, say 1.0.1 after
 1.1.0, is published as `1.0.1` and `1.0`, and leaves `latest` on 1.1.0.
+
+Nothing is published until everything is built, and what is published goes
+out in an order that a failure at any step leaves consistent:
+
+1. The archives, for every platform, and their checksums are built, and the
+   image is built for `linux/amd64` and `linux/arm64` without being pushed.
+   A compile error of one platform alone, or a broken image build, fails the
+   release here, with nothing published.
+2. The image is pushed under its version tag alone, `1.0.0`, from the build
+   above, which it does not repeat.
+3. The GitHub Release is created as a draft with the archives and the
+   checksums file, and then published, so it never shows without them.
+4. `latest` and `1.0` are moved to the image the version tag names, by its
+   digest (`docker buildx imagetools create`), when the release is the newest
+   of all or of its line.
+
+A failure at step 2 or 3 leaves `latest` and `1.0` where they were; a
+failure at step 4 leaves a published Release whose image is out under its
+version. Re-running the release repeats every step: the image is built and
+pushed again under the same tag, and the Release, which `gh release create`
+would refuse because it exists, is found with `gh release view` and its
+assets replaced (`gh release upload --clobber`) before it is published, if
+it was left a draft. The tags then move as on the first run. The archives'
+binaries are linked with the `-ldflags` the image's are, so `--version`
+reports the release's version and commit whichever a user runs.
 
 To check a downloaded archive, download the checksums file beside it and run,
 on Linux:

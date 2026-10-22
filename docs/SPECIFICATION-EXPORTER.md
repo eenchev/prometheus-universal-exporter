@@ -9890,7 +9890,11 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
   build run when anything the repository tests read changes (§ 42.12): Go
   source and module files, the workflows, the chart, `configs`, `examples`,
   `testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
-  Makefile, `tools`, the lint configuration and `test/python`.
+  Makefile, `tools`, the lint configuration, `test/python`, the Dependabot
+  configuration, `.gitignore`, the git hooks, `LICENSE` and the Artifact Hub
+  repository file. A test MUST fail for a file a string literal of
+  `test/repository`'s sources names, from the repository root, that this
+  filter does not match.
 - The tests of the packages are split in two sides: the target allocator's,
   `cmd/pue-allocator` and `internal/allocator`, and the exporter's, every
   other package of the module but `test/repository`. CI MUST run a side's
@@ -26516,7 +26520,11 @@ collectors page (§ 23) MUST list a label's parameters with the request's.
 ## 42.12 CI, container, and chart releases
 
 CI MUST materialize Go module checksums before running tests and MUST run the
-test, race, vet, build, and Helm validation checks.
+test, race, vet, build, and Helm validation checks. On every pull request
+whose changes the go filter (§ 34.33) matches, CI MUST also build the code
+for `darwin` on `amd64` and `arm64`, linking both commands, since the release
+builds archives for it, and MUST build the image from the Dockerfile without
+pushing it, so a change that breaks either fails before a release does.
 
 Known vulnerabilities MUST be reported by a workflow of its own, on every
 push and pull request and on a weekly schedule, for reference: it MUST NOT
@@ -26561,13 +26569,25 @@ MUST:
   `PYTHON_VERSION`, with the Dockerfile's pinned `lxml`, `PyYAML` and
   `python-dateutil`, and with the modules of `test/python/requirements.txt`
   installed and required, as CI does;
-- build release binaries for the documented target platforms; and
+- build release binaries for the documented target platforms, linked with
+  the `-ldflags` the Dockerfile links the image's with, the version and the
+  revision from the same values, so `--version` reports the same for an
+  archive's binary as for the image's;
 - create a GitHub Release containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
   is built for: macOS has no `sha256sum`, so beside the Linux command it MUST
-  give `shasum -a 256 -c`, which reads the same file.
+  give `shasum -a 256 -c`, which reads the same file; and
+- publish nothing before every archive, the checksums and the image are
+  built, the image without being pushed, and then publish in this order: the
+  image under its version tag alone; the GitHub Release, created as a draft
+  with its assets and then published; and last `latest` and `MAJOR.MINOR`,
+  moved to the digest the version tag was pushed with. A failure at any step
+  MUST leave `latest` and `MAJOR.MINOR` unmoved unless the Release is
+  published, and no Release published without its image. A rerun MUST
+  succeed where the Release already exists, draft or published, by replacing
+  its assets rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins
@@ -26637,7 +26657,10 @@ the job that runs it. They MUST also
 fail when a workflow runs the test suite without first setting up the image's
 Python and libraries, or runs `make ci` without installing golangci-lint and
 gopls; when the exporter release publishes its archives without the checksums
-file; and when the chart release pushes before checking its default image, or
+file, publishes anything before every archive and the image are built,
+publishes out of the order above, pushes the image with tags other than its
+version, or links an archive's binaries with other `-ldflags` than the
+image's; when CI builds no darwin binaries or no image; and when the chart release pushes before checking its default image, or
 signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.md
 § 42.12).
 

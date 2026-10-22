@@ -19,6 +19,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
 * SSH keys, passwords and known hosts for `sshfile` collectors, from a Secret and the values
 * Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
+* `list` permissions on the resources `kubernetes` collectors read, for the exporter's own ServiceAccount
 * Static targets the exporter scrapes itself and delivers over OTLP
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
@@ -559,6 +560,42 @@ config:
 ```
 
 and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+
+## Kubernetes collectors
+
+A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  namespaces: [shop]
+  rules:
+    - apiGroups: [apps]
+      resources: [deployments]
+    - apiGroups: [""]
+      resources: [pods]
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: deployments
+          request:
+            type: kubernetes
+            group: apps
+            resource: deployments
+            namespaces: [shop]
+          transform:
+            type: jq
+          metrics:
+            - name: kube_deployment_status_replicas_available
+              items: .items[]
+              expression: .status.availableReplicas // 0
+              labels:
+                - name: deployment
+                  expression: .metadata.name
+```
+
+and probe it with no target, `/probe?collector=deployments`. With `enabled`, the pods and the ServiceAccount mount the token, whatever `serviceAccount.automount` says, and the chart renders a Role and a RoleBinding `<fullname>` in each namespace of `namespaces`, the release's when it lists none, allowing `list` on each rule's `apiGroups` (`""` for the core group) and `resources`. A collector with `all_namespaces`, or of a cluster-scoped resource such as `nodes`, needs `clusterWide: true`, which renders a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` instead; `clusterWide` and `namespaces` together fail rendering. So do no rules, a rule with `*`, and a rule granting `secrets` of the core group, which no `kubernetes` collector may list. With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name`. While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
 
 ## Common configuration
 
@@ -1318,6 +1355,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
+| `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`; see [Kubernetes collectors](#kubernetes-collectors). |
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
@@ -1396,7 +1434,7 @@ The chart runs the exporter with security-focused defaults:
 * Read-only root filesystem
 * All Linux capabilities dropped
 * Privilege escalation disabled
-* No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as
+* No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as, unless `kubernetesAccess` grants `kubernetes` collectors `list` on the resources its rules name, and never on the core group's Secrets
 
 ## Uninstall
 

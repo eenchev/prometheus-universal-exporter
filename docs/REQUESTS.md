@@ -794,6 +794,10 @@ credentials of the machine the exporter runs on, to whoever can name it as a
 probe's target. A collector that must reach it lists its address, or a network
 holding it, in `allowed_targets`; a name that resolves to it is not enough.
 
+A [`kubernetes`](KUBERNETES.md#no-target) collector takes neither list, and
+no target: it lists what its configuration names, from the API server the
+configuration names.
+
 Each entry is a host name, a glob of one, an IP address or a CIDR network,
 without a scheme, port or path; a name is letters, digits, dots, hyphens and
 underscores, so `my_service` and `*.svc_local` can be listed. An entry is
@@ -1210,7 +1214,22 @@ headers, credentials, TLS settings, retries and redirect rules, and the same
 each page's connections. A next page is the target's to name, and is sent the
 collector's credentials, so one that leaves the target's origin — its scheme,
 host or port — fails the trip before it is asked for, and so does one that
-names a page fetched already, which would go round in a circle. The probe's
+names a page fetched already, which would go round in a circle.
+
+A target reached by its address with a [`Host` header](#the-host-header), the
+collector's or a static target's, writes its links with that `Host`:
+`https://10.0.0.5/items` with `Host: api.example` is answered with
+`Link: <https://api.example/items?page=2>; rel="next"`. A next page on the
+`Host`'s virtual host — the target's scheme, and the `Host`'s port, the
+scheme's own when it names none — is on the target's origin too, and is
+fetched as the first page was: from `https://10.0.0.5/items?page=2`, with
+`Host: api.example`. `api.example` is never looked up: what it resolves to
+may be another server, one the target's `allowed_targets` and
+`denied_targets` were not checked against, and it would be sent the
+collector's credentials; at the target's address the page stays on the host
+the policy let through, at the virtual host the configuration chose. A next
+page on the virtual host's other ports or scheme, or on any other host, still
+fails the trip. The probe's
 `timeout`, and the scrape's deadline, cover every page together. The response
 limit (`max_response_bytes`) holds each page, the pages together, and the
 merged document.
@@ -1267,7 +1286,9 @@ request, and again when they change, so a Secret mounted later is picked up.
 
 A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
 code, but for `insecure_skip_verify`: it reports a chain that does not
-verify rather than refusing it.
+verify rather than refusing it. A [`kubernetes`](KUBERNETES.md#outside-the-cluster)
+collector takes it only beside `api_server`, also without
+`insecure_skip_verify`, since it sends the API server a token.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

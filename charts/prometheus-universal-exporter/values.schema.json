@@ -44,6 +44,34 @@
       }
     },
 
+    "kubernetesAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The exporter's own access to the Kubernetes API, for kubernetes collectors: with enabled, the pods mount their service account token and the chart lets the exporter's ServiceAccount list what rules name, in namespaces (the release's when empty) or, with clusterWide, across the cluster.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "clusterWide": {"type": "boolean", "description": "A ClusterRole and a ClusterRoleBinding in place of a Role and a RoleBinding per namespace: for a collector with all_namespaces, or of a cluster-scoped resource such as nodes. Not with namespaces."},
+        "namespaces": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63}, "description": "The namespaces the ServiceAccount may list in, a Role and a RoleBinding in each; the release's when empty."},
+        "rules": {
+          "type": "array",
+          "description": "What the ServiceAccount may list: each rule's apiGroups, \"\" for the core group, and resources, by their plural names. The verb is list alone. Never \"*\", nor secrets of the core group.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["apiGroups", "resources"],
+            "properties": {
+              "apiGroups": {"type": "array", "minItems": 1, "items": {"type": "string", "not": {"const": "*"}}},
+              "resources": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}}
+            },
+            "if": {"properties": {"apiGroups": {"contains": {"const": ""}}}},
+            "then": {"properties": {"resources": {"not": {"contains": {"const": "secrets"}}}}}
+          }
+        }
+      },
+      "if": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]},
+      "then": {"properties": {"namespaces": {"maxItems": 0}}}
+    },
+
     "service": {
       "type": "object",
       "additionalProperties": false,

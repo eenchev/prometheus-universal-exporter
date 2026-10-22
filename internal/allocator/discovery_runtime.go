@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -28,8 +29,8 @@ type sourceState struct {
 	lastGood  time.Time
 }
 
-// fetch asks the source once.
-func (s *sourceState) fetch(ctx context.Context) ([]discovered, error) {
+// fetch asks the source once; logger takes what is logged on the way.
+func (s *sourceState) fetch(ctx context.Context, logger *slog.Logger) ([]discovered, error) {
 	d := &s.spec.cfg
 	switch {
 	case d.FileSD != nil:
@@ -45,7 +46,7 @@ func (s *sourceState) fetch(ctx context.Context) ([]discovered, error) {
 		}
 		return flatten(groups, d.Labels, s.limit)
 	default:
-		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit, d.timeout())
+		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit, d.timeout(), logger)
 	}
 }
 
@@ -154,14 +155,14 @@ func (a *Allocator) startSource(s *sourceState) {
 // failure keeps what s found last, and is logged and counted once while
 // its text stays the same, as a refused reload is.
 func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
-	found, err := s.fetch(ctx)
+	attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name}
+	found, err := s.fetch(ctx, a.logger.With(attrs...))
 	if ctx.Err() != nil {
 		// Stopped meanwhile: the source is no longer in force.
 		return false
 	}
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
-	attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name}
 	if err != nil {
 		if text := model.SameFailureText(err); text != s.lastErr {
 			s.lastErr = text

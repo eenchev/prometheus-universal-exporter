@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -322,6 +323,64 @@ func TestDryRunInAllocatorModeFailsAConfigurationItDidNotInstall(t *testing.T) {
 	}
 }
 
+// The self-metrics of an exporter in allocator mode name the generation of
+// the configuration in force from the moment it is in force: here while the
+// reload that put the first bundle in force has not yet returned, held by
+// those it tells (config.Manager.OnInstall), when the exporter is already
+// ready but the client has not yet heard that the bundle is in force. An
+// exporter started again with that bundle in its cache directory names its
+// generation before the client has asked for anything.
+func TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce(t *testing.T) {
+	a := newAllocatorStandIn(t)
+	generation := a.serve(map[string]string{"config.yaml": allocatorTestConfig})
+	mode := &allocatorMode{url: a.server.URL, cacheDir: t.TempDir(), member: "pod-0", advertise: "10.0.0.7:8080"}
+	logger := newLogger("error", io.Discard)
+	manager, cached := mode.startManager(logger, "python3", nil, nil, false)
+	if cached != "" || manager.Generation() != "" {
+		t.Fatalf("an empty cache directory: %q %q", cached, manager.Generation())
+	}
+	installed, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	manager.OnInstall(func() {
+		once.Do(func() {
+			close(installed)
+			<-release
+		})
+	})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
+	server := exporter.NewServer(manager, "python3", logger)
+	client, stop, err := mode.startClient(manager, cached, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	server.SetAllocatorStatus(allocatorStatus(client))
+	get := func(path string) (int, string) {
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w.Code, w.Body.String()
+	}
+	select {
+	case <-installed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the bundle was not put in force")
+	}
+	want := `http_exporter_allocator_generation_info{generation="` + generation + `"} 1`
+	if code, body := get("/ready"); code != http.StatusOK {
+		t.Fatalf("/ready with the bundle in force: %d %q", code, body)
+	}
+	if _, body := get("/self-metrics"); !strings.Contains(body, want) {
+		t.Errorf("with the bundle in force, before its reload returned, the self-metrics do not name its generation:\n%s", body)
+	}
+	releaseOnce()
+	stop()
+	restarted, cached := mode.startManager(logger, "python3", nil, nil, false)
+	if cached != generation || restarted.Generation() != generation {
+		t.Fatalf("started again with the bundle: %q %q, want %q", cached, restarted.Generation(), generation)
+	}
+}
+
 // blockingReloader is a configuration manager whose reload of a new bundle
 // waits until the test releases it.
 type blockingReloader struct {
@@ -331,7 +390,7 @@ type blockingReloader struct {
 
 func (r *blockingReloader) CheckReplacement(string, string) error { return nil }
 
-func (r *blockingReloader) ReloadReplacing(_ string, replace func() (func() error, error)) error {
+func (r *blockingReloader) ReloadReplacing(_, _ string, replace func() (func() error, error)) error {
 	r.once.Do(func() { close(r.entered) })
 	<-r.release
 	_, err := replace()

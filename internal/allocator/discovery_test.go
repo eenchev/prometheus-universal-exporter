@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	mrand "math/rand/v2"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubetest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -514,9 +516,10 @@ func TestKubernetesListsInPagesOf100(t *testing.T) {
 }
 
 // worstCaseSlice is an EndpointSlice as the API server sends it, whole,
-// with the EndpointSlice controller's 100 endpoints and every name at its
-// longest: what a page of a large cluster's listing is made of.
-func worstCaseSlice(i int) map[string]any {
+// with n endpoints, the EndpointSlice controller's 100 unless it was told
+// otherwise, and every name at its longest: what a page of a large
+// cluster's listing is made of.
+func worstCaseSlice(i, n int) map[string]any {
 	name := func(prefix string, n int) string { return prefix + strings.Repeat("x", n-len(prefix)) }
 	labels := map[string]string{
 		"kubernetes.io/service-name":             name("svc", 63),
@@ -526,7 +529,7 @@ func worstCaseSlice(i int) map[string]any {
 	for j := range 8 {
 		labels[name(fmt.Sprintf("example.com/label-%d", j), 63)] = name("value", 63)
 	}
-	endpoints := make([]map[string]any, 100)
+	endpoints := make([]map[string]any, n)
 	for j := range endpoints {
 		endpoints[j] = map[string]any{
 			"addresses":  []string{fmt.Sprintf("fd00:1234:5678:9abc:def0:%04x:%04x:%04x", i, j, i+j)},
@@ -566,7 +569,7 @@ func worstCaseSlice(i int) map[string]any {
 func TestAKubernetesPageOfTheWorstCaseFits(t *testing.T) {
 	items := make([]map[string]any, kubernetesPageSize)
 	for i := range items {
-		items[i] = worstCaseSlice(i)
+		items[i] = worstCaseSlice(i, 100)
 	}
 	raw, err := json.Marshal(map[string]any{"kind": "EndpointSliceList", "apiVersion": "discovery.k8s.io/v1", "metadata": map[string]string{"resourceVersion": "123456789012", "continue": strings.Repeat("c", 200)}, "items": items})
 	if err != nil {
@@ -586,6 +589,43 @@ func TestAKubernetesPageOfTheWorstCaseFits(t *testing.T) {
 	}
 	if per := len(raw) / kubernetesPageSize; 500*per <= maxDiscoveryAnswerBytes {
 		t.Errorf("a slice is %d bytes, so 500 of them would fit too: the case is not the worst a page of 500 met", per)
+	}
+}
+
+// A cluster that raises --max-endpoints-per-slice makes pages of 100
+// slices larger than the 16 MiB an answer may hold: 60 slices of 300
+// endpoints, about 18 MiB, are listed in pages of 50, about 15 MiB, after
+// the page of 100 was refused, every endpoint found, and the fall to
+// smaller pages is logged once at debug level.
+func TestAKubernetesListingOfLargeSlicesFallsToSmallerPages(t *testing.T) {
+	s := kubetest.New(t)
+	s.InCluster(t)
+	old := serviceAccountDir
+	serviceAccountDir = s.Dir
+	t.Cleanup(func() { serviceAccountDir = old })
+	items := make([]map[string]any, 60)
+	for i := range items {
+		items[i] = worstCaseSlice(i, 300)
+	}
+	s.Serve("/apis/discovery.k8s.io/v1/namespaces/monitoring/endpointslices", kubetest.List{Kind: "EndpointSliceList", APIVersion: "discovery.k8s.io/v1", Items: items})
+	a, src := testSource(t, DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", AddressType: "IPv6", RefreshInterval: model.Duration(time.Minute), Timeout: model.Duration(30 * time.Second)}}, 60*300)
+	var logs bytes.Buffer
+	a.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if !a.refreshSource(context.Background(), src) {
+		t.Fatalf("nothing found: %s", src.lastErr)
+	}
+	if len(src.found) != 60*300 {
+		t.Errorf("found %d targets, want every endpoint of the 60 slices, %d", len(src.found), 60*300)
+	}
+	var asked []string
+	for _, r := range s.Requests() {
+		asked = append(asked, r.Query.Get("limit")+"@"+r.Query.Get("continue"))
+	}
+	if want := []string{"100@", "50@", "50@50"}; !slices.Equal(asked, want) {
+		t.Errorf("asked %v, want %v", asked, want)
+	}
+	if n := strings.Count(logs.String(), "the listing asked for smaller pages"); n != 1 || !strings.Contains(logs.String(), `"page_size":50`) || !strings.Contains(logs.String(), `"level":"DEBUG"`) {
+		t.Errorf("logged %d times, want once at debug level with the page size 50:\n%s", n, logs.String())
 	}
 }
 

@@ -79,6 +79,12 @@
 {{- if $token -}}
 {{- $_ := set $taken (include "prometheus-universal-exporter.allocatorTokenDir" .) "the allocator token directory" -}}
 {{- end -}}
+{{- /* With kubernetesAccess the pod mounts its service account's token,
+       which kubernetes collectors list with. */ -}}
+{{- $kubernetes := (.Values.kubernetesAccess | default dict).enabled -}}
+{{- if $kubernetes -}}
+{{- $_ := set $taken "/var/run/secrets/kubernetes.io/serviceaccount" "the service account token directory" -}}
+{{- end -}}
 {{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
 {{- if and $auth $auth.enabled -}}
@@ -115,6 +121,9 @@
 {{- end -}}
 {{- if $token -}}
 {{- $readOnly = append $readOnly (dict "path" (include "prometheus-universal-exporter.allocatorTokenDir" .) "what" (printf "the allocator token directory %s" (include "prometheus-universal-exporter.allocatorTokenDir" .)) "kind" "Secret" "hint" "") -}}
+{{- end -}}
+{{- if $kubernetes -}}
+{{- $readOnly = append $readOnly (dict "path" "/var/run/secrets/kubernetes.io/serviceaccount" "what" "the service account token directory /var/run/secrets/kubernetes.io/serviceaccount" "kind" "projected" "hint" "") -}}
 {{- end -}}
 {{- range $name := list "targetAuth" "webAuth" "sshAuth" "sqlAuth" -}}
 {{- $auth := index $.Values $name -}}
@@ -835,6 +844,42 @@ http
 true
 {{- end -}}
 {{- end }}
+{{- /* "true" when kubernetesAccess is enabled, "" otherwise: whether the
+       exporter's pods mount their service account's token and the chart
+       lets that account list what kubernetesAccess.rules name. Read through
+       a default, so a parent chart's values without the key render as
+       before. */ -}}
+{{- define "prometheus-universal-exporter.kubernetesAccess" -}}
+{{- if (.Values.kubernetesAccess | default dict).enabled -}}true{{- end -}}
+{{- end -}}
+{{- /* What kubernetesAccess is held to, beside its schema, so that values
+       rendered without the schema fail the same way: rules that grant
+       something, each naming API groups and resources; never a wildcard,
+       nor the core group's secrets, which no kubernetes collector may list
+       (the exporter refuses one at load), so the account cannot read them
+       either; and namespaces or clusterWide, not both. */ -}}
+{{- define "prometheus-universal-exporter.validateKubernetesAccess" -}}
+{{- $access := .Values.kubernetesAccess -}}
+{{- if not $access.rules -}}
+{{- fail "kubernetesAccess.enabled is true and kubernetesAccess.rules lists nothing; name the apiGroups and resources the kubernetes collectors list" -}}
+{{- end -}}
+{{- if and $access.clusterWide $access.namespaces -}}
+{{- fail "kubernetesAccess sets both clusterWide and namespaces; clusterWide grants every namespace's objects, so list namespaces or set clusterWide, not both" -}}
+{{- end -}}
+{{- range $i, $rule := $access.rules -}}
+{{- if or (not $rule.apiGroups) (not $rule.resources) -}}
+{{- fail (printf "kubernetesAccess.rules[%d] needs apiGroups, \"\" for the core group, and resources" $i) -}}
+{{- end -}}
+{{- range $field := list "apiGroups" "resources" -}}
+{{- if has "*" (index $rule $field) -}}
+{{- fail (printf "kubernetesAccess.rules[%d].%s has \"*\", which would let the exporter read secrets too; name each one" $i $field) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (has "" $rule.apiGroups) (has "secrets" $rule.resources) -}}
+{{- fail (printf "kubernetesAccess.rules[%d] grants secrets of the core group, which no kubernetes collector may list; take secrets out" $i) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
 {{- end }}

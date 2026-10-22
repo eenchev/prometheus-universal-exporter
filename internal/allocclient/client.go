@@ -79,8 +79,10 @@ type Reloader interface {
 	// would, without putting them in force.
 	CheckReplacement(configPath, targetsPath string) error
 	// ReloadReplacing runs replace and reloads under the reload lock, and
-	// when the reload is refused runs restore and reloads again.
-	ReloadReplacing(trigger string, replace func() (restore func() error, err error)) error
+	// when the reload is refused runs restore and reloads again. generation
+	// is that of the files replace puts in place, which the configuration
+	// put in force from them carries.
+	ReloadReplacing(trigger, generation string, replace func() (restore func() error, err error)) error
 }
 
 // Options are what a Client is made with. URL, CacheDir, Member, Advertise
@@ -153,7 +155,10 @@ const (
 )
 
 // Status is how the client is keeping up with the allocator, for the
-// self-metrics (exporter.AllocatorStatus has the same fields).
+// self-metrics. Generation is the bundle the client last saw put in force,
+// which it learns once the reload has returned: the self-metric that names
+// the generation in force reads it from the manager instead
+// (config.Manager.Generation), stored with the configuration.
 type Status struct {
 	Generation string
 	LastSync   time.Time
@@ -188,7 +193,10 @@ type Client struct {
 	// inForce is the generation of the bundle in force, seen that of the
 	// last bundle fetched, put in force or refused: the bundle request
 	// says it, so a refused bundle is not fetched again until the
-	// allocator has another.
+	// allocator has another. inForce is set once the reload that put the
+	// bundle in force has returned, so a heartbeat built while it runs
+	// still names the bundle before, for as long as the reload's end
+	// takes; the next heartbeat, sent at once, names the new one.
 	inForce, seen string
 	refused       *allocapi.Refusal
 	shuttingDown  bool

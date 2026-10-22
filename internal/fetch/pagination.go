@@ -51,7 +51,9 @@ import (
 // redirect rules, and the same allowed_targets and denied_targets checked on
 // it. A next URL is the target's to name, and is sent the target's
 // credentials, so one that leaves the first page's origin, its scheme, host
-// and port, is refused, as is one that names a page fetched already, which
+// and port, is refused, unless it names the virtual host the request's Host
+// header asks for, when it is fetched from the first page's host with that
+// Host (onVirtualHost); so is one that names a page fetched already, which
 // would go round in a circle. The probe's timeout covers every page, and the
 // response limit holds each page, the pages together, and the merged
 // document.
@@ -351,7 +353,14 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 			break
 		}
 		if !sameOrigin(first, next) {
-			return nil, fmt.Errorf("page %d of request.pagination names the next page %s, which is not on the target's origin %s; a next page is sent the target's credentials, so it must keep the target's scheme, host and port", n, RedactURL(next, MaskCredentialQueryValues), originOf(first))
+			onHost, err := onVirtualHost(c, overrides, forwarded, first, next)
+			if err != nil {
+				return nil, err
+			}
+			if onHost == nil {
+				return nil, fmt.Errorf("page %d of request.pagination names the next page %s, which is not on the target's origin %s; a next page is sent the target's credentials, so it must keep the target's scheme, host and port, or name the virtual host the request's Host header asks for", n, RedactURL(next, MaskCredentialQueryValues), originOf(first))
+			}
+			next = onHost
 		}
 		if earlier, ok := seen[next.String()]; ok {
 			return nil, fmt.Errorf("page %d of request.pagination names the next page %s, which page %d was; the pages would go round in a circle", n, RedactURL(next, MaskCredentialQueryValues), earlier)
@@ -379,6 +388,33 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 	// Content-Length and Content-Encoding described.
 	firstResponse.Headers.Del("Content-Length")
 	return firstResponse, nil
+}
+
+// onVirtualHost is next, a page after the first that is not on the first's
+// origin, sent to the first's host instead, when it names the virtual host
+// the request asks for with its Host override (hostOverride): the same
+// scheme as the first, and the Host's host and port, the scheme's when the
+// Host names none. It is nil when there is no Host override or next is
+// elsewhere. A target reached by its address with Host: api.example builds
+// its links from that Host, so https://10.0.0.5 with Host: api.example is
+// answered with Link: <https://api.example/items?page=2>; that page is
+// fetched from https://10.0.0.5/items?page=2 with the same Host, as the
+// first was. Looking api.example up instead could reach another server,
+// which the policy has not checked and which would be sent the target's
+// credentials; at the target's address the page stays on the host the
+// policy let through, at the virtual host the configuration chose.
+func onVirtualHost(c *model.Collector, overrides RequestOverrides, forwarded http.Header, first, next *url.URL) (*url.URL, error) {
+	headers, err := renderedValues(c.Request.Headers, "header", "request.headers.", overrides.Params)
+	if err != nil {
+		return nil, err
+	}
+	host := hostOverride(headers, forwarded)
+	if host == "" || !sameOrigin(&url.URL{Scheme: first.Scheme, Host: host}, next) {
+		return nil, nil
+	}
+	onHost := *next
+	onHost.Host = first.Host
+	return &onHost, nil
 }
 
 // nextPage is the URL of the page after page, the answer to a request for

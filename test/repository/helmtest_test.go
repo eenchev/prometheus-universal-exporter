@@ -1044,24 +1044,37 @@ chmod +x "$FAKE_BIN/helm"
 	}
 }
 
-// The version check itself stays strict: the release line a source build
-// reports, another patch release and another minor are refused with the
-// command that fixes it, and a release build's commit suffix is no difference.
+// The version check accepts the pinned release, with or without a release
+// build's commit suffix, and the release line alone, which a helm built from
+// source reports, as its .0 release; another patch release, another minor or
+// major, and a release line that is not the pin's .0 release are refused
+// with the command that fixes it. The Makefile's HELM_VERSION is replaced
+// on the command line, so the .0 case is tried whatever the pin is.
 func TestMakeHelmVersionAcceptsOnlyThePinnedRelease(t *testing.T) {
-	pinned := pinnedHelmVersion(t)
-	line := pinned[:strings.LastIndex(pinned, ".")]
-	for reported, accepted := range map[string]bool{
-		pinned:               true,
-		pinned + "+g1234abc": true,
-		line:                 false,
-		pinned + "1":         false,
-		line + ".99":         false,
-		"v3.16.4+gabcdef0":   false,
+	for _, tc := range []struct {
+		pinned, reported string
+		accepted         bool
+	}{
+		{"v4.3.0", "v4.3.0", true},
+		{"v4.3.0", "v4.3.0+g1234abc", true},
+		{"v4.3.0", "v4.3", true},
+		{"v4.3.0", "v4.3+g1234abc", true},
+		{"v4.3.1", "v4.3.1", true},
+		{"v4.3.1", "v4.3", false},
+		{"v4.3.0", "v4.3.1", false},
+		{"v4.3.0", "v4.3.01", false},
+		{"v4.3.0", "v4.4", false},
+		{"v4.3.0", "v4.30", false},
+		{"v4.3.0", "v4", false},
+		{"v4.3.0", "v3.16.4+gabcdef0", false},
+		{pinnedHelmVersion(t), pinnedHelmVersion(t), true},
 	} {
-		t.Run(reported, func(t *testing.T) {
+		t.Run(tc.pinned+"/"+tc.reported, func(t *testing.T) {
+			pinned, reported := tc.pinned, tc.reported
 			dir := t.TempDir()
 			fakeTool(t, dir, "helm", `echo "`+reported+`"`+"\n")
-			out, err := runMake(t, dir, "helm-version")
+			out, err := runMake(t, dir, "helm-version", "HELM_VERSION="+pinned)
+			accepted := tc.accepted
 			if accepted {
 				if err != nil {
 					t.Fatalf("a helm reporting %s was refused: %v\n%s", reported, err, out)

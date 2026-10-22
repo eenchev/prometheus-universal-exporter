@@ -479,6 +479,8 @@ Therefore the chart SHOULD default to no additional Kubernetes API permissions.
 
 A dedicated ServiceAccount MAY be created for standard Kubernetes deployment conventions, but no broad `ClusterRole`/`ClusterRoleBinding` should be installed unless a future feature explicitly requires it.
 
+`kubernetes` collectors list objects with the exporter's own ServiceAccount, which `kubernetesAccess` grants, off by default. With `kubernetesAccess.enabled`, the exporter's pods and its ServiceAccount MUST set `automountServiceAccountToken: true`, whatever `serviceAccount.automount` says, and the chart MUST render, allowing the verb `list` alone on the `apiGroups` and `resources` of each entry of `kubernetesAccess.rules`, in that order, to the ServiceAccount the pods run as, in the release's namespace: a Role and a RoleBinding `<fullname>` in each namespace of `kubernetesAccess.namespaces`, in the release's namespace when it lists none; or, with `kubernetesAccess.clusterWide`, a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` in their place. Rendering MUST fail, by the values schema and, with the schema skipped, by the templates, naming `kubernetesAccess`, when it is enabled with no rules; when a rule's `apiGroups` or `resources` is empty or holds `*`; when a rule whose `apiGroups` holds `""` names `secrets`, which no `kubernetes` collector may list; and when `clusterWide` is set beside `namespaces`. While it is enabled, the service account token directory, `/var/run/secrets/kubernetes.io/serviceaccount`, MUST be among the paths no `extraVolumeMounts` entry may be at or below. Without it nothing of it MUST be rendered.
+
 ### 33.9 Network and security settings
 
 The chart SHOULD support:
@@ -492,7 +494,7 @@ The chart SHOULD support:
 
 If a NetworkPolicy is provided, it MUST account for the exporter needing to reach configured target endpoints. `networkPolicy.enabled` alone MUST limit ingress to the `http` port, from anywhere, and MUST NOT limit egress, since the targets probes name are not known to the chart; `ingress` rules MUST replace that ingress default; `egress` rules MUST limit egress to them, and add DNS, port 53 over UDP and TCP, unless `networkPolicy.allowDNS` is false.
 
-Objects MUST be named `<release>-<chart>`, or after the release alone when its name contains the chart's, so two releases in one namespace do not collide; `fullnameOverride` MUST name them outright. The pod MUST set `automountServiceAccountToken` from `serviceAccount.automount`, off by default, whichever account it runs as.
+Objects MUST be named `<release>-<chart>`, or after the release alone when its name contains the chart's, so two releases in one namespace do not collide; `fullnameOverride` MUST name them outright. The pod MUST set `automountServiceAccountToken` from `serviceAccount.automount`, off by default, whichever account it runs as, but for `kubernetesAccess` (§ 33.8).
 
 ### 33.10 Helm values
 

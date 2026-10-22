@@ -13,15 +13,16 @@ import (
 // "places" of each request type, whose request.path, where its type has
 // one, is /p/{{param_path:x}}.
 var unusedRefusals = map[string]string{
-	RequestTypeHTTP:      `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}"), body, header or query values or its label values names them`,
-	RequestTypeGraphite:  `probe parameters param_tenat are not used by collector "places": no placeholder in its request.targets, its request.path ("/p/{{param_path:x}}"), its header or query values or its label values names them`,
-	RequestTypeGRPC:      `probe parameters param_tenat are not used by collector "places": no placeholder in its request.message, its metadata values or its label values names them`,
-	RequestTypeLocalFile: `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
-	RequestTypeSSHFile:   `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
-	RequestTypeSQL:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.database, its args or its label values names them`,
-	RequestTypeDNS:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
-	RequestTypeTLSCert:   `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
-	RequestTypeS3File:    `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeHTTP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}"), body, header or query values or its label values names them`,
+	RequestTypeGraphite:   `probe parameters param_tenat are not used by collector "places": no placeholder in its request.targets, its request.path ("/p/{{param_path:x}}"), its header or query values or its label values names them`,
+	RequestTypeGRPC:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.message, its metadata values or its label values names them`,
+	RequestTypeLocalFile:  `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeSSHFile:    `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeSQL:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.database, its args or its label values names them`,
+	RequestTypeDNS:        `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeTLSCert:    `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeKubernetes: `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeS3File:     `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -99,10 +100,10 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 			continue
 		}
 		filled := TemplatedFields(&c)
-		// A dns or tlscert collector has no placeholder in its request, and
-		// fills its label values alone.
+		// A dns, tlscert or kubernetes collector has no placeholder in its
+		// request, and fills its label values alone.
 		least := 2
-		if name == RequestTypeDNS || name == RequestTypeTLSCert {
+		if name == RequestTypeDNS || name == RequestTypeTLSCert || name == RequestTypeKubernetes {
 			least = 1
 		}
 		if len(filled) < least {

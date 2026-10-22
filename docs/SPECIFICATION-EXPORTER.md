@@ -596,7 +596,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert` and `s3file` are implemented;
+`tlscert`, `s3file` and `kubernetes` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -674,9 +674,10 @@ opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns` and `tlscert` MUST import nothing outside the standard library,
-  and the test MUST find none of the other types' modules in a build of
-  either. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  that driver. `dns`, `tlscert` and `kubernetes` MUST import nothing
+  outside the standard library and the module's own packages — no
+  Kubernetes client library — and the test MUST find none of the other
+  types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
   configuration in a default build with it, and none of them in the default
@@ -855,7 +856,13 @@ checked on each page's connections. A next page whose scheme, host or port
 — a port left out being its scheme's — is not the first page's MUST fail the
 trip before it is asked for, since it would be sent the target's
 credentials, and so MUST a next page whose URL a page of the trip already
-had. The probe's `timeout` and the trip's deadline MUST cover every page
+had. The one exception is the virtual host of the request's `Host` override,
+a collector's `request.headers` `Host` or a static target's, the latter
+replacing the former: a next page with the first page's scheme, the
+`Host`'s host (in any case) and the `Host`'s port, its scheme's when the
+`Host` names none, MUST be fetched from the first page's host and port, with
+the same `Host`, and MUST NOT be fetched by looking the virtual host up; a
+next page on another port or scheme of it MUST still fail the trip. The probe's `timeout` and the trip's deadline MUST cover every page
 together. The response limit (§ 20) MUST hold each page, the pages' bodies
 added up, failing the trip after the page that takes them past it, and the
 merged document, each failure a limit failure (`ErrLimitExceeded`).
@@ -1945,6 +1952,95 @@ carries it. Its keys:
   of a file's.
 - Only the type's files, behind its tag alone, MAY import the AWS SDK.
 
+#### `kubernetes`
+
+A `kubernetes` collector lists the objects of one resource of a Kubernetes
+API server, built in or custom, and hands them to the transforms as a JSON
+document. The listing MUST be made over the API's REST interface with the
+standard library alone, through `internal/kubeapi`, the code the target
+allocator's Kubernetes discovery (§ 42.14d) lists EndpointSlices with. Its
+keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `resource` | none | **Required.** A resource's plural name: lower-case letters, digits and `-`, at most 63 characters; one with `/`, a subresource, MUST be refused at load. |
+| `group` | the core group | An API group's name, a lower-case DNS subdomain of at most 253 characters; `core` and `v1` MUST be refused at load, the core group being left out. |
+| `version` | `v1` | Lower-case letters, digits and `-`, at most 63 characters. |
+| `namespaces` | the exporter's own | Each a namespace's name; one listed twice MUST be refused at load. |
+| `all_namespaces` | `false` | The listing across the cluster; with `namespaces` MUST be refused at load. |
+| `label_selector`, `field_selector` | none | Sent as written; blanks alone MUST be refused at load. |
+| `max_objects` | 10000 | Zero or more, `0` the default; negative MUST be refused at load. |
+| `max_response_bytes` | 10 MiB | As every type's response limit (below). |
+| `api_server` | the exporter's own cluster's | An `https` URL with a host, a path or not, and no user, query or fragment; anything else MUST be refused at load. |
+| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it. With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
+
+- The core group's `secrets` MUST be refused at load, by the exporter and
+  by the schema (§ 24.3): their values would pass through the transforms.
+- A collector MUST take no target: a probe with a `target` MUST be
+  answered `400` before anything is listed, and a static target that names
+  one MUST be refused at load; a probe without one is complete. A probe
+  MUST take `timeout` and `param_<name>` parameters, and a static target's
+  request block `timeout`; `allowed_targets` and `denied_targets` MUST be
+  refused at load, there being no target to hold to them.
+- Without `api_server`, the API server MUST be the one of the cluster the
+  exporter runs in, at `https://` and the address in
+  `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`, its certificate
+  verified against `ca.crt` of the service account directory,
+  `/var/run/secrets/kubernetes.io/serviceaccount`, and the directory's
+  `token` sent as a bearer token; without those variables a scrape MUST
+  fail saying the exporter does not run in a pod. With `api_server`, the
+  server MUST be verified against `tls.ca_file` and the system's roots, and
+  `bearer_token_file`'s token or the client certificate sent. The token
+  and the TLS files MUST be read at every scrape, so a rotated one is used;
+  `--dry-run` MUST read those of a collector with `api_server` as a scrape
+  would and warn of one a scrape would fail on, without failing the check.
+- Without `namespaces` and `all_namespaces`, the namespace listed MUST be
+  the exporter's own, read from the service account directory's
+  `namespace` at every scrape; with `api_server` the scrape MUST fail
+  saying to list `namespaces`. The path listed MUST be
+  `/api/<version>/namespaces/<namespace>/<resource>` for the core group and
+  `/apis/<group>/<version>/namespaces/<namespace>/<resource>` for the
+  others, without `/namespaces/<namespace>` for `all_namespaces`, one
+  listing a namespace in the order of `namespaces`.
+- A listing MUST ask for pages with `limit=100` and follow each page's
+  `metadata.continue` to the last, sending `labelSelector` and
+  `fieldSelector` as written when they are set. A page larger than the
+  response limit MUST be read no further than one byte past it, MUST NOT
+  be taken, counted towards `max_objects` or the objects' bytes, and MUST
+  be asked for again with the same `continue` and half the limit, rounded
+  down, down to `limit=1`; the rest of the listing MUST keep the smaller
+  limit, and the next scrape MUST start at `limit=100` again. The whole
+  listing, the pages asked for again included, MUST take at most the
+  scrape's deadline, 30 seconds without one.
+- The answer MUST be a JSON document of `kind`, the list's kind without
+  its `List` suffix, `api_version`, `count` and `items`, the objects in the
+  order listed, each as the API server sent it without its
+  `metadata.managedFields`; a listing of no objects has `items` empty and,
+  when the API server named no kind, the collector's group and version as
+  `api_version`.
+- More objects than `max_objects` MUST fail the scrape as a limit exceeded.
+  A page of one object larger than the response limit MUST fail the scrape
+  as a limit exceeded, saying a single object is larger than the limit and
+  naming it in bytes; so MUST objects that come to more than it without
+  their managed fields, and a document larger than it.
+- A failed listing MUST be reported in the `kubernetes` stage. An API
+  server's answer other than `200` MUST fail the scrape naming the
+  resource, its group and version, the namespace or the cluster, the
+  status and the Status object's message, and for `401` that the token is
+  not taken, for `403` that the service account needs `list` on the
+  resource and the chart's `kubernetesAccess.rules` that grant it, for
+  `404` how to name a resource and that a cluster-scoped one is listed with
+  `all_namespaces`. The token MUST NOT appear in an error.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each page's `GET` and URL, its
+  query's values masked, its `Authorization` masked, and its status, a
+  page asked for again included; a page larger than the response limit
+  MUST show after its status its limit and the response limit. The
+  verbose `url` label MUST be `kubernetes:` and the path of the listing
+  across the cluster, or with `api_server` its URL before that path, and
+  `http_method` MUST be `LIST`.
+
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
 a trip that fails. Omitting `cache`, or setting both to `0s`, MUST disable
@@ -2472,16 +2568,18 @@ this order, without cycles:
 1. `allocapi`: what the target allocator and an exporter in allocator mode
    say to each other (§ 42.14d).
 2. `model`: the shared data types.
-3. `expr`: expression compilation and its caches.
-4. `fetch`: request types, probe parameters and transports.
-5. `decode`: response decoding and charset conversion.
-6. `transform`: transforms, metric rules and the Python worker pool.
-7. `config`: loading, validating and reloading the configuration and target
+3. `kubeapi`: listing objects from a Kubernetes API server, which the
+   `kubernetes` request type and the target allocator share.
+4. `expr`: expression compilation and its caches.
+5. `fetch`: request types, probe parameters and transports.
+6. `decode`: response decoding and charset conversion.
+7. `transform`: transforms, metric rules and the Python worker pool.
+8. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-8. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
-9. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
+10. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-10. `allocator`: the target allocator (§ 42.14d).
+11. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.
@@ -2489,8 +2587,10 @@ nothing else of it there.
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
-stand-in database of the `sql` tests, MUST NOT be imported outside tests and
-MUST import nothing but the standard library. `internal/testutil` MAY hold
+stand-in database of the `sql` tests, and `internal/kubetest`, the stand-in
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, MUST
+NOT be imported outside tests and MUST import nothing but the standard
+library. `internal/testutil` MAY hold
 helpers shared by the tests of several packages and MUST NOT be imported
 outside tests; nor may the package within it,
 `internal/testutil/alloctest`, the tests' measure of allocations (§ 34), which
@@ -10146,8 +10246,8 @@ status captured:
 
 ## 34.49 Configuration schema tests
 
-See § 24.3. In addition, the README's command-line table lists exactly the flags
-the exporter has. No Markdown document in the repository names a flag of the
+See § 24.3. In addition, the flag table of `docs/FLAGS.md` lists exactly the
+flags the exporter has, and the README has no flag rows (§ 35). No Markdown document in the repository names a flag of the
 exporter's prefixes (`--web.`, `--log.`, `--config.`, `--probe.`, `--python.`,
 `--runtime.`, `--static-targets`) that the exporter does not have (§ 30).
 
@@ -11787,9 +11887,10 @@ Tests MUST show:
   when none is set, succeeds, and the installed helm reports the pinned
   version.
 - `make helm-version` accepts a helm reporting the pinned version, with or
-  without a `+g<commit>` suffix, and refuses the release line alone, another
-  patch release and another minor, saying which helm it found, which CI
-  runs, and `make helm-install`.
+  without a `+g<commit>` suffix, and the release line alone (`v4.3`) for a
+  `.0` pin (`v4.3.0`), and refuses the release line for another patch pin
+  (`v4.3.1`), another patch release, another minor or major, saying which
+  helm it found, which CI runs, and `make helm-install`.
 - `make helm-test` and the chart steps of `ci.yml`, read as the shell reads
   them — loops expanded over their words, a render kept in a variable, a
   pipeline in a condition — make the same checks: the same helm command
@@ -24531,6 +24632,154 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   holds longer, its intermediate's, not the other intermediate's earlier
   one.
 
+## 34.162 Virtual hosts for logins and pages, the helm version, the flag reference and the kubernetes type
+
+- A relative `login.url` is posted with the request's `Host` override, the
+  collector's `request.headers` `Host` or a static target's, json and oauth2
+  alike, and the debug trace shows that `Host` on the login; two virtual
+  hosts on one address log in once each and neither is sent the other's
+  token; an absolute `login.url` is sent with its own host, not the
+  target's `Host` (`TestARelativeLoginIsSentWithTheHostOverride`).
+- With a `Host` override, the collector's or a static target's, a next page
+  of `request.pagination` on the `Host`'s virtual host — the first page's
+  scheme, the `Host` in any case, the `Host`'s port or the scheme's — is
+  fetched from the target's address with the same `Host` and the target's
+  credentials, and the pages are merged; a next page on another port or
+  scheme of the virtual host, on another host, or on a collector's `Host` a
+  static target's replaced, fails the trip as not on the target's origin
+  (`TestPaginationFollowsTheHostOverridesVirtualHost`).
+- `make helm-version`, with `HELM_VERSION` set on the command line and a
+  stand-in helm, accepts `v4.3` and `v4.3+g<commit>` for `v4.3.0`, and the
+  pinned version, and refuses `v4.3` for `v4.3.1`, `v4.3.1`, `v4.3.01`,
+  `v4.4`, `v4.30`, `v4` and `v3.16.4` for `v4.3.0`
+  (`TestMakeHelmVersionAcceptsOnlyThePinnedRelease`).
+- The flag table of `docs/FLAGS.md` lists exactly the flags of the exporter's
+  `--help`, so a flag missing from the page, or a row for a flag the exporter
+  does not have, fails the test; and the README has no flag rows, so the table
+  cannot grow back there as a second copy (§ 34.49, § 35).
+- `docs/ENDPOINTS.md` and `docs/FLAGS.md`, like every page under `docs/`, are
+  linked from the README's index, and the README stays within its line limit
+  (§ 35).
+## 34.x The kubernetes request type and internal/kubeapi
+
+- A listing of internal/kubeapi asks for pages of its page size, follows
+  each continue token to the last page, sends the token, both selectors
+  and an Accept of JSON, and tells of each request and its status; without
+  a page size it asks for 100 and sends no selector
+  (`TestAListingFollowsEveryPage`).
+- An answer other than 200 is a StatusError with its status and the start
+  of the Status object, a page over the bound is ErrPageTooLarge, and a
+  listing without a token sends no Authorization
+  (`TestAListingsFailuresSayWhat`).
+- The in-cluster server is the environment's, none outside a pod, and the
+  namespace and token are read from the service account's files, an empty
+  one refused (`TestTheInClusterConfigurationIsReadFromThePod`).
+- A kubernetes collector lists its resource in the exporter's own namespace
+  from the service account's namespace file, in pages of 100 with the
+  continue tokens, its selectors and the service account's token, and
+  answers kind, api_version, count and the objects, each without its
+  managed fields (`TestAKubernetesCollectorListsEveryPageAsADocument`).
+- Listed namespaces are listed at their own paths in the order named,
+  all_namespaces at the cluster's path, a cluster-scoped resource with it,
+  the core group under /api, and an empty listing is a document of no
+  objects (`TestAKubernetesCollectorListsTheNamespacesItNames`).
+- The token is read again at every scrape
+  (`TestAKubernetesCollectorReadsTheTokenAgain`).
+- More objects than max_objects, 10000 by default, a page over the response
+  limit and objects that come to more than it without their managed fields
+  fail the scrape as a limit; objects under it without their managed fields
+  are taken (`TestAKubernetesListingIsBounded`).
+- A 403 names the permission to grant and kubernetesAccess.rules, a 404 how
+  to name a resource, a 401 that the token is not taken, never showing the
+  token; no namespace file and no pod environment fail saying so
+  (`TestAKubernetesListingsFailuresSayWhatToDo`).
+- With api_server, tls.ca_file and bearer_token_file the collector lists
+  another API server, traced for a debug probe with the token masked by the
+  report, labelled with the server's URL and the path, LIST and the
+  kubernetes stage, and --dry-run warns of missing token and CA files
+  (`TestAKubernetesCollectorReachesTheAPIServerItNames`).
+- A probe's and a static target's target are refused, and none is required
+  (`TestAKubernetesCollectorTakesNoTarget`).
+- Load refuses a missing resource, a subresource, a kind, group core, a bad
+  group or version, the core group's secrets, namespaces with
+  all_namespaces, a bad or repeated namespace, a blank selector, a negative
+  max_objects, tls or bearer_token_file without api_server, an http,
+  user-bearing or query-bearing api_server, api_server without a
+  credential or with insecure_skip_verify, a lone cert_file, and other
+  types' keys (`TestAKubernetesCollectorsKeysAreCheckedAtLoad`).
+- A kubernetes collector's decoder is json and its transform one that reads
+  JSON (`TestKubernetesDecoderAndTransform`), and a configuration listing
+  secrets is refused (`TestAKubernetesCollectorOfSecretsIsRefusedAtLoad`).
+- Probes of a Deployment and a Pod collector give the replicas and the
+  phase counts their jq rules read, with LIST and the listing's URL as the
+  verbose labels (`TestAKubernetesCollectorProbe`); a debug probe shows
+  each page and the document without the token, a probe with a target is
+  answered 400 and a forbidden listing names kubernetesAccess.rules
+  (`TestADebugProbeOfAKubernetesCollector`); label values take param_
+  parameters and a python transform reads the document
+  (`TestAKubernetesCollectorsLabelValuesAndPython`).
+- --dry-run warns of a missing bearer_token_file of a collector with
+  api_server, passing the check
+  (`TestDryRunWarnsOfTheTokenFileOfAKubernetesCollector`).
+- The schema and the exporter agree on resource, group, version, each
+  namespace, the selectors, api_server and tls.insecure_skip_verify left
+  out, written "", well and badly
+  (`TestSchemaAndExporterAgreeOnKubernetesKeysWrittenEmpty`).
+- The examples of docs/KUBERNETES.md give their series against a stand-in
+  API server, and its static target loads
+  (`TestKubernetesDocumentationExamples`).
+- The chart grants the exporter's ServiceAccount list on the rules'
+  resources by Role and RoleBinding per namespace, the release's by
+  default, or ClusterRole and ClusterRoleBinding with clusterWide, mounts
+  the token on the pods and the account, binds the account the pods run
+  as, and refuses an extra mount at the token's directory
+  (`TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed`); it
+  refuses no rules, wildcards, the core group's secrets and namespaces
+  beside clusterWide by schema and templates
+  (`TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing`).
+
+## 34.163 The generation named is that of the configuration in force
+
+- An exporter in allocator mode, in process, names the first bundle's
+  generation in its self-metrics while the reload that put the bundle in
+  force has not yet returned, held by those it tells, when `/ready` already
+  answers `200`; started again with that bundle in its cache directory, its
+  manager names the generation before the client has asked for anything
+  (§ 42.14e).
+- `ReloadReplacing` stores the generation it is given with the configuration
+  it puts in force, named already to those told of the reload; a refused
+  replacement never names its generation, not even while the unchanged
+  static target file is put in force alone, the restored files are reloaded
+  with theirs, and a reload in place keeps it (§ 42.14e).
+
+## 34.164 Kubernetes pages that adapt to the byte bound
+
+- A Kubernetes listing whose pages of 100 objects are over the per-page
+  byte bound but whose pages of 25 fit asks for the first page with
+  `limit=100`, `50` and `25`, then the next pages at `25`, lists every
+  object once, is told of the limits 50 and 25, and traces the refused
+  pages as `200 OK, a page of <n> larger than <bound> bytes`.
+- A page refused in the middle of a listing is asked for again with the
+  continue token it was first asked for with, and every object is listed
+  once, in order.
+- A single object over the bound fails the listing with ErrPageTooLarge,
+  saying a page of a single one of the objects is larger than the bound,
+  after the limit fell to 1; the objects before it were handed on.
+- A listing whose refused pages each take 300ms runs out of its 750ms
+  deadline while the page asked for again with `limit=25` is answered:
+  the pages asked for again are bounded by the listing's deadline.
+- A `kubernetes` collector with a 5000-byte response limit lists 30
+  Deployments whose pages of 100, 50 and 25 are over it in pages of 12,
+  each object counted once, and its debug trace shows every request with
+  its limit and continue token and why a refused page was asked for again;
+  a single Deployment over the limit fails the scrape as a limit exceeded
+  saying so.
+- The allocator's kubernetes source lists 60 EndpointSlices of 300
+  endpoints, about 18 MiB, in pages of 50 after the page of 100 was
+  refused (`limit=100`, `limit=50`, `limit=50` with the continue token),
+  finds every endpoint, and logs the fall to smaller pages once at debug
+  level with the page size 50.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -24574,10 +24823,16 @@ The documentation MUST be split by audience rather than gathered in one file.
 The repository README is what someone reads before deciding to use the exporter
 and while starting it for the first time, so it MUST carry only what serves
 that: what the exporter is, how the probe pattern works, a minimal configuration
-and the commands to run it, the endpoints, the command-line flags, and an index
-of everything else. It MUST NOT carry reference material — decoder and transform
-detail, caching, transport settings, authentication models, operator manifests —
-because a README that answers every question stops answering the first one.
+and the commands to run it, a short account of the endpoints, and an index of
+everything else. It MUST NOT carry reference material — decoder and transform
+detail, caching, transport settings, authentication models, operator manifests,
+the table of endpoints and the table of command-line flags — because a README
+that answers every question stops answering the first one. The endpoints, with
+what each takes and answers, MUST live in `docs/ENDPOINTS.md`, and every flag
+of the exporter, with its default, in `docs/FLAGS.md`, which a test MUST hold
+to exactly the flags the exporter has (§ 34.49); the README MUST link both and
+name `--help`. The target allocator's flags MUST live on its own page,
+`docs/ALLOCATOR.md`, which `docs/FLAGS.md` MUST link.
 
 What the exporter is MUST cover every source it reads, not the first one it
 learned: the README's tagline and the sources paragraph after it MUST each name
@@ -25371,7 +25626,10 @@ absolute `http` or `https` URL of a scheme `allowed_schemes` allows, or a
 path from the root (starting with `/`), with a query if need be, resolved
 against the target's scheme, host and port alone: the target's path, query,
 credentials and fragment MUST NOT play a part in where the login goes or in
-which token is kept. A relative reference that does not start with `/`
+which token is kept. A login whose `url` is a path MUST be sent with the
+request's `Host` override, a collector's `request.headers` `Host` or a
+static target's, the latter replacing the former, and one whose `url` is
+absolute MUST NOT. A relative reference that does not start with `/`
 (`login`, `../login`, `?x`) MUST be refused at load, and in the schema. It
 MUST hold no credentials, fragment or placeholder, and a reference naming a
 host without a scheme (`//host/...`) MUST be refused. The login request MUST be held to the
@@ -25382,9 +25640,9 @@ and otherwise with the collector's `request.tls`, never with an
 `insecure_skip_verify` a probe parameter or a static target sets for the
 target.
 
-A token MUST be kept, by the collector, the login block and the URL the
-login was sent to, and sent on every request until it is due to be fetched
-again: when a tenth of its life is left or 30 seconds, whichever is more,
+A token MUST be kept, by the collector, the login block, the URL the
+login was sent to and the `Host` it was sent with, and sent on every request
+until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own
@@ -26531,10 +26789,15 @@ optional `bearer_token_file` read again at every refresh and a `tls` block
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
-`KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`,
+`KUBERNETES_SERVICE_PORT`, made by `internal/kubeapi` as the `kubernetes`
+request type's are (§ 5.1), verified with the service account's `ca.crt`,
 with its token read again at every listing, in pages of 100 (`limit=100`,
-following each `continue` token), the whole listing, every page of every
-namespace, bounded by its `timeout`, in each of
+following each `continue` token), a page larger than 16 MiB asked for
+again as § 5.1's `kubernetes` asks for a page larger than its response
+limit (half the limit, down to 1, the rest of the listing keeping it, the
+next listing starting at 100) and the fall to a smaller limit logged once
+per listing at debug level, the whole listing, every page of every
+namespace and every page asked for again, bounded by its `timeout`, in each of
 `namespaces` (DNS-1123 labels; none lists the namespace of the service
 account's `namespace` file) or, with `all_namespaces`, cluster-wide, by
 `label_selector` (checked at load), taking only the slices whose
@@ -26544,8 +26807,8 @@ endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
 `host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
 `__meta_kubernetes_endpointslice_address_type` among them. An
-answer larger than 16 MiB, with more targets than its bound or that cannot
-be read MUST be a failure; a failing source MUST keep the targets of its last
+answer larger than 16 MiB (for `kubernetes`, a page of one slice), with
+more targets than its bound or that cannot be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be
 logged and counted (`pue_allocator_discovery_refreshes_total{result="failure"}`)
 once while its text stays the same. A probe job's discovered target MUST be
@@ -26824,8 +27087,15 @@ http_exporter_allocator_sync_errors_total{stage}        counter
 http_exporter_allocator_bundle_refused_total            counter
 ```
 
-`generation_info` MUST be 1 for the generation in force, absent before the
-first; the timestamp MUST be the last answer to a bundle request, 0 before
+`generation_info` MUST be 1 for the generation of the bundle whose
+configuration is in force, absent before the first: the generation MUST be
+stored with the configuration, in the same step that puts it in force, so
+from the moment a bundle's configuration answers probes and makes the
+exporter ready the series names its generation, a refused bundle's never,
+and a bundle put in force at startup from the cache directory names its
+generation from the start. A heartbeat names the generation the client
+knows to be in force, which it learns once the reload has returned; the
+heartbeat sent at once after it names the new one. The timestamp MUST be the last answer to a bundle request, 0 before
 one; `stage` MUST be `heartbeat` (one per address a heartbeat failed for),
 `fetch` or `write`, each from zero. An exporter outside allocator mode MUST
 have none of them.
@@ -27216,11 +27486,14 @@ it.
 renders, the same values that must be rejected, the same lines looked for in
 what is rendered — and no other, and a test MUST compare the two, so that a
 clean local run means a clean CI run and the reverse. `make helm-test` MUST
-refuse any helm but the pinned release, and `make helm-install` MUST install
-one it accepts: built from source with `go install`, helm reports only its
-release line (`v4.3`) unless the version is set at link time as helm's own
-release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
-target MUST pass that flag with the pinned version.
+refuse any helm but the pinned release, reading a version without a patch,
+the release line a helm built from source reports (`v4.3`), as its `.0`
+release (`v4.3.0`) and comparing any other whole, and `make helm-install`
+MUST install one it accepts: built from source with `go install`, helm
+reports only its release line (`v4.3`) unless the version is set at link time
+as helm's own release build sets it
+(`-X helm.sh/helm/v4/internal/version.version`), so the target MUST pass that
+flag with the pinned version.
 
 `make ci` MUST run every go command the CI workflow's jobs run, beside
 the `go mod download` that fills their module cache, and reach every make

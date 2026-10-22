@@ -4,6 +4,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -154,7 +155,7 @@ func TestCheckReplacementChecksThePairWithoutPuttingItInForce(t *testing.T) {
 func TestReloadReplacingReplacesTheFilesUnderTheReloadLock(t *testing.T) {
 	p := newPair(t, oneCollector, oneTarget)
 	var lockedDuringReplace bool
-	err := p.manager.ReloadReplacing("allocator", func() (func() error, error) {
+	err := p.manager.ReloadReplacing("allocator", "", func() (func() error, error) {
 		lockedDuringReplace = !p.manager.reloadMu.TryLock()
 		if !lockedDuringReplace {
 			p.manager.reloadMu.Unlock()
@@ -170,7 +171,7 @@ func TestReloadReplacingReplacesTheFilesUnderTheReloadLock(t *testing.T) {
 		t.Fatal("the files put in place were not reloaded")
 	}
 	var restored bool
-	err = p.manager.ReloadReplacing("allocator", func() (func() error, error) {
+	err = p.manager.ReloadReplacing("allocator", "", func() (func() error, error) {
 		p.write(t, p.configPath, oneCollector)
 		return func() error {
 			restored = true
@@ -186,7 +187,7 @@ func TestReloadReplacingReplacesTheFilesUnderTheReloadLock(t *testing.T) {
 	}
 	before, _ := p.manager.InForce()
 	failed := errors.New("the disk is full")
-	if err := p.manager.ReloadReplacing("allocator", func() (func() error, error) { return nil, failed }); !errors.Is(err, failed) {
+	if err := p.manager.ReloadReplacing("allocator", "", func() (func() error, error) { return nil, failed }); !errors.Is(err, failed) {
 		t.Fatalf("a failed replacement: %v", err)
 	}
 	if after, _ := p.manager.InForce(); after != before {
@@ -194,6 +195,48 @@ func TestReloadReplacingReplacesTheFilesUnderTheReloadLock(t *testing.T) {
 	}
 	if names := collectorNames(p.manager.Get()); !slices.Equal(names, []string{"a", "b"}) {
 		t.Fatalf("collectors %v", names)
+	}
+}
+
+// The generation ReloadReplacing is given is stored with the configuration
+// it puts in force: those told of the reload, while it has not returned, find
+// it named already. A refused replacement never names its generation, not
+// even while a static target file it reads again is put in force alone, and
+// the restored files are reloaded with theirs; a reload of the files in
+// place, as SIGHUP makes, keeps it.
+func TestReloadReplacingPutsTheGenerationInForceWithTheConfiguration(t *testing.T) {
+	p := newPair(t, oneCollector, oneTarget)
+	p.manager.SetGeneration("g1")
+	if got := p.manager.Generation(); got != "g1" {
+		t.Fatalf("the generation started with: %q", got)
+	}
+	var told []string
+	p.manager.OnInstall(func() {
+		told = append(told, fmt.Sprintf("%s:%d", p.manager.Generation(), len(p.manager.Get().Collectors)))
+	})
+	if err := p.manager.ReloadReplacing("allocator", "g2", func() (func() error, error) {
+		p.write(t, p.configPath, twoCollectors)
+		p.write(t, p.targetsAt, twoTargets)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(told, []string{"g2:2"}) || p.manager.Generation() != "g2" {
+		t.Fatalf("put in force: told %v, generation %q", told, p.manager.Generation())
+	}
+	told = nil
+	err := p.manager.ReloadReplacing("allocator", "g3", func() (func() error, error) {
+		p.write(t, p.configPath, oneCollector)
+		return func() error {
+			p.write(t, p.configPath, twoCollectors)
+			return nil
+		}, nil
+	})
+	if err == nil || len(told) == 0 || slices.ContainsFunc(told, func(s string) bool { return s != "g2:2" }) || p.manager.Generation() != "g2" {
+		t.Fatalf("refused: %v, told %v, generation %q", err, told, p.manager.Generation())
+	}
+	if err := p.manager.Reload(ReloadTriggerSignal); err != nil || p.manager.Generation() != "g2" {
+		t.Fatalf("reloaded in place: %v, generation %q", err, p.manager.Generation())
 	}
 }
 

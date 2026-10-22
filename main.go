@@ -358,7 +358,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		defer stopAllocClient()
-		server.SetAllocatorStatus(func() exporter.AllocatorStatus { return exporter.AllocatorStatus(allocClient.Status()) })
+		server.SetAllocatorStatus(allocatorStatus(allocClient))
 	}
 
 	conf := manager.Get()

@@ -1,0 +1,80 @@
+{{- /* What kubernetes collectors need: the right of the exporter's own
+       ServiceAccount to list the resources kubernetesAccess.rules name, and
+       no more, since a collector only lists. A Role and a RoleBinding in
+       each namespace of kubernetesAccess.namespaces, the release's when it
+       lists none; with clusterWide, a ClusterRole and a ClusterRoleBinding,
+       which a collector with all_namespaces, or of a cluster-scoped
+       resource such as nodes, needs. */ -}}
+{{- if include "prometheus-universal-exporter.kubernetesAccess" . }}
+{{- include "prometheus-universal-exporter.validateKubernetesAccess" . }}
+{{- $name := include "prometheus-universal-exporter.fullname" . }}
+{{- $namespace := include "prometheus-universal-exporter.namespace" . }}
+{{- $rules := list }}
+{{- range $rule := .Values.kubernetesAccess.rules }}
+{{- $rules = append $rules (dict "apiGroups" $rule.apiGroups "resources" $rule.resources "verbs" (list "list")) }}
+{{- end }}
+{{- if .Values.kubernetesAccess.clusterWide }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
+    namespace: {{ $namespace }}
+{{- else }}
+{{- $namespaces := .Values.kubernetesAccess.namespaces | default (list $namespace) }}
+{{- range $ns := $namespaces | uniq | sortAlpha }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list $) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $) | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list $) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list $) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "prometheus-universal-exporter.serviceAccountName" $ }}
+    namespace: {{ $namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

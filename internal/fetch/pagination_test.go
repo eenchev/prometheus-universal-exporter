@@ -536,3 +536,82 @@ func TestPaginationValidation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// A target reached by its address with a Host override builds its links from
+// that Host: a next page on the Host's virtual host, with the first page's
+// scheme and the Host's port (the scheme's, when it names none), is fetched
+// from the target's address with the same Host, never by looking the
+// virtual host up, and with the target's credentials; a static target's Host
+// counts as the collector's does. A next page on another port or scheme of
+// the virtual host, or on another host, is still refused.
+func TestPaginationFollowsTheHostOverridesVirtualHost(t *testing.T) {
+	type sent struct{ host, uri, authorization string }
+	var mu sync.Mutex
+	var requests []sent
+	next := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, sent{r.Host, r.URL.RequestURI(), r.Header.Get("Authorization")})
+		mu.Unlock()
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`{"items":[2]}`))
+			return
+		}
+		w.Header().Set("Link", "<"+strings.ReplaceAll(next, "HOST", r.Host)+`>; rel="next"`)
+		_, _ = w.Write([]byte(`{"items":[1]}`))
+	}))
+	t.Cleanup(server.Close)
+	for name, tc := range map[string]struct {
+		collectorHost, targetHost, next string
+		refused                         bool
+	}{
+		"the collector's Host":                {collectorHost: "api.example", next: "http://HOST/items?page=2"},
+		"the Host in another case":            {collectorHost: "api.example", next: "http://API.Example:80/items?page=2"},
+		"a static target's Host":              {collectorHost: "other.example", targetHost: "api.example", next: "http://HOST/items?page=2"},
+		"a Host with a port":                  {collectorHost: "api.example:8080", next: "http://HOST/items?page=2"},
+		"the Host's virtual host on a port":   {collectorHost: "api.example", next: "http://api.example:8080/items?page=2", refused: true},
+		"the Host's virtual host over https":  {collectorHost: "api.example", next: "https://api.example/items?page=2", refused: true},
+		"another virtual host":                {collectorHost: "api.example", next: "http://www.api.example/items?page=2", refused: true},
+		"a static target's Host replaces one": {collectorHost: "api.example", targetHost: "other.example", next: "http://api.example/items?page=2", refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mu.Lock()
+			requests, next = nil, tc.next
+			mu.Unlock()
+			c := pagedCollector(t, model.PaginationConfig{Type: "link", Items: ".items"})
+			c.Request.BearerToken = "t0ken"
+			c.Request.Headers = map[string]string{"Host": tc.collectorHost}
+			var forwarded http.Header
+			if tc.targetHost != "" {
+				forwarded = http.Header{"Host": {tc.targetHost}}
+			}
+			response, err := FetchCollector(context.Background(), server.URL+"/items", c, RequestOverrides{}, forwarded)
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "is not on the target's origin "+server.URL+"; a next page is sent the target's credentials") {
+					t.Fatalf("err=%v", err)
+				}
+				if len(requests) != 1 {
+					t.Fatalf("sent %+v", requests)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := decoded(t, response.Body), decoded(t, []byte(`{"items":[1,2]}`)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("merged %s", response.Body)
+			}
+			host := tc.collectorHost
+			if tc.targetHost != "" {
+				host = tc.targetHost
+			}
+			want := []sent{{host, "/items", "Bearer t0ken"}, {host, "/items?page=2", "Bearer t0ken"}}
+			if !reflect.DeepEqual(requests, want) {
+				t.Fatalf("sent %+v, want %+v", requests, want)
+			}
+			if want := []string{server.URL + "/items", server.URL + "/items?page=2"}; !reflect.DeepEqual(pageURLs(response), want) {
+				t.Fatalf("pages %v", pageURLs(response))
+			}
+		})
+	}
+}

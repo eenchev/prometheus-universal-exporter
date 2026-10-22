@@ -779,7 +779,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// The login is made, or its token taken from those kept, once the
 	// target has passed the collector's policy, so a target the policy
 	// refuses never has a login made for it.
-	login, err := startLogin(ctx, target, c, overrides, forwarded)
+	login, err := startLogin(ctx, target, c, overrides, forwarded, hostOverride(headers, forwarded...))
 	if err != nil {
 		return nil, err
 	}
@@ -980,6 +980,29 @@ func setRequestHeader(req *http.Request, name, value string) {
 		return
 	}
 	req.Header.Set(name, value)
+}
+
+// hostOverride is the Host a request is sent with in place of its URL's
+// host, as fetch sets it: a static target's, which comes with the forwarded
+// headers and is applied last, else a Host among the collector's rendered
+// request.headers; "" when neither sets one. A probe never forwards Host
+// (UnforwardableReason). A relative login.url (loginURL) and a next page on
+// that virtual host (pagination.go) are sent with it too.
+func hostOverride(headers map[string]string, forwarded ...http.Header) string {
+	host := ""
+	for name, value := range headers {
+		if strings.EqualFold(name, "Host") {
+			host = value
+		}
+	}
+	if len(forwarded) > 0 {
+		for name, values := range forwarded[0] {
+			if strings.EqualFold(name, "Host") && len(values) > 0 {
+				host = values[len(values)-1]
+			}
+		}
+	}
+	return host
 }
 
 // defaultResponseLimit is the response limit of a collector that sets neither

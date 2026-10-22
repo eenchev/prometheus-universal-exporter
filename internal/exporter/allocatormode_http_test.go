@@ -75,7 +75,7 @@ func TestAnExporterWithAConfigurationIsNotAwaitingOne(t *testing.T) {
 }
 
 // In allocator mode the self-metrics say how the exporter keeps up with the
-// allocator: the generation in force, when it last synced, its sync errors
+// allocator: the generation of the configuration in force, when it last synced, its sync errors
 // by stage and the bundles it refused, each family with its description.
 // Outside allocator mode there are no such series.
 func TestTheAllocatorSelfMetrics(t *testing.T) {
@@ -84,8 +84,9 @@ func TestTheAllocatorSelfMetrics(t *testing.T) {
 		t.Fatalf("an exporter outside allocator mode has allocator series:\n%s", got)
 	}
 	synced := time.Unix(1790000000, 0)
+	server.manager.SetGeneration("0a1b")
 	server.SetAllocatorStatus(func() AllocatorStatus {
-		return AllocatorStatus{Generation: "0a1b", LastSync: synced, SyncErrors: map[string]uint64{"write": 0, "heartbeat": 3, "fetch": 1}, Refused: 2}
+		return AllocatorStatus{LastSync: synced, SyncErrors: map[string]uint64{"write": 0, "heartbeat": 3, "fetch": 1}, Refused: 2}
 	})
 	got := selfMetrics(t, server)
 	for _, want := range []string{
@@ -98,6 +99,7 @@ func TestTheAllocatorSelfMetrics(t *testing.T) {
 			t.Errorf("the self-metrics lack\n%s\nin\n%s", want, got)
 		}
 	}
+	server.manager.SetGeneration("")
 	server.SetAllocatorStatus(func() AllocatorStatus { return AllocatorStatus{SyncErrors: map[string]uint64{}} })
 	if got := selfMetrics(t, server); strings.Contains(got, "http_exporter_allocator_generation_info") || !strings.Contains(got, "http_exporter_allocator_last_sync_timestamp_seconds 0\n") {
 		t.Errorf("before the first bundle:\n%s", got)

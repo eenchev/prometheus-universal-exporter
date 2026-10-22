@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -206,17 +207,7 @@ func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string, timeout
 }
 
 // readToken reads a bearer token file, refusing an empty one.
-func readToken(path string) (string, error) {
-	raw, err := os.ReadFile(path) // #nosec G304 -- a token file the configuration names
-	if err != nil {
-		return "", err
-	}
-	token := strings.TrimSpace(string(raw))
-	if token == "" {
-		return "", fmt.Errorf("%s is empty", path)
-	}
-	return token, nil
-}
+func readToken(path string) (string, error) { return kubeapi.ReadToken(path) }
 
 // seconds writes a duration in whole seconds, for the refresh header.
 func seconds(d float64) string { return strconv.FormatFloat(d, 'f', -1, 64) }

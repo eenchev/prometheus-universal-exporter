@@ -250,7 +250,13 @@ of its own, which replaces the collector's for it:
   would let the path a probe names choose where the secrets go. The secrets
   then go to whichever target a probe names, as `basic_auth_file`'s do:
   restrict the collector's targets with
-  [`allowed_targets`](REQUESTS.md#restricting-targets).
+  [`allowed_targets`](REQUESTS.md#restricting-targets). A target reached by
+  its address with a [`Host` header](REQUESTS.md#the-host-header), the
+  collector's or a static target's, is logged in to at that virtual host: a
+  probe of `https://10.0.0.5/` with `Host: api.example` posts to
+  `https://10.0.0.5/api/v2/login` with `Host: api.example`, as the request
+  itself is sent, rather than to the server's default virtual host. An
+  absolute `url` names its own host and is sent no `Host` of the target's.
 
 The login request is held to the collector's `allowed_schemes`,
 `allowed_targets` and `denied_targets` as the request is; a login URL they
@@ -266,8 +272,9 @@ a static target sets for the target. The `login` block is written whole:
 
 ### How long a token is kept
 
-A token is kept, by the collector, the login and the URL the login went to,
-and sent on every request until shortly before it expires. Its lifetime is
+A token is kept, by the collector, the login, the URL the login went to and
+the `Host` it was sent with, so two virtual hosts on one address keep a token
+each and neither is sent the other's, and sent on every request until shortly before it expires. Its lifetime is
 `expires_in` for a `json` login, the answer's `expires_in` for `oauth2`, the
 cookie's `Max-Age` or `Expires` for `token_cookie`, and, where the answer
 says none, `ttl`, such as `15m`; with neither, the token is kept until the

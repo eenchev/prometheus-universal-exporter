@@ -199,7 +199,7 @@ func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 		return err, nil
 	}
 	var swapErr, restoreErr error
-	err = c.o.Manager.ReloadReplacing(ReloadTrigger, func() (func() error, error) {
+	err = c.o.Manager.ReloadReplacing(ReloadTrigger, b.Generation, func() (func() error, error) {
 		restore, err := c.swap(b.Generation, b.Files)
 		if swapErr = err; err != nil {
 			return nil, err
@@ -280,7 +280,7 @@ func (c *Client) repair() error {
 		names = append(names, e.Name())
 	}
 	var relinkErr error
-	_ = c.o.Manager.ReloadReplacing(ReloadTrigger, func() (func() error, error) {
+	_ = c.o.Manager.ReloadReplacing(ReloadTrigger, want, func() (func() error, error) {
 		relinkErr = c.relink(want, names)
 		return nil, relinkErr
 	})

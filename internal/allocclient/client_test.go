@@ -208,7 +208,7 @@ func (f *fakeManager) CheckReplacement(configPath, _ string) error {
 	return nil
 }
 
-func (f *fakeManager) ReloadReplacing(trigger string, replace func() (func() error, error)) error {
+func (f *fakeManager) ReloadReplacing(trigger, _ string, replace func() (func() error, error)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	restore, err := replace()
@@ -885,18 +885,36 @@ func TestAnAllocatorWithoutAMemberListIsAskedAgainAfterRetryAfter(t *testing.T) 
 	a := newFakeAllocator(t)
 	a.failBundle, a.retryAfter = http.StatusServiceUnavailable, "1"
 	const most = 40 * time.Millisecond
-	c := startClient(t, a, func(o *Options) { o.MaxBackoff = most })
-	var last time.Time
-	for i := range 3 {
+	// The answers are timed where the client gives them, before it waits,
+	// rather than where this test reads them: a test goroutine scheduled
+	// late reads one event late and sees the next gap that much shorter
+	// than the client waited.
+	var mu sync.Mutex
+	var answered []time.Time
+	c := startClient(t, a, func(o *Options) {
+		o.MaxBackoff = most
+		given := o.Event
+		o.Event = func(e Event) {
+			if e.Kind == EventNotSettled {
+				mu.Lock()
+				answered = append(answered, time.Now())
+				mu.Unlock()
+			}
+			given(e)
+		}
+	})
+	for range 3 {
 		if e := c.waitFor(t, EventNotSettled); e.Err == nil || !strings.Contains(e.Err.Error(), "the allocator is not ready") {
 			t.Errorf("event %+v", e)
 		}
-		now := time.Now()
-		if gap := now.Sub(last); i > 0 && gap < most {
+	}
+	mu.Lock()
+	for i := 1; i < len(answered); i++ {
+		if gap := answered[i].Sub(answered[i-1]); gap < most {
 			t.Errorf("asked again after %s, want Retry-After bounded by %s", gap, most)
 		}
-		last = now
 	}
+	mu.Unlock()
 	if st := c.Status(); st.SyncErrors[StageFetch] != 0 {
 		t.Errorf("an allocator without a member list was counted as a failure: %+v", st)
 	}

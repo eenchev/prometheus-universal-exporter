@@ -179,6 +179,14 @@ dependency of their own: the first asks Go's own resolver (`net`), the second
 makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
 same test finds none of the other types' modules in a build of either.
 
+Nor has the [`kubernetes`](KUBERNETES.md) request type: it lists objects
+over the API server's REST API with `net/http` and `encoding/json`, through
+`internal/kubeapi`, which the target allocator's Kubernetes discovery shares,
+and no Kubernetes client library (`k8s.io/client-go`), whose dependencies
+would add some tens of megabytes to the binary for what a few `GET`s with a
+continue token do. The same test finds none of the other types' modules in a
+build of it.
+
 The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
 has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token
 endpoint for a token with the OAuth 2.0 client credentials grant

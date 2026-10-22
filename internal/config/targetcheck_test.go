@@ -191,6 +191,11 @@ func checkCorpusFile(r *rand.Rand, cfg *model.Config) *model.StaticTargetFile {
 		if c := model.CollectorByName(cfg, t.Collector); c != nil && c.Request.Type == fetch.RequestTypeS3File && r.IntN(4) > 0 {
 			t.Target = "metrics-bucket"
 		}
+		// A kubernetes collector takes no target at all: one of such a
+		// collector names none, mostly, for the same reason.
+		if c := model.CollectorByName(cfg, t.Collector); c != nil && c.Request.Type == fetch.RequestTypeKubernetes && r.IntN(4) > 0 {
+			t.Target = ""
+		}
 		if r.IntN(8) == 0 {
 			t.Request.Method = "POST"
 		}

@@ -1,4 +1,4 @@
-# Generic HTTP Prometheus Exporter — Exporter Specification
+# Prometheus Universal Exporter — Exporter Specification
 
 This is the specification for the exporter itself: its endpoints, configuration,
 decoders, transforms, limits, logging, CLI, container image and tests. The Helm
@@ -18,17 +18,17 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts arbitrary HTTP endpoint responses into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
-The exporter is intended for systems that expose useful operational/status data over HTTP but do not provide suitable Prometheus metrics.
+The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
 The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Fetch HTTP/HTTPS endpoints itself, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods.
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for it, objects in S3 (`s3file`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, YAML, XML, CSV, HTML, Prometheus exposition format, plain text, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -36,11 +36,11 @@ The exporter MUST:
 - Support regex-based extraction for plain text.
 - Support full Python as a first-class decoder/transformation mechanism, not merely as a fallback.
 - Normalize all decoder output into a common internal metric representation before Prometheus exposition.
-- Provide explicit handling for HTTP failures, decoding failures, transformation failures, and missing fields/keys.
+- Provide explicit handling for fetch failures, an HTTP status or any other request type's, decoding failures, transformation failures, and missing fields/keys.
 - Protect against excessive response size, execution time, metric count, label count, and other cardinality/resource abuse.
 - Expose exporter self-metrics for scrape, decode, transform, and configuration health.
 
-The design MUST remain extensible so additional decoders or transformation engines can be added without changing the HTTP fetcher or Prometheus output layer.
+The design MUST remain extensible so additional request types, decoders or transformation engines can be added without changing the other layers or the Prometheus output layer.
 
 ---
 
@@ -56,10 +56,11 @@ Prometheus Operator
      /probe
         |
         v
-  HTTP Fetcher
+  Request type
+ (http, grpc, sql, ...)
         |
         v
- HTTP Response
+    Response
         |
         v
     Decoder
@@ -82,6 +83,8 @@ Prometheus Operator
 
 Important:
 
+- A request type is a first-class component: it reaches the source and hands
+  the decoder a response, which every type's later layers share (§ 5.1).
 - A decoder is a first-class component.
 - Python is a first-class transform, not a decoder or fallback.
 - Prometheus is a first-class decoder capable of converting an existing Prometheus endpoint into the internal metric model and then applying optional filtering/renaming/label transformations.
@@ -8003,15 +8006,18 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile` or `sql` collector MAY set `request.allowed_targets`
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` or
+`s3file` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
 entry that is none of these, such as one with a scheme, a port or a path,
-MUST be refused at load; another request type setting either MUST be refused
-as any key of another type is. An `s3file` collector's lists name buckets,
-whose target is one (§ 5.1, `s3file`), and are held to the rules of names
-alone. A name entry MAY hold letters, digits, dots,
+MUST be refused at load; another request type — `localfile`, and
+`kubernetes`, which takes no target — setting either MUST be refused as any
+key of another type is. A `dns` collector's lists are matched against the
+name alone, and a `PTR` target's against its address (§ 5.1, `dns`). An
+`s3file` collector's lists name buckets, whose target is one (§ 5.1,
+`s3file`), and are held to the rules of names alone. A name entry MAY hold letters, digits, dots,
 hyphens and underscores, a hyphen first or last included. An entry MUST be
 written in ASCII: one with any character outside it — an internationalised
 name in its own letters, a full-width spelling, a space outside ASCII beside
@@ -10154,13 +10160,14 @@ status captured:
 - Build-time selection: every `internal/fetch/requesttype_<name>.go` carries its selection
   constraint and the list of known types matches the files; the guard's
   constraint names every type; evaluated with the Go toolchain's constraint
-  rules, a default build compiles every type and not the guard,
+  rules, a default build compiles every type but the opt-in ones and not
+  the guard,
   `select_request_types,request_type_http` compiles http and not the guard,
   `select_request_types,request_type_graphite` compiles graphite alone, and
   `select_request_types,request_type_grpc` compiles grpc alone, and
   `select_request_types` alone compiles only the guard; each of CI's loops
   over single-type builds names every type in the tree; a default build
-  registers every known type; a known type missing from the build is rejected
+  registers every known type but the opt-in ones; a known type missing from the build is rejected
   as left out of the build, naming the tag, while an unknown name is not;
   registering a type twice panics; the `--dry-run` report lists the built
   types; `tools/request-type-tags.sh` maps lists to tags, de-duplicates, and
@@ -24725,7 +24732,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `docs/ENDPOINTS.md` and `docs/FLAGS.md`, like every page under `docs/`, are
   linked from the README's index, and the README stays within its line limit
   (§ 35).
-## 34.x The kubernetes request type and internal/kubeapi
+
+## 34.163 The kubernetes request type and internal/kubeapi
 
 - A listing of internal/kubeapi asks for pages of its page size, follows
   each continue token to the last page, sends the token, both selectors
@@ -24803,7 +24811,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   beside clusterWide by schema and templates
   (`TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing`).
 
-## 34.163 The generation named is that of the configuration in force
+## 34.164 The generation named is that of the configuration in force
 
 - An exporter in allocator mode, in process, names the first bundle's
   generation in its self-metrics while the reload that put the bundle in
@@ -24817,7 +24825,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   static target file is put in force alone, the restored files are reloaded
   with theirs, and a reload in place keeps it (§ 42.14e).
 
-## 34.164 Kubernetes pages that adapt to the byte bound
+## 34.165 Kubernetes pages that adapt to the byte bound
 
 - A Kubernetes listing whose pages of 100 objects are over the per-page
   byte bound but whose pages of 25 fit asks for the first page with
@@ -24845,7 +24853,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   finds every endpoint, and logs the fall to smaller pages once at debug
   level with the page size 50.
 
-## 34.165 Pinned workflow actions and an opt-in Retry-After
+## 34.166 Pinned workflow actions and an opt-in Retry-After
 
 - Every `uses:` in `.github/workflows`, a commented-out one included, names
   its action at a 40-character commit SHA followed by `# vX.Y.Z`, actions in
@@ -24907,7 +24915,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `request.retry.retry_after` as a boolean described as `http` and
   `graphite`'s (`TestTheSchemasHaveRetryAfter`).
 
-## 34.166 Histograms from a list of values
+## 34.167 Histograms from a list of values
 
 - A jq rule of type histogram with a histogram block counts its values in cumulative buckets: a value on a bound is in that bound's bucket, `+Inf` counts every value as the count does, the sum is of the scaled values, milliseconds under `scale: 0.001` land in buckets of seconds, text that is a number is counted, `-Inf` is in every bucket and `+Inf` in `+Inf` alone (TestAHistogramRuleCountsItsValuesInCumulativeBuckets).
 - Every transform that reads values with rules — jq without and with items, yq, xpath, css with items and without, csv and regex — makes one histogram of the values of each set of label values, in the order of its first value, a static label on each (TestEveryTransformCountsAHistogramRulesValues).
@@ -24958,6 +24966,43 @@ The repository MUST include documentation covering:
     probe parameters, static targets, its self-metrics, gRPC-Web and Connect
     through `http`, and building without it, with the size it adds; its
     examples MUST be loaded and run by a repository test
+25. Every other request type, each on a page of its own covering at least a
+    collector's keys, the target, and static targets: `graphite` in
+    `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
+    `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
+    `kubernetes` in `docs/KUBERNETES.md` and the opt-in `s3file` in
+    `docs/S3FILE.md`, with `localfile` and `grpc` above and `http` in
+    `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
+    each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
+    `docs/<NAME>.md`, named in this list and linked from the README's index
+    and from the related pages of `docs/CONFIGURATION.md`
+26. The target allocator, `pue-allocator`, in `docs/ALLOCATOR.md`
+
+A list in the documentation that stands for every request type — the keys of
+each type in `docs/CONFIGURATION.md`, what a static target of each takes in
+`docs/STATIC-TARGETS.md`, the types label placeholders work with in
+`docs/REQUESTS.md` — MUST be marked with a line `<!-- request-types: all -->`
+before it and a line `<!-- /request-types -->` after it, and a test MUST
+find every type of the tree, the opt-in ones included, named in each marked
+list as `` `name` ``, or in the form the marker gives after `all`, such as
+`"For `%s`"`. A list of the types of a default build, as the
+`http_exporter_build_info` example in `docs/SELF-METRICS.md`, MUST be marked
+`<!-- request-types: default -->`, and the test MUST find every type but the
+opt-in ones in it, and no opt-in one. So a new request type fails the test
+until each such list names it. The code layout of `docs/DEVELOPMENT.md` MUST
+name every package `go list ./...` lists, and every file of the root
+package that is not a test, which a test MUST check too.
+
+A sentence that says which request types take a key MUST name exactly the
+types whose registration in `internal/fetch` lists it, and a test MUST read
+the registrations and hold the sentence to them: the types that take
+`allowed_targets` in § 26.1, the targets that take their own credentials in
+§ 42.14 and `docs/STATIC-TARGETS.md`, and the types that take the `tls`
+block in `docs/TLSCERT.md`. The formats of § 1 and the comment on
+`model.DecoderConfig` MUST name every decoder of `decoder.type`, and
+`docs/ENDPOINTS.md` MUST have a row for every path the server routes, the
+self-metrics and static targets paths at their defaults, each held so by a
+test.
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
 
@@ -25133,11 +25178,13 @@ The resulting system should behave as a generic Prometheus adapter:
                          |
                          v
                  +---------------+
-                 |  HTTP Fetcher |
+                 | Request type  |
+                 | http, grpc,   |
+                 | sql, files... |
                  +-------+-------+
                          |
                          v
-                   HTTP Response
+                      Response
                          |
                          v
                  +---------------+
@@ -25166,6 +25213,12 @@ The resulting system should behave as a generic Prometheus adapter:
                          v
                Prometheus exposition
 ```
+
+The request types and decoders drawn are a sample: every request type of
+§ 5.1 hands the decoder its response, and every decoder of §§ 9–15a and
+§ 6.0a — NDJSON, TOML, INI, logfmt, plain text and Graphite besides those
+drawn — feeds the same transforms. A static target (§ 42.14) enters at the
+request type, as a probe does.
 
 The central invariant is:
 
@@ -26616,8 +26669,10 @@ the `/probe` endpoint accepts — for `http`, `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `retry.attempts`, and `retry.backoff` — with
 the same semantics, overriding the collector's own request settings for that
 target only. An `http` or `graphite` target MUST also accept static request
-`headers`, and a target of every type but `localfile` its own target
-credentials, as inline or file-backed basic authentication or a bearer token. A request that carries an
+`headers`, and an `http`, `graphite` or `grpc` target its own target
+credentials, as inline or file-backed basic authentication or a bearer
+token; an `sshfile` or `sql` target MAY instead name its own user and key
+or password files, as § 5.1 says for each. A request that carries an
 `Authorization` of its own — a static target's credential, or one a probe
 forwards — sends it instead of the collector's, and the collector's
 credential files MUST NOT be read for it: a missing or empty one MUST fail

@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns an HTTP endpoint that was never meant for Prometheus into a Prometheus target. Point it at a service that answers with JSON, YAML, XML, CSV, HTML, plain text or Prometheus exposition; a collector in the configuration says how to call it, how to read the response and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,6 +10,8 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file` collectors in an image built with them
+* HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
 * Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
@@ -24,6 +26,9 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
 * Self-metrics, optionally including per-request series and the standard `go_` and `process_` series
+* A target allocator that splits static targets over the exporter's pods
+* A HorizontalPodAutoscaler that can scale on how busy the pods are, or on static targets per pod
+* A debug page, `/debug`, that runs a collector on a pasted or fetched answer and shows every stage (`server.debug`)
 
 ## Prerequisites
 

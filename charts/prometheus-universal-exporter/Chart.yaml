@@ -1,6 +1,6 @@
 apiVersion: v2
 name: prometheus-universal-exporter
-description: Turn HTTP endpoints that do not speak Prometheus into Prometheus metrics, with configurable collectors and transforms
+description: Turn sources that do not speak Prometheus — HTTP and gRPC APIs, Graphite, files local or over SSH, SQL databases, DNS names, TLS certificates and Kubernetes objects — into Prometheus metrics, with configurable collectors and transforms
 type: application
 # The chart is versioned and released independently of the exporter. This is
 # the source of truth for the chart version: the release workflow refuses to

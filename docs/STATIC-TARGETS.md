@@ -50,11 +50,12 @@ targets:
       region: us
 ```
 
+<!-- request-types: all -->
 `interval` and `targets` are required, and the file refuses keys it does not
 know. A target's `target` is checked when the file loads as its collector's
 type reads it: an `http` or `graphite` target is an absolute URL, and one
 whose port is 0 or past 65535, which no connection can use, is refused
-naming the port, as a `grpc`, `sshfile` or `sql` target's is. Each target names a collector from the exporter configuration and takes
+naming the port, as a `grpc`, `sshfile`, `sql` or `tlscert` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the
 `retry` settings — overriding the collector's own request for that target only.
@@ -70,10 +71,15 @@ account and credential files, `username`, `private_key_file`,
 `passphrase_file` and `password_file`, and for [`sql`](SQL.md#static-targets)
 `timeout`, its own `username` and `password_file` or `private_key_file`, and
 `connections`, but `max_targets`, a target whose `connections` change a
-setting being a target of its own for the collector's limits. An `http` or
-`graphite` target also takes static `headers`, and every target but a
-`localfile`, `sshfile` or `sql` one its own target credentials, inline or
-file-backed, as basic authentication or a bearer token; a basic username
+setting being a target of its own for the collector's limits, and for
+[`dns`](DNS.md#static-targets) and [`tlscert`](TLSCERT.md#static-targets)
+only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
+`timeout`, with no `target` at all, and for the opt-in
+[`s3file`](S3FILE.md#static-targets) `path` and `timeout`, with the bucket as
+its required `target`. An `http` or `graphite` target also takes static
+`headers`, and an `http`, `graphite` or `grpc` target its own target
+credentials, inline or file-backed, as basic authentication or a bearer
+token; a basic username
 holds no colon, which is refused at startup written in the target and fails
 the target's scrape read from its file
 ([Authentication](AUTHENTICATION.md#credentials-in-the-configuration)).
@@ -96,6 +102,7 @@ that answers `503` with a useful body on one host only takes it there.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
+<!-- /request-types -->
 
 A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
 its path, body, header values, query values, Graphite targets and gRPC

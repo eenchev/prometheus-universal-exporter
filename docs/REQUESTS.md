@@ -420,15 +420,18 @@ collectors:
      status_up{region="eu",source="api-acme",tenant="acme"} 1
 ```
 
+<!-- request-types: all -->
 One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
-`localfile` and `sshfile` — and under every transform: `transform.labels` are applied
+`localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in
+`s3file` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
 value](CONFIGURATION.md#long-label-values). A `python` script is not given
 the parameters; what it labels its series with is its own.
+<!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or
 `{{param_<name>:<default>}}`, any number of them in one value, among text of
@@ -787,7 +790,9 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector refuses the cloud metadata
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector, and a
+`dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
+refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
 and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
 credentials of the machine the exporter runs on, to whoever can name it as a

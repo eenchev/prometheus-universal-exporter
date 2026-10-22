@@ -525,10 +525,10 @@ type CSVConfig struct {
 }
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
-// reads the response: json, yaml, xml, csv, html, prometheus, text or
-// graphite. Unset or
-// auto, the transform's type picks it when it implies one, and otherwise the
-// response's content type or its content.
+// reads the response: json, ndjson, yaml, toml, ini, xml, csv, html,
+// logfmt, prometheus, text or graphite. Unset or auto, the transform's type
+// picks it when it implies one, and otherwise the response's content type or
+// its content.
 type DecoderConfig struct {
 	Type string `yaml:"type"`
 }

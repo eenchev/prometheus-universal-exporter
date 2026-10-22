@@ -79,9 +79,11 @@ help and value in both.
 
 ## Build information
 
+<!-- request-types: default -->
 ```text
-http_exporter_build_info{goversion="go1.25.1",request_types="graphite,grpc,http,localfile,sql,sshfile",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,http,kubernetes,localfile,sql,sshfile,tlscert",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
 ```
+<!-- /request-types -->
 
 As every Prometheus exporter does, one series with value `1` carries the
 build as labels: the version, the git revision (`-modified` when built from a

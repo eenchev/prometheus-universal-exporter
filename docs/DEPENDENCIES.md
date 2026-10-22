@@ -106,8 +106,9 @@ leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)).
 
 ## What the image contains
 
-The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary and
-three Python libraries: lxml, PyYAML and python-dateutil. BeautifulSoup is not
+The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary,
+the [target allocator](ALLOCATOR.md)'s, `/bin/pue-allocator`, and three
+Python libraries: lxml, PyYAML and python-dateutil. BeautifulSoup is not
 bundled; `lxml.html` parses HTML (see [PYTHON.md](PYTHON.md)).
 
 The build keeps the image's known vulnerabilities down to the ones nobody has

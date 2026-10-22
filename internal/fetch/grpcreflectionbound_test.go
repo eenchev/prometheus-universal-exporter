@@ -225,10 +225,10 @@ func TestAReflectionAnswerOfJustTheLimitIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := askReflection(context.Background(), conn, grpctest.Service, int64(size)); err != nil {
-		t.Fatalf("files of %d bytes against a limit of %d: %v", size, size, err)
+	if _, got, err := askReflection(context.Background(), conn, grpctest.Service, int64(size)); err != nil || got != int64(size) {
+		t.Fatalf("files of %d bytes against a limit of %d: %d bytes counted, %v", size, size, got, err)
 	}
-	_, err = askReflection(context.Background(), conn, grpctest.Service, int64(size-1))
+	_, _, err = askReflection(context.Background(), conn, grpctest.Service, int64(size-1))
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("come to more than %d bytes", size-1)) {
 		t.Fatalf("files of %d bytes against a limit of %d: got %v, want the limit's failure", size, size-1, err)
 	}
@@ -413,7 +413,7 @@ func TestAReflectionQuestionGivesWhatItGaveWithinItsBounds(t *testing.T) {
 		return func(service string) (want, got map[string]string) {
 			files, err := oldAskReflection(context.Background(), conn, service)
 			want = registryOutcome(t, files, err)
-			files, err = askReflection(context.Background(), conn, service, defaultResponseLimit)
+			files, _, err = askReflection(context.Background(), conn, service, defaultResponseLimit)
 			got = registryOutcome(t, files, err)
 			return want, got
 		}, func() { _ = conn.Close() }

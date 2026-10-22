@@ -119,13 +119,23 @@ editor adds, is removed. A file that is missing or empty when the
 configuration loads is refused like any other invalid configuration. A file
 changed on disk is read again by the next request, so a rotated Kubernetes
 Secret takes effect without a restart; one that can no longer be read refuses
-every protected request with `500` and logs why, rather than letting requests
-in. The chart mounts the Secret with `webAuth`, and every monitor it renders
+every protected request with `500` rather than letting requests in, and logs
+why as a repeated failure is: one error, the requests after it at debug level
+and again as an error every five minutes, and an info line when a request
+reads the file again. The chart mounts the Secret with `webAuth`, and every monitor it renders
 then presents that credential: the self-metrics and static targets monitors,
 and each probing monitor without an `auth` of its own — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
 
-When enabled, Basic Auth is required for `/probe`, the self-metrics path, the static targets path, the landing page at `/` and the collectors page at `/collectors` (which list the collectors), and [`/-/reload`](CONFIGURATION.md#reloading-on-demand). `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
+When enabled, Basic Auth is required for `/probe`, the self-metrics path, the static targets path, the landing page at `/` and the collectors page at `/collectors` (which list the collectors), and [`/-/reload`](CONFIGURATION.md#reloading-on-demand). `/health` and `/ready` remain unauthenticated for Kubernetes probes. In
+[allocator mode](ALLOCATOR.md) `web.basic_auth` comes with the allocator's
+bundle, so an exporter that has none in force yet — it started without one
+in its cache directory and the allocator has not answered — serves none of
+those endpoints: each answers `503` with `no configuration yet: waiting for
+the allocator at <url>`, the self-metrics included, since serving anything
+before the credential is known could serve it to anyone. One that starts
+with a bundle from its cache directory asks for the bundle's credential at
+once. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 

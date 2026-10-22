@@ -558,13 +558,8 @@ func TestGRPCReflection(t *testing.T) {
 	if len(server.Calls())-before != 2 || reflectionAnswers.fetchedAt(key).Equal(first) {
 		t.Fatalf("%d calls; asked again: %v", len(server.Calls())-before, !reflectionAnswers.fetchedAt(key).Equal(first))
 	}
-	// An answer older than the TTL is asked for again.
-	reflectionAnswers.mu.Lock()
-	reflectionAnswers.sweepLocked(time.Now().Add(reflectionTTL + time.Minute))
-	reflectionAnswers.mu.Unlock()
-	if !reflectionAnswers.fetchedAt(key).IsZero() {
-		t.Fatal("an expired answer was kept")
-	}
+	// An answer older than the TTL is forgotten:
+	// TestGRPCReflectionAnswersAreForgottenOnTheirOwnAndBounded.
 
 	// A service the reflection service does not know.
 	missing := grpcCollector()
@@ -606,7 +601,8 @@ func TestGRPCTLS(t *testing.T) {
 	}
 }
 
-// Connections are kept per target and TLS settings, and forgotten unused.
+// Connections are kept per target and TLS settings (closing them unused is
+// TestGRPCAConnectionNoCallHoldsIsClosedOnItsOwn).
 func TestGRPCConnectionsAreReused(t *testing.T) {
 	cache := &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 	start := time.Now()
@@ -625,16 +621,9 @@ func TestGRPCConnectionsAreReused(t *testing.T) {
 	if again := call(a, start.Add(time.Minute)); first != again {
 		t.Fatal("a second call made a new connection")
 	}
-	call(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL/2))
+	call(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(2*time.Minute))
 	if cache.size() != 2 {
 		t.Fatalf("%d connections", cache.size())
-	}
-	call(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL+time.Second))
-	if cache.size() != 1 {
-		t.Fatalf("%d connections after the first went unused", cache.size())
-	}
-	if state := first.conn.GetState(); state != connectivity.Shutdown {
-		t.Fatalf("the connection that went unused is %s, want it closed", state)
 	}
 	// A missing CA is an error, not a connection.
 	if _, err := cache.get(grpcConnKey{dial: "127.0.0.1:3", tls: true, settings: model.TLSConfig{CAFile: "/nonexistent"}}, start); err == nil {

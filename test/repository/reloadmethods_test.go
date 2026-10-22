@@ -14,8 +14,8 @@ import (
 
 // /-/reload takes POST and PUT, as Prometheus's own does, so a tool written
 // for Prometheus reloads the exporter too. The pages that say how to reload
-// over HTTP name every method the endpoint takes, read from its own Allow,
-// and no other: they once said POST alone, and a reader took PUT for a
+// over HTTP, the exporter's landing page among them, name every method the
+// endpoint takes, read from its own Allow, and no other: they once said POST alone, and a reader took PUT for a
 // mistake to be refused.
 func TestTheReloadPagesNameEveryMethodTheEndpointTakes(t *testing.T) {
 	const path = "configs/config.example.yaml"
@@ -75,5 +75,33 @@ func TestTheReloadPagesNameEveryMethodTheEndpointTakes(t *testing.T) {
 		for method := range named {
 			t.Errorf("%s names %s for /-/reload, which answers it 405:\n%s", page.file, method, found)
 		}
+	}
+
+	// The landing page, which lists /-/reload when the lifecycle API is
+	// on, names them too.
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	var item string
+	for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+		if strings.Contains(line, "/-/reload") {
+			item = line
+			break
+		}
+	}
+	if item == "" {
+		t.Fatalf("the landing page with the lifecycle API on does not list /-/reload:\n%s", recorder.Body.String())
+	}
+	named := map[string]bool{}
+	for _, match := range regexp.MustCompile(`\b(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /-/reload`).FindAllStringSubmatch(item, -1) {
+		named[match[1]] = true
+	}
+	for _, method := range allowed {
+		if !named[method] {
+			t.Errorf("the landing page lists /-/reload without naming %s, which it takes:\n%s", method, item)
+		}
+		delete(named, method)
+	}
+	for method := range named {
+		t.Errorf("the landing page names %s for /-/reload, which answers it 405:\n%s", method, item)
 	}
 }

@@ -110,7 +110,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <li><a href="{{.SelfMetricsHref}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="health">/health</a> and <a href="ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
-<li><code>POST /-/reload</code> — reload the configuration</li>
+<li><code>POST /-/reload</code> or <code>PUT /-/reload</code> — reload the configuration</li>
 {{- end}}
 </ul>
 

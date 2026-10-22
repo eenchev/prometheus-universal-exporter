@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -202,8 +203,20 @@ func credentialsMatch(compare func(x, y []byte) int, username, password string, 
 	return userOK&passwordOK == 1
 }
 
+// basicAuthMiddleware authenticates every endpoint but /health and /ready
+// with web.basic_auth, and refuses them all with 503 while the manager is
+// awaiting its first configuration in allocator mode (allocatormode.go).
+// web.basic_auth is part of the bundle, so until one is in force the
+// exporter does not know whether it should ask for a credential, and the
+// empty configuration it holds asks for none: the landing page, the
+// collectors page, the self-metrics, a pasted debug run and /-/reload were
+// served to anyone while the allocator could not be reached. Refusing them
+// cannot let in a request the bundle would refuse.
 func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.awaitingConfiguration(w) {
+			return
+		}
 		auth := s.manager.Get().Web.BasicAuth
 		if auth == nil || !auth.Enabled {
 			next(w, r)
@@ -211,10 +224,17 @@ func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		want, err := config.WebAuthDigests(auth)
 		if err != nil {
-			s.logger.Error("the exporter's Basic Auth credential cannot be read; refusing the request", "path", r.URL.Path, "error", err)
+			// Logged as a repeated failure is (failurelog.go): every
+			// request fails on the file, unauthenticated ones and
+			// Prometheus's scrapes alike, and a line for each buried the
+			// log. The first is an error, the repeats are at debug
+			// level, and the first request that reads the file again
+			// logs the recovery.
+			s.failures.failed(s.logger, slog.LevelError, webAuthKey, "the exporter's Basic Auth credential cannot be read; refusing every request", "web_auth", err, "path", r.URL.Path)
 			http.Error(w, "the exporter's credential cannot be read", http.StatusInternalServerError)
 			return
 		}
+		s.failures.recovered(s.logger, webAuthKey, "the exporter's Basic Auth credential can be read again")
 		username, password, ok := r.BasicAuth()
 		if matched := credentialsMatch(subtle.ConstantTimeCompare, username, password, want); !ok || !matched {
 			w.Header().Set("WWW-Authenticate", `Basic realm="prometheus-universal-exporter"`)

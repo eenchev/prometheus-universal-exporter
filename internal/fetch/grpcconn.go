@@ -23,8 +23,16 @@ import (
 // transports (transport.go): one grpc.ClientConn per target and TLS
 // settings, kept across probes, which multiplexes every call to that target
 // over one HTTP/2 connection. A certificate or key replaced on disk gets a
-// new connection at the next call, and a connection nothing has used for
-// transportIdleTTL, 5 minutes, is closed and forgotten.
+// new connection at the next call, and a connection no call has held for
+// transportIdleTTL, 5 minutes, is closed and forgotten, by a timer of its
+// own: grpc-go goes on reconnecting a connection whose server is gone, every
+// few seconds (grpcBackoff), so one left to the next call to its target
+// would redial a target nobody asks about any more for as long as no call
+// came. At most maxGRPCConnections are kept: a probe chooses its target, so
+// without a bound every target ever probed would be redialled until its
+// timer ends. A new connection past the bound closes the one no call has
+// held for longest; one a call holds is never closed under it, so while
+// calls hold more than the bound, as many are kept.
 //
 // A connection can die without a word: a node that lost power, a firewall or
 // a NAT that dropped its entry, sends neither FIN nor RST, and grpc-go goes on
@@ -68,12 +76,27 @@ type grpcConnEntry struct {
 	// cache has forgotten it, so it is closed when the last of them ends.
 	calls   int
 	retired bool
+	// idle closes the connection when no call has held it for the cache's
+	// idle time; it runs while no call holds it. released counts the times
+	// the last hold ended, so that a timer that fires as a call takes the
+	// connection, and that call has let it go again, leaves it be.
+	idle     *time.Timer
+	released uint64
 }
 
 type grpcConnCache struct {
 	mu      sync.Mutex
 	entries map[grpcConnKey]*grpcConnEntry
+	// idleTime and most are how long a connection no call holds is kept,
+	// and how many are kept, transportIdleTTL and maxGRPCConnections when
+	// zero; the tests set shorter ones.
+	idleTime time.Duration
+	most     int
 }
+
+// maxGRPCConnections bounds the connections kept, across collectors: a
+// probe chooses the target, and each target is a connection.
+const maxGRPCConnections = 1000
 
 var grpcConns = &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 
@@ -88,11 +111,13 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sweepLocked(now)
 	if entry := c.entries[key]; entry != nil {
 		if entry.stamp == stamp {
 			entry.lastUsed = now
 			entry.calls++
+			if entry.idle != nil {
+				entry.idle.Stop()
+			}
 			return entry, nil
 		}
 		// A call may still be using the old connection, which Close would
@@ -126,6 +151,7 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	}
 	entry := &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal, calls: 1}
 	c.entries[key] = entry
+	c.trimLocked()
 	return entry, nil
 }
 
@@ -139,14 +165,79 @@ func (c *grpcConnCache) hold(entry *grpcConnEntry) {
 
 // release ends a call's hold on a connection get returned, and closes the
 // connection when the cache has forgotten it and no other call holds it.
+// A connection the cache keeps waits its idle time for the next call, and
+// when the cache keeps more than its bound, the one held longest ago is
+// closed.
 func (c *grpcConnCache) release(entry *grpcConnEntry) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	entry.calls--
-	closeNow := entry.retired && entry.calls == 0
-	c.mu.Unlock()
-	if closeNow {
-		_ = entry.conn.Close()
+	if entry.calls > 0 {
+		return
 	}
+	if entry.retired {
+		_ = entry.conn.Close()
+		return
+	}
+	entry.released++
+	released := entry.released
+	if entry.idle != nil {
+		entry.idle.Stop()
+	}
+	entry.idle = time.AfterFunc(c.idleTimeout(), func() { c.idleEnded(entry, released) })
+	c.trimLocked()
+}
+
+// idleEnded closes a connection no call has held since its last hold ended
+// for the idle time; released is which ending that was.
+func (c *grpcConnCache) idleEnded(entry *grpcConnEntry, released uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry.retired || entry.calls > 0 || entry.released != released {
+		return
+	}
+	c.forgetLocked(entry)
+}
+
+// trimLocked closes, while the cache keeps more connections than its bound,
+// the one no call holds that was used longest ago. Connections calls hold
+// are not counted out: they are closed when the last call ends, if the cache
+// still keeps too many then.
+func (c *grpcConnCache) trimLocked() {
+	most := c.most
+	if most <= 0 {
+		most = maxGRPCConnections
+	}
+	for len(c.entries) > most {
+		var oldest *grpcConnEntry
+		for _, entry := range c.entries {
+			if entry.calls == 0 && (oldest == nil || entry.lastUsed.Before(oldest.lastUsed)) {
+				oldest = entry
+			}
+		}
+		if oldest == nil {
+			return
+		}
+		c.forgetLocked(oldest)
+	}
+}
+
+// forgetLocked forgets a connection the cache keeps and retires it.
+func (c *grpcConnCache) forgetLocked(entry *grpcConnEntry) {
+	for key, kept := range c.entries {
+		if kept == entry {
+			delete(c.entries, key)
+			break
+		}
+	}
+	c.retireLocked(entry)
+}
+
+func (c *grpcConnCache) idleTimeout() time.Duration {
+	if c.idleTime > 0 {
+		return c.idleTime
+	}
+	return transportIdleTTL
 }
 
 // drop forgets a connection that stopped answering, so the next call to its
@@ -169,18 +260,11 @@ func (c *grpcConnCache) drop(key grpcConnKey, entry *grpcConnEntry) {
 // it unless a call holds it; release closes it then.
 func (c *grpcConnCache) retireLocked(entry *grpcConnEntry) {
 	entry.retired = true
+	if entry.idle != nil {
+		entry.idle.Stop()
+	}
 	if entry.calls == 0 {
 		_ = entry.conn.Close()
-	}
-}
-
-// sweepLocked forgets the connections nothing has used for transportIdleTTL.
-func (c *grpcConnCache) sweepLocked(now time.Time) {
-	for key, entry := range c.entries {
-		if now.Sub(entry.lastUsed) > transportIdleTTL {
-			delete(c.entries, key)
-			c.retireLocked(entry)
-		}
 	}
 }
 

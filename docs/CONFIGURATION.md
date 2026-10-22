@@ -668,7 +668,9 @@ The expression and label values are interpreted by the selected transform:
   computes a value instead of selecting nodes — `count(//job)`,
   `sum(//job/@size)`, `string(/status/@load)`, a comparison such as
   `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
-  `0`; a label may compute its text too, as in `normalize-space(@name)`. A
+  `0`; a label may compute its text too, as in `normalize-space(@name)`, and
+  a number it computes is written as a jq label's is, without an exponent
+  from a millionth up to 1e21, as described below. A
   computed value that is not a number, such as `number('n/a')`, is the rule's
   missing value: a NaN an expression computes is the XPath engine saying it
   could not read a number, where `NaN` written in a cell is the value the
@@ -768,6 +770,11 @@ as it is written, without an exponent from a millionth up to 1e21, so an ID of
 metric, handled by its [`error_mode`](#when-a-metric-cannot-be-extracted):
 select one of its fields, or make one value of an array with
 `.tags | join(",")`.
+An XPath label that computes a number, rather than selecting a node, writes
+it the same way: `count(//item) * 2000000` is the label `4000000`, as `2 *
+2000000` is from jq, and `sum(//item/@n)` over `1234567` and `0.5` is
+`1234567.5`. A label that selects a node, as every css label does, is the
+node's text as the response writes it.
 
 A label expression that gives a series no value — a selector or path that
 matches nothing, a missing attribute or capture group, an empty CSV cell, a
@@ -4996,11 +5003,18 @@ removes a `config.yaml` or `static-targets.yaml` there, such as one put
 there by hand, and starts without a configuration: the cache directory is
 the exporter's, not a place to put files for it. Other files are left
 alone. One without a bundle, or whose
-bundle does not load, serves its endpoints while it waits for the first:
-`/ready` answers `503` (`not ready: no configuration yet: waiting for the
-allocator`), `/probe` answers `503` with `no configuration yet: waiting for
-the allocator at <url>`, the static targets endpoint has no targets and the
-self-metrics are served. The first bundle makes it ready. When the allocator
+bundle does not load, waits for the first: `/health` answers, `/ready`
+answers `503` (`not ready: no configuration yet: waiting for the
+allocator`), and every other endpoint — `/probe`, the self-metrics, the
+static targets endpoint, the landing and collectors pages, the debug page
+and `/-/reload` — answers `503` with `no configuration yet: waiting for the
+allocator at <url>`, whatever the method. `web.basic_auth` comes with the
+bundle, so until one is in force the exporter cannot tell whom to let in,
+and lets in no one rather than everyone. The cost is that the self-metrics,
+which would show the allocator's sync errors, are not served while it
+waits; the log says why each sync failed. An exporter that starts with a
+bundle from its cache directory has its credential from the start. The
+first bundle makes it ready. When the allocator
 sends again the bundle that did not load, it is checked and reloaded where
 it lies, not written again, and stays there when it is refused. The
 [self-metrics](SELF-METRICS.md#target-allocator) say how it keeps up with the

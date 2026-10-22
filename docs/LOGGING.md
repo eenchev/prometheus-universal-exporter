@@ -88,6 +88,13 @@ first success after a failure is logged at info level with how long it failed
 and how many times. The repeats in between are still written at debug level,
 marked `"repeat":true`, so `--log.level=debug` shows every one.
 
+The exporter's own `web.basic_auth` file that can no longer be read is one
+such failure: every request is refused with `500`, but it is logged once as
+an error, `the exporter's Basic Auth credential cannot be read; refusing
+every request`, and the first request that reads the file again logs `the
+exporter's Basic Auth credential can be read again`
+([Authentication](AUTHENTICATION.md)).
+
 The same error is the same failure, not the same text. An error says where in
 the response it happened and what it measured — `CSV column "used" is empty
 in row 3`, `metric "m" value is missing for node 7`, a decoder's line and

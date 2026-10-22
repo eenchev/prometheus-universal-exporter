@@ -43,7 +43,12 @@ import (
 //     the service and the files it imports. The answer is kept per
 //     connection and service for reflectionTTL, so a scrape costs one call
 //     rather than two, and asked again sooner when the method is not found
-//     or its answer does not decode, as after the server was upgraded.
+//     or its answer does not decode, as after the server was upgraded. A
+//     timer of its own forgets it then, whether or not another call comes,
+//     and at most maxReflectionAnswers answers, of maxReflectionBytes of
+//     files all together, are kept, the one used longest ago forgotten
+//     first: a probe chooses its target, and each target's answer can be
+//     as large as the collector's reflection limit.
 //   - protoset reads a FileDescriptorSet from protoset_file.
 //   - proto compiles the .proto files of proto_files, resolving imports in
 //     proto_import_paths, with the well-known types built in.
@@ -59,6 +64,16 @@ import (
 // reflectionTTL is how long a reflection answer is used before the server is
 // asked again.
 const reflectionTTL = 10 * time.Minute
+
+// maxReflectionAnswers and maxReflectionBytes bound the reflection answers
+// kept, across collectors: how many, and how many bytes of files the server
+// sent for them all together. An answer is tens of kilobytes, so the bytes
+// leave room for a thousand services of the largest APIs; an answer larger
+// than them alone is used by the probes that asked for it and not kept.
+const (
+	maxReflectionAnswers = 1000
+	maxReflectionBytes   = 128 << 20
+)
 
 // grpcMethod is a method whose types are known.
 type grpcMethod struct {
@@ -583,6 +598,13 @@ type reflected struct {
 	mu      sync.Mutex
 	entries map[reflectedKey]*reflectedEntry
 	asking  map[reflectedKey]*reflectionCall
+	// bytes is the size of the answers kept. ttl, most and mostBytes are
+	// reflectionTTL, maxReflectionAnswers and maxReflectionBytes when zero;
+	// the tests set smaller ones.
+	bytes     int64
+	ttl       time.Duration
+	most      int
+	mostBytes int64
 }
 
 // reflectionCall is a question to a reflection service in flight, which the
@@ -604,6 +626,11 @@ type reflectedKey struct {
 type reflectedEntry struct {
 	files   *protoregistry.Files
 	fetched time.Time
+	// size is the bytes of files the server sent for the answer, used the
+	// last time a probe took it, and expiry forgets it after the TTL.
+	size   int64
+	used   time.Time
+	expiry *time.Timer
 }
 
 var reflectionAnswers = &reflected{entries: map[reflectedKey]*reflectedEntry{}, asking: map[reflectedKey]*reflectionCall{}}
@@ -650,8 +677,8 @@ func reflectionLimit(c *model.Collector) int64 {
 func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflectedKey, limit int64, now time.Time) (*protoregistry.Files, error) {
 	conn := held.conn
 	r.mu.Lock()
-	r.sweepLocked(now)
 	if entry := r.entries[key]; entry != nil {
+		entry.used = now
 		r.mu.Unlock()
 		return entry.files, nil
 	}
@@ -666,14 +693,14 @@ func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflecte
 		go func() {
 			defer grpcConns.release(held)
 			defer cancel()
-			files, err := askReflection(detached, conn, key.service, limit)
+			files, size, err := askReflection(detached, conn, key.service, limit)
 			r.mu.Lock()
 			call.files, call.err = files, err
 			if r.asking[key] == call {
 				delete(r.asking, key)
 			}
 			if err == nil {
-				r.entries[key] = &reflectedEntry{files: files, fetched: now}
+				r.keepLocked(key, &reflectedEntry{files: files, fetched: now, size: size, used: now})
 			}
 			r.mu.Unlock()
 			close(call.done)
@@ -688,20 +715,63 @@ func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflecte
 	}
 }
 
-// sweepLocked forgets the answers older than reflectionTTL.
-func (r *reflected) sweepLocked(now time.Time) {
-	for k, entry := range r.entries {
-		if now.Sub(entry.fetched) > reflectionTTL {
-			delete(r.entries, k)
-		}
+// keepLocked keeps an answer, in place of any kept under its key, for the
+// TTL, forgetting the answers used longest ago while the cache would keep
+// more than its bounds; an answer larger than the bound of bytes alone is
+// not kept.
+func (r *reflected) keepLocked(key reflectedKey, entry *reflectedEntry) {
+	ttl, most, mostBytes := r.ttl, r.most, r.mostBytes
+	if ttl <= 0 {
+		ttl = reflectionTTL
 	}
+	if most <= 0 {
+		most = maxReflectionAnswers
+	}
+	if mostBytes <= 0 {
+		mostBytes = maxReflectionBytes
+	}
+	r.forgetLocked(key)
+	if entry.size > mostBytes {
+		return
+	}
+	for len(r.entries) >= most || r.bytes+entry.size > mostBytes {
+		var oldestKey reflectedKey
+		var oldest *reflectedEntry
+		for k, kept := range r.entries {
+			if oldest == nil || kept.used.Before(oldest.used) {
+				oldestKey, oldest = k, kept
+			}
+		}
+		r.forgetLocked(oldestKey)
+	}
+	r.entries[key] = entry
+	r.bytes += entry.size
+	entry.expiry = time.AfterFunc(ttl, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.entries[key] == entry {
+			r.forgetLocked(key)
+		}
+	})
 }
 
 // forget drops an answer, so the next call asks again.
 func (r *reflected) forget(key reflectedKey) {
 	r.mu.Lock()
-	delete(r.entries, key)
+	r.forgetLocked(key)
 	r.mu.Unlock()
+}
+
+func (r *reflected) forgetLocked(key reflectedKey) {
+	entry := r.entries[key]
+	if entry == nil {
+		return
+	}
+	if entry.expiry != nil {
+		entry.expiry.Stop()
+	}
+	delete(r.entries, key)
+	r.bytes -= entry.size
 }
 
 // reflectionStream asks a reflection service for files, by the symbol they
@@ -716,20 +786,20 @@ type reflectionStream interface {
 // files that is and how large they are, so the question takes at most limit
 // bytes of files (reflectionLimit) and maxReflectionFiles files, and fails
 // at whichever it passes first.
-func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, limit int64) (*protoregistry.Files, error) {
+func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, limit int64) (*protoregistry.Files, int64, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream, err := openReflection(ctx, conn)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer stream.close()
 	answers, err := stream.ask(service, "")
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return nil, fmt.Errorf("the server's reflection service does not know the service %s: %w", service, err)
+			return nil, 0, fmt.Errorf("the server's reflection service does not know the service %s: %w", service, err)
 		}
-		return nil, err
+		return nil, 0, err
 	}
 	byName := map[string]*descriptorpb.FileDescriptorProto{}
 	// imports are the files' imports still to be looked at, each with the
@@ -763,7 +833,7 @@ func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, l
 		return nil
 	}
 	if err := collect(answers); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// A server sends the imports it has not sent before on the stream;
 	// anything still missing is asked for by name, unless the exporter
@@ -783,13 +853,13 @@ func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, l
 		}
 		answers, err := stream.ask("", name)
 		if err != nil {
-			return nil, fmt.Errorf("asking the reflection service for %s: %w", name, err)
+			return nil, 0, fmt.Errorf("asking the reflection service for %s: %w", name, err)
 		}
 		if err := collect(answers); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if _, ok := byName[name]; !ok {
-			return nil, fmt.Errorf("the reflection service did not send %s, which the service's files import", name)
+			return nil, 0, fmt.Errorf("the reflection service did not send %s, which the service's files import", name)
 		}
 	}
 	protos := make([]*descriptorpb.FileDescriptorProto, 0, len(byName))
@@ -798,9 +868,9 @@ func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, l
 	}
 	files, err := registryOf(protos)
 	if err != nil {
-		return nil, fmt.Errorf("the reflection service's answer: %w", err)
+		return nil, 0, fmt.Errorf("the reflection service's answer: %w", err)
 	}
-	return files, nil
+	return files, size, nil
 }
 
 // openReflection opens a reflection stream, v1, or v1alpha when the server

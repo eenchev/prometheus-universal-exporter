@@ -39,8 +39,12 @@ type fakeS3 struct {
 	auth     []string
 	// page is the most entries one listing answers, whatever it asks for.
 	page int
-	// denied is a bucket every request to which is answered 403.
-	denied string
+	// denied is a bucket every request to which is answered 403, and
+	// unavailable one every request to which is answered 503 SlowDown,
+	// counted in unavailableRequests.
+	denied              string
+	unavailable         string
+	unavailableRequests int
 	// afterList, when set, runs after each listing is answered.
 	afterList func()
 	// hold, when set, is waited on before a GetObject is answered.
@@ -94,9 +98,17 @@ func (f *fakeS3) serve(w http.ResponseWriter, r *http.Request) {
 	f.auth = append(f.auth, r.Header.Get("Authorization"))
 	objects, exists := f.buckets[bucket]
 	denied := bucket == f.denied
+	unavailable := bucket == f.unavailable
+	if unavailable {
+		f.unavailableRequests++
+	}
 	f.mu.Unlock()
 	if denied {
 		s3ErrorAnswer(w, r, http.StatusForbidden, "AccessDenied")
+		return
+	}
+	if unavailable {
+		s3ErrorAnswer(w, r, http.StatusServiceUnavailable, "SlowDown")
 		return
 	}
 	if !exists {
@@ -455,6 +467,24 @@ func TestS3FileFailuresNameTheObjectAndTheBucket(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "(in s3://"+tc.target+")") {
 			t.Errorf("%s/%s: err=%v, want %q and the bucket", tc.target, tc.path, err, tc.want)
 		}
+	}
+}
+
+// Each request is sent once: a 503 SlowDown, which the SDK's own retryer
+// would try three times, fails the read at the first answer, and the next
+// scrape tries again.
+func TestS3FileSendsEachRequestOnce(t *testing.T) {
+	f := newFakeS3(t)
+	f.put("busy", "exports/app/a.prom", "a 1\n", time.Now())
+	f.unavailable = "busy"
+	c := f.collector(t, "busy", "a.prom")
+	if _, err := FetchCollector(context.Background(), "busy", c, RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("%v, want the 503", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unavailableRequests != 1 {
+		t.Fatalf("%d requests, want 1", f.unavailableRequests)
 	}
 }
 

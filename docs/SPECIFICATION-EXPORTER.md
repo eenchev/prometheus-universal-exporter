@@ -24801,6 +24801,68 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   finds every endpoint, and logs the fall to smaller pages once at debug
   level with the page size 50.
 
+## 34.165 Pinned workflow actions and an opt-in Retry-After
+
+- Every `uses:` in `.github/workflows`, a commented-out one included, names
+  its action at a 40-character commit SHA followed by `# vX.Y.Z`, actions in
+  the repository (`./...`) and images (`docker://`) excepted; the test fails
+  for an action named by a tag or branch, and when it finds no `uses:` at all
+  (§ 42.12).
+- `.github/dependabot.yml` has a `github-actions` update of the directory `/`,
+  which keeps the pinned SHAs and their version comments current, and the test
+  fails without it (§ 42.12, § 42.16).
+- The golangci-lint and helm versions, and the lint step's build tags, are
+  still read from `ci.yml` and the other workflows with the action pinned and
+  its version comment between the `uses:` and its `with:`; the tests fail
+  when the comment hides the step's inputs from them.
+- Without `retry.retry_after` a `503`, and a `429`, whose `Retry-After` asks
+  for no wait is retried after the backoff, an hour the deadline cuts short,
+  so the first answer is kept and no wait is traced; with it the retry is
+  sent at once and the trace says `then waited 0s, as Retry-After asked`
+  (`TestRetryAfterReplacesTheBackoffOnlyWhenAsked`, § 3.2a).
+- A `Retry-After: 1` is waited, a second, in place of a backoff of none
+  (`TestRetryAfterSecondsAreWaited`).
+- A `Retry-After` HTTP date two seconds off is waited until, a second at
+  least, and a date already past asks for no wait whatever the backoff
+  (`TestRetryAfterDatesAreWaitedUntil`).
+- A `Retry-After` of `soon`, `-1`, `1.5`, `+1`, `0x10` or a date that does
+  not parse falls back to the backoff, which the trace says, and an answer
+  without the header waits the backoff too
+  (`TestAnUnreadableRetryAfterFallsBackToTheBackoff`).
+- A `Retry-After` of seconds, of a date or of more digits than a duration
+  holds that asks for longer than the probe has left ends the request at
+  once with that answer, after one request, the answer and the trace saying
+  why it was not retried (`TestARetryAfterLongerThanTheTimeLeftEndsTheRequest`).
+- A status `retry.statuses` does not list, an accepted one and the last
+  attempt's answer are the answer, however long their `Retry-After`, and say
+  nothing of a retry, while a listed one asking for too long does
+  (`TestRetryAfterIsReadOnlyOnARetriedAnswer`).
+- A static target's `retry.retry_after` replaces the collector's either way
+  and keeps the collector's when left out, in its overrides and in the
+  requests sent (`TestAStaticTargetsRetryAfterReplacesTheCollectors`); it is
+  read from the target file and is part of the target's cache key as
+  `retry_retry_after` (`TestLoadStaticTargetFileParsesEveryRequestParameter`).
+- The retry line says a retried answer's `Retry-After` replaces the backoff
+  only when it is on, a static target's off included
+  (`TestTheRetriesLineSaysRetryAfterReplacesTheBackoff`).
+- A `graphite` collector's `retry.retry_after` retries a `503` asking for no
+  wait at once, and without it the deadline cuts an hour's backoff short
+  (`TestAGraphiteCollectorsRetryAfterReplacesTheBackoff`).
+- `retry.retry_after` is refused for a `grpc` collector and a `grpc` static
+  target, as `retry.non_idempotent` is
+  (`TestGRPCValidation`, `TestGRPCStaticTargetRequest`).
+- A debug probe of a collector with `retry.retry_after` shows `then waited
+  0s, as Retry-After asked` below a retried `429` and the retry line's
+  mention of `Retry-After`; a `503` asking for 120 seconds shows `not
+  retried: ...` below its request and in the `http_status` failure
+  (`TestADebugProbeShowsTheWaitsRetryAfterAskedFor`).
+- `--dry-run` lists `retry_after: true` under `request_policies` for a
+  collector that sets it, and no policy for one that leaves it off
+  (`TestDryRunReportsRetryAfter`).
+- The configuration and static target file schemas have
+  `request.retry.retry_after` as a boolean described as `http` and
+  `graphite`'s (`TestTheSchemasHaveRetryAfter`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

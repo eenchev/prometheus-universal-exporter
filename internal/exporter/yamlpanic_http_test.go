@@ -33,7 +33,7 @@ func TestAYAMLDocumentTheLibraryPanicsOnFailsTheDecodeStage(t *testing.T) {
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
 	logs := &bytes.Buffer{}
 	server.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	const want = "YAML decode: yaml: the mapping key at line 3 is a sequence; only scalar keys (text, numbers, booleans, null) can be read"
+	const want = "YAML decode: yaml: the mapping key at line 3 is a sequence; only scalar keys (text, numbers, booleans) can be read"
 	for scrape := range 2 {
 		answer := probeOnce(t, server, probePath("document", target.URL, ""), nil)
 		if answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), want) {

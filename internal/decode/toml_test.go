@@ -137,3 +137,56 @@ func TestTOMLIsRefusedPastItsNestingBeforeItIsParsed(t *testing.T) {
 		}
 	}
 }
+
+// The nesting scan passes over the byte order mark the library passes over
+// itself, after the one Decode took off the response, so a body starting
+// with two is bounded as any other: it was read past by the scan, which
+// expected a key at the second mark and left the body to the library, whose
+// recursion four mebibytes of [ took past the goroutine stack's limit, which
+// kills the process. A body the scan cannot follow is refused rather than
+// left to the library unscanned.
+func TestTOMLIsRefusedWhereTheNestingScanCannotFollowIt(t *testing.T) {
+	deep := strings.Repeat("[", 20000)
+	for name, body := range map[string]string{
+		"two UTF-8 byte order marks":             "\xef\xbb\xbf\xef\xbb\xbfa = " + deep,
+		"a UTF-8 and a UTF-16LE byte order mark": "\xef\xbb\xbf\xff\xfea = " + deep,
+		"a UTF-8 and a UTF-16BE byte order mark": "\xef\xbb\xbf\xfe\xffa = " + deep,
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			_, err := decodeKind(t, "toml", body)
+			if err == nil || !strings.HasPrefix(err.Error(), "TOML decode: line 1: arrays and inline tables nested more than 10000 deep") {
+				t.Errorf("err=%.200v", err)
+			}
+			if took := time.Since(start); took > time.Second {
+				t.Errorf("refused in %v", took)
+			}
+		})
+	}
+	t.Run("the attack body", func(t *testing.T) {
+		start := time.Now()
+		_, err := decodeKind(t, "toml", "\xef\xbb\xbf\xef\xbb\xbfa = "+strings.Repeat("[", 4<<20))
+		if err == nil || !strings.HasPrefix(err.Error(), "TOML decode: line 1: arrays and inline tables nested more than 10000 deep") {
+			t.Errorf("err=%.200v", err)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("refused in %v", took)
+		}
+	})
+	if d, err := decodeKind(t, "toml", "\xef\xbb\xbf\xef\xbb\xbfa = [[1]]\n"); err != nil || !reflect.DeepEqual(d.Data, map[string]any{"a": []any{[]any{1}}}) {
+		t.Errorf("two byte order marks before a document: %#v, %v", d, err)
+	}
+	for body, want := range map[string]string{
+		"a = 1\n\xef\xbb\xbfb = " + deep: "TOML decode: line 2: expected a key and = after it",
+		"a = 1\nb\n":                     "TOML decode: line 2: expected a key and = after it",
+		"[a.]\nb = " + deep:              "TOML decode: line 1: expected a table header, [name] or [[name]]",
+		"a = \"x\nb = " + deep:           "TOML decode: line 1: a string that does not end",
+		"a = [1}\nb = " + deep:           "TOML decode: line 1: a } that closes no inline table",
+		"a = 1]\nb = " + deep:            "TOML decode: line 1: a ] that closes no array",
+	} {
+		_, err := decodeKind(t, "toml", body)
+		if err == nil || err.Error() != want {
+			t.Errorf("%.20q: err=%.200v, want %s", body, err, want)
+		}
+	}
+}

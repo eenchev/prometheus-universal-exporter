@@ -2293,6 +2293,15 @@ while True:
         # that is the body is the body's own string, not a copy.
         line=None
         if p.get('data_is_body'): p['data']=p['response']['body']
+        if p.get('data_is_csv'):
+            # CSV rows by header come as the header's columns once and each
+            # row's cells, which is as long as the body; each row is made
+            # the dict of every column the header names, '' for a cell the
+            # row is short of, that the rows written out as dicts, as long
+            # as the header times the rows, were read into.
+            table=p['data']; named=list(zip(table['columns'],table['places']))
+            p['data']=[{n:(r[i] if i<len(r) else '') for n,i in named} for r in table['rows']]
+            table=named=None
         # The request is read: the script's time, limits.script_timeout,
         # starts when the exporter reads this line.
         answer({'started': True})

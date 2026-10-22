@@ -3,6 +3,8 @@ package transform
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -531,16 +533,19 @@ func TestCSVTransformOfTheDecodersRowsGivesWhatItGave(t *testing.T) {
 }
 
 // What a script is handed of the rows the csv decoder gives is what it was
-// handed when each was a map of every column the header names: the request
-// line to the worker is the same, byte for byte, its data a list of dicts
-// by the header's names, keys in the order of their bytes, the cells a row
-// is short of "", or of lists without a header — written by the encoder,
-// and by json.Marshal where the encoder hands a request over to it — for
-// every fixture, every CSV the examples read and thousands of generated
-// bodies, under every setting.
+// handed when each was a map of every column the header names: its data a
+// list of dicts by the header's names, keys in the order of their bytes, the
+// cells a row is short of "", or of lists without a header. Without a header
+// the request line to the worker is the same, byte for byte; with one, it
+// carries the rows as their table, the header's columns once and each row's
+// cells (csvTable), and the table made into rows as the worker makes them
+// (csvTableRows) is the data of the request it was, the rest of the two
+// alike. json.Marshal, where the encoder hands a request over to it, writes
+// the request it was. For every fixture, every CSV the examples read and
+// thousands of generated bodies, under every setting.
 func TestAScriptIsHandedTheCSVRowsItWasHanded(t *testing.T) {
 	bodies, settings := csvBodies(t, alloctest.UnlessRaced(2500, 250))
-	decoded := 0
+	decoded, tables := 0, 0
 	for i, body := range bodies {
 		now, was, r := decodeCSVRows(body, settings[i])
 		if now == nil {
@@ -561,13 +566,69 @@ func TestAScriptIsHandedTheCSVRowsItWasHanded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(line, want) || !bytes.Equal(marshalled, want) {
-			t.Fatalf("%q under %+v: the request is\n%s\nand marshalled\n%s\nwas\n%s", body, settings[i], line, marshalled, want)
+		if !bytes.Equal(marshalled, want) {
+			t.Fatalf("%q under %+v: the request marshalled is\n%s\nwas\n%s", body, settings[i], marshalled, want)
+		}
+		if rows, ok := now.Data.(*decode.CSVRows); !ok || !rows.Named() {
+			if !bytes.Equal(line, want) {
+				t.Fatalf("%q under %+v: the request is\n%s\nwas\n%s", body, settings[i], line, want)
+			}
+			continue
+		}
+		tables++
+		got, wanted := csvTableRequest(t, line), requestOf(t, want)
+		if !reflect.DeepEqual(got, wanted) {
+			t.Fatalf("%q under %+v: the request with its table made into rows is\n%v\nwas\n%v", body, settings[i], got, wanted)
 		}
 	}
-	if decoded < len(bodies)/3 {
-		t.Errorf("%d of %d bodies decoded: the bodies do not cover the rows", decoded, len(bodies))
+	if decoded < len(bodies)/3 || tables < decoded/4 {
+		t.Errorf("%d of %d bodies decoded, %d by header: the bodies do not cover the rows", decoded, len(bodies), tables)
 	}
+}
+
+// requestOf is a request line read as JSON.
+func requestOf(t *testing.T, line []byte) map[string]any {
+	t.Helper()
+	var request map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if err := decoder.Decode(&request); err != nil {
+		t.Fatalf("%v: %.300s", err, line)
+	}
+	return request
+}
+
+// csvTableRequest is a request carrying CSV rows as their table, read as
+// JSON with the table made into the rows a script reads, as the worker makes
+// them: each row a dict of every column to its cell at the column's place,
+// "" past the row's end.
+func csvTableRequest(t *testing.T, line []byte) map[string]any {
+	t.Helper()
+	request := requestOf(t, line)
+	if request["data_is_csv"] != true {
+		t.Fatalf("the request carries no table: %.300s", line)
+	}
+	delete(request, "data_is_csv")
+	table := request["data"].(map[string]any)
+	columns, places := table["columns"].([]any), table["places"].([]any)
+	rows := []any{}
+	for _, cells := range table["rows"].([]any) {
+		cells := cells.([]any)
+		row := map[string]any{}
+		for j, name := range columns {
+			place, err := places[j].(json.Number).Int64()
+			if err != nil {
+				t.Fatal(err)
+			}
+			row[name.(string)] = ""
+			if int(place) < len(cells) {
+				row[name.(string)] = cells[place]
+			}
+		}
+		rows = append(rows, row)
+	}
+	request["data"] = rows
+	return request
 }
 
 // A pre-script and a python transform that echo the rows the csv decoder
@@ -619,5 +680,97 @@ func TestAScriptEchoesTheCSVRowsItEchoed(t *testing.T) {
 	}
 	if echoed < 2*len(files) {
 		t.Errorf("%d echoes of %d fixtures", echoed, len(files))
+	}
+}
+
+// CSV rows by header are handed to a script as their table, which is as long
+// as the body, rather than as a dict of every column for each row, which is
+// as long as the header times the rows: a header of 5,000 columns over 5,000
+// lines of one field, a body of 39 kB, was a request of 257 MiB, and is now
+// one of a few times the body. Made into rows by the worker, the table is
+// what the script read: every column of the header for each row, "" for the
+// cells a row is short of, the unnamed column left out.
+func TestAScriptIsHandedCSVRowsAsLongAsTheirBody(t *testing.T) {
+	var body strings.Builder
+	for j := range 5000 {
+		if j > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, "c%d", j)
+	}
+	body.WriteByte('\n')
+	for range 5000 {
+		body.WriteString("1\n")
+	}
+	now, _, r := decodeCSVRows([]byte(body.String()), model.CSVConfig{})
+	if now == nil {
+		t.Fatal("the body does not decode")
+	}
+	line, err := pythonRequest("data", "pass", now, r, &model.Collector{Name: "rows"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) > 4*body.Len() {
+		t.Errorf("a request of %d bytes for a body of %d", len(line), body.Len())
+	}
+
+	requirePython(t)
+	short := []byte("host,used,,free\nweb01,72\ndb1,5,,9\n")
+	now, _, r = decodeCSVRows(short, model.CSVConfig{})
+	c := model.Collector{Name: "echo", Decoder: model.DecoderConfig{Type: "csv"}, Transform: model.TransformConfig{Type: "python", Script: "import json\nmetric(name='rows', value=len(data), labels={'echo': json.dumps(data)})\n"},
+		Limits: model.Limits{ScriptTimeout: model.Duration(10 * time.Second)}}
+	set, err := Transform(t.Context(), now, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `rows{echo="[{\"free\": \"\", \"host\": \"web01\", \"used\": \"72\"}, {\"free\": \"9\", \"host\": \"db1\", \"used\": \"5\"}]"} 2`
+	if len(set.Metrics) != 1 || seriesLine(set.Metrics[0]) != want {
+		t.Errorf("the script read %v, want %s", set.Metrics, want)
+	}
+}
+
+// A request to a worker is no longer than 32 times the response limit and
+// limits.max_output_bytes together, and the script: data a decoder made far
+// more of than the response is refused while it is being written, the
+// transform failing without running, rather than built in the exporter's
+// memory and parsed in the worker's. Within the limit a request is written.
+func TestAPythonRequestPastItsLimitFailsTheTransform(t *testing.T) {
+	c := model.Collector{Name: "big", Transform: model.TransformConfig{Type: "python", Script: "pass"}, Limits: model.Limits{MaxResponseBytes: 1024, MaxOutputBytes: 1024}}
+	limit := pythonRequestLimit("pass", &c)
+	if limit != 32*2048+4 {
+		t.Fatalf("the limit is %d", limit)
+	}
+	r := &fetch.HTTPResponse{StatusCode: http.StatusOK, Body: []byte("[]"), Target: "http://big.example/"}
+	many := func(n int) []any {
+		list := make([]any, n)
+		for i := range list {
+			list[i] = "0123456789"
+		}
+		return list
+	}
+	headerless := model.Collector{Name: "rows", Decoder: model.DecoderConfig{Type: "csv"}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: new(bool)}}}
+	rowsResponse := &fetch.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(strings.Repeat("0123456789\n", 10000))}
+	rows, err := decode.Decode(rowsResponse, &headerless)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string]*decode.Decoded{
+		"a list":                {Kind: "json", Data: many(10000)},
+		"a dict":                {Kind: "json", Data: map[string]any{"a": map[string]any{"b": many(10000)}}},
+		"csv rows of no header": rows,
+	} {
+		_, err := pythonRequest("metrics", "pass", d, r, &c)
+		if !errors.Is(err, errPythonRequestTooLarge) || !strings.Contains(err.Error(), "more than 65540 bytes written out for the worker, 32 times the response limit (1024 bytes) and limits.max_output_bytes (1024 bytes) together") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := pythonRequest("metrics", "pass", &decode.Decoded{Kind: "json", Data: many(4000)}, r, &c); err != nil {
+		t.Errorf("a request within the limit: %v", err)
+	}
+
+	requirePython(t)
+	_, err = Transform(t.Context(), &decode.Decoded{Kind: "json", Data: many(10000)}, r, &c, "python3")
+	if !errors.Is(err, model.ErrScriptFailed) || !strings.HasPrefix(err.Error(), "python transform did not run: the response and the data decoded from it come to more than 65540 bytes") {
+		t.Errorf("the transform: %v", err)
 	}
 }

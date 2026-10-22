@@ -128,9 +128,18 @@ already defined at line 1`, rather than the later value replacing the earlier
 unseen: the error names the first ten such problems and counts the rest. A
 mapping key that is a sequence or a mapping (`? [a, b]`, `{x: 1}: 2`), or an
 alias of one, fails the scrape saying so, `yaml: the mapping key at line 3 is
-a sequence; only scalar keys (text, numbers, booleans, null) can be read`:
+a sequence; only scalar keys (text, numbers, booleans) can be read`:
 the decoded body's keys are the keys of JSON objects, which only a scalar
-can be. An
+can be. Those keys are text, a number or a boolean being its text, so two
+keys written otherwise that are one text — `1` and `1.0`, `16` and `0x10`,
+`true` and `True`, `'1'` and `1`, a key and an alias of it — are a key
+written twice and fail the scrape the same way, by that text, `line 2:
+mapping key "1" already defined at line 1`, rather than one of the two
+being kept, which for `16` and `0x10` the YAML library did unseen and for
+the others the order of a Go map decided; so does a key merged in with
+`<<` that is the text of one of the mapping's own. A null key (`~`, `null`
+or none at all) has no text and fails the scrape at its line, `line 2:
+mapping key "~" is null, which is no text; quote it to read it as text`. An
 error quotes no more than the start of a part of the document, followed by
 the length of the whole — the first 64 bytes of a key written twice (`mapping
 key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
@@ -270,7 +279,11 @@ the square of its parts: a single key of 10,000 held it for seconds. Within
 the bound, a document costs less than ten times what a flat one of its size
 does — a mebibyte of keys of 16 parts each decodes in about a second — and a
 real document names its values by a few. Past it, the scrape fails:
-`TOML decode: line 1: a value is named by more than 16 parts, ...`.
+`TOML decode: line 1: a value is named by more than 16 parts, ...`. The
+scan that keeps the bounds passes over a byte order mark as the library
+does, and where it cannot follow the body, which is then no TOML, it fails
+the scrape itself, naming the line (`TOML decode: line 2: expected a key and
+= after it`), rather than leave to the library a rest it has not bounded.
 
 **`ini`** reads an INI file with a parser of the exporter's own, since the
 dialects agree on little more than this. The document is a mapping of each

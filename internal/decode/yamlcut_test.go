@@ -337,6 +337,9 @@ func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 			// And but for a key that is a sequence or a mapping, which has
 			// since been refused in words of its own.
 			wasErr = yamlKeyRefusalNow([]byte(document), wasErr)
+			// And but for keys that are one text, and a null key, which
+			// have since been refused.
+			was, wasErr = yamlKeysAsTextNow([]byte(document), was, wasErr)
 			got, gotErr := reading.decode([]byte(document))
 			if (gotErr == nil) != (wasErr == nil) {
 				t.Fatalf("%.300q, large past %d keys, is refused with %.500v; it was with %.500v", document, large, gotErr, wasErr)

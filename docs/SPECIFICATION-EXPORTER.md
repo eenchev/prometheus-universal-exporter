@@ -2258,8 +2258,12 @@ does (§ 6.1a).
   counting those of its table header, of its dotted key and of the keys of
   the inline tables around it, MUST be refused naming the line: the library
   parses nested brackets by recursion and costs the square of a key's parts
-  for each key. A document whose tables and arrays together nest deeper than
-  `MaxDepth` MUST be refused too. An error of the library MUST be its message
+  for each key. The scan that keeps these bounds MUST pass over the byte
+  order mark the library passes over itself (UTF-8, UTF-16LE or UTF-16BE),
+  after the one taken off the response, and where it cannot follow the body
+  it MUST refuse it naming the line, and MUST NOT hand the library a body it
+  has not scanned to its end. A document whose tables and arrays together
+  nest deeper than `MaxDepth` MUST be refused too. An error of the library MUST be its message
   after the line it names, without the last key it read, and a message past
   256 bytes MUST be cut there with its length.
 - `ini`: the document MUST be a mapping of each section's name to the mapping
@@ -2929,7 +2933,7 @@ The YAML decoder MUST:
 - Refuse a document the YAML library refuses, or panics on, for a mapping
   key that is a sequence or a mapping, or an alias of one, in words that say
   so and where: `yaml: the mapping key at line 3 is a sequence; only scalar
-  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  keys (text, numbers, booleans) can be read` (`a mapping`, `an alias
   of a sequence`), naming the first such key of the document in the order it
   is written. A decoded document's keys are the keys of JSON objects, which
   such a key cannot be, and the library's own words say nothing of it: one
@@ -2942,6 +2946,20 @@ The YAML decoder MUST:
   out). A document with such a key that the library refuses for something
   else, or decodes, as it does one whose key is in a value a merge leaves
   out and never reads, MUST be refused, or decoded, as before.
+- Refuse a document with a mapping two of whose keys, written otherwise,
+  are one text in the decoded document, whose keys are text: `1` and `1.0`,
+  `16` and `0x10`, `true` and `True`, `'1'` and `1`, a key and an alias of
+  it. The library tells keys apart by how they are written and refuses none
+  of these, and of two that decode into one value it keeps the later
+  without a word. The error MUST be in the words of a key written twice,
+  naming the key by that text and both lines (`line 2: mapping key "1"
+  already defined at line 1`), named and counted as above; keys merged into
+  a mapping with `<<` that are the text of one of its own MUST be refused
+  too (`mapping key "1" is in a mapping twice, written otherwise each time,
+  once merged into it with <<`). Which key is refused MUST NOT depend on the
+  order of a Go map. A null key (`~`, `null`, or none) has no text and MUST
+  be refused at its line: `line 2: mapping key "~" is null, which is no
+  text; quote it to read it as text`.
 - Fail the decode, and nothing more, of a document the decoding panics on.
   The YAML library panics on a merge into a mapping that has a key that is
   no text where a merged mapping has a sequence or a mapping for a key,
@@ -4179,6 +4197,17 @@ typical script.
 - The response's body MUST be sent to a worker once: `response.text`,
   `response.body` and, where the script's `data` is the body as text, `data`
   MUST be one string in the worker, not a copy each in the request.
+- The csv decoder's rows by header MUST be sent to a worker as the header's
+  columns once and each row's cells, as long as the body, and the worker MUST
+  make of them the list a script reads, a dict of every column the header
+  names to its cell, `""` for a cell the row is short of; they MUST NOT be
+  sent as that list written out, which is as long as the header times the
+  rows. A request MUST be no longer than 32 times the response limit and
+  `limits.max_output_bytes` together, and the script, and one longer MUST be
+  refused while it is written, before it is written to its end and before
+  any worker reads it, failing the transform or the pre-script with `python
+  transform did not run: the response and the data decoded from it come to
+  more than N bytes written out for the worker, ...`.
 - The hand-over MUST NOT show in what a script is given, nor in what its
   answer is read as, however the lines are written and read. A request MUST
   carry `data` as the decoder made it: an object's keys in the order of their
@@ -22113,11 +22142,13 @@ The decoded rows of a CSV answer cost the cells its lines hold (§ 13):
   and the rows a pre-script leaves, dicts, lists, numbers, None, rows that
   are no row and data that is no list, are read as the transform read them
   (`TestCSVTransformOfTheDecodersRowsGivesWhatItGave`).
-- The request line that hands the decoder's rows to a Python worker is the
-  line that handed the rows as they were, byte for byte, written by the
-  encoder and by json.Marshal alike — dicts by the header's names in the
-  order of their bytes, "" for a cell a row is short of, lists without a
-  header — over the same fixtures and generated bodies
+- The request line that hands the decoder's rows to a Python worker carries
+  what the line that handed the rows as they were carried — dicts by the
+  header's names in the order of their bytes, "" for a cell a row is short
+  of, lists without a header: without a header the same line byte for byte,
+  with one the rows as their table, which made into rows as the worker makes
+  them is the data of that line, the rest alike; json.Marshal writes that
+  line — over the same fixtures and generated bodies
   (`TestAScriptIsHandedTheCSVRowsItWasHanded`); and a pre-script and a
   python transform that echo `json.dumps(data)` echo the same text for every
   fixture of testdata/csv, with a header and without
@@ -23140,7 +23171,7 @@ A reload refused because a file could not be read, the stamps' file modes, a YAM
   did before it held the mode, or the mode of a file it lists changed.
 - A YAML mapping key that is a sequence or a mapping, or an alias of one, is
   refused as `yaml: the mapping key at line N is a sequence; only scalar
-  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  keys (text, numbers, booleans) can be read` (`a mapping`, `an alias
   of a sequence`), naming the first such key of the document: two different
   ones, which were `mapping key "" already defined`, one alone and the same
   one twice, which were `invalid map key: ...` with no line, one in a

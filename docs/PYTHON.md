@@ -446,6 +446,20 @@ start once and then serves scrape after scrape.
   emits no metric answers in 38 bytes, so no transform's script could
   answer within it; set at least 38, or leave it out, or 0, for the
   default, 1MiB`.
+- **The size of a request.** What the exporter hands a worker — the
+  response, its body once, and `data` — is written out as one line of JSON,
+  which may be no longer than 32 times the response limit
+  (`limits.max_response_bytes`) and `limits.max_output_bytes` together, and
+  the script. Only data a decoder made far more of than the response comes
+  near it, and such a request is refused while it is being written, before
+  any worker reads it: `python transform did not run: the response and the
+  data decoded from it come to more than N bytes written out for
+  the worker, 32 times the response limit (10485760 bytes) and
+  limits.max_output_bytes (1048576 bytes) together, and the script; ...`.
+  CSV rows by header are sent as the header's columns once and each row's
+  cells, as long as the body, and the worker makes the dicts a script reads
+  of them, so a long header over many short lines costs the request no more
+  than the body.
 - **Memory.** `limits.max_script_memory`, such as `256MiB`, bounds the address
   space of each of the collector's workers through `RLIMIT_AS`, set after the
   libraries are loaded. Everything the worker's process has mapped counts

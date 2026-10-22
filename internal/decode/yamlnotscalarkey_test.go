@@ -18,7 +18,7 @@ import (
 
 // yamlNotScalarKeyWords is the problem of a document with a mapping key that
 // is a sequence or a mapping, after the line and what the key is.
-const yamlNotScalarKeyWords = "; only scalar keys (text, numbers, booleans, null) can be read"
+const yamlNotScalarKeyWords = "; only scalar keys (text, numbers, booleans) can be read"
 
 // yamlFirstNotScalarKey is the first mapping key under n, in the order the
 // document is written, that is a sequence or a mapping or an alias of one,
@@ -315,6 +315,7 @@ func TestEveryOtherYAMLDocumentDecodesAsItDidBeforeKeysThatAreNoScalarWereRefuse
 	for _, document := range documents {
 		v, err := decodeYAML([]byte(document))
 		was, wasErr := decodeYAMLBeforeKeys([]byte(document))
+		was, wasErr = yamlKeysAsTextNow([]byte(document), was, wasErr)
 		root, _ := yamlDocumentOf([]byte(document))
 		if root != nil && yamlFirstNotScalarKey(root) != nil {
 			counted["with a key that is no scalar"]++

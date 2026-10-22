@@ -9,7 +9,7 @@ make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
-make build      # bin/prometheus-universal-exporter, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file adds s3file
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file adds s3file
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
@@ -24,10 +24,13 @@ make test-external  # opt-in; probes real third-party endpoints
 
 ## Code layout
 
-The `main` package at the root holds only the command line (`main.go`) and the
-`--dry-run` report (`check.go`), with the tests of the command line itself
+The `main` package at the root holds only the command line (`main.go`), its
+allocator mode (`allocator.go`) and the `--dry-run` report (`check.go`), with
+the tests of the command line itself
 (`cli_test.go`, `shutdown_test.go`); the target allocator's command line is
-`cmd/pue-allocator`, with its own. The tests that check the repository as a
+`cmd/pue-allocator`, with its own, and `tools/depupdate` is the command that
+proposes updates for the versions the Dockerfile pins
+([Dependency updates](DEPENDENCIES.md)). The tests that check the repository as a
 whole — the documentation, the chart, the workflows, the Dockerfile, the
 shipped examples and schemas, and the layering below — are in
 `test/repository`, a package of tests only, which runs from the repository
@@ -44,6 +47,7 @@ the ones above them in this list:
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
+| `internal/allocclient` | The exporter's side of the target allocator in allocator mode (`--allocator.url`): the heartbeats to every copy of the allocator, the long poll for its bundle, and the cache directory a bundle is written into, checked in and put in force by swapping one symbolic link, for the configuration manager to reload ([Target allocator](ALLOCATOR.md)). |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/allocator` | The target allocator, whose command line is `cmd/pue-allocator`: its input files and the probe targets file, the member list from heartbeats, allocation and handover, bundles, service discovery and its HTTP API. Its time goes through a `Clock`, so its tests move a clock of their own by hand ([Target allocator](ALLOCATOR.md)). |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
@@ -232,6 +236,14 @@ the seed it used; run it again with `-shuffle=<seed>`. The limit is a
 package's, and the command names it because `go test`'s own ten minutes are
 meant for one run without the race detector; a test keeps the Makefile and
 `ci.yml` running the same command.
+
+A test that needs a TCP address nothing answers takes
+`testutil.RefusingAddress`: a socket bound to the address that never
+listens, so every connection is refused at once and no other socket can be
+handed the port while the test runs. The address of a listener that was
+closed is no substitute: the next server that asks for any free port may be
+given it, and a test that waited for a refused connection then reached that
+server instead, as a redirect to it once went round ten times in CI.
 
 State shared across tests is what breaks this. The Python worker pool is one
 such thing: its counts — starts, runs, stops, idle workers — would carry over
@@ -802,8 +814,9 @@ regenerate them all, or the test suite fails:
 make schemas
 ```
 
-The committed files are the schemas of a build with every request type and
-the sql type's default drivers alone, which is what `make schemas` runs, and
+The committed files are the schemas of a build with every request type but
+the opt-in ones — no `s3file` in the `request.type` enum — and the sql type's
+default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and
 one built with an opt-in type or with `SQL_DRIVERS` the opt-in types and
@@ -833,7 +846,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql` and `s3file`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and `s3file`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
@@ -2138,6 +2151,15 @@ it cannot parse, which produces no jobs at all, so a CI step cannot catch that
 mistake in the commit that introduces it — the checker would be in the file
 GitHub is refusing to read. Running the tests before pushing is what protects
 you.
+
+Every `uses:` in a workflow names its action by a full commit SHA, with the
+release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. A tag can be
+moved to other code by whoever controls the action's repository; a SHA cannot.
+Write a new step in that form, looking the SHA up from the release's tag, and
+leave the updates to Dependabot, which moves the SHA and the comment together.
+`test/repository/workflowpins_test.go` fails for any other form, a
+commented-out `uses:` included, and for a `.github/dependabot.yml` without its
+`github-actions` update.
 
 It validates the chart templates the same way. `test/repository/charts_test.go` checks that
 every manifest a template renders begins its own YAML document. A template that

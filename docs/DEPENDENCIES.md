@@ -12,10 +12,12 @@ Dependabot handles the Go modules and the GitHub Actions, configured in
 `.github/dependabot.yml`. The Go modules' minor and patch updates are grouped
 into one pull request, and their major bumps are excluded — a Go major version
 lives at a different import path and needs real work. The GitHub Actions'
-updates are grouped into one pull request, major versions included. It also
-handles the Python modules only the tests use, pinned in
-`test/python/requirements.txt`, neither grouped nor excluding major bumps —
-`prometheus-client`, whose strict OpenMetrics parser the suite runs the
+updates are grouped into one pull request, major versions included. The
+workflows pin every action to a full commit SHA with its release as a comment
+(`actions/checkout@<sha> # v7.0.1`), and Dependabot updates the SHA and the
+comment together. Dependabot also handles the Python modules only the tests
+use, pinned in `test/python/requirements.txt`, neither grouped nor excluding
+major bumps — `prometheus-client`, whose strict OpenMetrics parser the suite runs the
 exporter's answers through; CI runs the suite on a change to that file, with
 the module required (see [Repeatable tests](DEVELOPMENT.md#repeatable-tests)).
 
@@ -104,8 +106,9 @@ leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)).
 
 ## What the image contains
 
-The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary and
-three Python libraries: lxml, PyYAML and python-dateutil. BeautifulSoup is not
+The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary,
+the [target allocator](ALLOCATOR.md)'s, `/bin/pue-allocator`, and three
+Python libraries: lxml, PyYAML and python-dateutil. BeautifulSoup is not
 bundled; `lxml.html` parses HTML (see [PYTHON.md](PYTHON.md)).
 
 The build keeps the image's known vulnerabilities down to the ones nobody has

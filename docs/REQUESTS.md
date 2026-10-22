@@ -420,15 +420,18 @@ collectors:
      status_up{region="eu",source="api-acme",tenant="acme"} 1
 ```
 
+<!-- request-types: all -->
 One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
-`localfile` and `sshfile` — and under every transform: `transform.labels` are applied
+`localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in
+`s3file` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
 value](CONFIGURATION.md#long-label-values). A `python` script is not given
 the parameters; what it labels its series with is its own.
+<!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or
 `{{param_<name>:<default>}}`, any number of them in one value, among text of
@@ -787,7 +790,9 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector refuses the cloud metadata
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql` and `tlscert` collector, and a
+`dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
+refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
 and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
 credentials of the machine the exporter runs on, to whoever can name it as a
@@ -1055,9 +1060,65 @@ probe](CONFIGURATION.md#debug-probes) says, below its requests, how often
 and on which statuses its request is retried.
 
 A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
-`[UNAVAILABLE]` by default, and has no `non_idempotent` or `statuses`;
-`retry.codes` is refused for every other type, and `retry.statuses` for
-`grpc`. See [gRPC](GRPC.md#errors-and-retries).
+`[UNAVAILABLE]` by default, and has no `non_idempotent`, `statuses` or
+`retry_after`; `retry.codes` is refused for every other type, and
+`retry.statuses` and `retry.retry_after` for `grpc`. See
+[gRPC](GRPC.md#errors-and-retries).
+
+### Waiting as Retry-After asks
+
+A target that rate-limits or is briefly down often says when to come back,
+in a `Retry-After` header on its `429` or `503`. The exporter ignores the
+header unless a collector asks for it with `retry.retry_after`, for `http`
+and `graphite` collectors; without it every retry waits `backoff`, whatever
+the target says:
+
+```yaml
+request:
+  retry:
+    attempts: 2
+    backoff: 1s          # still the wait after a failed connection
+    retry_after: true    # a retried 429 or 503 waits what its Retry-After asks
+```
+
+With it, an answer that is retried — its status listed in `retry.statuses`,
+not accepted, with an attempt left — waits what its `Retry-After` asks for
+instead of `backoff`. A target that answers
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 3
+```
+
+is asked again 3 seconds later. The value is a number of seconds, digits
+alone, or an HTTP date such as `Wed, 21 Oct 2026 07:28:00 GMT`, which is
+waited until by the exporter's clock, not the answer's `Date` header; a date
+already past is no wait. A value that is neither — `soon`, `-1`, `1.5`,
+`+3` — is ignored, and `backoff` waited as without the header. A status
+that is not retried is the answer, whatever its `Retry-After`, as is the
+answer of the last attempt, and the wait after a failed connection, which
+has no answer to carry the header, is `backoff` still. The `401` resent
+with a new [login](AUTHENTICATION.md#logging-in-to-a-target)'s token is
+not affected.
+
+The probe's deadline bounds the wait, and there is no other bound: a
+`Retry-After` that asks for longer than the probe has left is not waited
+at all, since the retry could not be sent in time and the probe would fail
+the same way later. The answer is then the probe's answer at once, a failed
+`http_status` stage whose error says why it was not retried:
+
+```
+received HTTP status 503, not retried: its Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time
+```
+
+A [static target](STATIC-TARGETS.md) may set `retry.retry_after` either
+way, replacing the collector's; no probe parameter sets it. `--dry-run`
+lists it under `request_policies` as `retry_after: true`. A [debug
+probe](CONFIGURATION.md#debug-probes) says in its retry line that a
+retried answer's `Retry-After` replaces the backoff, and shows below each
+request that was retried the wait taken and why, `then waited 3s, as
+Retry-After asked`, or `then waited 1s, retry.backoff; the answer has no
+Retry-After`, or below the last one why it was not retried.
 
 ## Accepting other statuses
 

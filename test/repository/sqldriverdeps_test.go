@@ -124,7 +124,7 @@ func TestCILintsTheBuildWithEveryOptInSQLDriver(t *testing.T) {
 	if !slices.Contains(want, "minicore_disabled") {
 		t.Errorf("tools/request-type-tags.sh makes %v of the opt-in drivers, without snowflake's minicore_disabled", want)
 	}
-	lint := regexp.MustCompile(`(?m)golangci/golangci-lint-action@\S+\n\s+with:\n(?:\s+\w+:.*\n)*?\s+args:\s*--build-tags\s+(\S+)`).FindStringSubmatch(read(t, ".github/workflows/ci.yml"))
+	lint := regexp.MustCompile(`(?m)golangci/golangci-lint-action@\S+(?:[ \t]+#.*)?\n\s+with:\n(?:\s+\w+:.*\n)*?\s+args:\s*--build-tags\s+(\S+)`).FindStringSubmatch(read(t, ".github/workflows/ci.yml"))
 	if lint == nil {
 		t.Fatal("ci.yml has no golangci-lint step with --build-tags for the opt-in sql drivers")
 	}

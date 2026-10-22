@@ -298,7 +298,13 @@ the exposition formats leave the line out. Every series of a metric is a data po
 of one OTLP metric. A `NaN` or infinite value is sent as `"NaN"`, `"Infinity"`
 or `"-Infinity"`, as the OTLP JSON encoding writes them, rather than failing
 the export. A histogram's buckets and a summary's quantiles are sent in
-ascending order, in whatever order the target wrote them.
+ascending order, in whatever order the target wrote them. A histogram a rule
+counts of the values it reads
+([Histograms from a list of values](CONFIGURATION.md#histograms-from-a-list-of-values))
+is sent as one the target wrote is. It describes the values of one response,
+so its counts fall when the target's list shrinks, which starts its series
+again as a cumulative histogram whose count went down does; a backend that
+takes it for a running total reads it as reset on every such scrape.
 
 A family keeps its type only where its values allow it. The Prometheus text
 format lets a target write a counter that is `NaN` or negative, a histogram

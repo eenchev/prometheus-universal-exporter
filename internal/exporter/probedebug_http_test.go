@@ -365,3 +365,38 @@ func TestADebugProbeSaysWhichStatusesAreRetried(t *testing.T) {
 		t.Fatalf("a collector without retries:\n%s", body)
 	}
 }
+
+// Under retry.retry_after a debug probe's report says, below each request
+// retried, how long it waited and why, and its retry line says a
+// Retry-After replaces the backoff; an answer whose Retry-After asks for
+// longer than the probe has left is not retried, which the request and the
+// failing status say.
+func TestADebugProbeShowsTheWaitsRetryAfterAskedFor(t *testing.T) {
+	testutil.CaptureLogs(t)
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("busy") != "" {
+			w.Header().Set("Retry-After", "120")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if hits.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"up":1,"latency":2}`))
+	}))
+	t.Cleanup(target.Close)
+	retried := modeCollector("limited", model.ErrorModeLog)
+	retried.Request.Retry = model.RetryConfig{Attempts: 2, Backoff: model.Duration(time.Hour), RetryAfter: true}
+	server := modeServer(t, retried)
+	server.SetDebug(DebugFull)
+	body := debugProbeGet(t, server, "collector=limited&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
+	assertContains(t, body, "-> 429 Too Many Requests in", "\n     then waited 0s, as Retry-After asked\n", "-> 200 OK in",
+		"\n  Retries: up to 2, 1h0m0s apart, on a failed connection and on an answer of 408, 425, 429, 5xx that is not accepted, such an answer's Retry-After replacing the backoff (retry.retry_after).\n")
+	body = debugProbeGet(t, server, "collector=limited&debug=true&target="+url.QueryEscape(target.URL+"/?busy=1")).Body.String()
+	assertContains(t, body, "-> 503 Service Unavailable in", "\n     not retried: its Retry-After asks for 2m0s, longer than the ",
+		"received HTTP status 503, not retried: its Retry-After asks for 2m0s, longer than the ")
+}

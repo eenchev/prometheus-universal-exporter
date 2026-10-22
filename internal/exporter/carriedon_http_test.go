@@ -112,12 +112,8 @@ func carryOnCases() []carryOnCase {
 	counters := map[string]string{"decode": "http_exporter_parse_errors_total", "transform": "http_exporter_transform_errors_total"}
 	cases := []carryOnCase{{
 		name: "unreachable", stage: "http",
-		target: func(t *testing.T) string {
-			gone := httptest.NewServer(http.NotFoundHandler())
-			gone.Close()
-			return gone.URL
-		},
-		setup: func(c *model.Collector, policy string) { c.ErrorHandling.OnFetchError = policy },
+		target: func(t *testing.T) string { return "http://" + testutil.RefusingAddress(t) },
+		setup:  func(c *model.Collector, policy string) { c.ErrorHandling.OnFetchError = policy },
 	}}
 	for _, tc := range errorStageCases {
 		cases = append(cases, carryOnCase{
@@ -749,8 +745,7 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 		_, _ = io.WriteString(w, a.body)
 	}))
 	t.Cleanup(target.Close)
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
+	gone := "http://" + testutil.RefusingAddress(t)
 
 	compared, carried := 0, 0
 	compare := func(tc collectorCase, address, what string) {
@@ -787,7 +782,7 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 			before.cache, after.cache = newResponseCache(), newResponseCache()
 			compare(tc, target.URL, fmt.Sprintf("a target answering %d with %q", answers[i].status, answers[i].body))
 		}
-		compare(tc, gone.URL, "a target nothing listens at")
+		compare(tc, gone, "a target nothing listens at")
 	}
 	if compared == 0 || carried == 0 || carried == compared {
 		t.Fatalf("%d trips compared, %d of them carried on: the table covers neither or only one kind", compared, carried)

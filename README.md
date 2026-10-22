@@ -129,7 +129,7 @@ which `--help` prints too.
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.
 - [Endpoints](docs/ENDPOINTS.md) and [command-line flags](docs/FLAGS.md) — what each endpoint takes and answers, and every flag of the exporter.
-- [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, proxies, per-scrape overrides.
+- [Target requests](docs/REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, restricting targets, TLS, proxies, per-scrape overrides.
 - [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
 - [Graphite](docs/GRAPHITE.md) — the `graphite` request type: Graphite series from a render API, or carbon lines from a file, as Prometheus metrics.
 - [gRPC](docs/GRPC.md) — the `grpc` request type: a unary gRPC method called with a JSON message, its answer mapped as JSON, with message types from server reflection, a descriptor set or `.proto` files.
@@ -139,7 +139,7 @@ which `--help` prints too.
 - [DNS](docs/DNS.md) — the `dns` request type: the A, AAAA, CNAME, MX, NS, TXT, SRV or PTR records of a name, from the system's resolver or a named server, as a JSON document.
 - [TLS certificates](docs/TLSCERT.md) — the `tlscert` request type: the certificates a server presents in a TLS handshake, their names, issuers and expiry, and whether the chain verifies.
 - [Kubernetes objects](docs/KUBERNETES.md) — the `kubernetes` request type: the objects of one resource, built in or custom, listed from the API server with the exporter's service account, as a JSON document, for metrics such as kube-state-metrics gives from configuration alone.
-- [Authentication](docs/AUTHENTICATION.md) — credentials for the target and for the exporter itself.
+- [Authentication](docs/AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.
 - [Python](docs/PYTHON.md) — the transform and pre-script API.

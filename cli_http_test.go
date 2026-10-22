@@ -522,6 +522,32 @@ func TestDryRunReportsRetryStatuses(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.retry.retry_after as retry_after,
+// and nothing for a collector that leaves it off, which reads no
+// Retry-After.
+func TestDryRunReportsRetryAfter(t *testing.T) {
+	config := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: limited
+    request:
+      type: http
+      retry: {attempts: 2, retry_after: true}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: plain
+    request:
+      type: http
+      retry: {attempts: 2, retry_after: false}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	limited, _ := policies["limited"].(map[string]any)
+	if check.code != 0 || len(policies) != 1 || limited["retry_after"] != true {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+}
+
 // --dry-run lists a collector's request.pagination as it will be applied,
 // its defaults filled in, max_pages among them, and refuses one startup
 // refuses, as startup words it.

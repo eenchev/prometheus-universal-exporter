@@ -63,8 +63,9 @@ collectors:
 | `tls.cert_file`, `tls.key_file` | — | A client certificate, presented to a server that asks for one; both or neither. |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
 
-The `tls` block is the one `http`, `grpc` and `sql` take
-([TLS](REQUESTS.md#tls)), read by the same code, but for
+The `tls` block is the one `http`, `graphite`, `grpc`, `sql` and, with
+`api_server`, `kubernetes` take ([TLS](REQUESTS.md#tls)), read by the same
+code, but for
 `insecure_skip_verify`, which is refused, by the exporter and by the
 configuration's schema: no certificate is refused anyway.
 Its files are read at every handshake, so a Secret mounted after the

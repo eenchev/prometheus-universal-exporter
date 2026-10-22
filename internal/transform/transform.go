@@ -41,6 +41,7 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
 	ctx = withResponseVariables(ctx, r)
 	ctx = withSeriesBudget(ctx, c.Limits.MaxMetrics)
+	ctx = withHistogramFolds(ctx, c)
 	ctx, failures := withRuleFailures(ctx)
 	defer failures.finish(c, report)
 	ctx, cuts := withLabelCuts(ctx, c)
@@ -692,6 +693,11 @@ func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule
 		if part, err := wholeProblem(values, labels, count); err != nil {
 			return whole(part, err)
 		}
+		// A histogram rule's expression that gives no value is an empty
+		// list, which a histogram counts as nothing.
+		if rule.Histogram != nil {
+			return emptyHistogram(ctx, out, &rule)
+		}
 		if requiredRule(rule, c) {
 			missing := model.MarkError(fmt.Errorf("metric %q value is missing", rule.Name), model.ErrMissingValue)
 			return fail(missing, missing)
@@ -744,6 +750,12 @@ func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule
 		if missing := missingRequiredLabel(rule, series); missing != nil {
 			if failure := single(missing, missing); failure != nil {
 				return failure
+			}
+			continue
+		}
+		if rule.Histogram != nil {
+			if err := observeValue(ctx, out, &rule, n, series); err != nil {
+				return err
 			}
 			continue
 		}
@@ -1016,11 +1028,14 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 	// them at once where the number of items is known beforehand.
 	start := len(out.Metrics)
 	if known, ok := items.expected(data, rule.Items); ok {
-		out.Metrics = growSeries(ctx, out.Metrics, known)
+		out.Metrics = growRuleSeries(ctx, out.Metrics, &rule, known)
 	}
 	for index := 0; ; index++ {
 		item, more := items.next()
 		if !more {
+			if index == 0 && rule.Histogram != nil {
+				return emptyHistogram(ctx, out, &rule)
+			}
 			if index == 0 && requiredRule(rule, c) {
 				_, failure := fail(model.MarkError(fmt.Errorf("metric %q items selected nothing", rule.Name), model.ErrMissingValue))
 				return failure
@@ -1086,6 +1101,12 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		if labelErr != nil {
 			if carryOn, failure := fail(labelErr); !carryOn {
 				return failure
+			}
+			continue
+		}
+		if rule.Histogram != nil {
+			if err := observeValue(ctx, out, &rule, n, labels); err != nil {
+				return err
 			}
 			continue
 		}
@@ -1306,6 +1327,12 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 		}
 		matches, found := regexMatches(ctx, re, text)
 		match, ok := matches()
+		if !ok && rule.Histogram != nil {
+			if err := emptyHistogram(ctx, out, &rule); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if !ok {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("regex for metric %q matched no text", rule.Name), model.ErrMissingValue)
@@ -1321,7 +1348,7 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 		// once a match.
 		value := regexValueGroup(re)
 		captures := labelCaptures(rule.Labels, re.SubexpNames())
-		out.Metrics = growSeries(ctx, out.Metrics, found)
+		out.Metrics = growRuleSeries(ctx, out.Metrics, &rule, found)
 		for ; ok; match, ok = matches() {
 			if err := interrupted(ctx, rule); err != nil {
 				return nil, err
@@ -1442,6 +1469,9 @@ func regexSeries(ctx context.Context, out *model.MetricSet, text string, match [
 			return nil
 		}
 		return ruleFailure(c, rule, missing)
+	}
+	if rule.Histogram != nil {
+		return observeValue(ctx, out, &rule, n, labels)
 	}
 	if err := takeSeries(ctx); err != nil {
 		return err
@@ -2027,6 +2057,9 @@ func addComputedXPathSeries[N comparable](ctx context.Context, out *model.Metric
 		}
 		return ruleFailure(c, rule, missing)
 	}
+	if rule.Histogram != nil {
+		return observeValue(ctx, out, &rule, number, labels)
+	}
 	if err := takeSeries(ctx); err != nil {
 		return err
 	}
@@ -2071,6 +2104,9 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 		return addComputedXPathSeries(ctx, out, nodes, root, rule, c, plan, value)
 	}
 	selected := nodes.all(root, expression)
+	if len(selected) == 0 && rule.Histogram != nil {
+		return emptyHistogram(ctx, out, &rule)
+	}
 	if len(selected) == 0 {
 		if requiredRule(rule, c) {
 			missing := model.MarkError(fmt.Errorf("metric %q %s %q matched no nodes", rule.Name, nodes.kind, rule.Expression), model.ErrMissingValue)
@@ -2089,7 +2125,7 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 		}
 		return ruleFailure(c, rule, unreadable)
 	}
-	out.Metrics = growSeries(ctx, out.Metrics, len(selected))
+	out.Metrics = growRuleSeries(ctx, out.Metrics, &rule, len(selected))
 	texts := selectedTexts[N]{nodes: nodes, selected: selected}
 	summed := summedXPathLabels(plan)
 	for i, node := range selected {
@@ -2133,6 +2169,12 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 			}
 			return ruleFailure(c, rule, missing)
 		}
+		if rule.Histogram != nil {
+			if err := observeValue(ctx, out, &rule, value, labels); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := takeSeries(ctx); err != nil {
 			return err
 		}
@@ -2168,6 +2210,12 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 			return nil, ruleFailure(c, rule, err)
 		}
 		selection := doc.FindMatcher(matcher)
+		if rule.Histogram != nil {
+			if err := cssHistogram(ctx, out, selection.Nodes, rule, c); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("metric %q CSS selector %q matched no nodes", rule.Name, rule.Expression), model.ErrMissingValue)
@@ -2221,6 +2269,52 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 	return noSeriesIsNil(out), nil
 }
 
+// cssHistogram counts in its histogram the values of a histogram rule
+// without items: the whole text of each element its selector matched, which
+// a rule of another type refuses more than one of, since nothing would tell
+// their series apart. A histogram's values need nothing to tell them apart,
+// and its labels are static, as every css rule's without items are. An
+// element without a value is a missing value, and one that is no number a
+// value that fails, each handled by required and error_mode, the rule
+// carrying on with the other elements under log and ignore.
+func cssHistogram(ctx context.Context, out *model.MetricSet, elements []*html.Node, rule model.MetricRule, c *model.Collector) error {
+	if len(elements) == 0 {
+		return emptyHistogram(ctx, out, &rule)
+	}
+	labels := make(map[string]string, len(rule.Labels))
+	for _, label := range rule.Labels {
+		labels[label.Name] = label.Value
+	}
+	for i, element := range elements {
+		if err := interrupted(ctx, rule); err != nil {
+			return err
+		}
+		text := strings.TrimSpace(htmlText(element))
+		var problem error
+		var value float64
+		if isBlank(text) {
+			if !requiredRule(rule, c) {
+				continue
+			}
+			problem = model.MarkError(model.Errorf("metric %q value is missing for element %d: CSS selector %q matched an element without a value", rule.Name, model.Position(i), rule.Expression), model.ErrMissingValue)
+		} else if v, err := ruleTextValue(rule, text); err != nil {
+			problem = model.Errorf("metric %q element %d: %w", rule.Name, model.Position(i), err)
+		} else {
+			value = v
+		}
+		if problem != nil {
+			if handleMetricError(ctx, c, rule, problem) {
+				continue
+			}
+			return ruleFailure(c, rule, problem)
+		}
+		if err := observeValue(ctx, out, &rule, value, labels); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // transformCSSItems evaluates a rule item by item, as transformJQItems does:
 // items selects the elements the metric is about — table rows, status
 // entries — and the value selector and every label selector are matched
@@ -2251,13 +2345,16 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 		return failure
 	}
 	items := doc.FindMatcher(itemsMatcher)
+	if items.Length() == 0 && rule.Histogram != nil {
+		return emptyHistogram(ctx, out, &rule)
+	}
 	if items.Length() == 0 && requiredRule(rule, c) {
 		_, failure := fail(model.MarkError(fmt.Errorf("metric %q items CSS selector %q matched no nodes", rule.Name, rule.Items), model.ErrMissingValue))
 		return failure
 	}
 	// The rule adds its series to the set itself, with room made for one of
 	// each item.
-	out.Metrics = growSeries(ctx, out.Metrics, items.Length())
+	out.Metrics = growRuleSeries(ctx, out.Metrics, &rule, items.Length())
 	// What a selector matches within every item is found once, for all the
 	// items together, when the first item needs it (cssWithinItems).
 	var valueWithin *cssWithin
@@ -2334,6 +2431,12 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 		if err != nil {
 			if carryOn, failure := fail(err); !carryOn {
 				return failure
+			}
+			continue
+		}
+		if rule.Histogram != nil {
+			if err := observeValue(ctx, out, &rule, value, labels); err != nil {
+				return err
 			}
 			continue
 		}
@@ -2758,6 +2861,14 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 	// decides, rather than the scrape passing with nothing.
 	if count == 0 {
 		for _, rule := range rules {
+			// No rows is an empty list to a histogram rule, which it
+			// counts as nothing.
+			if rule.Histogram != nil {
+				if err := emptyHistogram(ctx, out, &rule); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if !requiredRule(rule, c) {
 				continue
 			}
@@ -2802,6 +2913,15 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 				}
 			}
 		}
+		// A histogram rule makes a series of each set of labels, not of
+		// each row, and has no part: its series are added after the parts.
+		for i := range rules {
+			if rules[i].Histogram != nil {
+				if _, exists := first.cell(rules[i].Expression); exists || !named {
+					columns--
+				}
+			}
+		}
 		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= count*columns) {
 			parts = count * columns
 			out.Metrics = make([]model.Metric, parts)
@@ -2809,7 +2929,7 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 			at := 0
 			for i := range rules {
 				next[i] = at
-				if _, exists := first.cell(rules[i].Expression); exists || !named {
+				if _, exists := first.cell(rules[i].Expression); (exists || !named) && rules[i].Histogram == nil {
 					at += count
 				}
 				ends[i] = at
@@ -2901,6 +3021,12 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
+			}
+			if rule.Histogram != nil {
+				if err := observeValue(ctx, out, &rule, n, labels); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if err := takeSeries(ctx); err != nil {
 				return nil, err

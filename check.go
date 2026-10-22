@@ -178,8 +178,9 @@ func checkStartup(in checkInputs) checkReport {
 }
 
 // requestPolicy is what a collector's request lets through: the targets it
-// may and may not reach, the statuses it decodes and those it retries, as
-// they will be applied, so a list that says less or more than meant shows
+// may and may not reach, the statuses it decodes and those it retries, and
+// whether a retry waits as the target's Retry-After asks, as they will be
+// applied, so a list that says less or more than meant shows
 // before it is deployed.
 type requestPolicy struct {
 	AllowedTargets []string `json:"allowed_targets,omitempty"`
@@ -190,6 +191,10 @@ type requestPolicy struct {
 	// which replaces the default set: an empty list, which retries no
 	// status, is shown as [] rather than left out.
 	RetryStatuses *[]string `json:"retry_statuses,omitempty"`
+	// RetryAfter is request.retry.retry_after: a retried answer's
+	// Retry-After replaces the backoff, which changes how long a trip
+	// waits on what the target says.
+	RetryAfter bool `json:"retry_after,omitempty"`
 	// Pagination is request.pagination as it will be applied, its defaults
 	// filled in: max_pages above all, which bounds what one trip asks of
 	// the target.
@@ -239,7 +244,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 		if retried := c.Request.Retry.Statuses; retried != nil {
 			p.RetryStatuses = &retried
 		}
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.Login != nil {
+		p.RetryAfter = c.Request.Retry.RetryAfter
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil {
 			out[c.Name] = p
 		}
 	}

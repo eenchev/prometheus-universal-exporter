@@ -115,6 +115,11 @@
                           "required": [
                             "error_mode"
                           ]
+                        },
+                        {
+                          "required": [
+                            "histogram"
+                          ]
                         }
                       ]
                     },
@@ -197,6 +202,11 @@
                         ]
                       }
                     ],
+                    "not": {
+                      "required": [
+                        "histogram"
+                      ]
+                    },
                     "properties": {
                       "expression": {
                         "not": {
@@ -521,6 +531,25 @@
             "description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. Nor, under a prometheus transform, may the expression of one rule match the name another rule passes on the metric of, where the two give its series one name and the same labels: each would make every series of that metric. A rule with an expression whose type is histogram or summary and whose error_mode is not fail is about the metrics of that type alone, and may match such a name unless the rule of the name sets that type too. The exporter checks both when the configuration loads. A python collector's rules make no series and are not held to it.",
             "items": {
               "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "histogram"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "type": {
+                        "const": "histogram"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              ],
               "if": {
                 "properties": {
                   "time_zone": {
@@ -571,6 +600,25 @@
                     "number",
                     "boolean"
                   ]
+                },
+                "histogram": {
+                  "additionalProperties": false,
+                  "description": "With type: histogram: counts the values the rule reads — every value its expression gives, or one per item, node, element, match or row — in a histogram, one for each set of label values, instead of making each a series. The values of this response alone: the histogram is made anew on every scrape. Not for the prometheus and python transforms.",
+                  "properties": {
+                    "buckets": {
+                      "description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most 100; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "buckets"
+                  ],
+                  "type": "object"
                 },
                 "items": {
                   "description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item.",
@@ -2523,6 +2571,10 @@
                   },
                   "non_idempotent": {
                     "description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
+                    "type": "boolean"
+                  },
+                  "retry_after": {
+                    "description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read.",
                     "type": "boolean"
                   },
                   "statuses": {

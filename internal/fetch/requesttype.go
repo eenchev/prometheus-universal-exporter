@@ -349,7 +349,7 @@ func ValidateRequest(c *model.Collector) error {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
 	}
-	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent); err != nil {
+	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent, c.Request.Retry.RetryAfter); err != nil {
 		return fmt.Errorf("collector %q %w", c.Name, err)
 	}
 	if c.Request.MaxResponseBytes < 0 {
@@ -369,8 +369,9 @@ func ValidateRequest(c *model.Collector) error {
 
 // checkRetryKeys refuses the retry key that does not apply to the type:
 // codes, the gRPC status codes a grpc request retries, for the others, and
-// statuses and non_idempotent, about HTTP answers and methods, for grpc.
-func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent bool) error {
+// statuses, non_idempotent and retry_after, about HTTP answers and methods,
+// for grpc.
+func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent, retryAfter bool) error {
 	if codes && !rt.StatusCodes {
 		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on the HTTP statuses retry.statuses lists, 408, 425, 429 and 5xx when it is left out", rt.Name)
 	}
@@ -379,6 +380,9 @@ func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent bool) error 
 	}
 	if nonIdempotent && rt.StatusCodes {
 		return fmt.Errorf("sets request.retry.non_idempotent, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
+	}
+	if retryAfter && rt.StatusCodes {
+		return fmt.Errorf("sets request.retry.retry_after, which does not apply to request.type %q; a gRPC status carries no Retry-After header, and retry.backoff is the wait between its retries", rt.Name)
 	}
 	return nil
 }
@@ -466,7 +470,7 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 		}
 	}
 	if retry := t.Request.Retry; retry != nil {
-		if err := checkRetryKeys(rt, retry.Codes != nil, retry.Statuses != nil, retry.NonIdempotent != nil); err != nil {
+		if err := checkRetryKeys(rt, retry.Codes != nil, retry.Statuses != nil, retry.NonIdempotent != nil, retry.RetryAfter != nil); err != nil {
 			return fmt.Errorf("target %q %w", t.Name, err)
 		}
 	}

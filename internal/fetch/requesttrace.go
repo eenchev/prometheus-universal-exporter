@@ -43,7 +43,11 @@ type TracedRequest struct {
 	Withheld    []string
 	WithheldWhy string
 	// Outcome is how it ended: a status, a gRPC code, or the error.
-	Outcome  string
+	Outcome string
+	// Wait is, under request.retry.retry_after, how long the trip waited
+	// before retrying the request and why, or why it was not retried when
+	// a Retry-After asked for longer than its time left; "" otherwise.
+	Wait     string
 	Duration time.Duration
 	started  time.Time
 }
@@ -119,6 +123,20 @@ func traceBodyError(ctx context.Context, err error) {
 		r := &t.requests[n-1]
 		r.Outcome += ", then the body broke off: " + model.CutTo(err.Error(), model.MaxFailureBytes, false)
 		r.Duration = time.Since(r.started)
+	}
+}
+
+// traceWait records, on the last request recorded, the wait before its
+// retry or why it was not retried (TracedRequest.Wait).
+func traceWait(ctx context.Context, wait string) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 {
+		t.requests[n-1].Wait = wait
 	}
 }
 

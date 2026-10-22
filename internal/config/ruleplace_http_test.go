@@ -44,7 +44,7 @@ func TestARuleWithoutANameIsToldOfByItsPlace(t *testing.T) {
 		{"csv", headless, "expression: host\n        labels:\n          - name: rack\n            expression: rack\n", []string{" has no name", ` reads column "host", but response.csv.header is false, so columns are named by number, from 1; write the column's number, such as "2"`, ` label "rack" reads column "rack", but response.csv.header is false`}},
 		{"jq", "", "expression: .v\n        error_mode: panic\n", []string{` error_mode has invalid value "panic"; want fail, log or ignore`}},
 		{"jq", "", "expression: .v\n        type: timer\n", []string{` has invalid type "timer"`}},
-		{"jq", "", "expression: .v\n        type: histogram\n", []string{" has type histogram, which only a prometheus transform can give, passing through a histogram that has its buckets or quantiles; a jq rule reads one value, so use gauge, counter or untyped"}},
+		{"jq", "", "expression: .v\n        type: histogram\n", []string{" has type histogram, which only a prometheus transform can give, passing through a histogram that has its buckets or quantiles; a jq rule reads one value, so use gauge, counter or untyped, or add a histogram block with the upper bounds of its buckets, as in histogram: {buckets: [0.1, 0.5, 1]}, to count the values the rule reads in a histogram"}},
 
 		{"prometheus", "", "expression: '^node_'\n        type: timer\n", []string{` has invalid type "timer"`}},
 		{"prometheus", "", "expression: '^node_'\n        error_mode: panic\n", []string{` error_mode has invalid value "panic"; want fail, log or ignore`}},

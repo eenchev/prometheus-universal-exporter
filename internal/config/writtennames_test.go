@@ -46,7 +46,7 @@ func validateMetricRuleBeforeEscapedNames(x *model.Collector, index int) error {
 		// expose; a rule reading one number would expose a histogram
 		// with a single plain sample, which no parser accepts.
 		if x.Transform.Type != "prometheus" {
-			return fmt.Errorf("%s has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", where, r.Type, r.Type, x.Transform.Type)
+			return fmt.Errorf("%s has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped%s", where, r.Type, r.Type, x.Transform.Type, histogramBlockAdvice(r.Type, x.Transform.Type))
 		}
 	default:
 		return fmt.Errorf("%s has invalid type %q", where, r.Type)

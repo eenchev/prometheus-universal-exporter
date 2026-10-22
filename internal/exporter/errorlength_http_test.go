@@ -42,21 +42,6 @@ func errorLengthServer(t *testing.T, collector string) (*Server, *bytes.Buffer) 
 	return server, logs
 }
 
-// refusingAddress is an address nothing listens on: that of a listener that
-// has been closed.
-func refusingAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
-
 // rawTarget answers every connection with what answer gives, written as it
 // is, and closes it: a target that does not speak HTTP.
 func rawTarget(t *testing.T, answer func() string) string {
@@ -129,7 +114,7 @@ type errorLengthCase struct {
 func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound(t *testing.T) {
 	requirePython(t)
 	testutil.CaptureLogs(t)
-	refusing := refusingAddress(t)
+	refusing := testutil.RefusingAddress(t)
 	redirectTo := func(location string) func(http.ResponseWriter, int) {
 		return func(w http.ResponseWriter, size int) {
 			w.Header().Set("Location", location+strings.Repeat("L", size))
@@ -395,7 +380,7 @@ func shortFailure(ctx context.Context, t *testing.T, c *model.Collector, target 
 func TestAShortFailureOfAnyStageIsAnsweredLoggedAndRememberedAsItWas(t *testing.T) {
 	requirePython(t)
 	testutil.CaptureLogs(t)
-	refusing := refusingAddress(t)
+	refusing := testutil.RefusingAddress(t)
 	var body atomic.Pointer[string]
 	var status atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

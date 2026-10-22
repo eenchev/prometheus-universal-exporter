@@ -447,6 +447,9 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			if minItems, ok := schema["minItems"].(float64); ok && float64(len(x)) < minItems {
 				errs = append(errs, fmt.Sprintf("%s: %d items, want at least %v", path, len(x), minItems))
 			}
+			if maxItems, ok := schema["maxItems"].(float64); ok && float64(len(x)) > maxItems {
+				errs = append(errs, fmt.Sprintf("%s: %d items, want at most %v", path, len(x), maxItems))
+			}
 			if items, ok := schema["items"].(map[string]any); ok {
 				for i, item := range x {
 					check(items, item, fmt.Sprintf("%s[%d]", path, i))

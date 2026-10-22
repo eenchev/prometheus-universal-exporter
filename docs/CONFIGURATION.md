@@ -497,7 +497,9 @@ entry has `name`, `description`, `type`, `labels`, and a transform-specific
 `histogram`, `summary`, and `untyped`. A rule reads one value per series, so
 it is a `gauge` unless it says otherwise, and `histogram` and `summary` are
 refused at startup for every transform but `prometheus`, where a rule passes
-through a series that has its buckets or quantiles; a `prometheus` rule
+through a series that has its buckets or quantiles — unless a `histogram`
+rule has a [`histogram` block](#histograms-from-a-list-of-values), which
+counts the values it reads in a histogram; a `prometheus` rule
 without a `type` keeps each series' own, so a counter stays a counter:
 
 ```yaml
@@ -1953,6 +1955,140 @@ without one; and `time_format: ""` beside a `time_zone` that names a zone is
 refused as `time_zone` without `time_format`. The
 [schema](#editor-support) says the same of each.
 
+### Histograms from a list of values
+
+A response often lists things one by one — the requests of the last minute
+with their durations, the files of a directory with their sizes, the jobs of
+a queue with their ages — where a distribution says more than a series per
+thing, and more than a series per thing is worth to store. A rule of `type:
+histogram` with a `histogram` block counts the values it reads in a
+histogram instead of making each a series, without a Python script:
+
+```yaml
+metrics:
+  - name: request_duration_seconds
+    description: Durations of the requests the target lists.
+    type: histogram
+    expression: .requests[].duration_ms
+    scale: 0.001
+    histogram:
+      buckets: [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5]
+```
+
+Nothing changes for a rule without the block: `type: histogram` without it is
+refused for every transform but `prometheus`, as it was. The block is taken by
+the `jq`, `yq`, `xpath`, `css`, `csv` and `regex` transforms, and refused on a
+`prometheus` rule, which passes on the target's histograms with their own
+buckets, and on a `python` rule, whose script makes its series itself.
+
+The values are what the rule would otherwise make series of, read the same
+way: every value a `jq` or `yq` expression gives, or the one value of each
+item with `items`; the text of each node an XPath expression selects, or the
+one value it computes; each match of a regex; a column's cell in each row of
+a CSV; and the text of each element a CSS selector matches within each item
+with `items`, or, without `items`, of every element it matches — which a rule
+of another type refuses more than one of, since nothing would tell their
+series apart. `value_map`, `time_format` and `scale` apply to each value
+before it is counted, so the `scale: 0.001` above counts milliseconds in
+buckets of seconds.
+
+`buckets` are the upper bounds of the histogram's buckets: finite numbers, in
+increasing order, each once, at most 100. The bucket `+Inf` is added; written
+among them it is refused, as are a bound out of order or written twice, NaN,
+`-Inf`, an empty list and the block on a rule of any other type or of none.
+A value is counted in every bucket whose bound it is at most, as Prometheus'
+`le` says — a value of exactly 0.1 is in `le="0.1"` — and in `+Inf`; the
+`_sum` is the sum of the values, after `scale`, and the `_count` how many
+there were. An infinity is counted as client libraries count one: `-Inf` in
+every bucket, `+Inf` in the bucket `+Inf` alone. The histogram is written as
+any other, a `_bucket` line of each bound and of `+Inf`, then `_sum` and
+`_count`; the example's target listing requests of 3ms, 40ms and 2s gives:
+
+```text
+# HELP request_duration_seconds Durations of the requests the target lists.
+# TYPE request_duration_seconds histogram
+request_duration_seconds_bucket{le="0.005"} 1
+request_duration_seconds_bucket{le="0.01"} 1
+request_duration_seconds_bucket{le="0.05"} 2
+request_duration_seconds_bucket{le="0.1"} 2
+request_duration_seconds_bucket{le="0.5"} 2
+request_duration_seconds_bucket{le="1"} 2
+request_duration_seconds_bucket{le="5"} 3
+request_duration_seconds_bucket{le="+Inf"} 3
+request_duration_seconds_sum 2.043
+request_duration_seconds_count 3
+```
+
+The labels apply to the histogram, not to each value. A static label is on
+every histogram of the rule; a label read from the response splits the
+values into one histogram for each distinct set of label values, in the
+order its first value came, which is what `items` makes natural — the
+durations of each method below, from a CSV of one request a row, are a
+histogram per method:
+
+```yaml
+transform:
+  type: csv
+metrics:
+  - name: request_duration_seconds
+    type: histogram
+    expression: duration_ms
+    scale: 0.001
+    labels:
+      - name: method
+        expression: method
+    histogram:
+      buckets: [0.01, 0.1, 1]
+```
+
+A label with an empty value is no label, so values whose labels differ only
+in one are one histogram's, as they are one series to Prometheus. The labels
+are grouped by the values their expressions give: a label's `value_map` or
+`truncate: true` that makes two sets alike afterwards leaves two histograms
+of one series, which fails the scrape as a duplicate series, so map such
+values in the expression instead.
+
+A value that cannot be counted is handled by the rule's
+[`error_mode`](#when-a-metric-cannot-be-extracted), as any rule's value is: a
+value that is no number, and NaN, which is in no bucket and would make the
+sum NaN for good (`metric "request_duration_seconds": value is NaN,
+which a histogram cannot count`), and a missing value, such as a `null`
+among the durations, as `required` says. Under `log` and `ignore` the
+histogram counts the other values, and under `fail` the scrape fails.
+
+An empty list is a histogram that counted nothing — every bucket, the
+`_sum` and the `_count` 0 — so the series is there whether the target listed
+anything or not, and is no missing value whatever `required` says: a `jq`
+expression that gives no value, `items` that select nothing, an XPath
+expression or a CSS selector that selects nothing, a regex that matches
+nothing, a CSV without rows. Only a rule whose labels are all static has
+one: a rule with a label read from the response has no labels to give a
+histogram of no value, and makes none. A `jq` path into a key the response
+lacks, `.requests[]` of a document without `requests`, is no empty list but
+an error of the expression, as it is for any rule.
+
+Each histogram is one series of
+[`limits.max_metrics`](#memory), however many values it counts, so a
+list of a hundred thousand durations costs one series; a rule whose labels
+split its values into more histograms than the limit allows fails the scrape
+as a rule of too many series does. How many values a response can hold is
+bounded by its size (`max_response_bytes`).
+
+The histogram describes the values of this one response. It is made anew on
+every scrape and counts nothing of the scrape before, so its buckets and its
+`_count` go down as well as up when the target's list changes, which a
+histogram Prometheus' client libraries keep never does: `rate()` and
+`increase()` over it mean nothing unless the target's list itself only grows.
+Read it as it is, as with `histogram_quantile(0.95,
+request_duration_seconds_bucket)` for the 95th percentile of the listed
+durations, summed by `le` across targets where needed. It is exported as a
+`histogram`, in the text format, [OpenMetrics](#openmetrics) (not as a
+`gaugehistogram`, which Prometheus reads as gauges) and to
+[OTLP](OTLP.md), where it is a histogram data point of the bounds and counts
+of each bucket. `--dry-run` checks the block as startup does, and a
+[debug probe](#debug-probes) counts each histogram as one series of its
+metric and shows it among the metrics as the probe answers it.
+
 ### Conditional metrics and labels
 
 There is no `when` key: each transform already says in its own language which
@@ -2066,6 +2202,7 @@ A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
 
+<!-- request-types: all "For `%s`" -->
 Each type accepts its own keys. For `http`, `type` is the only required one —
 `path` can be left out when the target URL already carries the whole path, and
 `method` defaults to `GET`:
@@ -2083,7 +2220,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401` makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
-| `retry` | none | `attempts`, `backoff`, `non_idempotent`, and `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set. See [Target requests](REQUESTS.md#retries). |
+| `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
@@ -2128,6 +2265,33 @@ apply too, and no `decoder` or `response` setting; its rows are read by a
 `csv`, `jq`, `yq` or `python` transform. Its table is in [Databases over
 SQL](SQL.md#a-collector).
 
+For `dns`, no key is required: `record_type` is `A` by default, or `AAAA`,
+`CNAME`, `MX`, `NS`, `TXT`, `SRV` or `PTR`, `server` the resolver asked, the
+system's by default, and `transport` `udp` or `tcp`; `allowed_targets` and
+`denied_targets` apply too, matched against the name. The decoder is `json`;
+its table is in [DNS](DNS.md#a-collector).
+
+For `tlscert`, no key is required: `tls` sets the roots, a client
+certificate and the name verified, and `allowed_targets` and
+`denied_targets` apply as for `http`. The decoder is `json`; its table is in
+[TLS certificates](TLSCERT.md#a-collector).
+
+For `kubernetes`, `resource` is required; `group` and `version`,
+`namespaces` or `all_namespaces`, `label_selector`, `field_selector`,
+`max_objects`, `max_response_bytes`, and `api_server` with `tls` and
+`bearer_token_file` for a cluster other than the exporter's own apply too,
+and `allowed_targets` and `denied_targets` do not, there being no target.
+The decoder is `json`; its table is in [Kubernetes objects](KUBERNETES.md#a-collector).
+
+For `s3file`, in a build that [asks for it](S3FILE.md#building-with-s3file),
+`root` is required; `path`, or `files`, `max_files` and `max_total_bytes`,
+`max_age` and `max_response_bytes` are `localfile`'s, and `region`,
+`endpoint`, `path_style`, `access_key_id_file`, `secret_access_key_file`,
+`session_token_file`, `allowed_targets` and `denied_targets` apply too; its
+table is in [Objects in S3](S3FILE.md#a-collector).
+<!-- /request-types -->
+
+<!-- request-types: all -->
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
@@ -2139,12 +2303,14 @@ and `from` and `until`, which no other type accepts. `grpc` accepts
 `timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
 `sshfile` accepts `path`, `timeout` and `param_<name>`, as `localfile` does,
-and requires a `target`, the host. `sql` accepts `timeout` and
+and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
+`param_<name>` too, and requires a `target`, the bucket. `sql` accepts `timeout` and
 `param_<name>`, and requires a `target`, the database server. `dns` and
 `tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
 name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
 since the collector lists what its configuration names.
+<!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
 value gets a `400` naming the parameter rather than one of the two being
@@ -2471,6 +2637,13 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - a `prometheus` rule's `expression` is not nothing but blanks, and the rule
   has a `name` or an `expression`, by which it says which metrics it passes
   on;
+- a rule's [`histogram` block](#histograms-from-a-list-of-values) is on a
+  rule of `type: histogram` of a transform other than `prometheus` and
+  `python`, and its `buckets` are 1 to 100 finite numbers in increasing order,
+  each once, without `+Inf`; such a rule has no label named `le`. `type:
+  histogram` without the block is refused for every transform but
+  `prometheus`, the error saying the block is the way to count the values in
+  a histogram;
 - `transform.labels` and `rename_labels` must give label names, classic ones
   unless `name_escaping` escapes the others, and two renames may not target
   the same label. A key of `transform.labels` or a rule's label that
@@ -3742,7 +3915,10 @@ and keeps five, the scrape passes under `max_metrics: 5`. One thing counts
 that is not kept: a rule that makes more series than the limit has room for
 ends the scrape there, also when it would have failed as a whole further on
 and given them all up, since finding that out would mean making every series
-the response describes.
+the response describes. A rule with a
+[`histogram` block](#histograms-from-a-list-of-values) makes a series of each
+histogram, taken when its first value comes, and none of the values it
+counts.
 
 In a container with a memory limit, `--runtime.memory-limit-ratio` sets the Go
 memory limit to a share of it, read at startup from the container's own
@@ -4351,7 +4527,12 @@ The report lists:
   first 512. An `http` or `graphite` request that is retried ends the list
   with how: `Retries: up to 2, 1s apart, on a failed connection and on an
   answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
-  collector's [`retry`](REQUESTS.md#retries) or the static target's.
+  collector's [`retry`](REQUESTS.md#retries) or the static target's. Under
+  [`retry.retry_after`](REQUESTS.md#waiting-as-retry-after-asks) the line
+  adds that such an answer's `Retry-After` replaces the backoff, and each
+  request retried has a line of the wait taken and why, `then waited 3s, as
+  Retry-After asked`, or of why it was not retried: `not retried: its
+  Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4628,10 +4809,11 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses`, `pagination` or `login` is listed under
-`details.request_policies`, by name, with those settings as they will be
-applied — `2XX` as `2xx`, `not_found` as `NOT_FOUND`, `retry.statuses` as
-`retry_statuses`, `[]` included, a `pagination` with its defaults,
+`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination` or
+`login` is listed under `details.request_policies`, by name, with those
+settings as they will be applied — `2XX` as `2xx`, `not_found` as
+`NOT_FOUND`, `retry.statuses` as `retry_statuses`, `[]` included,
+`retry.retry_after` as `retry_after: true`, a `pagination` with its defaults,
 `max_pages: 10` among them, a `login` with the `header` and `prefix` its
 token is sent with — so a list that lets through more or less than meant, a
 pagination that asks the target for more pages than meant, or a token sent
@@ -4817,11 +4999,21 @@ nothing there.
 ## Related pages
 
 - [PYTHON.md](PYTHON.md) — the Python transform and pre-script API.
-- [REQUESTS.md](REQUESTS.md) — redirects, HTTP/2, retries, TLS and per-scrape overrides.
+- [REQUESTS.md](REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, restricting targets, TLS and per-scrape overrides.
 - [LOCALFILE.md](LOCALFILE.md) — the `localfile` request type.
 - [GRAPHITE.md](GRAPHITE.md) — the `graphite` request type and decoder.
 - [GRPC.md](GRPC.md) — the `grpc` request type.
-- [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target and for the exporter itself.
+- [SSHFILE.md](SSHFILE.md) — the `sshfile` request type.
+- [SQL.md](SQL.md) — the `sql` request type.
+- [DNS.md](DNS.md) — the `dns` request type.
+- [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
+- [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
+- [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
+- [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
+- [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
+- [FLAGS.md](FLAGS.md) — every command-line flag.
 - [SELF-METRICS.md](SELF-METRICS.md) — the exporter's own metrics.
 - [STATIC-TARGETS.md](STATIC-TARGETS.md) — targets the exporter scrapes itself and serves on the static targets endpoint.
+- [ALLOCATOR.md](ALLOCATOR.md) — the target allocator, `pue-allocator`.
 - [OTLP.md](OTLP.md) — OTLP export.
+- [LOGGING.md](LOGGING.md) — the log format.

@@ -1,4 +1,4 @@
-# Generic HTTP Prometheus Exporter — Helm Chart Specification
+# Prometheus Universal Exporter — Helm Chart Specification
 
 This is the specification for the Helm chart: what it MUST render, expose,
 validate and document. The exporter it deploys has its own specification in
@@ -1065,6 +1065,14 @@ The Helm chart README MUST document:
 - A reference listing every top-level value, its type and its default
 - The features the chart deploys, described only where the exporter
   implements them
+- What the exporter reads, in its opening: every request type in the tree,
+  the opt-in ones as needing a build that asks for them, and every decoder;
+  `Chart.yaml`'s `description`, which Artifact Hub shows on the search card,
+  MUST name every request type of the image the chart deploys, a default
+  build. A test MUST find each `internal/fetch/requesttype_<name>.go` named
+  in both, the opt-in ones in the README alone, and each decoder in the
+  README's opening, so a new request type or decoder fails it until the
+  chart describes it
 - The target allocator: what `allocator.enabled` renders, the exporter in
   allocator mode and its `emptyDir` cache, the ScrapeConfigs of the probe
   jobs, and the combinations the chart refuses (§ 33.10c)

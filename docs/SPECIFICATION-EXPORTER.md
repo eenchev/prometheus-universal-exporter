@@ -1,4 +1,4 @@
-# Generic HTTP Prometheus Exporter — Exporter Specification
+# Prometheus Universal Exporter — Exporter Specification
 
 This is the specification for the exporter itself: its endpoints, configuration,
 decoders, transforms, limits, logging, CLI, container image and tests. The Helm
@@ -18,17 +18,17 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts arbitrary HTTP endpoint responses into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
-The exporter is intended for systems that expose useful operational/status data over HTTP but do not provide suitable Prometheus metrics.
+The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
 The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Fetch HTTP/HTTPS endpoints itself, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods.
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for it, objects in S3 (`s3file`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, YAML, XML, CSV, HTML, Prometheus exposition format, plain text, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -36,11 +36,11 @@ The exporter MUST:
 - Support regex-based extraction for plain text.
 - Support full Python as a first-class decoder/transformation mechanism, not merely as a fallback.
 - Normalize all decoder output into a common internal metric representation before Prometheus exposition.
-- Provide explicit handling for HTTP failures, decoding failures, transformation failures, and missing fields/keys.
+- Provide explicit handling for fetch failures, an HTTP status or any other request type's, decoding failures, transformation failures, and missing fields/keys.
 - Protect against excessive response size, execution time, metric count, label count, and other cardinality/resource abuse.
 - Expose exporter self-metrics for scrape, decode, transform, and configuration health.
 
-The design MUST remain extensible so additional decoders or transformation engines can be added without changing the HTTP fetcher or Prometheus output layer.
+The design MUST remain extensible so additional request types, decoders or transformation engines can be added without changing the other layers or the Prometheus output layer.
 
 ---
 
@@ -56,10 +56,11 @@ Prometheus Operator
      /probe
         |
         v
-  HTTP Fetcher
+  Request type
+ (http, grpc, sql, ...)
         |
         v
- HTTP Response
+    Response
         |
         v
     Decoder
@@ -82,6 +83,8 @@ Prometheus Operator
 
 Important:
 
+- A request type is a first-class component: it reaches the source and hands
+  the decoder a response, which every type's later layers share (§ 5.1).
 - A decoder is a first-class component.
 - Python is a first-class transform, not a decoder or fallback.
 - Prometheus is a first-class decoder capable of converting an existing Prometheus endpoint into the internal metric model and then applying optional filtering/renaming/label transformations.
@@ -247,6 +250,26 @@ target, as `retry.codes` is for every other type; a static target's MUST
 replace its collector's whole, and no probe parameter sets it. A debug report
 of an `http` or `graphite` request with retries MUST say, after its requests,
 how often, how far apart and on which statuses it is retried.
+`retry.retry_after`, for `http` and `graphite`, MUST default to off, and off,
+a `Retry-After` header MUST NOT change any wait. On, the wait before retrying
+an answer of a retried status — one `retry.statuses` lists, that is not
+accepted, with an attempt left — MUST be what its `Retry-After` asks for in
+place of `backoff`: delta-seconds, one or more digits, or an HTTP date (RFC
+9110, section 10.2.3), taken from the exporter's clock when the answer is
+read, a date already past asking for no wait. A value that is neither — a
+sign, a fraction, a date that does not parse — MUST be ignored and `backoff`
+waited. When the wait asked would end at or after the request's deadline,
+the exporter MUST NOT wait: that answer MUST be the request's answer at
+once, and its `http_status` failure MUST say that it was not retried, with
+the wait asked and the time left. The wait after a transport failure MUST
+NOT read the header, and the resend of a login's `401` (§ 42.6a) MUST stay
+as it is. `retry.retry_after` MUST be refused for `grpc`, in a collector and
+a static target, as `retry.non_idempotent` is; a static target's MUST
+replace its collector's and be part of its cache key, and no probe parameter
+sets it. A debug report MUST say in its retry line that a `Retry-After`
+replaces the backoff, and MUST show below each request retried under it the
+wait taken and why — as `Retry-After` asked, or `retry.backoff` and why the
+header was not used — or why it was not retried.
 A refused target (§ 26.1) and response headers over their bound (§ 4) MUST
 NOT be retried. An HTTP/2 connection closed for a protocol error before the
 response's headers were read (§ 4) MUST be retried once, as one of
@@ -779,7 +802,7 @@ opt-in types.
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
-| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out (§ 3.2a). |
+| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out; `retry_after`, off by default, waiting a retried answer's `Retry-After` in place of `backoff` (§ 3.2a). |
 | `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
@@ -1120,7 +1143,7 @@ keys:
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
-| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` and `statuses` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent`, `statuses` and `retry_after` MUST be refused, and `codes` for every other type, in a collector and a static target. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -4691,9 +4714,45 @@ standard shape. `description` becomes the Prometheus HELP text. `type` MUST be o
 to `gauge`, except on a `prometheus` rule, which MUST keep the type of each
 series it passes through when it sets none. `histogram` and `summary` MUST be
 refused at load on a rule of any other transform, since a rule reading one
-value has no buckets or quantiles to expose. Metric declarations MUST be placed on the collector, alongside
+value has no buckets or quantiles to expose, except `histogram` on a rule
+with a `histogram` block (below), and the refusal of `histogram` on a rule of
+a transform that takes the block MUST name the block as the way to count the
+values in a histogram. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
+
+A rule of `type: histogram` MAY set a `histogram` block with `buckets`, the
+upper bounds of its buckets, to count the values it reads in a histogram
+instead of making each a series; nothing MUST change for a rule without the
+block. The block MUST be taken by the `jq`, `yq`, `xpath`, `css`, `csv` and
+`regex` transforms and refused at load on a `prometheus` rule and a `python`
+rule, and on a rule of any other type or of none. `buckets` MUST be refused
+at load when it is empty, longer than 100, holds a bound that is not finite
+(`+Inf`, which every histogram has as its last bucket, refused saying so), or
+holds a bound not greater than the one before it; a rule with the block MUST
+NOT have a label named `le`. The values counted MUST be those the rule would
+otherwise make series of, read as such a rule reads them — every value of a
+`jq` or `yq` expression or one per item, each node an XPath expression
+selects or the one value it computes, each match of a regex, a column's cell
+in each row — and for a `css` rule without `items` the text of every element
+its selector matches, which a rule of another type MUST refuse more than one
+of; `value_map`, `time_format` and `scale` MUST apply to each value before it
+is counted. A value MUST be counted in every bucket whose bound it is at most
+and in `+Inf`, its scaled value added to the sum and 1 to the count; `-Inf`
+MUST be counted in every bucket and `+Inf` in `+Inf` alone. NaN, a value that
+is no number and a missing value MUST be handled by the rule's `error_mode`
+and `required` as any rule's value is, the histogram counting the others
+under `log` and `ignore`. The values of one set of label values, a label with
+an empty value being none, MUST make one histogram, the histograms in the
+order of their first values; each MUST take one series of
+`limits.max_metrics` when its first value comes, and the values none. A rule
+that reads no value at all — an expression that gives none, items, nodes or
+elements selected none, no match, no rows — MUST make one histogram of count
+0 with every bucket and the sum 0 when its labels are all static, and none
+otherwise, and MUST NOT count it as a missing value. The histogram MUST be
+made anew from each response, counting nothing of the scrape before, and
+MUST be exported as a histogram in the text format, OpenMetrics and OTLP, as
+one read from a target is.
 
 A rule MAY set `value_map`, a mapping of text to numbers, and `scale`, a
 number. The value an expression gives — a regex capture, a CSS element's or
@@ -7669,6 +7728,14 @@ being handed the mapping made of them; and where a `value_map` may stand —
 not on a static label, in a `python` or `prometheus` rule or in a rule
 without a name — stays the exporter's to refuse.
 
+The schemas MUST refuse of a rule's `histogram` block (§ 18.1) what a schema
+can tell, as the exporter does: the block on a rule whose `type` is not
+`histogram` or is left out, on a `python` or `prometheus` rule, without
+`buckets`, and with no bucket or more than 100. Whether the bounds are
+finite, in increasing order and each once, and whether such a rule has a
+label `le`, stay the exporter's to refuse, the description saying so, and a
+test MUST show both kinds.
+
 That no two rules of a collector are the same rule (§ 18.1) is the
 exporter's alone to refuse. A schema compares the items of a list only
 whole, with `uniqueItems`, and that is another verdict: it would take two
@@ -7939,15 +8006,18 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile` or `sql` collector MAY set `request.allowed_targets`
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` or
+`s3file` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
 entry that is none of these, such as one with a scheme, a port or a path,
-MUST be refused at load; another request type setting either MUST be refused
-as any key of another type is. An `s3file` collector's lists name buckets,
-whose target is one (§ 5.1, `s3file`), and are held to the rules of names
-alone. A name entry MAY hold letters, digits, dots,
+MUST be refused at load; another request type — `localfile`, and
+`kubernetes`, which takes no target — setting either MUST be refused as any
+key of another type is. A `dns` collector's lists are matched against the
+name alone, and a `PTR` target's against its address (§ 5.1, `dns`). An
+`s3file` collector's lists name buckets, whose target is one (§ 5.1,
+`s3file`), and are held to the rules of names alone. A name entry MAY hold letters, digits, dots,
 hyphens and underscores, a hyphen first or last included. An entry MUST be
 written in ASCII: one with any character outside it — an internationalised
 name in its own letters, a full-width spelling, a space outside ASCII beside
@@ -8484,10 +8554,11 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status`, `accept_codes`, `retry.statuses`, `pagination` or `login`
-  is listed under `details.request_policies` with those settings as
-  normalised for use, `retry.statuses` as `retry_statuses`, an empty list as
-  `[]`, a `pagination` with its defaults filled in, a `login` with the header
+  `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
+  `pagination` or `login` is listed under `details.request_policies` with
+  those settings as normalised for use, `retry.statuses` as
+  `retry_statuses`, an empty list as `[]`, `retry.retry_after` as
+  `retry_after: true`, a `pagination` with its defaults filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);
@@ -10089,13 +10160,14 @@ status captured:
 - Build-time selection: every `internal/fetch/requesttype_<name>.go` carries its selection
   constraint and the list of known types matches the files; the guard's
   constraint names every type; evaluated with the Go toolchain's constraint
-  rules, a default build compiles every type and not the guard,
+  rules, a default build compiles every type but the opt-in ones and not
+  the guard,
   `select_request_types,request_type_http` compiles http and not the guard,
   `select_request_types,request_type_graphite` compiles graphite alone, and
   `select_request_types,request_type_grpc` compiles grpc alone, and
   `select_request_types` alone compiles only the guard; each of CI's loops
   over single-type builds names every type in the tree; a default build
-  registers every known type; a known type missing from the build is rejected
+  registers every known type but the opt-in ones; a known type missing from the build is rejected
   as left out of the build, naming the tag, while an unknown name is not;
   registering a type twice panics; the `--dry-run` report lists the built
   types; `tools/request-type-tags.sh` maps lists to tags, de-duplicates, and
@@ -24632,7 +24704,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   holds longer, its intermediate's, not the other intermediate's earlier
   one.
 
-## 34.162 Virtual hosts for logins and pages, the helm version, the flag reference and the kubernetes type
+## 34.162 Virtual hosts for logins and pages, the helm version and the flag reference
 
 - A relative `login.url` is posted with the request's `Host` override, the
   collector's `request.headers` `Host` or a static target's, json and oauth2
@@ -24660,7 +24732,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `docs/ENDPOINTS.md` and `docs/FLAGS.md`, like every page under `docs/`, are
   linked from the README's index, and the README stays within its line limit
   (§ 35).
-## 34.x The kubernetes request type and internal/kubeapi
+
+## 34.163 The kubernetes request type and internal/kubeapi
 
 - A listing of internal/kubeapi asks for pages of its page size, follows
   each continue token to the last page, sends the token, both selectors
@@ -24738,7 +24811,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   beside clusterWide by schema and templates
   (`TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing`).
 
-## 34.163 The generation named is that of the configuration in force
+## 34.164 The generation named is that of the configuration in force
 
 - An exporter in allocator mode, in process, names the first bundle's
   generation in its self-metrics while the reload that put the bundle in
@@ -24752,7 +24825,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   static target file is put in force alone, the restored files are reloaded
   with theirs, and a reload in place keeps it (§ 42.14e).
 
-## 34.164 Kubernetes pages that adapt to the byte bound
+## 34.165 Kubernetes pages that adapt to the byte bound
 
 - A Kubernetes listing whose pages of 100 objects are over the per-page
   byte bound but whose pages of 25 fit asks for the first page with
@@ -24779,6 +24852,132 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   refused (`limit=100`, `limit=50`, `limit=50` with the continue token),
   finds every endpoint, and logs the fall to smaller pages once at debug
   level with the page size 50.
+
+## 34.166 Pinned workflow actions and an opt-in Retry-After
+
+- Every `uses:` in `.github/workflows`, a commented-out one included, names
+  its action at a 40-character commit SHA followed by `# vX.Y.Z`, actions in
+  the repository (`./...`) and images (`docker://`) excepted; the test fails
+  for an action named by a tag or branch, and when it finds no `uses:` at all
+  (§ 42.12).
+- `.github/dependabot.yml` has a `github-actions` update of the directory `/`,
+  which keeps the pinned SHAs and their version comments current, and the test
+  fails without it (§ 42.12, § 42.16).
+- The golangci-lint and helm versions, and the lint step's build tags, are
+  still read from `ci.yml` and the other workflows with the action pinned and
+  its version comment between the `uses:` and its `with:`; the tests fail
+  when the comment hides the step's inputs from them.
+- Without `retry.retry_after` a `503`, and a `429`, whose `Retry-After` asks
+  for no wait is retried after the backoff, an hour the deadline cuts short,
+  so the first answer is kept and no wait is traced; with it the retry is
+  sent at once and the trace says `then waited 0s, as Retry-After asked`
+  (`TestRetryAfterReplacesTheBackoffOnlyWhenAsked`, § 3.2a).
+- A `Retry-After: 1` is waited, a second, in place of a backoff of none
+  (`TestRetryAfterSecondsAreWaited`).
+- A `Retry-After` HTTP date two seconds off is waited until, a second at
+  least, and a date already past asks for no wait whatever the backoff
+  (`TestRetryAfterDatesAreWaitedUntil`).
+- A `Retry-After` of `soon`, `-1`, `1.5`, `+1`, `0x10` or a date that does
+  not parse falls back to the backoff, which the trace says, and an answer
+  without the header waits the backoff too
+  (`TestAnUnreadableRetryAfterFallsBackToTheBackoff`).
+- A `Retry-After` of seconds, of a date or of more digits than a duration
+  holds that asks for longer than the probe has left ends the request at
+  once with that answer, after one request, the answer and the trace saying
+  why it was not retried (`TestARetryAfterLongerThanTheTimeLeftEndsTheRequest`).
+- A status `retry.statuses` does not list, an accepted one and the last
+  attempt's answer are the answer, however long their `Retry-After`, and say
+  nothing of a retry, while a listed one asking for too long does
+  (`TestRetryAfterIsReadOnlyOnARetriedAnswer`).
+- A static target's `retry.retry_after` replaces the collector's either way
+  and keeps the collector's when left out, in its overrides and in the
+  requests sent (`TestAStaticTargetsRetryAfterReplacesTheCollectors`); it is
+  read from the target file and is part of the target's cache key as
+  `retry_retry_after` (`TestLoadStaticTargetFileParsesEveryRequestParameter`).
+- The retry line says a retried answer's `Retry-After` replaces the backoff
+  only when it is on, a static target's off included
+  (`TestTheRetriesLineSaysRetryAfterReplacesTheBackoff`).
+- A `graphite` collector's `retry.retry_after` retries a `503` asking for no
+  wait at once, and without it the deadline cuts an hour's backoff short
+  (`TestAGraphiteCollectorsRetryAfterReplacesTheBackoff`).
+- `retry.retry_after` is refused for a `grpc` collector and a `grpc` static
+  target, as `retry.non_idempotent` is
+  (`TestGRPCValidation`, `TestGRPCStaticTargetRequest`).
+- A debug probe of a collector with `retry.retry_after` shows `then waited
+  0s, as Retry-After asked` below a retried `429` and the retry line's
+  mention of `Retry-After`; a `503` asking for 120 seconds shows `not
+  retried: ...` below its request and in the `http_status` failure
+  (`TestADebugProbeShowsTheWaitsRetryAfterAskedFor`).
+- `--dry-run` lists `retry_after: true` under `request_policies` for a
+  collector that sets it, and no policy for one that leaves it off
+  (`TestDryRunReportsRetryAfter`).
+- The configuration and static target file schemas have
+  `request.retry.retry_after` as a boolean described as `http` and
+  `graphite`'s (`TestTheSchemasHaveRetryAfter`).
+
+## 34.167 Histograms from a list of values
+
+- A jq rule of type histogram with a histogram block counts its values in cumulative buckets: a value on a bound is in that bound's bucket, `+Inf` counts every value as the count does, the sum is of the scaled values, milliseconds under `scale: 0.001` land in buckets of seconds, text that is a number is counted, `-Inf` is in every bucket and `+Inf` in `+Inf` alone (TestAHistogramRuleCountsItsValuesInCumulativeBuckets).
+- Every transform that reads values with rules — jq without and with items, yq, xpath, css with items and without, csv and regex — makes one histogram of the values of each set of label values, in the order of its first value, a static label on each (TestEveryTransformCountsAHistogramRulesValues).
+- A csv histogram rule beside a gauge rule leaves the gauge's series of each row together and the histogram after them (TestAHistogramRuleBesideAGaugeRule).
+- An empty list — a jq expression of no value, items, XPath nodes, CSS elements or rows selected none, a regex of no match — is a histogram of count 0 with every bucket 0, under required: true and error_mode: fail, and a rule with a label read from the response makes none (TestAnEmptyListIsAHistogramOfNothing).
+- A histogram value that is no number, NaN, or missing is handled by the rule's error_mode in jq, xpath, csv and css: under log and ignore the histogram counts the rest and the failures are counted against the rule, under fail the scrape fails naming the value (TestAHistogramValueThatFailsFollowsTheErrorMode).
+- A histogram of a hundred thousand values is one series of limits.max_metrics: 1, and labels that split the values into more histograms than the limit allows fail the scrape with the limit's error (TestAHistogramIsOneSeriesOfTheLimit).
+- Values whose labels differ only in a label of an empty value, or none, are one histogram's (TestHistogramLabelsOfAnEmptyValueAreNone).
+- A collector without a histogram rule gets no histogram folds in its Transform's context, so its scrape allocates nothing for them (TestOnlyACollectorWithAHistogramRuleFoldsHistograms).
+- A histogram block loads on a rule of type histogram of jq, yq, xpath, css, regex and csv; type: histogram without it is refused naming the block; the block on a gauge, a rule without a type, a summary, a prometheus or a python rule, without buckets, with none, with +Inf, -Inf or NaN, out of order, twice, with 101 buckets, and beside a label le, is refused at load, each in its own words; 100 buckets load (TestAHistogramBlockIsCheckedWhenTheConfigurationLoads).
+- End to end, a probe answers a jq histogram rule's histograms per method in the text format, buckets, sum and count exactly, and in OpenMetrics, beside a gauge (TestAProbeAnswersAHistogramRulesHistograms).
+- A histogram rule's histograms are exported to OTLP as histogram data points of the rule's bounds, per-bucket counts, the count and the sum (TestAHistogramRulesHistogramsAreExportedAsOTLPHistograms).
+- The schema and the exporter take a histogram block alike on a jq or csv histogram rule with 1 to 100 buckets and refuse it alike with 101 or no buckets, without buckets, with a bucket of text or an unknown key, on a gauge or a rule without a type, and on a prometheus or a python rule; a bound out of order, twice, +Inf or NaN, a label le, and type: histogram without the block pass the schema and are refused by the exporter (TestSchemaAndExporterAgreeOnHistogramBlocks).
+
+## 34.168 Documentation that names every request type
+
+- Every list marked `<!-- request-types: all -->` names every request type
+  of `internal/fetch/requesttype_<name>.go`, the opt-in ones included, as
+  the marker's format writes it, and every list marked
+  `<!-- request-types: default -->` names every type of a default build and
+  no opt-in one; `docs/CONFIGURATION.md` holds two such lists,
+  `docs/STATIC-TARGETS.md`, `docs/REQUESTS.md` and `docs/SELF-METRICS.md`
+  one each, and a marker without its end fails (§ 35)
+  (TestMarkedListsNameEveryRequestType).
+- The check of marked lists finds a type missing from a list, a type
+  missing from the format the marker gives, a default list naming an opt-in
+  type or missing a default one, and passes complete lists
+  (TestTheRequestTypeListCheckFindsWhatIsMissing).
+- Every request type but `http` has its page, `docs/<NAME>.md`, which § 35
+  requires by name and which the README's index and the related pages of
+  `docs/CONFIGURATION.md` link (TestEveryRequestTypeHasItsPage).
+- The code layout of `docs/DEVELOPMENT.md` names every package of
+  `go list ./...` and every file of the root package that is not a test
+  (TestTheCodeLayoutNamesEveryPackage).
+- Read from the registrations in `internal/fetch`, the types § 26.1 lets
+  set target lists, the targets § 42.14 and `docs/STATIC-TARGETS.md` give
+  their own credentials, and the types `docs/TLSCERT.md` says take the
+  `tls` block are exactly those whose registration lists `allowed_targets`,
+  a target's `bearer_token`, and `tls` (§ 35)
+  (TestSentencesNameTheRequestTypesThatTakeAKey).
+- Spec § 1's formats, the chart README's opening and the comment on
+  `model.DecoderConfig` name every decoder of `model.DecoderTypes`
+  (TestDecoderListsNameEveryDecoder).
+- The chart README's opening names every request type of the tree and
+  `Chart.yaml`'s description every type of a default build, and a type the
+  test has no chart name for fails it (SPECIFICATION-CHART.md § 33.13)
+  (TestTheChartDescribesEverySource).
+- `docs/ENDPOINTS.md` has a row for every path `internal/exporter/server.go`
+  routes, `/debug/run` among them, and for the self-metrics and static
+  targets paths at their defaults (TestEndpointsListEveryRoute).
+- The headings of § 34 are numbered `34.<number>` in order, each after a
+  blank line (TestSpecTestSectionsAreNumberedInOrder).
+
+## 34.169 An address that keeps refusing
+
+- `testutil.RefusingAddress` gives an address whose connections are refused
+  and whose port no server can listen on, nor be handed, while the test
+  runs; the test fails for the address of a listener that was closed
+  (`TestARefusingAddressKeepsItsPort`). The tests that wait for a refused
+  connection — the largest failure of each stage, the debug report's bounds,
+  the same failure recognised, and carrying on after a failed fetch — take
+  their address from it.
 
 # 35. Documentation requirements
 
@@ -24816,6 +25015,43 @@ The repository MUST include documentation covering:
     probe parameters, static targets, its self-metrics, gRPC-Web and Connect
     through `http`, and building without it, with the size it adds; its
     examples MUST be loaded and run by a repository test
+25. Every other request type, each on a page of its own covering at least a
+    collector's keys, the target, and static targets: `graphite` in
+    `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
+    `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
+    `kubernetes` in `docs/KUBERNETES.md` and the opt-in `s3file` in
+    `docs/S3FILE.md`, with `localfile` and `grpc` above and `http` in
+    `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
+    each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
+    `docs/<NAME>.md`, named in this list and linked from the README's index
+    and from the related pages of `docs/CONFIGURATION.md`
+26. The target allocator, `pue-allocator`, in `docs/ALLOCATOR.md`
+
+A list in the documentation that stands for every request type — the keys of
+each type in `docs/CONFIGURATION.md`, what a static target of each takes in
+`docs/STATIC-TARGETS.md`, the types label placeholders work with in
+`docs/REQUESTS.md` — MUST be marked with a line `<!-- request-types: all -->`
+before it and a line `<!-- /request-types -->` after it, and a test MUST
+find every type of the tree, the opt-in ones included, named in each marked
+list as `` `name` ``, or in the form the marker gives after `all`, such as
+`"For `%s`"`. A list of the types of a default build, as the
+`http_exporter_build_info` example in `docs/SELF-METRICS.md`, MUST be marked
+`<!-- request-types: default -->`, and the test MUST find every type but the
+opt-in ones in it, and no opt-in one. So a new request type fails the test
+until each such list names it. The code layout of `docs/DEVELOPMENT.md` MUST
+name every package `go list ./...` lists, and every file of the root
+package that is not a test, which a test MUST check too.
+
+A sentence that says which request types take a key MUST name exactly the
+types whose registration in `internal/fetch` lists it, and a test MUST read
+the registrations and hold the sentence to them: the types that take
+`allowed_targets` in § 26.1, the targets that take their own credentials in
+§ 42.14 and `docs/STATIC-TARGETS.md`, and the types that take the `tls`
+block in `docs/TLSCERT.md`. The formats of § 1 and the comment on
+`model.DecoderConfig` MUST name every decoder of `decoder.type`, and
+`docs/ENDPOINTS.md` MUST have a row for every path the server routes, the
+self-metrics and static targets paths at their defaults, each held so by a
+test.
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
 
@@ -24991,11 +25227,13 @@ The resulting system should behave as a generic Prometheus adapter:
                          |
                          v
                  +---------------+
-                 |  HTTP Fetcher |
+                 | Request type  |
+                 | http, grpc,   |
+                 | sql, files... |
                  +-------+-------+
                          |
                          v
-                   HTTP Response
+                      Response
                          |
                          v
                  +---------------+
@@ -25024,6 +25262,12 @@ The resulting system should behave as a generic Prometheus adapter:
                          v
                Prometheus exposition
 ```
+
+The request types and decoders drawn are a sample: every request type of
+§ 5.1 hands the decoder its response, and every decoder of §§ 9–15a and
+§ 6.0a — NDJSON, TOML, INI, logfmt, plain text and Graphite besides those
+drawn — feeds the same transforms. A static target (§ 42.14) enters at the
+request type, as a probe does.
 
 The central invariant is:
 
@@ -26103,6 +26347,19 @@ the write grants to that list, failing for a workflow without top-level
 permissions, for a write granted at the top, and for a job's write grant that
 is not on the list.
 
+Every action a workflow uses MUST be pinned to a full 40-character commit SHA,
+followed on the same line by the release it is in as a comment
+(`uses: actions/checkout@<sha> # v7.0.1`), the first-party `actions/*`
+included, so one rule covers every workflow. A tag or branch can be moved by
+whoever controls the action's repository, and the next run would execute what
+it then names with the job's token, which in the release and Dockerfile update
+jobs may write; a commit SHA names one tree for good. An action in this
+repository (`./...`) and an image (`docker://...`) are exempt. The pins MUST be
+kept current by Dependabot's `github-actions` updates of the repository root
+(§ 42.16), which move the SHA and rewrite the version comment together. A test
+MUST fail for a `uses:`, a commented-out one included, that is not in that
+form, and for a `.github/dependabot.yml` without that update.
+
 Both release workflows MUST run their respective validation checks before
 publishing artifacts, and MUST publish nothing unless CI has passed on the
 commit the tag names. CI has passed on a commit when the newest finished
@@ -26461,8 +26718,10 @@ the `/probe` endpoint accepts — for `http`, `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `retry.attempts`, and `retry.backoff` — with
 the same semantics, overriding the collector's own request settings for that
 target only. An `http` or `graphite` target MUST also accept static request
-`headers`, and a target of every type but `localfile` its own target
-credentials, as inline or file-backed basic authentication or a bearer token. A request that carries an
+`headers`, and an `http`, `graphite` or `grpc` target its own target
+credentials, as inline or file-backed basic authentication or a bearer
+token; an `sshfile` or `sql` target MAY instead name its own user and key
+or password files, as § 5.1 says for each. A request that carries an
 `Authorization` of its own — a static target's credential, or one a probe
 forwards — sends it instead of the collector's, and the collector's
 credential files MUST NOT be read for it: a missing or empty one MUST fail

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"golang.org/x/net/http2"
 )
 
@@ -32,17 +33,6 @@ func readRequestHead(conn net.Conn) {
 			return
 		}
 	}
-}
-
-// closedPort is the address of a port nothing listens on.
-func closedPort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-	return listener.Addr().String()
 }
 
 // startRead is a dialer whose connections each say when the client has read
@@ -163,7 +153,7 @@ func TestAResetConnectionIsRecognisedWhateverPortItWasMadeFrom(t *testing.T) {
 	if strings.Contains(a.Error()+model.SameFailureText(a), "hunter2") || a.Error() == b.Error() || model.SameFailureText(a) != want || model.SameFailureText(b) != want {
 		t.Errorf("with a credential in the query the failures\n%v\n%v\nare recognised by\n%s\n%s\nwant both by\n%s", a, b, model.SameFailureText(a), model.SameFailureText(b), want)
 	}
-	nobody := closedPort(t)
+	nobody := testutil.RefusingAddress(t)
 	a, b = fetchFailures(t, httpCollector(t, nil), "http://"+nobody)
 	want = `HTTP request failed: Get "http://` + nobody + `": dial tcp ` + nobody + `: connect: connection refused`
 	if a.Error() != want || b.Error() != want || model.SameFailureText(a) != want {

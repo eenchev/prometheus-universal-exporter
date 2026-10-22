@@ -25045,6 +25045,101 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the same failure recognised, and carrying on after a failed fetch — take
   their address from it.
 
+## 34.170 Audit fixes: TOML, Python requests, YAML keys, gRPC and SQL bounds, the release gate and the allocator's token
+
+- A TOML body starting with two byte order marks, UTF-8 and UTF-8, UTF-8
+  and UTF-16LE, UTF-8 and UTF-16BE, followed by 20,000 `[`, is refused for
+  its nesting within a second, and so is the body that killed the process,
+  two UTF-8 marks and four mebibytes of `[`; a document after two marks
+  decodes; a body the nesting scan cannot follow — a second mark on a later
+  line, a key without `=`, an empty table-header part, a string that does
+  not end, a `}` or `]` that closes nothing — is refused naming its line,
+  not handed to the library (`TestTOMLIsRefusedWhereTheNestingScanCannotFollowIt`,
+  § 6.0a).
+- The rows of a CSV header of 5,000 columns over 5,000 lines of one field, a
+  body of 39 kB, are handed to a Python worker in a request of no more than
+  four times the body, where it was 257 MiB; a script reading rows by a
+  header with an unnamed column and short rows sees every named column, ""
+  for the cells a row is short of, the unnamed column left out
+  (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`, § 16.7).
+- The rows a CSV body decodes into are what a script was handed: without a
+  header the same request line, with one the table, made into rows as the
+  worker makes them, the data of the line it was, over the fixtures and
+  generated bodies (`TestAScriptIsHandedTheCSVRowsItWasHanded`, § 16.7).
+- A request longer than 32 times the response limit and
+  `limits.max_output_bytes` together, and the script, is refused while it is
+  written — data a list, a dict and CSV rows without a header — and the
+  transform fails with `python transform did not run: ...` without a
+  worker; a request within the limit is written
+  (`TestAPythonRequestPastItsLimitFailsTheTransform`, § 16.7).
+- YAML keys of one mapping that are one text — `1` and `1.0` in either
+  order, `16` and `0x10`, `true` and `True`, `'1'` and `1`, a key and an
+  alias of it — fail the decode as a key written twice by that text and
+  both lines, the same on each of twenty decodes; a null key, `~`, `null`
+  or none, fails it at its line; a key merged with `<<` that is the text of
+  the mapping's own fails it; different texts decode as before
+  (`TestYAMLKeysThatAreOneTextAreRefused`, § 10).
+- A gRPC answer of four million empty shards, 8 MB on the wire within a
+  10 MiB limit and 88 MB as JSON, is refused as at least that many bytes as
+  JSON, the call itself OK, with under 100 MiB allocated in all: its JSON is
+  counted as it is read, before it is decoded; decoding it alone allocated
+  3.6 GiB (§ 9a).
+- An answer the count lets through, twenty `Duration`s in `Any`s that count
+  as `"0s"`, is still refused by the size of its rendered JSON under a limit
+  between the count and that size (§ 9a).
+- The count of a gRPC answer's JSON equals the rendered JSON's length for
+  messages of every scalar kind, negative and largest integers, escaped
+  strings, bytes, enums named and unnamed, nested and repeated messages,
+  packed lists, maps of string, integer, bool and uint64 keys, a oneof,
+  proto3 optional fields, proto2 defaults, groups and packed lists, and the
+  empty message of each; with floating-point numbers, `Any`s and the
+  well-known types it is no more than the length; it stops just past a limit
+  of 10; and a message that does not parse is left to the decoder (§ 9a).
+- A postgres row of a 200 MiB value under a 1 MiB limit, from a stand-in that
+  sends it, fails the scrape as a limit in the limit's words, refused by pgx
+  from the message's length, with under 100 MiB allocated; without the bound
+  pgx read it whole and 401 MiB was allocated (§ 5.1 `sql`).
+- A SQL Server connection's session statement sets `TEXTSIZE 2097154` under
+  a 1 MiB limit, none with no limit, and `TEXTSIZE 2147483646` under the
+  largest limit (§ 5.1 `sql`).
+- An s3file read whose bucket answers every request 503 SlowDown fails at the
+  first answer, one request made, where the SDK's retryer made three (§ 5.1
+  `s3file`).
+- `/-/reload` answers `200` to every method its `Allow` names on a `405`,
+  which are at least two, and the endpoints table, the flag table, the
+  chart README's `server.enableLifecycle` sentence and the reload status
+  table's lead-in each name every one of those methods and no other: the test
+  fails on the pages that named `POST` alone.
+- Every job of `ci.yml` with a changed-path filter has, after it, a step
+  `changes` given `REF_TYPE` from `github.ref_type`, `CHANGED` from the
+  filter's `changes` output and `OUTPUTS` naming exactly the filter's
+  outputs; the test runs its script and finds every output true on a tag
+  push, whatever changed, and on a branch push true for the changed outputs
+  alone, and fails for a step whose `if` reads the filter's own outputs.
+- `tools/ci-passed.py`, run against a stand-in of the Actions API that also
+  answers a run's jobs, fails when the newest run concluded success with the
+  step that runs the repository's checks skipped and an older one failed,
+  passes when a newer run that ran that step succeeded past both, waits
+  while the tag's own run goes on beside a run that skipped the suite and
+  then fails with that run's failure, and fails at once, saying no run ran
+  the suite, when every run skipped it; it never asks for the jobs of a run
+  that did not succeed.
+- `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
+  `ci.yml`'s job `test` has a step of that name that runs
+  `go test ./test/repository/` under the go output.
+- With `allocator.enabled` and no `allocator.tokenSecret.name`, the chart
+  renders a Secret `<fullname>-allocator-token` with the allocator's labels
+  holding a random token of 32 characters or more under
+  `allocator.tokenSecret.key`, a different one at each of two renders, and
+  runs the allocator with `--web.token-file` and the exporter with
+  `--allocator.token-file`, both mounting that key of it at the token's
+  directory, while the ScrapeConfigs and the allocator's ServiceMonitor
+  present it as Bearer credentials; with a name the same is wired to the
+  named Secret and no Secret is rendered; without the allocator, none.
+- With the generated token, the allocator's pod mounts `config` and `token`,
+  and an `allocator.extraVolumeMounts` entry at or inside the token's
+  directory fails rendering, as with a named Secret.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

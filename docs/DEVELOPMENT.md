@@ -237,6 +237,14 @@ package's, and the command names it because `go test`'s own ten minutes are
 meant for one run without the race detector; a test keeps the Makefile and
 `ci.yml` running the same command.
 
+A test that needs a TCP address nothing answers takes
+`testutil.RefusingAddress`: a socket bound to the address that never
+listens, so every connection is refused at once and no other socket can be
+handed the port while the test runs. The address of a listener that was
+closed is no substitute: the next server that asks for any free port may be
+given it, and a test that waited for a refused connection then reached that
+server instead, as a redirect to it once went round ten times in CI.
+
 State shared across tests is what breaks this. The Python worker pool is one
 such thing: its counts — starts, runs, stops, idle workers — would carry over
 from test to test. A test that runs Python calls `requirePython(t)`, which also

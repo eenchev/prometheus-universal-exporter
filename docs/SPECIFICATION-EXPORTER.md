@@ -24969,6 +24969,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - The headings of § 34 are numbered `34.<number>` in order, each after a
   blank line (TestSpecTestSectionsAreNumberedInOrder).
 
+## 34.169 An address that keeps refusing
+
+- `testutil.RefusingAddress` gives an address whose connections are refused
+  and whose port no server can listen on, nor be handed, while the test
+  runs; the test fails for the address of a listener that was closed
+  (`TestARefusingAddressKeepsItsPort`). The tests that wait for a refused
+  connection — the largest failure of each stage, the debug report's bounds,
+  the same failure recognised, and carrying on after a failed fetch — take
+  their address from it.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

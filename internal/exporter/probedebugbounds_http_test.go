@@ -36,7 +36,7 @@ func TestARedirectToAURLOfMostOfAMegabyteIsListedByItsStart(t *testing.T) {
 	testutil.CaptureLogs(t)
 	size := alloctest.UnlessRaced(900<<10, 64<<10)
 	const collector = `{name: c, request: {type: http, follow_redirects: true}, decoder: {type: json}, transform: {type: jq}, metrics: [{name: m, expression: .n}]}`
-	refusing := refusingAddress(t)
+	refusing := testutil.RefusingAddress(t)
 	for name, tc := range map[string]struct {
 		// location is where the redirect leads, given the target's URL, and
 		// ended how the request for it ended.

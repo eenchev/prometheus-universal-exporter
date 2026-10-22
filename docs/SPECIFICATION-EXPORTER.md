@@ -9894,7 +9894,11 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
 - A change to none of these MAY complete without running either suite.
 
 The path filter MUST evaluate the correct comparison base for both push and
-pull-request workflows.
+pull-request workflows. A tag push MUST run every step, whatever changed:
+paths-filter compares a tag with its merge base on the default branch, which
+for a tag on that branch's newest commit is the commit itself, so the steps
+MUST run under outputs that are all true on a tag push and the filter's own
+otherwise, and a test MUST run the step that sets them.
 
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
@@ -26424,16 +26428,21 @@ form, and for a `.github/dependabot.yml` without that update.
 Both release workflows MUST run their respective validation checks before
 publishing artifacts, and MUST publish nothing unless CI has passed on the
 commit the tag names. CI has passed on a commit when the newest finished
-`ci.yml` run that a push of that commit started concluded `success`, however
-many of its steps its changed paths skipped; a run a pull request started
-does not count, since it tested the pull request merged into its base. A first
+`ci.yml` run that a push of that commit started, and that ran the suite,
+concluded `success`. A run that did not succeed MUST count whatever it ran; a
+run that succeeded MUST count only when its step that runs the repository's
+checks concluded success, found by its name, which a test MUST keep the same
+in `ci.yml` and the script: a push whose changed paths ran none of the Go
+steps passes with every step skipped, and MUST NOT take back a failure before
+it. A run a pull request started does not count, since it tested the pull
+request merged into its base. A first
 job, which every publishing job needs, MUST validate the tag and then check
 this with `tools/ci-passed.py`, reading the Actions API with a token limited
 to `contents: read` and `actions: read`. A commit whose CI runs are queued or
 running, or that has none yet — a tag is often pushed right after its
 commit, and the tag push starts a CI run of its own — MUST be waited for, up
-to an hour; when every run has finished and the newest did not succeed, when
-the wait runs out, and when the API refuses the request, the release MUST
+to an hour; when every run has finished and the newest counted one did not
+succeed, when none ran the suite, when the wait runs out, and when the API refuses the request, the release MUST
 fail, saying that CI has not passed on the commit and to run CI or wait for
 it, then push the tag again or re-run the release.
 
@@ -26442,8 +26451,8 @@ workflow triggers on its whole namespace, that the format it enforces accepts
 well-formed tags and rejects malformed ones, and that the version committed in
 `Chart.yaml` would produce a tag the chart release accepts. They MUST run
 `tools/ci-passed.py` against a stand-in of the API, for a run that passed, one
-that failed, runs that finish while it waits, no run, and a wait that runs
-out, and MUST fail when a publishing job of a release workflow does not need
+that failed, a run that skipped the suite after one that failed, runs that
+finish while it waits, no run, and a wait that runs out, and MUST fail when a publishing job of a release workflow does not need
 the job that runs it. They MUST also
 fail when a workflow runs the test suite without first setting up the image's
 Python and libraries, or runs `make ci` without installing golangci-lint and

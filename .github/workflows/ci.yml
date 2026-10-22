@@ -2,8 +2,8 @@ name: ci
 # A push to main and a push of any tag run CI; a pull request runs it on the
 # pull request. A push to a pull request's branch is left to the
 # pull_request run, so a pull request's checks run once, not twice. A tag
-# push still runs CI on the commit it names, which the release workflows wait
-# for (tools/ci-passed.py counts push runs alone).
+# push still runs CI on the commit it names, every step of it, which the
+# release workflows wait for (tools/ci-passed.py counts push runs alone).
 on:
   push:
     branches:
@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: changes
+        id: filter
         with:
           filters: |
             go:
@@ -123,6 +123,28 @@ jobs:
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.changes.outputs.go == 'true'
         with:
@@ -220,8 +242,11 @@ jobs:
       # The repository's own checks read the whole tree, so they run on
       # every change the go filter names. The exporter's packages run when
       # the exporter filter names a change, the allocator's in a job of their
-      # own; tools/ci-packages.sh lists each side's packages.
-      - run: go test ./test/repository/
+      # own; tools/ci-packages.sh lists each side's packages. The release
+      # gate (tools/ci-passed.py) finds by this step's name whether a run
+      # ran the suite at all, so the name is kept as that script writes it.
+      - name: Run the repository's checks
+        run: go test ./test/repository/
         if: steps.changes.outputs.go == 'true'
       - name: Test the exporter
         run: |
@@ -623,7 +648,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: changes
+        id: filter
         with:
           filters: |
             go:
@@ -720,6 +745,28 @@ jobs:
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.changes.outputs.go == 'true'
         with:
@@ -804,7 +851,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: changes
+        id: filter
         with:
           filters: |
             go:
@@ -901,6 +948,28 @@ jobs:
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.changes.outputs.go == 'true'
         with:
@@ -966,7 +1035,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: changes
+        id: filter
         with:
           filters: |
             go:
@@ -1063,6 +1132,28 @@ jobs:
               - 'internal/model/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.changes.outputs.go == 'true'
         with:

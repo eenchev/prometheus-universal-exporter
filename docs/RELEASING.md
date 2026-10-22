@@ -10,9 +10,18 @@ Neither release publishes anything unless CI has passed on the commit the tag
 names. The first job of each workflow, `preflight`, checks the tag's format
 and then runs `tools/ci-passed.py`, which reads the commit's `ci.yml` runs
 through the GitHub API. CI has passed when the newest finished run that a push
-of that commit started concluded `success` — a run whose changed paths skipped
-the Go suite counts as it concluded — and runs started by a pull request do
-not count, since they tested a merge rather than the commit.
+of that commit started, and that ran the suite, concluded `success`. A run
+that failed counts whatever it ran; a run that succeeded counts only when its
+step *Run the repository's checks* did, since a push whose changed paths ran
+none of the Go steps passes with every step skipped and says nothing about
+the commit — so it takes back no failure before it. Runs started by a pull
+request do not count, since they tested a merge rather than the commit.
+
+A tag push runs every step of CI whatever changed: the changed-path filter
+compares a tag with its merge base on `main`, which for a tag on `main`'s
+newest commit is the commit itself, so it would find no change and skip
+everything. The step `changes` after the filter turns each of its outputs
+true on a tag push, and every step runs under those.
 
 CI runs on a push to `main`, on a push of any tag and on a pull request; a
 push to another branch runs nothing of its own, its pull request's run being
@@ -22,8 +31,8 @@ still tested, by the run its own push starts.
 Pushing the tag starts a CI run of its own, and a tag is often pushed right
 after its commit, so while the commit's runs are queued or running, or none
 has started yet, the job waits, for up to an hour, looking every 30 seconds.
-When every run has finished and the newest did not succeed, or the hour runs
-out, the release stops with `CI has not passed on <sha>: run CI or wait for it,
+When every run has finished and the newest counted one did not succeed, or
+none ran the suite, or the hour runs out, the release stops with `CI has not passed on <sha>: run CI or wait for it,
 then push the tag again or re-run this release`, before anything is built or
 pushed. To release that commit once CI is green — after re-running a failed CI
 run, say — re-run the failed release run from its page under Actions (*Re-run

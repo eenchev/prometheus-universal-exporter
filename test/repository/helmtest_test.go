@@ -564,14 +564,16 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 			ContinueOnError yaml.Node `yaml:"continue-on-error"`
 			Steps           []struct {
 				ID   string `yaml:"id"`
+				Uses string `yaml:"uses"`
 				With struct {
 					Filters string `yaml:"filters"`
 				} `yaml:"with"`
-				Name            string    `yaml:"name"`
-				Run             yaml.Node `yaml:"run"`
-				Shell           yaml.Node `yaml:"shell"`
-				If              yaml.Node `yaml:"if"`
-				ContinueOnError yaml.Node `yaml:"continue-on-error"`
+				Env             map[string]string `yaml:"env"`
+				Name            string            `yaml:"name"`
+				Run             yaml.Node         `yaml:"run"`
+				Shell           yaml.Node         `yaml:"shell"`
+				If              yaml.Node         `yaml:"if"`
+				ContinueOnError yaml.Node         `yaml:"continue-on-error"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
@@ -582,13 +584,20 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 	var blocks []helmBlock
 	// chartChanges says whether a step read so far, with the id the chart
 	// steps' condition names, gives the output it asks for whenever a file
-	// of the chart changed.
+	// of the chart changed: the step that passes on the outputs of a
+	// changed-path filter before it, whose chart list holds charts/**, and
+	// names chart among them. chartFilters are those filters, by their id.
 	chartChanges := false
+	chartFilters := map[string]bool{}
 	for _, step := range job.Steps {
-		if step.ID == "changes" {
+		if strings.HasPrefix(step.Uses, "dorny/paths-filter@") && step.ID != "" {
 			var filters map[string][]string
 			_ = yaml.Unmarshal([]byte(step.With.Filters), &filters)
-			chartChanges = slices.Contains(filters["chart"], "charts/**")
+			chartFilters[step.ID] = slices.Contains(filters["chart"], "charts/**")
+		}
+		if step.ID == "changes" {
+			from := regexp.MustCompile(`^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.changes \}\}$`).FindStringSubmatch(step.Env["CHANGED"])
+			chartChanges = from != nil && chartFilters[from[1]] && slices.Contains(strings.Fields(step.Env["OUTPUTS"]), "chart")
 		}
 		if !regexp.MustCompile(`(?m)(^|[\s(])helm (lint|template|package|install)\b`).MatchString(step.Run.Value) {
 			continue
@@ -624,7 +633,7 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step does not run whenever the chart changed, as the chart steps do with `if: "+chartStepCondition+"`", "if: "+node.Value))
 		}
 		if node := step.If; node.Value == chartStepCondition && !chartChanges {
-			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step runs when steps.changes.outputs.chart is true, and no step before it with the id `changes` sets that for a change under charts/**: the `filters` of that step need a `chart` list that holds 'charts/**'", "if: "+node.Value))
+			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step runs when steps.changes.outputs.chart is true, and no step before it with the id `changes` sets that for a change under charts/**: that step has to name chart in its OUTPUTS and read its CHANGED from a changed-path filter before it, whose `filters` need a `chart` list that holds 'charts/**'", "if: "+node.Value))
 		}
 		if node := job.If; node.Kind != 0 {
 			block.lost = append(block.lost, helmFinding(file, node.Line, "the job test", "the job has an `if`, so the chart steps do not run whenever the chart changed; the one condition they have is each step's `if: "+chartStepCondition+"`, which a job cannot have", "if: "+node.Value))

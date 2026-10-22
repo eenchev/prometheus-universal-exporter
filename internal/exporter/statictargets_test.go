@@ -45,6 +45,7 @@ targets:
       retry:
         attempts: 2
         backoff: 1s
+        retry_after: true
       headers:
         X-Tenant: team-a
       bearer_token: monitor-token
@@ -83,6 +84,7 @@ targets:
 		"target": "http://legacy.example:8080", "collector": "text", "method": "POST",
 		"path": "/api/status", "body": "raw payload", "timeout": "5s",
 		"insecure_skip_verify": "true", "retry_attempts": "2", "retry_backoff": "1s",
+		"retry_retry_after": "true",
 	} {
 		if query.Get(key) != want {
 			t.Fatalf("cache query %q=%q, want %q", key, query.Get(key), want)

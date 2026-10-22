@@ -118,6 +118,8 @@ type TargetRetryConfig struct {
 	Codes []string `yaml:"codes"`
 	// Statuses replaces an http or graphite collector's retry.statuses.
 	Statuses []string `yaml:"statuses"`
+	// RetryAfter replaces an http or graphite collector's retry.retry_after.
+	RetryAfter *bool `yaml:"retry_after"`
 }
 
 // Over is the retry a target makes: its own settings over the collector's.
@@ -140,6 +142,9 @@ func (r *TargetRetryConfig) Over(collector RetryConfig) RetryConfig {
 	}
 	if r.Statuses != nil {
 		out.Statuses = r.Statuses
+	}
+	if r.RetryAfter != nil {
+		out.RetryAfter = *r.RetryAfter
 	}
 	return out
 }

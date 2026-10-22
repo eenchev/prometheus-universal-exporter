@@ -327,7 +327,8 @@ function show(answer, response, took) {
     r.method + " " + r.url + (r.page ? " (page " + r.page + ")" : "") + (r.redirect ? " (redirect)" : "") + (r.login ? " (login)" : "") +
     (r.outcome ? " -> " + r.outcome + " in " + r.took : "") +
     (r.headers || []).map((h) => "\n  " + h).join("") +
-    (r.withheld ? "\n  not sent: " + r.withheld.join(", ") + " — " + r.withheld_why : "")).join("\n");
+    (r.withheld ? "\n  not sent: " + r.withheld.join(", ") + " — " + r.withheld_why : "") +
+    (r.wait ? "\n  " + r.wait : "")).join("\n");
   const shown = answer.response;
   $("response-part").hidden = !shown;
   if (shown) {

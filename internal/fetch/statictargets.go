@@ -148,6 +148,10 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		if retry.Statuses != nil {
 			out.RetryStatuses = append([]string{}, retry.Statuses...)
 		}
+		if retry.RetryAfter != nil {
+			retryAfter := *retry.RetryAfter
+			out.RetryAfter = &retryAfter
+		}
 	}
 	return out
 }

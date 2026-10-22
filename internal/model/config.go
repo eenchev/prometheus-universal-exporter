@@ -449,6 +449,11 @@ type RetryConfig struct {
 	// connection that failed is retried still. Not for the grpc type, which
 	// retries by Codes.
 	Statuses []string `yaml:"statuses"`
+	// RetryAfter makes the wait before retrying an answer of Statuses the
+	// one its Retry-After header asks for, in place of Backoff. Off, the
+	// header is not read: a target is waited for only as the collector
+	// says. Not for the grpc type.
+	RetryAfter bool `yaml:"retry_after"`
 }
 
 // BasicAuth is request.basic_auth, credentials written in the configuration.

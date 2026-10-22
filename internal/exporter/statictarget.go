@@ -331,6 +331,11 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 			// so it is part of the key.
 			values.Set("retry_non_idempotent", strconv.FormatBool(*retry.NonIdempotent))
 		}
+		if retry.RetryAfter != nil {
+			// Neither does one set it, and it changes how long the
+			// trip may wait.
+			values.Set("retry_retry_after", strconv.FormatBool(*retry.RetryAfter))
+		}
 	}
 	if from := strings.TrimSpace(t.Request.From); from != "" {
 		values.Set("from", from)

@@ -271,3 +271,28 @@ func TestAnOptionalKeyTakesItsValuesAndTheEmptyString(t *testing.T) {
 		t.Errorf("the values are %v, and the decoder types %v", values, model.DecoderTypes)
 	}
 }
+
+// request.retry.retry_after is a boolean of a collector's request and of a
+// static target's, each described as http and graphite's alone.
+func TestTheSchemasHaveRetryAfter(t *testing.T) {
+	retry := func(schema map[string]any, path ...string) map[string]any {
+		for _, key := range path {
+			if items, ok := schema["items"].(map[string]any); ok {
+				schema = items
+			}
+			schema, _ = schema["properties"].(map[string]any)[key].(map[string]any)
+			if schema == nil {
+				t.Fatalf("no %s in %v", key, path)
+			}
+		}
+		return schema
+	}
+	for name, key := range map[string]map[string]any{
+		"collectors": retry(configSchema(), "collectors", "request", "retry", "retry_after"),
+		"targets":    retry(staticTargetsSchema(), "targets", "request", "retry", "retry_after"),
+	} {
+		if key["type"] != "boolean" || !strings.HasPrefix(key["description"].(string), "http and graphite: ") {
+			t.Errorf("%s: %v", name, key)
+		}
+	}
+}

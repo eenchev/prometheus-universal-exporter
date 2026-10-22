@@ -283,6 +283,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// (fetch/redirecttrust.go): most often why it answers 401 or 403.
 			statusErr = fmt.Errorf("received HTTP status %d %s", response.StatusCode, response.RedirectWithheld)
 		}
+		if response.NotRetried != "" {
+			// Attempts were left, but the target's Retry-After asked for
+			// more time than the probe had (request.retry.retry_after).
+			statusErr = fmt.Errorf("%w, not retried: %s", statusErr, response.NotRetried)
+		}
 		if pages := response.Pages; pages != nil && len(pages.Pages) > 1 {
 			// A page after the first: the pages before it were accepted.
 			statusErr = fmt.Errorf("%w on page %d of request.pagination, %s", statusErr, len(pages.Pages), fetch.RedactURLString(pages.Pages[len(pages.Pages)-1].URL, fetch.MaskCredentialQueryValues))

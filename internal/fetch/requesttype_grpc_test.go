@@ -253,6 +253,7 @@ func TestGRPCStaticTargetRequest(t *testing.T) {
 		"request.metadata X-A":                    {Metadata: map[string]string{"X-A": "b"}},
 		"is not a gRPC status code":               {Retry: &model.TargetRetryConfig{Codes: []string{"NOPE"}}},
 		"retry.non_idempotent, which does not":    {Retry: &model.TargetRetryConfig{NonIdempotent: new(bool)}},
+		"retry.retry_after, which does not":       {Retry: &model.TargetRetryConfig{RetryAfter: new(bool)}},
 		"request.method, which does not apply to": {Method: "GET"},
 	} {
 		target := &model.StaticTarget{Name: "t", Target: "q:1", Request: request}
@@ -940,6 +941,7 @@ func TestGRPCValidation(t *testing.T) {
 		{"unknown code", func(c *model.Collector) { c.Request.Retry.Codes = []string{"UNAVAILABLE", "BUSY"} }, `"BUSY", which is not a gRPC status code`},
 		{"OK retried", func(c *model.Collector) { c.Request.Retry.Codes = []string{"OK"} }, "lists OK"},
 		{"non_idempotent", func(c *model.Collector) { c.Request.Retry.NonIdempotent = true }, "retry.non_idempotent, which does not apply"},
+		{"retry_after", func(c *model.Collector) { c.Request.Retry.RetryAfter = true }, `sets request.retry.retry_after, which does not apply to request.type "grpc"; a gRPC status carries no Retry-After header, and retry.backoff is the wait between its retries`},
 		{"http statuses", func(c *model.Collector) { c.Request.Retry.Statuses = []string{"503"} }, `sets request.retry.statuses, which does not apply to request.type "grpc"; retry.codes says which gRPC status codes are retried`},
 		{"no http status", func(c *model.Collector) { c.Request.Retry.Statuses = []string{} }, "sets request.retry.statuses, which does not apply"},
 		{"negative attempts", func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "must be from 0 to 10"},

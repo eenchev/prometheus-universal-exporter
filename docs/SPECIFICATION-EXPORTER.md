@@ -247,6 +247,26 @@ target, as `retry.codes` is for every other type; a static target's MUST
 replace its collector's whole, and no probe parameter sets it. A debug report
 of an `http` or `graphite` request with retries MUST say, after its requests,
 how often, how far apart and on which statuses it is retried.
+`retry.retry_after`, for `http` and `graphite`, MUST default to off, and off,
+a `Retry-After` header MUST NOT change any wait. On, the wait before retrying
+an answer of a retried status — one `retry.statuses` lists, that is not
+accepted, with an attempt left — MUST be what its `Retry-After` asks for in
+place of `backoff`: delta-seconds, one or more digits, or an HTTP date (RFC
+9110, section 10.2.3), taken from the exporter's clock when the answer is
+read, a date already past asking for no wait. A value that is neither — a
+sign, a fraction, a date that does not parse — MUST be ignored and `backoff`
+waited. When the wait asked would end at or after the request's deadline,
+the exporter MUST NOT wait: that answer MUST be the request's answer at
+once, and its `http_status` failure MUST say that it was not retried, with
+the wait asked and the time left. The wait after a transport failure MUST
+NOT read the header, and the resend of a login's `401` (§ 42.6a) MUST stay
+as it is. `retry.retry_after` MUST be refused for `grpc`, in a collector and
+a static target, as `retry.non_idempotent` is; a static target's MUST
+replace its collector's and be part of its cache key, and no probe parameter
+sets it. A debug report MUST say in its retry line that a `Retry-After`
+replaces the backoff, and MUST show below each request retried under it the
+wait taken and why — as `Retry-After` asked, or `retry.backoff` and why the
+header was not used — or why it was not retried.
 A refused target (§ 26.1) and response headers over their bound (§ 4) MUST
 NOT be retried. An HTTP/2 connection closed for a protocol error before the
 response's headers were read (§ 4) MUST be retried once, as one of
@@ -779,7 +799,7 @@ opt-in types.
 | `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
-| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out (§ 3.2a). |
+| `retry` | none | `attempts` and `backoff`, both non-negative; `non_idempotent`; `statuses`, the statuses retried, `408`, `425`, `429` and `5xx` when left out; `retry_after`, off by default, waiting a retried answer's `Retry-After` in place of `backoff` (§ 3.2a). |
 | `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
@@ -1120,7 +1140,7 @@ keys:
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
-| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` and `statuses` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent`, `statuses` and `retry_after` MUST be refused, and `codes` for every other type, in a collector and a static target. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -8484,10 +8504,11 @@ The steps MUST be:
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
-  `accept_status`, `accept_codes`, `retry.statuses`, `pagination` or `login`
-  is listed under `details.request_policies` with those settings as
-  normalised for use, `retry.statuses` as `retry_statuses`, an empty list as
-  `[]`, a `pagination` with its defaults filled in, a `login` with the header
+  `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
+  `pagination` or `login` is listed under `details.request_policies` with
+  those settings as normalised for use, `retry.statuses` as
+  `retry_statuses`, an empty list as `[]`, `retry.retry_after` as
+  `retry_after: true`, a `pagination` with its defaults filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);

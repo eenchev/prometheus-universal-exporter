@@ -44,6 +44,11 @@ type HTTPResponse struct {
 	// error of a failing status goes on with: "from <host>, where a
 	// redirect led: ..."; "" otherwise.
 	RedirectWithheld string
+	// NotRetried says why an answer of a retried status was not retried
+	// with attempts left, in the words the error of its failing status
+	// goes on with: under request.retry.retry_after, its Retry-After asked
+	// for a wait longer than the probe's time left; "" otherwise.
+	NotRetried string
 	// Directory is set instead of Body by a localfile collector reading a
 	// directory: every file it read, each to be decoded on its own.
 	Directory *DirectoryRead
@@ -141,6 +146,9 @@ type RequestOverrides struct {
 	// RetryStatuses is a static target's retry.statuses, replacing an http
 	// or graphite collector's when not nil; no probe parameter sets it.
 	RetryStatuses []string
+	// RetryAfter is a static target's retry.retry_after; no probe
+	// parameter sets it.
+	RetryAfter *bool
 	// AcceptStatus and AcceptCodes are a static target's request.accept_status
 	// and accept_codes, replacing the collector's when not nil; no probe
 	// parameter sets them.
@@ -775,6 +783,24 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if retryBackoff < 0 {
 		retryBackoff = 0
 	}
+	retryAfter := c.Request.Retry.RetryAfter
+	if overrides.RetryAfter != nil {
+		retryAfter = *overrides.RetryAfter
+	}
+	// wait waits backoff before a retry, after a failure no Retry-After
+	// came with. Under retry.retry_after the debug report shows each wait,
+	// so one Retry-After set can be told from the backoff.
+	wait := func(backoff time.Duration, why string) error {
+		err := waitRetry(requestContext, backoff)
+		if retryAfter {
+			if err != nil {
+				traceWait(requestContext, fmt.Sprintf("then the wait of %s, %s, was cut short: %v", backoff, why, err))
+			} else {
+				traceWait(requestContext, fmt.Sprintf("then waited %s, %s", backoff, why))
+			}
+		}
+		return err
+	}
 
 	// The login is made, or its token taken from those kept, once the
 	// target has passed the collector's policy, so a target the policy
@@ -861,7 +887,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			if http2ProtocolError(err) {
 				protocolErrors++
 				if protocolErrors == 1 && attempt < retryAttempts && requestContext.Err() == nil {
-					if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+					if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
 						return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 					}
 					client = onOwnConnection(client)
@@ -878,7 +904,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// certificate, to a host that is not trusted.
 			var redirectRefused *redirectRefusedError
 			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) {
-				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
 					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}
 				continue
@@ -910,7 +936,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// retried as one that broke before the answer began, unless the
 			// probe's own time is what ran out.
 			if attempt < retryAttempts && requestContext.Err() == nil {
-				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
 					return nil, fmt.Errorf("reading response: %w (the wait before retrying was cut short: %w)", readErr, waitErr)
 				}
 				continue
@@ -959,7 +985,18 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// what the target answered: the status and body say why the
 			// scrape failed, where the bare context error would only say
 			// that time ran out.
-			if waitRetry(requestContext, retryBackoff) != nil {
+			next := retryWait{wait: retryBackoff, why: "retry.backoff"}
+			if retryAfter {
+				next = retryAfterWait(requestContext, resp.Header.Get("Retry-After"), retryBackoff, time.Now())
+			}
+			if next.giveUp != "" {
+				// Waiting until the deadline would only fail the same
+				// way later, with no answer to show for it.
+				response.NotRetried = next.giveUp
+				traceWait(requestContext, "not retried: "+next.giveUp)
+				return response, nil
+			}
+			if wait(next.wait, next.why) != nil {
 				return response, nil
 			}
 			continue
@@ -1102,7 +1139,15 @@ func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
 	if len(statuses) == 0 {
 		return fmt.Sprintf("up to %d, %s apart, on a failed connection alone: retry.statuses is empty", attempts, max(backoff, 0))
 	}
-	return fmt.Sprintf("up to %d, %s apart, on a failed connection and on an answer of %s that is not accepted", attempts, max(backoff, 0), strings.Join(statuses, ", "))
+	retries := fmt.Sprintf("up to %d, %s apart, on a failed connection and on an answer of %s that is not accepted", attempts, max(backoff, 0), strings.Join(statuses, ", "))
+	retryAfter := c.Request.Retry.RetryAfter
+	if overrides.RetryAfter != nil {
+		retryAfter = *overrides.RetryAfter
+	}
+	if retryAfter {
+		retries += ", such an answer's Retry-After replacing the backoff (retry.retry_after)"
+	}
+	return retries
 }
 
 // retriedStatus says whether an answer with status is retried, when it is

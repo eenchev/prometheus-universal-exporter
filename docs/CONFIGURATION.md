@@ -2083,7 +2083,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401` makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
-| `retry` | none | `attempts`, `backoff`, `non_idempotent`, and `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set. See [Target requests](REQUESTS.md#retries). |
+| `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
@@ -4351,7 +4351,12 @@ The report lists:
   first 512. An `http` or `graphite` request that is retried ends the list
   with how: `Retries: up to 2, 1s apart, on a failed connection and on an
   answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
-  collector's [`retry`](REQUESTS.md#retries) or the static target's.
+  collector's [`retry`](REQUESTS.md#retries) or the static target's. Under
+  [`retry.retry_after`](REQUESTS.md#waiting-as-retry-after-asks) the line
+  adds that such an answer's `Retry-After` replaces the backoff, and each
+  request retried has a line of the wait taken and why, `then waited 3s, as
+  Retry-After asked`, or of why it was not retried: `not retried: its
+  Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4628,10 +4633,11 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses`, `pagination` or `login` is listed under
-`details.request_policies`, by name, with those settings as they will be
-applied — `2XX` as `2xx`, `not_found` as `NOT_FOUND`, `retry.statuses` as
-`retry_statuses`, `[]` included, a `pagination` with its defaults,
+`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination` or
+`login` is listed under `details.request_policies`, by name, with those
+settings as they will be applied — `2XX` as `2xx`, `not_found` as
+`NOT_FOUND`, `retry.statuses` as `retry_statuses`, `[]` included,
+`retry.retry_after` as `retry_after: true`, a `pagination` with its defaults,
 `max_pages: 10` among them, a `login` with the `header` and `prefix` its
 token is sent with — so a list that lets through more or less than meant, a
 pagination that asks the target for more pages than meant, or a token sent

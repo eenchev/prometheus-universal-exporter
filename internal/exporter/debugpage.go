@@ -201,6 +201,7 @@ type debugShownRequest struct {
 	Headers     []string `json:"headers,omitempty"`
 	Withheld    []string `json:"withheld,omitempty"`
 	WithheldWhy string   `json:"withheld_why,omitempty"`
+	Wait        string   `json:"wait,omitempty"`
 }
 
 type debugShownResponse struct {
@@ -227,7 +228,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 		shown := debugShownRequest{
 			Method: req.Method, URL: shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit),
 			Page: req.Page, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
-			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy,
+			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy, Wait: req.Wait,
 		}
 		if req.Outcome != "" {
 			shown.Took = req.Duration.Round(time.Millisecond).String()

@@ -1316,6 +1316,10 @@
                     "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
                     "type": "boolean"
                   },
+                  "retry_after": {
+                    "description": "http and graphite: replaces the collector's request.retry.retry_after for this target.",
+                    "type": "boolean"
+                  },
                   "statuses": {
                     "description": "http and graphite: replaces the collector's request.retry.statuses for this target.",
                     "items": {
@@ -2378,6 +2382,10 @@
                   },
                   "non_idempotent": {
                     "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
+                    "type": "boolean"
+                  },
+                  "retry_after": {
+                    "description": "http and graphite: replaces the collector's request.retry.retry_after for this target.",
                     "type": "boolean"
                   },
                   "statuses": {

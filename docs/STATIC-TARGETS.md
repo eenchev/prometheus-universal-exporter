@@ -314,7 +314,10 @@ Retries come from the collector's `request.retry`, and each key a target's own
 or the default set, whole, as the collector's own replaces the default
 ([Retries](REQUESTS.md#retries)); an entry that the `accept_status` in force
 for the target, its own or else the collector's, accepts whole is refused,
-since it could never be retried. Scrapes go through the same fetch, decode and
+since it could never be retried. Its `retry.retry_after` replaces the
+collector's either way, so one target known to send a `Retry-After` worth
+waiting for can have it read while the collector's others do not
+([Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks)). Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A static target scrape and an identical `/probe` request share cache

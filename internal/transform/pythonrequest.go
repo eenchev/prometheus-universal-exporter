@@ -3,6 +3,7 @@ package transform
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"math/big"
 	"slices"
@@ -24,7 +25,10 @@ import (
 // string to write it. pythonEncoder writes the same line — the same bytes,
 // which pythonrequest_test.go compares over every kind of value — from the
 // values a decoder makes, into a buffer it keeps, and what it does not know
-// how to write is written as it was (pythonRequestMarshalled).
+// how to write is written as it was (pythonRequestMarshalled). The one
+// request it writes otherwise than json.Marshal is one of csv rows by
+// header, which it sends as their table, and the worker makes into the rows
+// the line once carried (csvTable).
 //
 // What a script reads is therefore what it read: an object's keys in order
 // of their bytes, which is the order a script iterates a dict in; a whole
@@ -46,6 +50,10 @@ type pythonEncoder struct {
 	// nul says a string of the request holds a NUL, without which none is
 	// the marker of a float that is not finite.
 	nul bool
+	// limit is how long the request may be (pythonRequestLimit), and over
+	// says the encoder stopped writing it for being longer.
+	limit int
+	over  bool
 }
 
 // pythonMember is a member of an object.
@@ -76,6 +84,49 @@ const pythonEncoderKept = 16 << 20
 // where json.Marshal refuses it, for holding itself or for its depth.
 const pythonEncoderDepth = decode.MaxDepth
 
+// pythonRequestFactor is how many times the response limit and
+// limits.max_output_bytes together a request may be long. A request holds
+// the body once and the data once, and the data of a pre-script, which is
+// no longer than limits.max_output_bytes as the worker wrote it; JSON writes
+// a byte as six at most (a control character as \u0001, < as \u003c), and
+// a decoder makes more of a short line than its bytes — the prometheus
+// decoder makes "a 1" a dict of five keys, some sixty bytes. A request
+// longer than all that holds data a decoder made far more of than its
+// response, and is refused before it is written to its end, rather than
+// built in the exporter's memory and parsed in the worker's: the csv rows
+// of a header of 5,000 columns over 5,000 short lines, 39 kB, were once
+// written as a dict of every column for each row, a request of 257 MiB.
+const pythonRequestFactor = 32
+
+// pythonRequestLimit is how long the request that runs script for a
+// collector c may be: pythonRequestFactor times its response limit and its
+// limits.max_output_bytes together, and the script.
+func pythonRequestLimit(script string, c *model.Collector) int {
+	output := int64(c.Limits.MaxOutputBytes)
+	if output <= 0 {
+		output = 1 << 20
+	}
+	room := fetch.ResponseLimit(c)
+	if room > math.MaxInt/(2*pythonRequestFactor) {
+		return math.MaxInt
+	}
+	room = (room + min(output, math.MaxInt/(2*pythonRequestFactor))) * pythonRequestFactor
+	return int(min(room, int64(math.MaxInt-len(script)))) + len(script)
+}
+
+// pythonRequestTooLarge is the error of a request longer than limit.
+func pythonRequestTooLarge(limit int, c *model.Collector) error {
+	output := int64(c.Limits.MaxOutputBytes)
+	if output <= 0 {
+		output = 1 << 20
+	}
+	return model.Errorf("the response and the data decoded from it come to more than %d bytes written out for the worker, %d times the response limit (%d bytes) and limits.max_output_bytes (%d bytes) together, and the script; the decoder made far more of the response than its size", limit, pythonRequestFactor, fetch.ResponseLimit(c), output)
+}
+
+// errPythonRequestTooLarge marks the error of a request longer than its
+// limit, which runPython says the script did not run for.
+var errPythonRequestTooLarge = errors.New("python request exceeds limit")
+
 // request writes the request line that has a worker run script: the
 // response, with its body once, and the data, unless it is the body. The
 // line is the encoder's buffer, and is overwritten by its next request.
@@ -85,18 +136,31 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	if text, ok := data.(string); ok && text == string(r.Body) {
 		isBody = true
 	}
-	e.nul = false
+	e.nul, e.over, e.limit = false, false, pythonRequestLimit(script, c)
 	dst := append(e.buf[:0], `{"mode":`...)
 	dst = appendPythonString(dst, mode, &e.nul)
 	dst = append(dst, `,"script":`...)
 	dst = appendPythonString(dst, script, &e.nul)
 	dst = append(dst, `,"data":`...)
 	written := true
-	if isBody {
+	rows, isRows := data.(*decode.CSVRows)
+	switch {
+	case isBody:
 		dst = append(dst, `null,"data_is_body":true`...)
-	} else {
+	case isRows && rows.Named():
+		// The rows by header are sent as the header's columns once and
+		// each row's cells, and the worker makes each row the dict a
+		// script reads (csvTable).
+		dst = e.csvTable(dst, rows)
+		dst = append(dst, `,"data_is_csv":true`...)
+	default:
 		e.members = e.members[:0]
 		dst, written = e.value(dst, data, 0)
+	}
+	if e.over {
+		clear(e.members[:cap(e.members)])
+		e.buf = dst[:0]
+		return nil, model.MarkError(pythonRequestTooLarge(e.limit, c), errPythonRequestTooLarge)
 	}
 	dst = append(dst, `,"response":{"status_code":`...)
 	switch status := r.Status().(type) {
@@ -117,6 +181,9 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	dst = appendPythonString(dst, c.Name, &e.nul)
 	dst = append(dst, '}')
 	e.buf = dst
+	if written && len(dst) > e.limit {
+		return nil, model.MarkError(pythonRequestTooLarge(e.limit, c), errPythonRequestTooLarge)
+	}
 	if !written {
 		// What was being written is not kept from the garbage collector.
 		clear(e.members[:cap(e.members)])
@@ -146,6 +213,9 @@ func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HT
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
+	}
+	if limit := pythonRequestLimit(script, c); len(payload) > limit {
+		return nil, model.MarkError(pythonRequestTooLarge(limit, c), errPythonRequestTooLarge)
 	}
 	// Only a request that holds a marker is rewritten, which copies it.
 	if bytes.Contains(payload, nonFiniteJSONMarker) {
@@ -187,6 +257,10 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 			if i > 0 {
 				dst = append(dst, ',')
 			}
+			if len(dst) > e.limit {
+				e.over = true
+				return dst, false
+			}
 			var ok bool
 			if dst, ok = e.value(dst, element, depth+1); !ok {
 				return dst, false
@@ -194,14 +268,14 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 		}
 		return append(dst, ']'), true
 	case *decode.CSVRows:
-		// The csv decoder's rows, written as the list of rows they stand
-		// for (decode.CSVRows.Document) without making it: a dict of every
-		// column the header names, the cells a row is short of empty, or
-		// without a header a list of the row's fields.
-		if depth+2 > pythonEncoderDepth {
+		// The csv decoder's rows without a header, written as the list of
+		// rows they stand for (decode.CSVRows.Document) without making it:
+		// a list of each row's fields. Rows by header are written as their
+		// table where they are the data (csvTable), and are nowhere else.
+		if depth+2 > pythonEncoderDepth || x.Named() {
 			return dst, false
 		}
-		return e.csvRows(dst, x), true
+		return e.csvRows(dst, x)
 	case map[string]any:
 		if depth >= pythonEncoderDepth {
 			return dst, false
@@ -221,6 +295,10 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 			if i > first {
 				dst = append(dst, ',')
 			}
+			if len(dst) > e.limit {
+				e.over = true
+				return dst, false
+			}
 			dst = appendPythonString(dst, e.members[i].key, &e.nul)
 			dst = append(dst, ':')
 			var ok bool
@@ -235,41 +313,72 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 	return dst, false
 }
 
-// csvRows writes the csv decoder's rows as json.Marshal writes the list of
-// rows they stand for.
-func (e *pythonEncoder) csvRows(dst []byte, rows *decode.CSVRows) []byte {
-	columns := rows.Columns()
+// csvRows writes the csv decoder's rows read without a header as
+// json.Marshal writes the list of rows they stand for: a list of each row's
+// fields. It reports false for rows longer written than the request may be.
+func (e *pythonEncoder) csvRows(dst []byte, rows *decode.CSVRows) ([]byte, bool) {
 	dst = append(dst, '[')
 	for i := range rows.Len() {
 		if i > 0 {
 			dst = append(dst, ',')
 		}
-		row := rows.Row(i)
-		if !rows.Named() {
-			dst = append(dst, '[')
-			for j, field := range row {
-				if j > 0 {
-					dst = append(dst, ',')
-				}
-				dst = appendPythonString(dst, field, &e.nul)
-			}
-			dst = append(dst, ']')
-			continue
+		if len(dst) > e.limit {
+			e.over = true
+			return dst, false
 		}
-		dst = append(dst, '{')
-		for j, column := range columns {
-			if j > 0 {
-				dst = append(dst, ',')
-			}
-			dst = appendPythonString(dst, column.Name, &e.nul)
-			dst = append(dst, ':')
-			cell := ""
-			if column.Place < len(row) {
-				cell = row[column.Place]
-			}
-			dst = appendPythonString(dst, cell, &e.nul)
+		dst = e.cells(dst, rows.Row(i))
+	}
+	return append(dst, ']'), true
+}
+
+// csvTable writes the csv decoder's rows read by header as the table they
+// are: {"columns": [...], "places": [...], "rows": [[...], ...]}, the names
+// of the header's columns in the order of their bytes, the place of each in
+// a row, and each row's cells as its line holds them. The worker makes of
+// it the list of rows a script reads, a dict of every column the header
+// names to its cell, "" where the row is short of it, as json.loads made of
+// that list written out (decode.CSVRows.Document). Written out, that list
+// is as long as the header times the rows, which a body of a long header
+// and many short lines makes far more than its size; the table is as long
+// as the body. It sets over for a table longer than the request may be.
+func (e *pythonEncoder) csvTable(dst []byte, rows *decode.CSVRows) []byte {
+	columns := rows.Columns()
+	dst = append(dst, `{"columns":[`...)
+	for j, column := range columns {
+		if j > 0 {
+			dst = append(dst, ',')
 		}
-		dst = append(dst, '}')
+		dst = appendPythonString(dst, column.Name, &e.nul)
+	}
+	dst = append(dst, `],"places":[`...)
+	for j, column := range columns {
+		if j > 0 {
+			dst = append(dst, ',')
+		}
+		dst = strconv.AppendInt(dst, int64(column.Place), 10)
+	}
+	dst = append(dst, `],"rows":[`...)
+	for i := range rows.Len() {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		if len(dst) > e.limit {
+			e.over = true
+			return dst
+		}
+		dst = e.cells(dst, rows.Row(i))
+	}
+	return append(dst, "]}"...)
+}
+
+// cells writes a row's cells as a list of strings.
+func (e *pythonEncoder) cells(dst []byte, row []string) []byte {
+	dst = append(dst, '[')
+	for j, field := range row {
+		if j > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendPythonString(dst, field, &e.nul)
 	}
 	return append(dst, ']')
 }

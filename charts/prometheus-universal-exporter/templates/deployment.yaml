@@ -120,9 +120,7 @@ spec:
             - {{ printf "--allocator.cache-dir=%s" (include "prometheus-universal-exporter.allocatorCacheDir" .) | quote }}
             - "--allocator.member=$(POD_NAME)"
             - {{ printf "--allocator.advertise=$(POD_IP):%d" (include "prometheus-universal-exporter.containerPort" . | int) | quote }}
-            {{- if .Values.allocator.tokenSecret.name }}
             - {{ printf "--allocator.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
-            {{- end }}
             {{- else }}
             - --config.file=/etc/prometheus-universal-exporter/config.yaml
             {{- end }}
@@ -227,11 +225,9 @@ spec:
             {{- if $allocator }}
             - name: allocator-cache
               mountPath: {{ include "prometheus-universal-exporter.allocatorCacheDir" . }}
-            {{- if .Values.allocator.tokenSecret.name }}
             - name: allocator-token
               mountPath: {{ include "prometheus-universal-exporter.allocatorTokenDir" . }}
               readOnly: true
-            {{- end }}
             {{- else }}
             - name: config
               mountPath: /etc/prometheus-universal-exporter
@@ -270,15 +266,13 @@ spec:
         {{- if $allocator }}
         - name: allocator-cache
           emptyDir: {}
-        {{- with .Values.allocator.tokenSecret.name }}
         - name: allocator-token
           secret:
-            secretName: {{ . | quote }}
+            secretName: {{ include "prometheus-universal-exporter.allocatorTokenSecretName" . | quote }}
             defaultMode: 256
             items:
-              - key: {{ $.Values.allocator.tokenSecret.key | default "token" | quote }}
+              - key: {{ .Values.allocator.tokenSecret.key | default "token" | quote }}
                 path: token
-        {{- end }}
         {{- else }}
         - name: config
           configMap:

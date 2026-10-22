@@ -552,7 +552,7 @@ values schema:
 | `goMemLimit.enabled`, `goMemLimit.ratio` | `--runtime.memory-limit-ratio`, rendered only when enabled (§ 33.1) |
 | `config` | `--config.file`, the chart's mount path of `config.yaml` (§ 33.2), rendered unless `allocator.enabled` |
 | `allocator.enabled` | `--allocator.url`, `--allocator.cache-dir`, `--allocator.member`, `--allocator.advertise`, rendered only when enabled (§ 33.10c) |
-| `allocator.tokenSecret.name`, `allocator.tokenSecret.key` | `--allocator.token-file`, rendered only with `allocator.enabled` and a name (§ 33.10c) |
+| `allocator.tokenSecret.name`, `allocator.tokenSecret.key` | `--allocator.token-file`, rendered whenever `allocator.enabled`, naming the generated Secret's token when the name is empty (§ 33.10c) |
 | `allocator.staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `allocator.enabled` (§ 33.10c) |
 
 An invalid value MUST fail rendering and be refused by the values schema.
@@ -782,7 +782,7 @@ The allocator MUST be run with `--web.listen-address=:9116`, `--config.file` nam
 configuration's `config.yaml`, `--static-targets-file` while
 `allocator.staticTargets.data` is not empty, `--probe-targets-file` while
 `allocator.probeJobs` is not empty, `--web.token-file` naming the token's
-mounted file with `allocator.tokenSecret.name`, `--log.level`
+mounted file, `--log.level`
 from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
 empty, and `--members.max` from `allocator.maxMembers`, 1000 by default, a
 whole number from 1 to 2147483647. Its `minReadySeconds` MUST be `max(allocator.settle, 10s)`, an empty
@@ -814,6 +814,24 @@ peers of `allocator.networkPolicy.prometheus`, which defaults to pods labelled
 `app.kubernetes.io/name: prometheus` in any namespace, as the Prometheus
 Operator labels Prometheus.
 
+The allocator MUST always require a bearer token, since the NetworkPolicy's
+default peer admits any Prometheus-labelled pod of the cluster, which without
+one could heartbeat as a member, be handed targets and be probed with the
+exporter's credential. The token MUST come from the Secret
+`allocator.tokenSecret.name` names, under `allocator.tokenSecret.key`
+(`token` by default), and when the name is empty, the default, from a Secret
+`<fullname>-allocator-token` the chart renders with a random token under that
+key, which MUST be read back from the release's existing Secret of that name
+with `lookup`, so an upgrade keeps it; where `lookup` reads nothing, as with
+`helm template`, a new one MUST be generated. With a name the chart MUST
+render no Secret. The token's Secret MUST be mounted into the allocator's
+and the exporter pods, the allocator run with `--web.token-file`, the exporter
+pods with `--allocator.token-file`, and every ScrapeConfig and the
+allocator's ServiceMonitor MUST present it as `Bearer` credentials. The
+allocator MUST NOT be required to compare a member's advertised address with
+the source of its heartbeat: a sidecar or proxy between them would make them
+differ for every pod.
+
 The configuration the allocator serves MUST be `config.data`, or the
 ConfigMap supplied with `config.enabled: false`, mounted into the allocator at
 the configuration directory; `allocator.staticTargets.data` and
@@ -841,7 +859,7 @@ the directory, at or inside a directory the allocator's pod mounts, every one
 a read-only volume: the configuration directory always, the static target
 directory while `allocator.staticTargets.data` is not empty, the probe
 targets directory while `allocator.probeJobs` is not empty, the token's
-directory with `allocator.tokenSecret.name`, and
+directory, and
 `/var/run/secrets/kubernetes.io/serviceaccount` while the service account
 token is mounted, with a `kubernetes` source or `serviceAccount.automount`;
 and so MUST two entries of one `mountPath`. The paths MUST be compared
@@ -873,8 +891,8 @@ naming `allocator.staticTargets.expandEnv`.
 `http` port, selecting the allocator's Service by its selector labels and so
 no Service of the exporter's, with `interval`, `scrapeTimeout` and `labels`
 from `allocator.serviceMonitor` when set, a timeout longer than the interval
-failing rendering, and presenting the token as `Bearer` credentials when
-`allocator.tokenSecret.name` is set. Being asked for, it MUST NOT wait on the
+failing rendering, and presenting the allocator's token as `Bearer`
+credentials. Being asked for, it MUST NOT wait on the
 CRD's presence, and counts as another monitor for the self monitor (§ 33.5).
 
 In allocator mode the exporter pods MUST NOT be given `--config.file`,
@@ -884,9 +902,9 @@ configuration or a static target ConfigMap; they MUST be given
 port 9116, `--allocator.cache-dir=/var/cache/prometheus-universal-exporter`,
 `--allocator.member` set to the pod's name and `--allocator.advertise` to the
 pod's IP and the container port, both from the downward API through the
-environment variables `POD_NAME` and `POD_IP`, and, with
-`allocator.tokenSecret.name`, `--allocator.token-file` naming the Secret's key
-mounted read-only with mode 0400. An `env` entry of either name MUST fail
+environment variables `POD_NAME` and `POD_IP`, and `--allocator.token-file`
+naming the key of the token's Secret, `allocator.tokenSecret.name`'s or the
+generated one, mounted read-only with mode 0400. An `env` entry of either name MUST fail
 rendering. The credential Secrets (`targetAuth`, `webAuth`, `sshAuth`,
 `sqlAuth`) and `extraVolumes` MUST stay mounted as without the allocator. The
 cache directory MUST be an `emptyDir`: it survives a container restart but not
@@ -1755,9 +1773,11 @@ are skipped and the text checks of the templates still run:
    - Each probe job renders a ScrapeConfig whose `httpSDConfigs` URL is the
      job's `/v1/sd/<job>` on the allocator's Service, refreshed every 30s, with
      the interval, timeout and labels given and no relabelings, metrics path or
-     parameters; with `allocator.tokenSecret` it presents the token as Bearer
-     credentials, the exporter gets `--allocator.token-file` and the allocator
-     `--web.token-file`; with `webAuth.enabled` it presents the exporter's Basic
+     parameters; it presents the token as Bearer credentials, the exporter
+     gets `--allocator.token-file` and the allocator `--web.token-file`, from
+     the Secret `allocator.tokenSecret` names or, without a name, the
+     `<fullname>-allocator-token` the chart generates with a random token,
+     a new one at each `helm template`, and none with a name; with `webAuth.enabled` it presents the exporter's Basic
      Auth. No probe job, or `scrapeConfig.enabled: false`, renders none.
    - In allocator mode the exporter is a Deployment, which the
      HorizontalPodAutoscaler scales, with no StatefulSet and no Service beside

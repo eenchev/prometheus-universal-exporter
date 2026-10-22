@@ -642,7 +642,14 @@ them rolls the allocator, and reaches the replicas as a new bundle without a
 restart. The replicas get `--allocator.url`, their pod's name as the member
 and their pod's IP as the address to advertise, keep their bundle in an
 `emptyDir`, and keep the credential Secrets mounted, which the allocator does
-not need. The `emptyDir` survives a container restart but not the pod's
+not need. The allocator always runs with `--web.token-file`, and the replicas
+and Prometheus send its token: from the Secret `allocator.tokenSecret.name`
+names, or, by default, from one the chart generates and keeps across
+upgrades (see
+[The allocator's token](../charts/prometheus-universal-exporter/README.md#the-allocators-token)),
+since the default NetworkPolicy admits any Prometheus-labelled pod of the
+cluster, which without the token could heartbeat as a replica and be handed
+targets. The `emptyDir` survives a container restart but not the pod's
 replacement: a new pod starts with no bundle, not ready, and waits for the
 allocator. A restarted container starts with the bundle its exporter
 installed there, and with nothing else: a `config.yaml` put into the

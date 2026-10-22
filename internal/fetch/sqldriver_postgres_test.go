@@ -3,14 +3,19 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"database/sql/driver"
+	"encoding/binary"
 	"errors"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
@@ -130,4 +135,122 @@ func TestAPostgresStatementTimeoutIsTheScrapesDeadline(t *testing.T) {
 	if err := mysql.sqlDeadline(context.Background(), "running the statement", timeout); strings.Contains(err.Error(), "deadline") {
 		t.Errorf("another driver: %v", err)
 	}
+}
+
+// A row larger than the response limit is refused by pgx from the length of
+// its message, before a byte of it is read: a value of 200 MiB under a limit
+// of 1 MiB fails the statement with the limit's words, and the exporter
+// allocates nothing like it. pgx would otherwise read a message of up to a
+// gigabyte whole before the limit on the rows' values applied.
+func TestAPostgresRowOverTheResponseLimitIsRefusedBeforeItIsRead(t *testing.T) {
+	const value = 200 << 20
+	port := postgresRowStandIn(t, value)
+	hook := func(ctx context.Context, _ string, spec *sqlConnectSpec) (driver.Conn, error) {
+		return connectPostgres(ctx, spec)
+	}
+	sqlConnectHook.Store(&hook)
+	t.Cleanup(func() {
+		sqlConnectHook.Store(nil)
+		sqlPools.closeAll()
+	})
+	c := &model.Collector{
+		Name: "pg",
+		Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "SELECT v", Username: "metrics",
+			PasswordFile: testutil.WriteIn(t, t.TempDir(), "password", "s3cret\n"), MaxResponseBytes: 1 << 20},
+		Transform: model.TransformConfig{Type: "jq"},
+	}
+	if err := ValidateRequest(c); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	allocated := alloctest.BytesAtMost(1, 100<<20, func() {
+		_, err = FetchCollector(context.Background(), net.JoinHostPort("127.0.0.1", port), c, RequestOverrides{Timeout: time.Minute}, nil)
+	})
+	if allocated > 100<<20 {
+		t.Fatalf("refusing the row allocated %d MiB", allocated>>20)
+	}
+	if err == nil || !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "larger than the response limit of 1048576 bytes") || !strings.Contains(err.Error(), "max_response_bytes") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// postgresRowStandIn is a stand-in for postgres that takes every login and
+// answers every statement with a row of one text column holding value bytes,
+// which it sends a megabyte at a time.
+func postgresRowStandIn(t *testing.T, value int) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	description := &pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{{Name: []byte("v"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1}}}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				backend := pgproto3.NewBackend(conn, conn)
+				if _, err := backend.ReceiveStartupMessage(); err != nil {
+					return
+				}
+				backend.Send(&pgproto3.AuthenticationOk{})
+				backend.Send(&pgproto3.BackendKeyData{ProcessID: postgresStandInPID, SecretKey: []byte{1, 2, 3, 4}})
+				backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+				if backend.Flush() != nil {
+					return
+				}
+				for {
+					msg, err := backend.Receive()
+					if err != nil {
+						return
+					}
+					switch m := msg.(type) {
+					case *pgproto3.Query:
+						backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("OK")})
+						backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'T'})
+					case *pgproto3.Parse:
+						backend.Send(&pgproto3.ParseComplete{})
+					case *pgproto3.Describe:
+						if m.ObjectType == 'S' {
+							backend.Send(&pgproto3.ParameterDescription{})
+						}
+						backend.Send(description)
+					case *pgproto3.Bind:
+						backend.Send(&pgproto3.BindComplete{})
+					case *pgproto3.Execute:
+						if backend.Flush() != nil {
+							return
+						}
+						header := binary.BigEndian.AppendUint32([]byte{'D'}, uint32(4+2+4+value))
+						header = binary.BigEndian.AppendUint16(header, 1)
+						header = binary.BigEndian.AppendUint32(header, uint32(value))
+						if _, err := conn.Write(header); err != nil {
+							return
+						}
+						chunk := bytes.Repeat([]byte{'x'}, 1<<20)
+						for sent := 0; sent < value; sent += len(chunk) {
+							if _, err := conn.Write(chunk[:min(len(chunk), value-sent)]); err != nil {
+								return
+							}
+						}
+						backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
+					case *pgproto3.Sync:
+						backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'T'})
+					case *pgproto3.Terminate:
+						return
+					}
+					if backend.Flush() != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	return port
 }

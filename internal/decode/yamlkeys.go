@@ -536,7 +536,7 @@ func yamlNotScalarKey(key *yaml.Node) error {
 		what = "an alias of " + what
 	}
 	problem := func(line string) string {
-		return fmt.Sprintf("the mapping key at line %s is %s; only scalar keys (text, numbers, booleans, null) can be read", line, what)
+		return fmt.Sprintf("the mapping key at line %s is %s; only scalar keys (text, numbers, booleans) can be read", line, what)
 	}
 	return model.SameFailureAs(errors.New(library+problem(strconv.Itoa(key.Line))), library+problem(model.MovingMark))
 }

@@ -810,6 +810,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	stmtCtx, stop := context.WithCancel(ctx)
 	rows, done, err := p.driver.run(stmtCtx, conn, col.Request.Statement, args, timeout)
 	if err != nil {
+		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "running the statement", err)
 		traceOutcome(ctx, "error: "+err.Error())
 		return nil, stop, err
@@ -822,12 +823,25 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		if p.driver.rowsError != nil {
 			err = p.driver.rowsError(err)
 		}
+		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "reading the rows", err)
 		traceOutcome(ctx, "error: "+err.Error())
 		return nil, finish, err
 	}
 	traceOutcome(ctx, fmt.Sprintf("returned %d rows of the columns %s", len(result.rows), strings.Join(result.columns, ", ")))
 	return result, finish, nil
+}
+
+// sqlMessageLimit is err in the words of the response limit when it is the
+// driver's refusal of a message from the server larger than the limit allows
+// (sqlDriver.messageTooLarge): a row too large for the limit, refused before
+// it is read.
+func (p *sqlPool) sqlMessageLimit(col *model.Collector, err error) error {
+	if p.driver.messageTooLarge == nil || !p.driver.messageTooLarge(err) {
+		return err
+	}
+	return model.MarkError(model.Errorf("the server sent a message larger than the response limit of %d bytes and the %d bytes the protocol is allowed beside it, as a row too large for the limit is; return smaller values, or raise request.max_response_bytes or limits.max_response_bytes: %w",
+		model.Size(responseLimit(col)), sqlMessageSlack, err), model.ErrLimitExceeded)
 }
 
 // sqlEndGrace is how long the end of a statement is waited for when the
@@ -1248,6 +1262,7 @@ func (p *sqlPool) spec() (*sqlConnectSpec, error) {
 		options: p.options, tls: config, tlsDigest: digest,
 		dial:    sqlDial(base.policy, address.host, keepalive),
 		appName: sqlAppName,
+		limit:   base.limit,
 	}, nil
 }
 

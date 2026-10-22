@@ -561,6 +561,9 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	// free again once the worker has been handed it.
 	encoder := pythonEncoders.Get().(*pythonEncoder)
 	payload, err := encoder.request(mode, script, d, r, c)
+	if errors.Is(err, errPythonRequestTooLarge) {
+		return nil, model.MarkError(fmt.Errorf("python %s did not run: %w", what, err), model.ErrScriptFailed)
+	}
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
 	}

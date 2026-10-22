@@ -57,7 +57,7 @@ collectors:
 | `tls` | — | `ca_file`, `cert_file` and `key_file`, `server_name`, `insecure_skip_verify`, as for [any request](REQUESTS.md#tls): a key set here switches TLS on, verified, unless the driver's TLS option says otherwise (see [Drivers](#drivers)). |
 | `options` | — | The driver's own settings, from a short list for each (see [Drivers](#drivers)); any other is a startup error. |
 | `max_rows` | `10000` | The most rows the statement may return; one more fails the scrape, and the statement is ended there, the rest of its rows not read (the driver may close its connection to do so). |
-| `max_response_bytes` | limit | The most bytes the rows may hold: each value, text and binary data by its length and every other value as 8, with its column's name's length, which the rows the transforms read have in each row the column has a value in; a `NULL`, left out of its row, counts nothing. |
+| `max_response_bytes` | limit | The most bytes the rows may hold: each value, text and binary data by its length and every other value as 8, with its column's name's length, which the rows the transforms read have in each row the column has a value in; a `NULL`, left out of its row, counts nothing. A driver reads a row before the limit sees it: how much a row larger than the limit costs is under [Limitations](#limitations). |
 | `connections` | — | How connections to a target are kept (see [Connections](#connections)). |
 | `allowed_targets`, `denied_targets` | — | The servers the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on every connection. |
 
@@ -512,6 +512,35 @@ label name the drivers a build has; of a build without the `sql` type,
   exporter refuses (above) — `failed to extract HTTP response body. URL:
   ...` six times, with the chunk's presigned URL — are logged at debug: the
   scrape's own failure says what happened.
+- **A row is read before `max_response_bytes` sees it.** The limit counts
+  the values as a driver hands them on, and a driver reads a row, at least,
+  whole before it hands any of it on. Where a driver can be told, the
+  exporter bounds what it reads by the limit:
+  - `postgres` refuses a message from the server, a row with all its values
+    among them, that is larger than the limit and 1 MiB beside it (for a
+    row's lengths and `NULL`s, a wide result's description and a long error
+    message) from its length alone, before reading it, and closes the
+    connection: `the server sent a message larger than the response limit
+    of 1048576 bytes and the 1048576 bytes the protocol is allowed beside
+    it, as a row too large for the limit is; return smaller values, or raise
+    request.max_response_bytes or limits.max_response_bytes`. Unbounded,
+    pgx would read a message of up to 1 GiB.
+  - `sqlserver` sets `TEXTSIZE` to twice the limit and two bytes on each
+    connection, when it is made and before each use of it, which costs a
+    round trip: the server cuts a longer `varchar(max)`, `nvarchar(max)`,
+    `varbinary(max)`, `text`, `ntext` or `image` value there, and since a cut
+    value is still over the limit as the exporter reads it (`nvarchar` text
+    is two bytes a character as sent), the scrape fails by the limit and
+    never hands a cut value on. Other values are 8000 bytes at most, but `xml`
+    and CLR types such as `geography`, which `TEXTSIZE` does not cover, and
+    which the driver reads whole.
+  - `mysql` reads a row whole, as long as the server sends it, which the
+    server's `max_allowed_packet` bounds (64 MiB by default, 1 GiB at most);
+    the driver cannot be told less, its own `maxAllowedPacket` bounding what
+    it sends alone.
+  - The opt-in drivers read a row, or a block of rows as their protocol
+    sends it (`clickhouse`'s blocks, `snowflake`'s result chunk), whole, with
+    no bound the exporter sets.
 - **No connection string.** A setting a driver has that no key or option
   above names cannot be set.
 

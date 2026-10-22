@@ -607,7 +607,7 @@
         "tokenSecret": {
           "type": "object",
           "additionalProperties": false,
-          "description": "The Secret holding the shared bearer token; an empty name sends and requires none.",
+          "description": "The Secret holding the shared bearer token the allocator always requires; an empty name has the chart generate one, <fullname>-allocator-token, kept across upgrades.",
           "properties": {
             "name": {"type": "string"},
             "key": {"type": "string", "minLength": 1}

@@ -218,9 +218,19 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		out := dynamicpb.NewMessage(m.desc.Output())
 		var header, trailer metadata.MD
 		traceRequest(ctx, "POST", grpcTraceScheme(secure)+address.hostPort+m.path(), grpcTraceHeader(md), "", false)
+		// The answer's JSON is counted before the answer is decoded, and
+		// one whose JSON is surely over the limit is refused unread
+		// (answerCodec).
+		codec := &answerCodec{limit: limit, resolver: answerResolver(m.types)}
 		err := conn.Invoke(callCtx, m.path(), in, out,
 			grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))),
+			grpc.ForceCodecV2(codec),
 			grpc.Header(&header), grpc.Trailer(&trailer))
+		if codec.over != nil {
+			// The call was answered OK; the answer is over the limit.
+			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
+			return nil, &CallAnswerError{Err: codec.over}
+		}
 		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
 		if err == nil {
 			body, err := renderAnswer(out, m.types)
@@ -228,7 +238,9 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				return nil, &CallAnswerError{Err: err}
 			}
 			// The limit bounds the message as it arrived, and the JSON it
-			// became, which writing every zero value can make much larger.
+			// became, which writing every zero value can make much larger:
+			// the count before decoding is short of the JSON by what it
+			// does not count exactly.
 			if int64(len(body)) > limit {
 				return nil, &CallAnswerError{Err: model.MarkError(model.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", model.Size(len(body)), limit), model.ErrLimitExceeded)}
 			}
@@ -308,9 +320,7 @@ func grpcTraceHeader(md metadata.MD) http.Header {
 // the exporter; one found in neither fails the answer, naming its type.
 func renderAnswer(out *dynamicpb.Message, types *dynamicpb.Types) ([]byte, error) {
 	options := grpcJSON
-	if types != nil {
-		options.Resolver = answerTypes{types}
-	}
+	options.Resolver = answerResolver(types)
 	raw, err := options.Marshal(out)
 	if err != nil {
 		return nil, fmt.Errorf("rendering the answer as JSON: %w", err)
@@ -462,6 +472,18 @@ func unavailable(err error) bool {
 		return call.Code == int(codes.Unavailable)
 	}
 	return status.Code(err) == codes.Unavailable
+}
+
+// answerResolver is what resolves the types an answer's google.protobuf.Any
+// values name, when it is rendered and when its size is counted.
+func answerResolver(types *dynamicpb.Types) interface {
+	protoregistry.MessageTypeResolver
+	protoregistry.ExtensionTypeResolver
+} {
+	if types == nil {
+		return protoregistry.GlobalTypes
+	}
+	return answerTypes{types}
 }
 
 // answerTypes resolves the types an answer's google.protobuf.Any values name:

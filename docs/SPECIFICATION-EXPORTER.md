@@ -1690,7 +1690,20 @@ of objects, one a row, of its columns by name. Its keys:
   other value as 8 bytes, each with its column's name's length, a `NULL`
   nothing — MUST fail the scrape as a limit, the statement
   ended before its rows are closed so that the driver reads none of the
-  rest. The rows MUST be read by a `csv` transform by column name, one row
+  rest. A driver reads a row whole before the limit sees any of it, so the
+  limit MUST bound what a driver reads of the server at once where the
+  driver can be told: `postgres` MUST refuse a message from the server
+  larger than the limit and 1 MiB beside it from its length, before reading
+  it, failing the scrape as a limit in the limit's words (`the server sent a
+  message larger than the response limit of N bytes ...`), where pgx would
+  read one of up to 1 GiB; `sqlserver` MUST set `TEXTSIZE` on each
+  connection, when it is made and before each use, to twice the limit and two
+  bytes, so that the server cuts a longer `varchar(max)`, `nvarchar(max)`,
+  `varbinary(max)`, `text`, `ntext` or `image` value, a cut value being over
+  the limit as read and so never handed on. What no driver can be told — a
+  `mysql` row, up to the server's `max_allowed_packet`; a SQL Server `xml` or
+  CLR-type value; the opt-in drivers' rows and blocks of rows — is read
+  before the limit applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
   at a time as a CSV file's with a header, and by `jq`, `yq` and `python` as
   the list; `decoder.type` other than its default, any other transform and
   any `response` setting MUST be refused at load, with no warning that the
@@ -2258,8 +2271,12 @@ does (§ 6.1a).
   counting those of its table header, of its dotted key and of the keys of
   the inline tables around it, MUST be refused naming the line: the library
   parses nested brackets by recursion and costs the square of a key's parts
-  for each key. A document whose tables and arrays together nest deeper than
-  `MaxDepth` MUST be refused too. An error of the library MUST be its message
+  for each key. The scan that keeps these bounds MUST pass over the byte
+  order mark the library passes over itself (UTF-8, UTF-16LE or UTF-16BE),
+  after the one taken off the response, and where it cannot follow the body
+  it MUST refuse it naming the line, and MUST NOT hand the library a body it
+  has not scanned to its end. A document whose tables and arrays together
+  nest deeper than `MaxDepth` MUST be refused too. An error of the library MUST be its message
   after the line it names, without the last key it read, and a message past
   256 bytes MUST be cut there with its length.
 - `ini`: the document MUST be a mapping of each section's name to the mapping
@@ -2742,6 +2759,23 @@ JSON mapping, compacted so the same answer is always the same bytes, with:
 
 A numeric string MUST be read by metric values as a number.
 
+The JSON MUST be bounded by `max_response_bytes` as the message is: an answer
+whose JSON is over the limit MUST fail as an answer over the limit, the call
+itself `OK`, its error saying how large the JSON is and the limit. Writing
+every zero value can make the JSON far larger than the message: an empty
+element of a repeated field is two bytes on the wire and every one of its
+fields as JSON. The JSON's size MUST therefore be counted from the message as
+it arrived, before it is decoded, and an answer whose count is over the limit
+MUST be refused then, its error saying the answer is at least that many bytes
+as JSON: neither decoding nor rendering an answer that is refused may cost
+more than reading it does. The count MUST NOT be more than the JSON of a
+message that carries no single-valued field and no map key twice, as no
+encoder writes one, so that such an answer within the limit is never refused
+by it; it MUST be exact but for floating-point numbers, which count as a
+digit, and the well-known types written in a form of their own, which count
+at their shortest. An answer the count lets through MUST still fail when its
+rendered JSON is over the limit.
+
 ---
 
 # 10. YAML decoder
@@ -2929,7 +2963,7 @@ The YAML decoder MUST:
 - Refuse a document the YAML library refuses, or panics on, for a mapping
   key that is a sequence or a mapping, or an alias of one, in words that say
   so and where: `yaml: the mapping key at line 3 is a sequence; only scalar
-  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  keys (text, numbers, booleans) can be read` (`a mapping`, `an alias
   of a sequence`), naming the first such key of the document in the order it
   is written. A decoded document's keys are the keys of JSON objects, which
   such a key cannot be, and the library's own words say nothing of it: one
@@ -2942,6 +2976,20 @@ The YAML decoder MUST:
   out). A document with such a key that the library refuses for something
   else, or decodes, as it does one whose key is in a value a merge leaves
   out and never reads, MUST be refused, or decoded, as before.
+- Refuse a document with a mapping two of whose keys, written otherwise,
+  are one text in the decoded document, whose keys are text: `1` and `1.0`,
+  `16` and `0x10`, `true` and `True`, `'1'` and `1`, a key and an alias of
+  it. The library tells keys apart by how they are written and refuses none
+  of these, and of two that decode into one value it keeps the later
+  without a word. The error MUST be in the words of a key written twice,
+  naming the key by that text and both lines (`line 2: mapping key "1"
+  already defined at line 1`), named and counted as above; keys merged into
+  a mapping with `<<` that are the text of one of its own MUST be refused
+  too (`mapping key "1" is in a mapping twice, written otherwise each time,
+  once merged into it with <<`). Which key is refused MUST NOT depend on the
+  order of a Go map. A null key (`~`, `null`, or none) has no text and MUST
+  be refused at its line: `line 2: mapping key "~" is null, which is no
+  text; quote it to read it as text`.
 - Fail the decode, and nothing more, of a document the decoding panics on.
   The YAML library panics on a merge into a mapping that has a key that is
   no text where a merged mapping has a sequence or a mapping for a key,
@@ -4179,6 +4227,17 @@ typical script.
 - The response's body MUST be sent to a worker once: `response.text`,
   `response.body` and, where the script's `data` is the body as text, `data`
   MUST be one string in the worker, not a copy each in the request.
+- The csv decoder's rows by header MUST be sent to a worker as the header's
+  columns once and each row's cells, as long as the body, and the worker MUST
+  make of them the list a script reads, a dict of every column the header
+  names to its cell, `""` for a cell the row is short of; they MUST NOT be
+  sent as that list written out, which is as long as the header times the
+  rows. A request MUST be no longer than 32 times the response limit and
+  `limits.max_output_bytes` together, and the script, and one longer MUST be
+  refused while it is written, before it is written to its end and before
+  any worker reads it, failing the transform or the pre-script with `python
+  transform did not run: the response and the data decoded from it come to
+  more than N bytes written out for the worker, ...`.
 - The hand-over MUST NOT show in what a script is given, nor in what its
   answer is read as, however the lines are written and read. A request MUST
   carry `data` as the decoder made it: an object's keys in the order of their
@@ -9835,7 +9894,11 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
 - A change to none of these MAY complete without running either suite.
 
 The path filter MUST evaluate the correct comparison base for both push and
-pull-request workflows.
+pull-request workflows. A tag push MUST run every step, whatever changed:
+paths-filter compares a tag with its merge base on the default branch, which
+for a tag on that branch's newest commit is the commit itself, so the steps
+MUST run under outputs that are all true on a tag push and the filter's own
+otherwise, and a test MUST run the step that sets them.
 
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
@@ -22113,11 +22176,13 @@ The decoded rows of a CSV answer cost the cells its lines hold (§ 13):
   and the rows a pre-script leaves, dicts, lists, numbers, None, rows that
   are no row and data that is no list, are read as the transform read them
   (`TestCSVTransformOfTheDecodersRowsGivesWhatItGave`).
-- The request line that hands the decoder's rows to a Python worker is the
-  line that handed the rows as they were, byte for byte, written by the
-  encoder and by json.Marshal alike — dicts by the header's names in the
-  order of their bytes, "" for a cell a row is short of, lists without a
-  header — over the same fixtures and generated bodies
+- The request line that hands the decoder's rows to a Python worker carries
+  what the line that handed the rows as they were carried — dicts by the
+  header's names in the order of their bytes, "" for a cell a row is short
+  of, lists without a header: without a header the same line byte for byte,
+  with one the rows as their table, which made into rows as the worker makes
+  them is the data of that line, the rest alike; json.Marshal writes that
+  line — over the same fixtures and generated bodies
   (`TestAScriptIsHandedTheCSVRowsItWasHanded`); and a pre-script and a
   python transform that echo `json.dumps(data)` echo the same text for every
   fixture of testdata/csv, with a header and without
@@ -23140,7 +23205,7 @@ A reload refused because a file could not be read, the stamps' file modes, a YAM
   did before it held the mode, or the mode of a file it lists changed.
 - A YAML mapping key that is a sequence or a mapping, or an alias of one, is
   refused as `yaml: the mapping key at line N is a sequence; only scalar
-  keys (text, numbers, booleans, null) can be read` (`a mapping`, `an alias
+  keys (text, numbers, booleans) can be read` (`a mapping`, `an alias
   of a sequence`), naming the first such key of the document: two different
   ones, which were `mapping key "" already defined`, one alone and the same
   one twice, which were `invalid map key: ...` with no line, one in a
@@ -23795,8 +23860,9 @@ The exporter's tests and the target allocator's run when a file each needs chang
   compound `allocator.settle` (SPECIFICATION-CHART.md § 33.10c).
 - `allocator.serviceMonitor.enabled` renders a ServiceMonitor of the
   allocator's `/metrics` on port `http` selecting the allocator's Service and
-  not the exporter's, with the interval, timeout and labels given, the token
-  as Bearer credentials only with `allocator.tokenSecret`, the self-metrics
+  not the exporter's, with the interval, timeout and labels given, the
+  token, the generated one or `allocator.tokenSecret`'s, as Bearer
+  credentials, the self-metrics
   monitor beside it, nothing by default or without the allocator, and a
   timeout longer than its interval failing rendering
   (SPECIFICATION-CHART.md § 33.10c).
@@ -24978,6 +25044,101 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   connection — the largest failure of each stage, the debug report's bounds,
   the same failure recognised, and carrying on after a failed fetch — take
   their address from it.
+
+## 34.170 Audit fixes: TOML, Python requests, YAML keys, gRPC and SQL bounds, the release gate and the allocator's token
+
+- A TOML body starting with two byte order marks, UTF-8 and UTF-8, UTF-8
+  and UTF-16LE, UTF-8 and UTF-16BE, followed by 20,000 `[`, is refused for
+  its nesting within a second, and so is the body that killed the process,
+  two UTF-8 marks and four mebibytes of `[`; a document after two marks
+  decodes; a body the nesting scan cannot follow — a second mark on a later
+  line, a key without `=`, an empty table-header part, a string that does
+  not end, a `}` or `]` that closes nothing — is refused naming its line,
+  not handed to the library (`TestTOMLIsRefusedWhereTheNestingScanCannotFollowIt`,
+  § 6.0a).
+- The rows of a CSV header of 5,000 columns over 5,000 lines of one field, a
+  body of 39 kB, are handed to a Python worker in a request of no more than
+  four times the body, where it was 257 MiB; a script reading rows by a
+  header with an unnamed column and short rows sees every named column, ""
+  for the cells a row is short of, the unnamed column left out
+  (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`, § 16.7).
+- The rows a CSV body decodes into are what a script was handed: without a
+  header the same request line, with one the table, made into rows as the
+  worker makes them, the data of the line it was, over the fixtures and
+  generated bodies (`TestAScriptIsHandedTheCSVRowsItWasHanded`, § 16.7).
+- A request longer than 32 times the response limit and
+  `limits.max_output_bytes` together, and the script, is refused while it is
+  written — data a list, a dict and CSV rows without a header — and the
+  transform fails with `python transform did not run: ...` without a
+  worker; a request within the limit is written
+  (`TestAPythonRequestPastItsLimitFailsTheTransform`, § 16.7).
+- YAML keys of one mapping that are one text — `1` and `1.0` in either
+  order, `16` and `0x10`, `true` and `True`, `'1'` and `1`, a key and an
+  alias of it — fail the decode as a key written twice by that text and
+  both lines, the same on each of twenty decodes; a null key, `~`, `null`
+  or none, fails it at its line; a key merged with `<<` that is the text of
+  the mapping's own fails it; different texts decode as before
+  (`TestYAMLKeysThatAreOneTextAreRefused`, § 10).
+- A gRPC answer of four million empty shards, 8 MB on the wire within a
+  10 MiB limit and 88 MB as JSON, is refused as at least that many bytes as
+  JSON, the call itself OK, with under 100 MiB allocated in all: its JSON is
+  counted as it is read, before it is decoded; decoding it alone allocated
+  3.6 GiB (§ 9a).
+- An answer the count lets through, twenty `Duration`s in `Any`s that count
+  as `"0s"`, is still refused by the size of its rendered JSON under a limit
+  between the count and that size (§ 9a).
+- The count of a gRPC answer's JSON equals the rendered JSON's length for
+  messages of every scalar kind, negative and largest integers, escaped
+  strings, bytes, enums named and unnamed, nested and repeated messages,
+  packed lists, maps of string, integer, bool and uint64 keys, a oneof,
+  proto3 optional fields, proto2 defaults, groups and packed lists, and the
+  empty message of each; with floating-point numbers, `Any`s and the
+  well-known types it is no more than the length; it stops just past a limit
+  of 10; and a message that does not parse is left to the decoder (§ 9a).
+- A postgres row of a 200 MiB value under a 1 MiB limit, from a stand-in that
+  sends it, fails the scrape as a limit in the limit's words, refused by pgx
+  from the message's length, with under 100 MiB allocated; without the bound
+  pgx read it whole and 401 MiB was allocated (§ 5.1 `sql`).
+- A SQL Server connection's session statement sets `TEXTSIZE 2097154` under
+  a 1 MiB limit, none with no limit, and `TEXTSIZE 2147483646` under the
+  largest limit (§ 5.1 `sql`).
+- An s3file read whose bucket answers every request 503 SlowDown fails at the
+  first answer, one request made, where the SDK's retryer made three (§ 5.1
+  `s3file`).
+- `/-/reload` answers `200` to every method its `Allow` names on a `405`,
+  which are at least two, and the endpoints table, the flag table, the
+  chart README's `server.enableLifecycle` sentence and the reload status
+  table's lead-in each name every one of those methods and no other: the test
+  fails on the pages that named `POST` alone.
+- Every job of `ci.yml` with a changed-path filter has, after it, a step
+  `changes` given `REF_TYPE` from `github.ref_type`, `CHANGED` from the
+  filter's `changes` output and `OUTPUTS` naming exactly the filter's
+  outputs; the test runs its script and finds every output true on a tag
+  push, whatever changed, and on a branch push true for the changed outputs
+  alone, and fails for a step whose `if` reads the filter's own outputs.
+- `tools/ci-passed.py`, run against a stand-in of the Actions API that also
+  answers a run's jobs, fails when the newest run concluded success with the
+  step that runs the repository's checks skipped and an older one failed,
+  passes when a newer run that ran that step succeeded past both, waits
+  while the tag's own run goes on beside a run that skipped the suite and
+  then fails with that run's failure, and fails at once, saying no run ran
+  the suite, when every run skipped it; it never asks for the jobs of a run
+  that did not succeed.
+- `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
+  `ci.yml`'s job `test` has a step of that name that runs
+  `go test ./test/repository/` under the go output.
+- With `allocator.enabled` and no `allocator.tokenSecret.name`, the chart
+  renders a Secret `<fullname>-allocator-token` with the allocator's labels
+  holding a random token of 32 characters or more under
+  `allocator.tokenSecret.key`, a different one at each of two renders, and
+  runs the allocator with `--web.token-file` and the exporter with
+  `--allocator.token-file`, both mounting that key of it at the token's
+  directory, while the ScrapeConfigs and the allocator's ServiceMonitor
+  present it as Bearer credentials; with a name the same is wired to the
+  named Secret and no Secret is rendered; without the allocator, none.
+- With the generated token, the allocator's pod mounts `config` and `token`,
+  and an `allocator.extraVolumeMounts` entry at or inside the token's
+  directory fails rendering, as with a named Secret.
 
 # 35. Documentation requirements
 
@@ -26363,16 +26524,21 @@ form, and for a `.github/dependabot.yml` without that update.
 Both release workflows MUST run their respective validation checks before
 publishing artifacts, and MUST publish nothing unless CI has passed on the
 commit the tag names. CI has passed on a commit when the newest finished
-`ci.yml` run that a push of that commit started concluded `success`, however
-many of its steps its changed paths skipped; a run a pull request started
-does not count, since it tested the pull request merged into its base. A first
+`ci.yml` run that a push of that commit started, and that ran the suite,
+concluded `success`. A run that did not succeed MUST count whatever it ran; a
+run that succeeded MUST count only when its step that runs the repository's
+checks concluded success, found by its name, which a test MUST keep the same
+in `ci.yml` and the script: a push whose changed paths ran none of the Go
+steps passes with every step skipped, and MUST NOT take back a failure before
+it. A run a pull request started does not count, since it tested the pull
+request merged into its base. A first
 job, which every publishing job needs, MUST validate the tag and then check
 this with `tools/ci-passed.py`, reading the Actions API with a token limited
 to `contents: read` and `actions: read`. A commit whose CI runs are queued or
 running, or that has none yet — a tag is often pushed right after its
 commit, and the tag push starts a CI run of its own — MUST be waited for, up
-to an hour; when every run has finished and the newest did not succeed, when
-the wait runs out, and when the API refuses the request, the release MUST
+to an hour; when every run has finished and the newest counted one did not
+succeed, when none ran the suite, when the wait runs out, and when the API refuses the request, the release MUST
 fail, saying that CI has not passed on the commit and to run CI or wait for
 it, then push the tag again or re-run the release.
 
@@ -26381,8 +26547,8 @@ workflow triggers on its whole namespace, that the format it enforces accepts
 well-formed tags and rejects malformed ones, and that the version committed in
 `Chart.yaml` would produce a tag the chart release accepts. They MUST run
 `tools/ci-passed.py` against a stand-in of the API, for a run that passed, one
-that failed, runs that finish while it waits, no run, and a wait that runs
-out, and MUST fail when a publishing job of a release workflow does not need
+that failed, a run that skipped the suite after one that failed, runs that
+finish while it waits, no run, and a wait that runs out, and MUST fail when a publishing job of a release workflow does not need
 the job that runs it. They MUST also
 fail when a workflow runs the test suite without first setting up the image's
 Python and libraries, or runs `make ci` without installing golangci-lint and

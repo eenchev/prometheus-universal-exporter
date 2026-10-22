@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"encoding/base64"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -147,6 +149,7 @@ func TestChartRendersTheAllocatorAndTheExporterInAllocatorMode(t *testing.T) {
 		"--config.file=/etc/prometheus-universal-exporter/config.yaml",
 		"--static-targets-file=/etc/prometheus-universal-exporter-static-targets/static-targets.yaml",
 		"--probe-targets-file=/etc/prometheus-universal-exporter-probe-targets/probe-targets.yaml",
+		"--web.token-file=/var/run/prometheus-universal-exporter/allocator-token/token",
 		"--log.level=info",
 		"--settle=15s",
 		"--members.max=1000",
@@ -200,13 +203,14 @@ func TestChartRendersTheAllocatorAndTheExporterInAllocatorMode(t *testing.T) {
 		"--allocator.member=$(POD_NAME)",
 		"--allocator.advertise=$(POD_IP):8080",
 		"--web.static-targets-path=/static-targets",
+		"--allocator.token-file=/var/run/prometheus-universal-exporter/allocator-token/token",
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("the exporter's args %v lack %s", args, want)
 		}
 	}
 	for _, arg := range args {
-		for _, refused := range []string{"--config.file", "--static-targets-file", "--allocator.token-file"} {
+		for _, refused := range []string{"--config.file", "--static-targets-file"} {
 			if strings.HasPrefix(arg, refused) {
 				t.Errorf("the exporter in allocator mode is given %s", arg)
 			}
@@ -281,8 +285,11 @@ func TestChartRendersAScrapeConfigPerProbeJob(t *testing.T) {
 		if got := text(path(sd, "refreshInterval")); got != "30s" {
 			t.Errorf("the ScrapeConfig of %s refreshes every %s, want 30s", job, got)
 		}
-		if path(sd, "authorization") != nil || path(scrape, "spec", "basicAuth") != nil {
-			t.Errorf("the ScrapeConfig of %s presents a credential nobody set", job)
+		if auth := path(sd, "authorization"); text(path(auth, "credentials", "name")) != "test-prometheus-universal-exporter-allocator-token" || text(path(auth, "credentials", "key")) != "token" {
+			t.Errorf("the ScrapeConfig of %s does not present the token the chart generated", job)
+		}
+		if path(scrape, "spec", "basicAuth") != nil {
+			t.Errorf("the ScrapeConfig of %s presents a Basic Auth credential nobody set", job)
 		}
 		if text(path(scrape, "spec", "scrapeInterval")) != "1m" || text(path(scrape, "spec", "scrapeTimeout")) != "20s" || text(path(scrape, "metadata", "labels", "release")) != "main" {
 			t.Errorf("the ScrapeConfig of %s does not carry the interval, timeout and labels given", job)
@@ -496,4 +503,81 @@ func chartAppVersion(t *testing.T) string {
 		t.Fatalf("Chart.yaml has no appVersion: %v", err)
 	}
 	return chart.AppVersion
+}
+
+// The allocator always requires a token: without one, any pod the
+// NetworkPolicy's default peer admits, a Prometheus-labelled pod of any
+// namespace, could heartbeat as a member, be handed targets and be probed
+// with the exporter's credential. With allocator.tokenSecret.name empty the
+// chart renders a Secret <fullname>-allocator-token with a random token under
+// allocator.tokenSecret.key, and every party is wired to it as to a named
+// one: the allocator's --web.token-file, the exporter's
+// --allocator.token-file, both pods' mounts of the Secret, the ScrapeConfigs
+// and the allocator's ServiceMonitor. helm template reads no cluster, so each
+// render generates a new token. With a name the chart renders no Secret.
+func TestChartGeneratesTheAllocatorsTokenUnlessASecretIsNamed(t *testing.T) {
+	helm := requireHelm(t)
+	const tokenFile = "/var/run/prometheus-universal-exporter/allocator-token/token"
+	wired := func(docs map[string]*yaml.Node, secret, key string) {
+		t.Helper()
+		allocator := path(manifest(t, docs, "Deployment/test-prometheus-universal-exporter-allocator"), "spec", "template", "spec")
+		exporter := path(manifest(t, docs, "Deployment/test-prometheus-universal-exporter"), "spec", "template", "spec")
+		for _, pod := range []struct {
+			name, volume, flag string
+			spec               *yaml.Node
+		}{
+			{"allocator", "token", "--web.token-file=" + tokenFile, allocator},
+			{"exporter", "allocator-token", "--allocator.token-file=" + tokenFile, exporter},
+		} {
+			if !slices.Contains(scalars(path(pod.spec, "containers", "0", "args")), pod.flag) {
+				t.Errorf("the %s is not run with %s", pod.name, pod.flag)
+			}
+			volume := named(path(pod.spec, "volumes"), pod.volume)
+			if text(path(volume, "secret", "secretName")) != secret || text(path(volume, "secret", "items", "0", "key")) != key || text(path(volume, "secret", "items", "0", "path")) != "token" {
+				t.Errorf("the %s's volume %s is not the key %s of the Secret %s", pod.name, pod.volume, key, secret)
+			}
+			if text(path(named(path(pod.spec, "containers", "0", "volumeMounts"), pod.volume), "mountPath")) != filepath.Dir(tokenFile) {
+				t.Errorf("the %s does not mount the token at %s", pod.name, filepath.Dir(tokenFile))
+			}
+		}
+		for _, auth := range []*yaml.Node{
+			path(manifest(t, docs, "ScrapeConfig/test-prometheus-universal-exporter-websites"), "spec", "httpSDConfigs", "0", "authorization"),
+			path(manifest(t, docs, "ServiceMonitor/test-prometheus-universal-exporter-allocator"), "spec", "endpoints", "0", "authorization"),
+		} {
+			if text(path(auth, "type")) != "Bearer" || text(path(auth, "credentials", "name")) != secret || text(path(auth, "credentials", "key")) != key {
+				t.Errorf("a ScrapeConfig or the allocator's ServiceMonitor does not present the key %s of the Secret %s", key, secret)
+			}
+		}
+	}
+	const generated = "Secret/test-prometheus-universal-exporter-allocator-token"
+	args := []string{"--set", "allocator.enabled=true", "--set-json", allocatorProbeJobs, "--set", "allocator.serviceMonitor.enabled=true"}
+	var tokens []string
+	for range 2 {
+		docs := manifests(t, helm, append(args, "--set", "allocator.tokenSecret.key=shared")...)
+		wired(docs, "test-prometheus-universal-exporter-allocator-token", "shared")
+		secret := manifest(t, docs, generated)
+		if text(path(secret, "metadata", "labels", "app.kubernetes.io/name")) != "prometheus-universal-exporter-allocator" {
+			t.Error("the generated token's Secret does not carry the allocator's labels")
+		}
+		encoded := text(path(secret, "data", "shared"))
+		token, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(token) < 32 {
+			t.Errorf("the generated Secret holds %q under shared, not a token of 32 characters or more (%v)", encoded, err)
+		}
+		tokens = append(tokens, string(token))
+	}
+	if tokens[0] == tokens[1] {
+		t.Errorf("two renders generated the same token %q; it is meant to be random", tokens[0])
+	}
+
+	docs := manifests(t, helm, append(args, "--set", "allocator.tokenSecret.name=allocator-token")...)
+	wired(docs, "allocator-token", "token")
+	for name := range docs {
+		if strings.HasPrefix(name, "Secret/") {
+			t.Errorf("with allocator.tokenSecret.name the chart renders %s", name)
+		}
+	}
+	if _, found := manifests(t, helm)[generated]; found {
+		t.Error("without the allocator the chart renders its token's Secret")
+	}
 }

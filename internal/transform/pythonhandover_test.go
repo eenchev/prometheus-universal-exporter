@@ -99,7 +99,11 @@ func (h *handover) run(mode, script string, input handoverInput, state string, m
 	c := &model.Collector{Name: "handover"}
 	want, wantErr := oraclePythonRequest(mode, script, input.decoded, input.response, c)
 	request, err := pythonRequest(mode, script, input.decoded, input.response, c)
-	if wantErr != nil || err != nil || string(request) != string(want) {
+	// CSV rows by header are sent as their table, which the worker makes
+	// into the rows they were sent as (TestAScriptIsHandedTheCSVRowsItWasHanded).
+	rows, table := input.decoded.Data.(*decode.CSVRows)
+	table = table && rows.Named()
+	if wantErr != nil || err != nil || !table && string(request) != string(want) {
 		h.t.Fatalf("%s, script %q: the request (%v) is not the request it was (%v):\n     %.400q\nwas  %.400q", input.name, script, err, wantErr, request, want)
 	}
 	spec := pythonSpec{Path: "python3", Collector: c.Name, MaxOutput: maxOutput, Scripts: state}

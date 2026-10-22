@@ -69,14 +69,11 @@
 {{- if $static -}}
 {{- $_ := set $taken "/etc/prometheus-universal-exporter-static-targets" "the static target directory" -}}
 {{- end -}}
-{{- /* In allocator mode the pod mounts its cache directory and, with a
-       token, the token's Secret. */ -}}
+{{- /* In allocator mode the pod mounts its cache directory and the
+       token's Secret. */ -}}
 {{- $allocator := and $.Values.allocator $.Values.allocator.enabled -}}
-{{- $token := and $allocator $.Values.allocator.tokenSecret.name -}}
 {{- if $allocator -}}
 {{- $_ := set $taken (include "prometheus-universal-exporter.allocatorCacheDir" .) "the allocator cache directory" -}}
-{{- end -}}
-{{- if $token -}}
 {{- $_ := set $taken (include "prometheus-universal-exporter.allocatorTokenDir" .) "the allocator token directory" -}}
 {{- end -}}
 {{- /* With kubernetesAccess the pod mounts its service account's token,
@@ -119,7 +116,7 @@
 {{- if $static -}}
 {{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-static-targets" "what" "the static target directory /etc/prometheus-universal-exporter-static-targets" "kind" "ConfigMap" "hint" "") -}}
 {{- end -}}
-{{- if $token -}}
+{{- if $allocator -}}
 {{- $readOnly = append $readOnly (dict "path" (include "prometheus-universal-exporter.allocatorTokenDir" .) "what" (printf "the allocator token directory %s" (include "prometheus-universal-exporter.allocatorTokenDir" .)) "kind" "Secret" "hint" "") -}}
 {{- end -}}
 {{- if $kubernetes -}}
@@ -154,7 +151,7 @@
        exporter's to, over the directories it mounts itself: the
        configuration directory always, the static target and the probe
        targets directories while it reads those files, the token's directory
-       with a token, and the service account token's directory while its
+       always, and the service account token's directory while its
        token is mounted, a kubernetes discovery source's or
        serviceAccount.automount's. Every one of them is a ConfigMap, Secret
        or projected volume, which the kubelet mounts read-only, so no
@@ -171,9 +168,7 @@
 {{- if $allocator.probeJobs -}}
 {{- $readOnly = append $readOnly (dict "path" "/etc/prometheus-universal-exporter-probe-targets" "what" "the probe targets directory /etc/prometheus-universal-exporter-probe-targets" "kind" "ConfigMap" "hint" "") -}}
 {{- end -}}
-{{- if $allocator.tokenSecret.name -}}
 {{- $readOnly = append $readOnly (dict "path" (include "prometheus-universal-exporter.allocatorTokenDir" .) "what" (printf "the allocator token directory %s" (include "prometheus-universal-exporter.allocatorTokenDir" .)) "kind" "Secret" "hint" "") -}}
-{{- end -}}
 {{- if or (include "prometheus-universal-exporter.allocatorUsesKubernetes" .) .Values.serviceAccount.automount -}}
 {{- $readOnly = append $readOnly (dict "path" "/var/run/secrets/kubernetes.io/serviceaccount" "what" "the service account token directory /var/run/secrets/kubernetes.io/serviceaccount" "kind" "projected" "hint" "") -}}
 {{- end -}}
@@ -1099,6 +1094,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- define "prometheus-universal-exporter.allocatorTokenDir" -}}
 /var/run/prometheus-universal-exporter/allocator-token
+{{- end }}
+{{- /* The Secret holding the allocator's token, which the allocator always
+       requires: allocator.tokenSecret.name, or the one the chart generates
+       when that is empty (allocator-token-secret.yaml). Without a token any
+       pod the NetworkPolicy admits could heartbeat as a member and be
+       handed targets, which Prometheus would then probe on it, with the
+       exporter's credential. */ -}}
+{{- define "prometheus-universal-exporter.allocatorTokenSecretName" -}}
+{{- .Values.allocator.tokenSecret.name | default (printf "%s-token" (include "prometheus-universal-exporter.allocatorFullname" .)) -}}
 {{- end }}
 {{- /* Whether the allocator serves static targets: the static targets
        monitor then reads every exporter pod's share. */ -}}

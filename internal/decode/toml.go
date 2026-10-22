@@ -162,10 +162,22 @@ func tomlTime(t time.Time) string {
 // before the library reads it. It reads the body as the
 // library's lexer does as far as the two depend on it: comments, the four
 // kinds of string, the brackets of table headers, arrays and inline tables,
-// and where a key stands. Where the body is no TOML it stops and leaves the
-// error to the library, which stops at the same place, having parsed
-// nothing deeper than what was read up to there.
+// and where a key stands. Where it cannot follow the body it refuses it,
+// rather than leave the rest to the library: what lies past that place is
+// unscanned, and bounded by nothing, so a body the library reads otherwise
+// than the scan does, as it once read one starting with a second byte order
+// mark, would reach the library's recursion with no bound at all. A body the
+// scan cannot follow is no TOML, and the library would fail at the same
+// place; the message is the exporter's.
 func tomlNesting(body []byte) error {
+	// The library passes over one byte order mark of its own, UTF-8 or
+	// either UTF-16 one, after the one Decode took off the response.
+	for _, mark := range []string{"\xef\xbb\xbf", "\xff\xfe", "\xfe\xff"} {
+		if strings.HasPrefix(string(body), mark) {
+			body = body[len(mark):]
+			break
+		}
+	}
 	var (
 		line model.Position = 1
 		// open is the brackets of the arrays and inline tables around
@@ -215,7 +227,7 @@ func tomlNesting(body []byte) error {
 			}
 			parts, next, ok := tomlKey(body, i)
 			if !ok || next >= len(body) || body[next] != ']' {
-				return nil
+				return model.Errorf("line %d: expected a table header, [name] or [[name]]", line)
 			}
 			header, i = parts, next+1
 			if i < len(body) && body[i] == ']' {
@@ -237,7 +249,7 @@ func tomlNesting(body []byte) error {
 			}
 			parts, next, ok := tomlKey(body, i)
 			if !ok || next >= len(body) || body[next] != '=' {
-				return nil
+				return model.Errorf("line %d: expected a key and = after it", line)
 			}
 			keys[len(keys)-1] = parts
 			if tables() > maxTOMLTables {
@@ -250,7 +262,7 @@ func tomlNesting(body []byte) error {
 		case '"', '\'':
 			next, lines, ok := tomlString(body, i)
 			if !ok {
-				return nil
+				return model.Errorf("line %d: a string that does not end", line)
 			}
 			i, line = next, line+model.Position(lines)
 			continue
@@ -268,7 +280,11 @@ func tomlNesting(body []byte) error {
 				want = '{'
 			}
 			if len(open) == 0 || open[len(open)-1] != want {
-				return nil
+				what := "array"
+				if c == '}' {
+					what = "inline table"
+				}
+				return model.Errorf("line %d: a %c that closes no %s", line, c, what)
 			}
 			open = open[:len(open)-1]
 			if c == '}' {

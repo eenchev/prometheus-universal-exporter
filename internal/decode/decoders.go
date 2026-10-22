@@ -213,6 +213,9 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
 	case "yaml":
 		v, err := decodeYAML(r.Body)
+		if err == nil {
+			v, err = yamlTextKeys(v)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("YAML decode: %w", err)
 		}
@@ -636,7 +639,13 @@ func (r yamlReading) decode(body []byte) (v any, err error) {
 		}
 	}
 	timestampsAsText(&root, map[*yaml.Node]bool{})
-	return r.value(&root)
+	if v, err = r.value(&root); err != nil {
+		return nil, err
+	}
+	if err := yamlKeysAsText(&root); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // yamlPlace is where a panic was raised: the file, without its directory,

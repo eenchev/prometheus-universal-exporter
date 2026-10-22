@@ -114,9 +114,7 @@ spec:
             {{- if $allocator.probeJobs }}
             - "--probe-targets-file=/etc/prometheus-universal-exporter-probe-targets/probe-targets.yaml"
             {{- end }}
-            {{- if $allocator.tokenSecret.name }}
             - {{ printf "--web.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
-            {{- end }}
             - {{ printf "--log.level=%s" ($allocator.logLevel | default "info") | quote }}
             {{- with $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
@@ -153,11 +151,9 @@ spec:
               mountPath: /etc/prometheus-universal-exporter-probe-targets
               readOnly: true
             {{- end }}
-            {{- if $allocator.tokenSecret.name }}
             - name: token
               mountPath: {{ include "prometheus-universal-exporter.allocatorTokenDir" . }}
               readOnly: true
-            {{- end }}
             {{- include "prometheus-universal-exporter.validateAllocatorMounts" . }}
             {{- with $allocator.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -176,15 +172,13 @@ spec:
           configMap:
             name: {{ include "prometheus-universal-exporter.allocatorFullname" . }}-probe-targets
         {{- end }}
-        {{- with $allocator.tokenSecret.name }}
         - name: token
           secret:
-            secretName: {{ . | quote }}
+            secretName: {{ include "prometheus-universal-exporter.allocatorTokenSecretName" . | quote }}
             defaultMode: 256
             items:
               - key: {{ $allocator.tokenSecret.key | default "token" | quote }}
                 path: token
-        {{- end }}
         {{- with $allocator.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

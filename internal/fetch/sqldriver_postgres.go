@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -38,7 +40,36 @@ func init() {
 		run:       sqlReadOnlyTx(postgresStatementTimeout),
 		timedOut:  postgresTimedOut,
 		readOnly:  "transaction",
+
+		messageTooLarge: postgresMessageTooLarge,
 	})
+}
+
+// postgresMaxMessage is the most pgx reads of one message by default, the
+// server's own bound on the messages it takes (pgproto3 maxMessageBodyLen).
+const postgresMaxMessage = 0x3fffffff - 1
+
+// postgresFrontend is pgx's reader of the server's messages, bounded to the
+// response limit and sqlMessageSlack beside it: pgx reads a message whole,
+// a row with every value in it, before handing any of it on, so without the
+// bound a row of up to a gigabyte would be read before the limit applied.
+// A message over the bound fails the read from its length alone, and the
+// connection with it.
+func postgresFrontend(limit int64) pgconn.BuildFrontendFunc {
+	return func(r io.Reader, w io.Writer) *pgproto3.Frontend {
+		frontend := pgproto3.NewFrontend(r, w)
+		if limit > 0 {
+			frontend.SetMaxBodyLen(int(min(limit, postgresMaxMessage-sqlMessageSlack) + sqlMessageSlack))
+		}
+		return frontend
+	}
+}
+
+// postgresMessageTooLarge recognises pgx's refusal of a message over the
+// bound postgresFrontend sets.
+func postgresMessageTooLarge(err error) bool {
+	var tooLarge *pgproto3.ExceededMaxBodyLenErr
+	return errors.As(err, &tooLarge)
 }
 
 // postgresStatementTimeout bounds the statement at the server to the
@@ -97,6 +128,7 @@ func postgresConfig(spec *sqlConnectSpec) (*pgx.ConnConfig, error) {
 	config.SSLNegotiation = ""
 	config.ValidateConnect, config.AfterConnect = nil, nil
 	config.DialFunc = postgresDial(spec)
+	config.BuildFrontend = postgresFrontend(spec.limit)
 	// The dialer is given the host, which it resolves and holds to the
 	// policy itself, rather than each address pgx would look up.
 	config.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }

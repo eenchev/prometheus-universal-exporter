@@ -2240,7 +2240,12 @@ runs the repository tests too, which check the docs. The Helm lint/template
 checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
 files the chart steps render. A change under `charts/` runs the Go checks
 because the template guard above lives there and is worth least on exactly
-the changes that would break it.
+the changes that would break it. A tag push runs everything: the filter
+compares a tag with its merge base on `main`, which for a tag on `main`'s
+newest commit finds no change, so the steps run under the outputs of the
+step `changes` after the filter, all true on a tag push and the filter's own
+otherwise (`TestATagPushRunsEveryStepOfCI` runs that step's script); a step
+reads those, never the filter's own outputs.
 
 The tests of the packages themselves are split in two sides, each run only
 when something it depends on changed. `tools/ci-packages.sh allocator` lists

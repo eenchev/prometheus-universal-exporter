@@ -52,7 +52,7 @@ func TestAYAMLKeyOfAnySizeFailsTheProbeInAShortError(t *testing.T) {
 			numbers[i] = strconv.Itoa(from + i)
 		}
 		listed := strings.Join(numbers, ", ")
-		return "used: 5\n? [" + listed + "]\n: x\n", "YAML decode: yaml: the mapping key at line 2 is a sequence; only scalar keys (text, numbers, booleans, null) can be read"
+		return "used: 5\n? [" + listed + "]\n: x\n", "YAML decode: yaml: the mapping key at line 2 is a sequence; only scalar keys (text, numbers, booleans) can be read"
 	}
 	scrape := func(from, count int) map[string]any {
 		t.Helper()

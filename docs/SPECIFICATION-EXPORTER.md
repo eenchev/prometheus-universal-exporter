@@ -1195,7 +1195,12 @@ keys:
 - With `reflection`, the target's `grpc.reflection.v1` service MUST be asked,
   and `v1alpha` when the server does not implement v1, for the file defining
   the service and every file it imports, asking by name for any the answer
-  left out. An answer MUST be kept per connection and service for 10 minutes.
+  left out. An answer MUST be kept per connection and service for 10 minutes,
+  and MUST then be forgotten by a timer, whether or not another call comes.
+  At most 1000 answers, of at most 128 MiB of files as the server sent them
+  all together, MUST be kept, the one a probe used longest ago forgotten
+  first to make room; an answer larger than 128 MiB alone MUST serve the
+  probes that asked for it and MUST NOT be kept.
   Probes missing the same answer together MUST share one question, which MUST
   run with its own timeout, detached from the deadline and cancellation of the
   probe that started it, so that probe ending does not fail the others; each
@@ -1245,7 +1250,14 @@ keys:
   all of them, a reserved name left out.
 - Connections MUST be kept per target and TLS settings and reused, closed
   after 5 minutes unused, and made again when a TLS file changes on disk,
-  without cancelling a call still using the old one. An attempt to connect —
+  without cancelling a call still using the old one. A connection MUST be
+  closed by a timer once no call or reflection question has held it for 5
+  minutes, whether or not another call comes, since grpc-go goes on
+  reconnecting a connection whose server is gone. At most 1000 connections
+  MUST be kept: a new one past them MUST close the one no call holds that
+  was used longest ago. A connection a call holds MUST NOT be closed for the
+  bound; while calls hold more than 1000, as many MUST be kept, and the
+  excess MUST be closed as their calls end. An attempt to connect —
   the TCP connection, the TLS handshake and the server's answer to the
   HTTP/2 preface — MUST be given up after 20 seconds, a call still waiting
   for it then failing as `UNAVAILABLE`. A connection that failed

@@ -91,7 +91,15 @@ malformed.
 
 Calls to one target, with one set of TLS settings, share one connection,
 kept between probes and closed after 5 minutes unused, and made again with a
-new certificate when a TLS file changes on disk. An attempt to connect — the
+new certificate when a TLS file changes on disk. The 5 minutes run from the
+end of the last call, or reflection question, on the connection, and the
+connection is closed when they end whether or not another probe comes: a
+connection whose server has gone keeps trying to reconnect, so one left open
+would go on dialing a target nobody asks about. At most 1000 connections are
+kept, across collectors, since a probe chooses its target: a new one past
+them closes the one used longest ago that no call is using. A connection in
+use is never closed for the bound; when more than 1000 are in use at once,
+all are kept, and the cache shrinks back to the bound as their calls end. An attempt to connect — the
 TCP connection, the TLS handshake and the server's first HTTP/2 frames — is
 given up after 20 seconds, and a probe still waiting for it then fails as
 `UNAVAILABLE`. When the server goes away,
@@ -142,7 +150,12 @@ wrong only at the first scrape.
 
 A reflection answer is kept for each connection and service for 10 minutes,
 so a scrape costs one call rather than two, and probes that find no answer at
-the same time share one question to the server. A call that fails with
+the same time share one question to the server. It is forgotten when the 10
+minutes end, whether or not another probe comes. At most 1000 answers are
+kept, across collectors, of at most 128 MiB of files all together, as the
+servers sent them; a new answer past either bound forgets the answers used
+longest ago, and an answer larger than 128 MiB alone serves the probes that
+asked for it and is not kept, so each probe asks again. A call that fails with
 `UNIMPLEMENTED`, or whose answer does not decode, asks again and calls again,
 once, which covers a server upgraded to a new schema; this is not one of the
 retries. A question that fails with a status is reported as a call with that

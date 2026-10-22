@@ -537,7 +537,11 @@ label name the drivers a build has; of a build without the `sql` type,
   - `mysql` reads a row whole, as long as the server sends it, which the
     server's `max_allowed_packet` bounds (64 MiB by default, 1 GiB at most);
     the driver cannot be told less, its own `maxAllowedPacket` bounding what
-    it sends alone.
+    it sends alone. Nor can the exporter read the packets' lengths on the
+    connection it hands the driver, as it does `postgres`'s messages: with
+    `tls`, the driver starts TLS itself on that connection, and the packets
+    are inside it, where only the driver sees them; a bound that held without
+    TLS and not with it is not given.
   - The opt-in drivers read a row, or a block of rows as their protocol
     sends it (`clickhouse`'s blocks, `snowflake`'s result chunk), whole, with
     no bound the exporter sets.

@@ -24907,6 +24907,21 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `request.retry.retry_after` as a boolean described as `http` and
   `graphite`'s (`TestTheSchemasHaveRetryAfter`).
 
+## 34.166 Histograms from a list of values
+
+- A jq rule of type histogram with a histogram block counts its values in cumulative buckets: a value on a bound is in that bound's bucket, `+Inf` counts every value as the count does, the sum is of the scaled values, milliseconds under `scale: 0.001` land in buckets of seconds, text that is a number is counted, `-Inf` is in every bucket and `+Inf` in `+Inf` alone (TestAHistogramRuleCountsItsValuesInCumulativeBuckets).
+- Every transform that reads values with rules — jq without and with items, yq, xpath, css with items and without, csv and regex — makes one histogram of the values of each set of label values, in the order of its first value, a static label on each (TestEveryTransformCountsAHistogramRulesValues).
+- A csv histogram rule beside a gauge rule leaves the gauge's series of each row together and the histogram after them (TestAHistogramRuleBesideAGaugeRule).
+- An empty list — a jq expression of no value, items, XPath nodes, CSS elements or rows selected none, a regex of no match — is a histogram of count 0 with every bucket 0, under required: true and error_mode: fail, and a rule with a label read from the response makes none (TestAnEmptyListIsAHistogramOfNothing).
+- A histogram value that is no number, NaN, or missing is handled by the rule's error_mode in jq, xpath, csv and css: under log and ignore the histogram counts the rest and the failures are counted against the rule, under fail the scrape fails naming the value (TestAHistogramValueThatFailsFollowsTheErrorMode).
+- A histogram of a hundred thousand values is one series of limits.max_metrics: 1, and labels that split the values into more histograms than the limit allows fail the scrape with the limit's error (TestAHistogramIsOneSeriesOfTheLimit).
+- Values whose labels differ only in a label of an empty value, or none, are one histogram's (TestHistogramLabelsOfAnEmptyValueAreNone).
+- A collector without a histogram rule gets no histogram folds in its Transform's context, so its scrape allocates nothing for them (TestOnlyACollectorWithAHistogramRuleFoldsHistograms).
+- A histogram block loads on a rule of type histogram of jq, yq, xpath, css, regex and csv; type: histogram without it is refused naming the block; the block on a gauge, a rule without a type, a summary, a prometheus or a python rule, without buckets, with none, with +Inf, -Inf or NaN, out of order, twice, with 101 buckets, and beside a label le, is refused at load, each in its own words; 100 buckets load (TestAHistogramBlockIsCheckedWhenTheConfigurationLoads).
+- End to end, a probe answers a jq histogram rule's histograms per method in the text format, buckets, sum and count exactly, and in OpenMetrics, beside a gauge (TestAProbeAnswersAHistogramRulesHistograms).
+- A histogram rule's histograms are exported to OTLP as histogram data points of the rule's bounds, per-bucket counts, the count and the sum (TestAHistogramRulesHistogramsAreExportedAsOTLPHistograms).
+- The schema and the exporter take a histogram block alike on a jq or csv histogram rule with 1 to 100 buckets and refuse it alike with 101 or no buckets, without buckets, with a bucket of text or an unknown key, on a gauge or a rule without a type, and on a prometheus or a python rule; a bound out of order, twice, +Inf or NaN, a label le, and type: histogram without the block pass the schema and are refused by the exporter (TestSchemaAndExporterAgreeOnHistogramBlocks).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

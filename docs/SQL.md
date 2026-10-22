@@ -146,6 +146,12 @@ split a statement at each `;` and run the parts one after another, a `COMMIT`
 among them ending the read-only transaction, so a `vertica` statement of
 several parts — a `;` followed by anything but blanks and comments, outside
 quotes, quoted identifiers, comments and dollar quotes — is a startup error.
+The exporter decides this itself as well as by the driver's own splitting:
+since vertica-sql-go 1.3.9 the driver does not split at a `;` it takes to
+stand inside a `BEGIN ... END`, `CASE`, `IF`, `LOOP` or `WHILE` block, and
+sends such text to the server whole, which runs every statement in it — even
+`SELECT 1 AS begin; COMMIT`. A `//` is not a comment to either, so a `;`
+followed by `// ...` is refused too.
 The other drivers send what is written, and a statement of several parts is the database's to run
 or refuse: another reason for an account that can only read.
 

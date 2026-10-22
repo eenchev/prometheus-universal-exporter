@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	vertigo "github.com/vertica/vertica-sql-go"
 	verticalog "github.com/vertica/vertica-sql-go/logger"
@@ -68,20 +70,101 @@ func (verticaLog) Write(prefix, name, msg string) {
 func (verticaLog) Close() {}
 
 // verticaSingleStatement refuses a statement that holds more than one. The
-// driver splits what it is given at each ; outside quotes, quoted
-// identifiers, comments and dollar quotes and runs each part on its own
-// (vertica-sql-go stmt.go, newStmt and QueryContext, by parse.SplitStatements),
-// so a COMMIT among them would end the read-only transaction and the
-// statements after it would run outside it. The driver's own splitting
-// decides, on the statement as written and as its lexer rewrites the
-// placeholders of, so that a ; followed only by blanks and comments is one
-// statement, as the driver runs it.
+// driver splits what it is given (vertica-sql-go stmt.go, newStmt and
+// QueryContext, by parse.SplitStatements) and runs each part on its own, so
+// a COMMIT among them would end the read-only transaction and the
+// statements after it would run outside it. Since vertica-sql-go 1.3.9 the
+// driver no longer splits at a ; inside what it takes for a BEGIN ... END,
+// CASE, IF, LOOP or WHILE block, and sends such text to the server whole,
+// which runs every statement in it: "BEGIN; COMMIT; DROP TABLE t" and even
+// "SELECT 1 AS begin; COMMIT" reach the server as one query. So the
+// driver's splitting is not enough to go by: a statement is refused when
+// the driver would split it, as written or as its lexer rewrites the
+// placeholders of, or when verticaParts finds a ; followed by anything but
+// blanks and comments outside quotes, quoted identifiers, comments and
+// dollar quotes, whatever block it seems to stand in.
 func verticaSingleStatement(statement string) error {
-	if len(parse.SplitStatements(statement)) > 1 || len(parse.SplitStatements(parse.Lex(statement))) > 1 {
+	if len(parse.SplitStatements(statement)) > 1 || len(parse.SplitStatements(parse.Lex(statement))) > 1 ||
+		verticaParts(statement) > 1 || verticaParts(parse.Lex(statement)) > 1 {
 		return errors.New("request.statement holds more than one statement, which the vertica driver would run one after another, " +
 			"the later ones outside the read-only transaction; write a single statement (a ; may end it, followed by nothing but blanks and comments)")
 	}
 	return nil
+}
+
+// verticaParts counts the statements in statement as Vertica's SQL has
+// them, every ; outside a quote ending one: 'text' with ” inside, "name"
+// with "" inside, -- to the end of the line, /* ... */, and $tag$ ... $tag$.
+// A part of nothing but blanks and comments is no statement. It knows no
+// blocks, so a ; never stands inside one, and a // is not taken for a
+// comment, as the driver since 1.3.9 does not take it for one either: a
+// statement that is one only if those were honoured is refused, which costs
+// a metrics query nothing.
+func verticaParts(statement string) int {
+	parts, content := 0, false
+	end := func() {
+		if content {
+			parts++
+		}
+		content = false
+	}
+	for i := 0; i < len(statement); i++ {
+		ch := statement[i]
+		switch {
+		case ch == '\'' || ch == '"':
+			content = true
+			for i++; i < len(statement); i++ {
+				if statement[i] == ch {
+					if i+1 < len(statement) && statement[i+1] == ch {
+						i++
+						continue
+					}
+					break
+				}
+			}
+		case ch == '-' && i+1 < len(statement) && statement[i+1] == '-':
+			for i < len(statement) && statement[i] != '\n' && statement[i] != '\r' {
+				i++
+			}
+		case ch == '/' && i+1 < len(statement) && statement[i+1] == '*':
+			i += 2
+			for i+1 < len(statement) && (statement[i] != '*' || statement[i+1] != '/') {
+				i++
+			}
+			i++
+		case ch == '$':
+			content = true
+			if tag, ok := verticaDollarTag(statement[i:]); ok {
+				if found := strings.Index(statement[i+len(tag):], tag); found >= 0 {
+					i += len(tag) + found + len(tag) - 1
+				} else {
+					i = len(statement)
+				}
+			}
+		case ch == ';':
+			end()
+		case !unicode.IsSpace(rune(ch)):
+			content = true
+		}
+	}
+	end()
+	return parts
+}
+
+// verticaDollarTag is the $tag$ that s begins with, tag letters, digits and
+// _ and not beginning with a digit, or $$.
+func verticaDollarTag(s string) (string, bool) {
+	for j := 1; j < len(s); j++ {
+		c := s[j]
+		switch {
+		case c == '$':
+			return s[:j+1], true
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || (c >= '0' && c <= '9' && j > 1):
+		default:
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // verticaTLS hands out the names TLS configurations are registered with

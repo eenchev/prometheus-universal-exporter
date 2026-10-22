@@ -65,34 +65,48 @@ func TestTheVerticaDriver(t *testing.T) {
 // on its own, a COMMIT ending the read-only transaction: a ; counts outside
 // quotes, quoted identifiers, comments and dollar quotes, and one followed
 // by nothing but blanks and comments ends the one statement. Each case is
-// split, or not, by the driver itself as the test expects of it.
+// split, or not, by the driver itself as the test expects of it, except
+// those the driver since 1.3.9 takes to stand inside a BEGIN ... END or
+// similar block and sends whole, which the server would still run as
+// several statements: those are refused too.
 func TestAVerticaStatementHoldingMoreThanOneIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		statement string
 		refused   bool
+		// blockHidden is a statement the driver itself does not split,
+		// taking its ; to stand inside a block, though the server would
+		// run every part of it.
+		blockHidden bool
 	}{
-		{"COMMIT; SELECT 1 AS one", true},
-		{"SELECT 1 AS one; COMMIT", true},
-		{"SELECT 1;SELECT 2", true},
-		{"SELECT 1 AS one -- ;\n; SELECT 2", true},
-		{"SELECT 1 AS one;", false},
-		{"SELECT 1 AS one ;  \n\t", false},
-		{"SELECT 1 AS one; -- the end", false},
-		{"SELECT 1 AS one; /* the end; really */", false},
-		{"SELECT 1 AS one; // the end", false},
-		{"SELECT ';' AS one", false},
-		{"SELECT 'it''s; here' AS one", false},
-		{`SELECT 1 AS "a;b"`, false},
-		{`SELECT 1 AS "a"";b"`, false},
-		{"SELECT $$;$$ AS one", false},
-		{"SELECT $tag$ ; $tag$ AS one", false},
-		{"SELECT 1 AS one -- ; COMMIT", false},
-		{"SELECT 1 AS one /* ; COMMIT */", false},
-		{"SELECT ? AS one, @name AS two", false},
-		{"SELECT @name; COMMIT", true},
+		{"COMMIT; SELECT 1 AS one", true, false},
+		{"SELECT 1 AS one; COMMIT", true, false},
+		{"SELECT 1;SELECT 2", true, false},
+		{"SELECT 1 AS one -- ;\n; SELECT 2", true, false},
+		{"SELECT 1 AS one;", false, false},
+		{"SELECT 1 AS one ;  \n\t", false, false},
+		{"SELECT 1 AS one; -- the end", false, false},
+		{"SELECT 1 AS one; /* the end; really */", false, false},
+		{"SELECT 1 AS one; // the end", true, false},
+		{"SELECT ';' AS one", false, false},
+		{"SELECT 'it''s; here' AS one", false, false},
+		{`SELECT 1 AS "a;b"`, false, false},
+		{`SELECT 1 AS "a"";b"`, false, false},
+		{"SELECT $$;$$ AS one", false, false},
+		{"SELECT $tag$ ; $tag$ AS one", false, false},
+		{"SELECT 1 AS one -- ; COMMIT", false, false},
+		{"SELECT 1 AS one /* ; COMMIT */", false, false},
+		{"SELECT ? AS one, @name AS two", false, false},
+		{"SELECT @name; COMMIT", true, false},
+		{"BEGIN; COMMIT; SELECT 1", true, true},
+		{"SELECT 1 AS begin; COMMIT", true, true},
+		{"begin select 1; commit; end", true, true},
+		{"SELECT 1 AS one; BEGIN; COMMIT; DROP TABLE t", true, false},
+		{"SELECT CASE WHEN 1 = 1 THEN 1 END AS one; COMMIT", true, false},
+		{"SELECT CASE WHEN 1 = 1 THEN 1 END AS one;", false, false},
+		{"SELECT 1 AS loop; COMMIT", true, true},
 	} {
-		if split := len(parse.SplitStatements(tc.statement)) > 1; split != tc.refused {
-			t.Errorf("%q: the driver splits it %t, the case says %t", tc.statement, split, tc.refused)
+		if split := len(parse.SplitStatements(tc.statement)) > 1; split != (tc.refused && !tc.blockHidden) {
+			t.Errorf("%q: the driver splits it %t, the case says %t", tc.statement, split, tc.refused && !tc.blockHidden)
 		}
 		err := verticaSingleStatement(tc.statement)
 		if (err != nil) != tc.refused {

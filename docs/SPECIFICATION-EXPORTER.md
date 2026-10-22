@@ -25225,6 +25225,51 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   inside one statement ended by `;` is taken; the test fails without the
   exporter's own reading (`TestAVerticaStatementHoldingMoreThanOneIsRefused`).
 
+## 34.173 CI's go filter, a release published in order, and label-set keys of any bytes
+
+- Every file a string literal of `test/repository`'s Go files names, from
+  the repository root, is matched by `ci.yml`'s go filter, so a change to it
+  alone runs the repository tests; the test fails for `LICENSE`,
+  `.githooks/pre-commit`, `.github/dependabot.yml`, `.gitignore` and
+  `.artifacthub-repo.yml` without their patterns, and for a filter that
+  loses its pattern for `LICENSE` (§ 34.33).
+- The exporter release builds every archive, darwin's among them, their
+  checksums and the image, unpushed, before any step that publishes; pushes
+  the image under its version tag alone; creates the GitHub Release as a
+  draft, or finds it and replaces its assets on a rerun, and publishes it;
+  and moves `latest` and `MAJOR.MINOR` last, by the digest it pushed
+  (§ 42.12).
+- The release archives' binaries are linked with the Dockerfile's
+  `-ldflags`, the revision among them, from the values the image's build is
+  given (§ 42.12).
+- CI's job test builds the code for darwin on amd64 and arm64, linking both
+  commands, and builds the image from the Dockerfile with `docker build`,
+  pushing nothing, both under the go filter, which matches every file the
+  image's build reads (§ 42.12).
+- A regex histogram rule with labels `a` and `b` reading
+  `"x\xfeb\xffy  5\nx y 7\n"` makes two histograms, `{a="x�b�y"}`
+  of count 1 and sum 5 and `{a="x",b="y"}` of count 1 and sum 7, where the
+  key that ended names and values with 0xff and 0xfe gave both one histogram
+  of count 2 and sum 12 (TestHistogramLabelsOfAnyBytesAreTheirOwnHistogram).
+- Over label sets of one, two and three labels whose values are made of
+  0xfe, 0xff, NUL, short bytes that read as lengths and their
+  concatenations, two sets share a histogram key exactly when they are one
+  series, labels of an empty value left out
+  (TestHistogramKeysAreTheSameOnlyForOneSeries); FuzzHistogramKey searches
+  pairs of two-label sets for a shared key, seeded with the case above.
+- A Prometheus exposition with a histogram `{a="x\xffb\xffy"}` and a
+  histogram `{a="x",b="y"}` decodes to two series with their own sum, count
+  and bucket, where the signature that ended names and values with 0xff
+  failed the decode for a second `h_sum` sample
+  (TestPromParseLabelSetsOfAnyBytesAreTheirOwnSeries); over label sets
+  whose values hold 0xff, NUL and bytes that read as lengths, two sets share
+  a signature exactly when they are one set
+  (TestPromSignaturesAreTheSameOnlyForOneSet).
+- Under `name_escaping: underscores`, a rule `worker\x00up` with a label
+  `state` and a rule `worker` with a label `up\x00state` load with different
+  value maps, as two labels of two metrics, where the check that joined the
+  names with NUL refused them as one (TestLabelValueMapsOfOneNameMustAgree).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

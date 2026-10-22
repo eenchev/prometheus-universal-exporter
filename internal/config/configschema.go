@@ -612,32 +612,41 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].time_format":         {"description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms."},
 		"collectors[].metrics[].time_zone":           {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
 		"collectors[].metrics[]":                     metricRuleSchemaRule(),
-		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
-		"collectors[].limits.max_output_bytes":       leastOutputRule(),
-		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms."},
-		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
-		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
-		"collectors[].request.headers":               {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.forward_headers":       {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
-		"collectors[].request.forward_headers[]":     forwardHeaderEntry(),
-		"collectors[].request.basic_auth.username":   {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
-		"collectors[].request.query":                 {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
-		"otlp.headers":                               {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
-		"otlp":                                       otlpSchemaRule(),
-		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
-		"web.basic_auth":                             webBasicAuthRule(),
-		"web.basic_auth.enabled":                     {"description": "Require the credentials. false keeps the block's settings without using them."},
-		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
-		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
-		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
-		"collectors[].name_escaping":                 {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). A name the collector writes itself, a rule's or a label's, is held to the same when the configuration loads: refused under fail, exported escaped under the other two. See docs/CONFIGURATION.md#utf-8-names."},
-		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
-		"otlp.max_pending_points":                    {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
-		"otlp.batch_max_size":                        {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
-		"otlp.batch_max_bytes":                       {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB, which the exporter checks of a size written as text, in quotes or with a unit, when the configuration loads; 0, like the key left out, is the default, 4MiB."},
-		"otlp.unready_after_failures":                {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
-		"otlp.probe_attributes":                      {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
-		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
+		"collectors[].metrics[].histogram": {
+			"required":    []string{"buckets"},
+			"description": "With type: histogram: counts the values the rule reads — every value its expression gives, or one per item, node, element, match or row — in a histogram, one for each set of label values, instead of making each a series. The values of this response alone: the histogram is made anew on every scrape. Not for the prometheus and python transforms.",
+		},
+		"collectors[].metrics[].histogram.buckets": {
+			"minItems":    1,
+			"maxItems":    model.MaxHistogramBuckets,
+			"description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most " + strconv.Itoa(model.MaxHistogramBuckets) + "; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
+		},
+		"collectors[].limits.max_script_memory":    {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
+		"collectors[].limits.max_output_bytes":     leastOutputRule(),
+		"collectors[].limits.script_timeout":       {"description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms."},
+		"collectors[].limits.max_response_bytes":   leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
+		"collectors[].request.max_response_bytes":  leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
+		"collectors[].request.headers":             {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.forward_headers":     {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
+		"collectors[].request.forward_headers[]":   forwardHeaderEntry(),
+		"collectors[].request.basic_auth.username": {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"collectors[].request.query":               {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+		"otlp.headers":                             {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
+		"otlp":                                     otlpSchemaRule(),
+		"otlp.enabled":                             {"description": "Turn the export on. false keeps the block's settings without using them."},
+		"web.basic_auth":                           webBasicAuthRule(),
+		"web.basic_auth.enabled":                   {"description": "Require the credentials. false keeps the block's settings without using them."},
+		"otlp.endpoint":                            {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
+		"web.basic_auth.username_file":             {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
+		"web.basic_auth.password_file":             {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
+		"collectors[].name_escaping":               {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). A name the collector writes itself, a rule's or a label's, is held to the same when the configuration loads: refused under fail, exported escaped under the other two. See docs/CONFIGURATION.md#utf-8-names."},
+		"collectors[].response.charset":            {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
+		"otlp.max_pending_points":                  {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
+		"otlp.batch_max_size":                      {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
+		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB, which the exporter checks of a size written as text, in quotes or with a unit, when the configuration loads; 0, like the key left out, is the default, 4MiB."},
+		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
+		"otlp.probe_attributes":                    {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
+		"collectors[].request.tls.server_name":     {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
 		// and the two numbers above any whole number, and otlpSchemaRule
 		// holds them to their values in a block that is switched on.
@@ -747,6 +756,12 @@ func metricRuleSchemaRule() map[string]any {
 		"if":   writtenKey("time_zone"),
 		"then": writtenKey("time_format"),
 		"not":  timeFormatBesideValueMap,
+		// A histogram block makes a histogram, so its rule is of that type
+		// (config.checkHistogramRule).
+		"allOf": []any{map[string]any{
+			"if":   map[string]any{"required": []string{"histogram"}},
+			"then": map[string]any{"required": []string{"type"}, "properties": map[string]any{"type": map[string]any{"const": string(model.HistogramMetricType)}}},
+		}},
 	}
 }
 
@@ -794,12 +809,13 @@ func collectorSchemaRule() map[string]any {
 		return map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": rule}}}
 	}
 	pythonRule := map[string]any{
-		"not":        map[string]any{"anyOf": []any{writtenKey("type"), writtenKey("description"), writtenKey("required"), writtenKey("error_mode")}},
+		"not":        map[string]any{"anyOf": []any{writtenKey("type"), writtenKey("description"), writtenKey("required"), writtenKey("error_mode"), map[string]any{"required": []string{"histogram"}}}},
 		"properties": map[string]any{"labels": map[string]any{"items": map[string]any{"not": writtenKey("value"), "required": []string{"truncate"}, "properties": map[string]any{"truncate": map[string]any{"const": true}}}}},
 	}
 	prometheusRule := map[string]any{
 		"properties": map[string]any{"expression": map[string]any{"not": onlyBlanks()}},
 		"anyOf":      []any{writtenKey("name"), writtenKey("expression")},
+		"not":        map[string]any{"required": []string{"histogram"}},
 	}
 	escapesNames := map[string]any{"properties": map[string]any{"name_escaping": map[string]any{"enum": []string{transform.NameEscapingUnderscores, transform.NameEscapingValues}}}, "required": []string{"name_escaping"}}
 	classicNames := map[string]any{"properties": map[string]any{

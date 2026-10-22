@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -24,6 +25,12 @@ const valueMapDefault = "*"
 
 // ruleValue is the value a rule's expression gave, raw, as the series' value.
 func ruleValue(rule model.MetricRule, raw any) (float64, error) {
+	n, err := readRuleValue(rule, raw)
+	return histogramValue(&rule, n, err)
+}
+
+// readRuleValue is ruleValue before a histogram rule's check of the value.
+func readRuleValue(rule model.MetricRule, raw any) (float64, error) {
 	if rule.TimeFormat != "" {
 		text, ok := raw.(string)
 		if !ok {
@@ -63,6 +70,13 @@ func ruleValue(rule model.MetricRule, raw any) (float64, error) {
 // header for every series. Only a text that is no number, whose error
 // ruleValue words, is handed to it.
 func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
+	n, err := readRuleTextValue(rule, text)
+	return histogramValue(&rule, n, err)
+}
+
+// readRuleTextValue is ruleTextValue before a histogram rule's check of the
+// value.
+func readRuleTextValue(rule model.MetricRule, text string) (float64, error) {
 	if rule.TimeFormat != "" {
 		return ruleTime(rule, text)
 	}
@@ -78,7 +92,20 @@ func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
 	if n, err := model.ParseFloat(trimmed); err == nil {
 		return scaled(rule, n), nil
 	}
-	return ruleValue(rule, text)
+	return readRuleValue(rule, text)
+}
+
+// histogramValue checks the value a histogram rule read: NaN, which a text
+// may spell and a value_map may map to, is in no bucket and would make the
+// sum NaN for good, so it fails the value, under the rule's error_mode, as a
+// value that is no number does. An infinity is counted, as Prometheus'
+// client libraries count one: -Inf in every bucket, +Inf in the bucket +Inf
+// alone. Any other rule's value is what it was read as.
+func histogramValue(rule *model.MetricRule, n float64, err error) (float64, error) {
+	if err == nil && rule.Histogram != nil && math.IsNaN(n) {
+		return 0, errors.New("value is NaN, which a histogram cannot count: it is in no bucket, and would make the sum NaN")
+	}
+	return n, err
 }
 
 func scaled(rule model.MetricRule, value float64) float64 {

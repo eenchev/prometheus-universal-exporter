@@ -4711,9 +4711,45 @@ standard shape. `description` becomes the Prometheus HELP text. `type` MUST be o
 to `gauge`, except on a `prometheus` rule, which MUST keep the type of each
 series it passes through when it sets none. `histogram` and `summary` MUST be
 refused at load on a rule of any other transform, since a rule reading one
-value has no buckets or quantiles to expose. Metric declarations MUST be placed on the collector, alongside
+value has no buckets or quantiles to expose, except `histogram` on a rule
+with a `histogram` block (below), and the refusal of `histogram` on a rule of
+a transform that takes the block MUST name the block as the way to count the
+values in a histogram. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
+
+A rule of `type: histogram` MAY set a `histogram` block with `buckets`, the
+upper bounds of its buckets, to count the values it reads in a histogram
+instead of making each a series; nothing MUST change for a rule without the
+block. The block MUST be taken by the `jq`, `yq`, `xpath`, `css`, `csv` and
+`regex` transforms and refused at load on a `prometheus` rule and a `python`
+rule, and on a rule of any other type or of none. `buckets` MUST be refused
+at load when it is empty, longer than 100, holds a bound that is not finite
+(`+Inf`, which every histogram has as its last bucket, refused saying so), or
+holds a bound not greater than the one before it; a rule with the block MUST
+NOT have a label named `le`. The values counted MUST be those the rule would
+otherwise make series of, read as such a rule reads them — every value of a
+`jq` or `yq` expression or one per item, each node an XPath expression
+selects or the one value it computes, each match of a regex, a column's cell
+in each row — and for a `css` rule without `items` the text of every element
+its selector matches, which a rule of another type MUST refuse more than one
+of; `value_map`, `time_format` and `scale` MUST apply to each value before it
+is counted. A value MUST be counted in every bucket whose bound it is at most
+and in `+Inf`, its scaled value added to the sum and 1 to the count; `-Inf`
+MUST be counted in every bucket and `+Inf` in `+Inf` alone. NaN, a value that
+is no number and a missing value MUST be handled by the rule's `error_mode`
+and `required` as any rule's value is, the histogram counting the others
+under `log` and `ignore`. The values of one set of label values, a label with
+an empty value being none, MUST make one histogram, the histograms in the
+order of their first values; each MUST take one series of
+`limits.max_metrics` when its first value comes, and the values none. A rule
+that reads no value at all — an expression that gives none, items, nodes or
+elements selected none, no match, no rows — MUST make one histogram of count
+0 with every bucket and the sum 0 when its labels are all static, and none
+otherwise, and MUST NOT count it as a missing value. The histogram MUST be
+made anew from each response, counting nothing of the scrape before, and
+MUST be exported as a histogram in the text format, OpenMetrics and OTLP, as
+one read from a target is.
 
 A rule MAY set `value_map`, a mapping of text to numbers, and `scale`, a
 number. The value an expression gives — a regex capture, a CSS element's or
@@ -7688,6 +7724,14 @@ reads as no key at all are YAML's and the exporter's to refuse, a validator
 being handed the mapping made of them; and where a `value_map` may stand —
 not on a static label, in a `python` or `prometheus` rule or in a rule
 without a name — stays the exporter's to refuse.
+
+The schemas MUST refuse of a rule's `histogram` block (§ 18.1) what a schema
+can tell, as the exporter does: the block on a rule whose `type` is not
+`histogram` or is left out, on a `python` or `prometheus` rule, without
+`buckets`, and with no bucket or more than 100. Whether the bounds are
+finite, in increasing order and each once, and whether such a rule has a
+label `le`, stay the exporter's to refuse, the description saying so, and a
+test MUST show both kinds.
 
 That no two rules of a collector are the same rule (§ 18.1) is the
 exporter's alone to refuse. A schema compares the items of a list only

@@ -753,15 +753,24 @@ func validateMetricRule(x *model.Collector, index int) error {
 	if r.Type == "" && x.Transform.Type != "prometheus" {
 		r.Type = model.GaugeMetricType
 	}
+	// A histogram block asks for a histogram of the values the rule reads,
+	// and is checked before the type, which it is what allows.
+	if err := checkHistogramRule(x, r, where); err != nil {
+		return err
+	}
 	switch r.Type {
 	case model.GaugeMetricType, model.CounterMetricType, model.UntypedMetricType:
 	case "":
 	case model.HistogramMetricType, model.SummaryMetricType:
 		// Only a series that is one already has buckets or quantiles to
 		// expose; a rule reading one number would expose a histogram
-		// with a single plain sample, which no parser accepts.
+		// with a single plain sample, which no parser accepts. A rule with
+		// a histogram block counts its values in buckets of its own.
+		if r.Histogram != nil {
+			break
+		}
 		if x.Transform.Type != "prometheus" {
-			return fmt.Errorf("%s has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", where, r.Type, r.Type, x.Transform.Type)
+			return fmt.Errorf("%s has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped%s", where, r.Type, r.Type, x.Transform.Type, histogramBlockAdvice(r.Type, x.Transform.Type))
 		}
 	default:
 		return fmt.Errorf("%s has invalid type %q", where, r.Type)
@@ -823,6 +832,17 @@ func validateMetricRule(x *model.Collector, index int) error {
 		return err
 	}
 	return checkPythonRule(x, r, where, wroteType, wroteErrorMode)
+}
+
+// histogramBlockAdvice ends the refusal of a rule's type histogram, which
+// its transform cannot give, with the histogram block, which makes one of
+// the values the rule reads, where the transform takes the block: every
+// transform but python, whose script makes its series itself.
+func histogramBlockAdvice(t model.MetricType, transform string) string {
+	if t != model.HistogramMetricType || transform == "python" {
+		return ""
+	}
+	return ", or add a histogram block with the upper bounds of its buckets, as in histogram: {buckets: [0.1, 0.5, 1]}, to count the values the rule reads in a histogram"
 }
 
 // checkPythonRuleLabels refuses a constant on a label of a python rule. The

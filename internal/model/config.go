@@ -645,7 +645,28 @@ type MetricRule struct {
 	// is read in, an IANA name such as Europe/Sofia; UTC when unset.
 	TimeFormat string `yaml:"time_format"`
 	TimeZone   string `yaml:"time_zone"`
+	// Histogram, on a rule of type histogram, makes the values the rule
+	// reads the observations of a histogram instead of series of their own
+	// (transform.observeValue). Without it a rule of any transform but
+	// prometheus reads one value per series and cannot be a histogram, so
+	// the block is what asks for one.
+	Histogram *HistogramRule `yaml:"histogram"`
 }
+
+// HistogramRule is a metric rule's histogram block: the upper bounds of the
+// buckets the rule's values are counted in, in increasing order, without
+// +Inf, whose bucket every histogram has.
+type HistogramRule struct {
+	Buckets []float64 `yaml:"buckets"`
+}
+
+// MaxHistogramBuckets bounds a histogram block's buckets. Each is a sample
+// of every histogram the rule makes on every scrape, and each value read is
+// counted in every bucket from its own up, so a histogram of a few thousand
+// buckets would cost every scrape and every query far more than the
+// distribution it describes is worth; client libraries default to about a
+// dozen.
+const MaxHistogramBuckets = 100
 
 // What a metric rule does when it cannot produce its value. The first two keep
 // the scrape going without that metric, so the response carries every metric

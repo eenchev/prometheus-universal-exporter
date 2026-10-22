@@ -65,7 +65,7 @@ func validateMetricRuleBeforeSameRules(x *model.Collector, r *model.MetricRule) 
 		// expose; a rule reading one number would expose a histogram
 		// with a single plain sample, which no parser accepts.
 		if x.Transform.Type != "prometheus" {
-			return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", x.Name, r.Name, r.Type, r.Type, x.Transform.Type)
+			return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped%s", x.Name, r.Name, r.Type, r.Type, x.Transform.Type, histogramBlockAdvice(r.Type, x.Transform.Type))
 		}
 	default:
 		return fmt.Errorf("collector %q metric %q has invalid type %q", x.Name, r.Name, r.Type)

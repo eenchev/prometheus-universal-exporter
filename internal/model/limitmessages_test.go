@@ -109,7 +109,7 @@ func formerValidate(s *MetricSet, l Limits, seen *seriesSet) error {
 		// exposition no parser reads as intended.
 		switch {
 		case (m.Type == HistogramMetricType) != (m.Histogram != nil):
-			return fmt.Errorf("metric %q has type %s but %s; only a histogram read from Prometheus exposition has buckets, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "buckets", false: "no buckets"}[m.Histogram != nil])
+			return fmt.Errorf("metric %q has type %s but %s; only a histogram read from Prometheus exposition or counted by a rule's histogram block has buckets, and metric() and the other rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "buckets", false: "no buckets"}[m.Histogram != nil])
 		case (m.Type == SummaryMetricType) != (m.Summary != nil):
 			return fmt.Errorf("metric %q has type %s but %s; only a summary read from Prometheus exposition has quantiles, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "quantiles", false: "no quantiles"}[m.Summary != nil])
 		}

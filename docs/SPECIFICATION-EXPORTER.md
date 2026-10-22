@@ -1651,7 +1651,10 @@ of objects, one a row, of its columns by name. Its keys:
   MUST NOT allow several statements in one, and a `vertica` statement holding
   a `;` followed by anything but blanks and comments, outside quotes, quoted
   identifiers, comments and dollar quotes, which its driver would run as
-  several, MUST be refused at load. A `{{param_...}}` placeholder in
+  several, MUST be refused at load — decided by the exporter's own reading,
+  which knows no blocks, as well as by the driver's splitting, since the
+  driver sends a statement whose `;` it takes to stand in a `BEGIN ... END`
+  or similar block to the server whole, and the server runs every part. A `{{param_...}}` placeholder in
   `statement` MUST be refused at load; one in `database` MUST be filled only
   with letters, digits and `_ - . $`, refused otherwise before anything is
   sent.
@@ -25203,6 +25206,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   credential and `/self-metrics` 200 with it.
 - The landing page with the lifecycle API on names every method `/-/reload`
   takes, read from its `Allow`, and no other (§ 35).
+
+## 34.172 A vertica statement the driver would send whole
+
+- A vertica statement of several parts is refused at load whether or not the
+  driver splits it: `BEGIN; COMMIT; SELECT 1`, `SELECT 1 AS begin; COMMIT`,
+  `SELECT 1 AS loop; COMMIT` and `begin select 1; commit; end`, which
+  vertica-sql-go 1.3.9 takes to be one block and would send to the server
+  whole, are refused, as is a `;` followed by `// ...`; a `CASE ... END`
+  inside one statement ended by `;` is taken; the test fails without the
+  exporter's own reading (`TestAVerticaStatementHoldingMoreThanOneIsRefused`).
 
 # 35. Documentation requirements
 

@@ -25159,6 +25159,51 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   and an `allocator.extraVolumeMounts` entry at or inside the token's
   directory fails rendering, as with a named Secret.
 
+## 34.171 Bounded gRPC caches, jq-style XPath number labels, quiet auth failures and no auth gap while waiting for the allocator
+
+- A `grpc` connection no call holds is closed and forgotten when its idle
+  time ends, with no further call made (the test gives the cache 50 ms); one
+  a call holds outlives that time and is closed once its call has ended
+  (TestGRPCAConnectionNoCallHoldsIsClosedOnItsOwn).
+- A `grpc` connection taken again within its idle time is not closed by the
+  timer its earlier release started
+  (TestGRPCAConnectionTakenAgainOutlivesItsFirstIdleTime).
+- With a bound of 2 connections, a third closes the one no call holds that
+  was used longest ago; a fifth beside two held ones is kept, nothing held
+  is closed, and the cache is back at the bound when a held one is released
+  (TestGRPCTheConnectionsKeptAreBounded).
+- Reflection answers past the bound of answers, or of bytes, forget the ones
+  a probe used longest ago, a probe's use counting; an answer larger than
+  the bound of bytes alone is not kept and forgets none; forgetting one
+  gives its bytes back; and an answer is forgotten when its TTL ends with no
+  further call (TestGRPCReflectionAnswersAreForgottenOnTheirOwnAndBounded).
+- The bytes a reflection question counts are those of the files the server
+  sent, the size the reflection cache holds the answer to
+  (TestAReflectionAnswerOfJustTheLimitIsTaken).
+- A number an XPath label computes reads as the same number from a jq label
+  does, over XML and over HTML: `count(//item) * 2000000` is `4000000`, a
+  `sum()` label of `1234567` and `0.5` is `1234567.5`, `0 - 3000000` is
+  `-3000000`, `-1 div 8` is `-0.125`, `0.000001` keeps no exponent, `1e-07`
+  and `1e+21` do, and a negative zero is `0`; it fails when an XPath label
+  is written in Go's shortest form.
+- A `web.basic_auth.password_file` removed under a running exporter answers
+  50 requests, with and without a credential, `500` and logs one ERROR line
+  and 49 DEBUG repeats; with the file back three authenticated requests are
+  answered and one recovery line is logged.
+- An exporter awaiting its first bundle answers `/probe` (GET and POST), the
+  static targets, `/self-metrics`, `/`, `/collectors`, `/debug`,
+  `/debug/run` and `/-/reload` (POST, PUT, GET) 503 with the sentence naming
+  the allocator, and serves `/health`; once a configuration with
+  `web.basic_auth` is in force they answer 401 without the credential and
+  the probe is answered with it. In the binary, `/self-metrics`, `/` and
+  `/collectors` answer 503 with that sentence before the first bundle.
+- An exporter in allocator mode started again with a bundle carrying
+  `web.basic_auth` in its cache directory, the allocator gone, is not
+  awaiting, answers `/self-metrics`, `/` and `/collectors` 401 without the
+  credential and `/self-metrics` 200 with it.
+- The landing page with the lifecycle API on names every method `/-/reload`
+  takes, read from its `Allow`, and no other (§ 35).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

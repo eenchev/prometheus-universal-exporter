@@ -61,7 +61,7 @@ The probe's `target` is the server, `host:port`:
 | `forward_authorization`, `forward_headers` | off | The probe's `Authorization` and listed headers, forwarded as metadata. |
 | `retry` | none | `attempts`, `backoff`, and `codes`, the status codes retried: `[UNAVAILABLE]` when left out. See [Errors and retries](#errors-and-retries). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks the calls may and may not reach, checked for the server and each connection; see [Restricting targets](REQUESTS.md#restricting-targets). |
-| `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make several times larger. With `reflection`, also the most bytes of files a reflection question takes, never less than 10 MiB. |
+| `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make many times larger (see [The answer](#the-answer)). With `reflection`, also the most bytes of files a reflection question takes, never less than 10 MiB. |
 
 `path`, `query`, `headers`, `body`, `method`, `follow_redirects`,
 `redirect_trusted_hosts`, `enable_http2` and `allowed_schemes` are `http`'s
@@ -328,6 +328,21 @@ matter for metrics:
   "slow consumer"}`. Its type is found among the service's own types, from
   whichever descriptors described the method, or among the well-known types
   built into the exporter; one in neither fails the answer, naming it.
+
+`max_response_bytes` bounds the JSON as well as the message. Writing every
+zero value can make the JSON far larger than the message: an empty shard is
+two bytes on the wire and `{"id":"","depth":"0"}` as JSON, so 8 MB of empty
+shards would be 88 MB of JSON. The exporter therefore counts the JSON's size
+from the message as it arrives, before decoding it, and refuses an answer whose
+count is over the limit then: `the answer is at least 10485761 bytes as JSON,
+over the response limit of 10485760`. Neither decoding nor rendering an
+answer that is refused costs more than reading it did. The count is exact but
+for floating-point numbers, which count as a digit, and the well-known types
+with a form of their own, such as `Timestamp`, which count at their shortest;
+so an answer the count lets through is rendered, and refused when its JSON is
+over the limit after all (`the answer is 10485770 bytes as JSON, ...`). A
+message that carries a single-valued field or a map key twice is counted with
+each, which no encoder writes.
 
 A Python transform reads the same JSON from `data`:
 

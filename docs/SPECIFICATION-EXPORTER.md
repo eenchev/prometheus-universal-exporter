@@ -2746,6 +2746,23 @@ JSON mapping, compacted so the same answer is always the same bytes, with:
 
 A numeric string MUST be read by metric values as a number.
 
+The JSON MUST be bounded by `max_response_bytes` as the message is: an answer
+whose JSON is over the limit MUST fail as an answer over the limit, the call
+itself `OK`, its error saying how large the JSON is and the limit. Writing
+every zero value can make the JSON far larger than the message: an empty
+element of a repeated field is two bytes on the wire and every one of its
+fields as JSON. The JSON's size MUST therefore be counted from the message as
+it arrived, before it is decoded, and an answer whose count is over the limit
+MUST be refused then, its error saying the answer is at least that many bytes
+as JSON: neither decoding nor rendering an answer that is refused may cost
+more than reading it does. The count MUST NOT be more than the JSON of a
+message that carries no single-valued field and no map key twice, as no
+encoder writes one, so that such an answer within the limit is never refused
+by it; it MUST be exact but for floating-point numbers, which count as a
+digit, and the well-known types written in a form of their own, which count
+at their shortest. An answer the count lets through MUST still fail when its
+rendered JSON is over the limit.
+
 ---
 
 # 10. YAML decoder

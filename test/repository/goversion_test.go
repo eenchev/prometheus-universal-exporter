@@ -432,7 +432,7 @@ func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
 	}
 	// The version input of the golangci-lint action, whose step is the only
 	// place CI names a linter version.
-	action := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+\s+with:\s+version:[ \t]*(\S+)`).FindSubmatch(workflow)
+	action := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+(?:[ \t]+#.*)?\s+with:\s+version:[ \t]*(\S+)`).FindSubmatch(workflow)
 	if action == nil {
 		t.Fatal("ci.yml no longer pins a golangci-lint version")
 	}
@@ -524,7 +524,7 @@ func TestTheHelmVersionIsPinnedConsistently(t *testing.T) {
 			t.Errorf("the Makefile no longer contains %q", want)
 		}
 	}
-	setup := regexp.MustCompile(`azure/setup-helm@[^\s]+(?:\s+with:\s+version:[ \t]*(\S+))?`)
+	setup := regexp.MustCompile(`azure/setup-helm@[^\s]+(?:[ \t]+#.*)?(?:\s+with:\s+version:[ \t]*(\S+))?`)
 	found := 0
 	for _, path := range workflowPaths(t) {
 		raw, err := os.ReadFile(path)

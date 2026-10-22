@@ -2139,6 +2139,15 @@ mistake in the commit that introduces it — the checker would be in the file
 GitHub is refusing to read. Running the tests before pushing is what protects
 you.
 
+Every `uses:` in a workflow names its action by a full commit SHA, with the
+release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. A tag can be
+moved to other code by whoever controls the action's repository; a SHA cannot.
+Write a new step in that form, looking the SHA up from the release's tag, and
+leave the updates to Dependabot, which moves the SHA and the comment together.
+`test/repository/workflowpins_test.go` fails for any other form, a
+commented-out `uses:` included, and for a `.github/dependabot.yml` without its
+`github-actions` update.
+
 It validates the chart templates the same way. `test/repository/charts_test.go` checks that
 every manifest a template renders begins its own YAML document. A template that
 renders more than one manifest — several declared, or one wrapped in a range —

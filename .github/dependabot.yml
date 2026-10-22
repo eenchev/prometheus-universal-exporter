@@ -56,7 +56,9 @@ updates:
     labels:
       - dependencies
 
-  # Keeps the actions used by CI and the release workflows current.
+  # Keeps the actions used by CI and the release workflows current. The
+  # workflows pin each action to a commit SHA with its release as a comment
+  # (`@<sha> # v7.0.1`); Dependabot moves the SHA and rewrites the comment.
   - package-ecosystem: github-actions
     directory: /
     schedule:

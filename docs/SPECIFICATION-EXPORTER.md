@@ -26103,6 +26103,19 @@ the write grants to that list, failing for a workflow without top-level
 permissions, for a write granted at the top, and for a job's write grant that
 is not on the list.
 
+Every action a workflow uses MUST be pinned to a full 40-character commit SHA,
+followed on the same line by the release it is in as a comment
+(`uses: actions/checkout@<sha> # v7.0.1`), the first-party `actions/*`
+included, so one rule covers every workflow. A tag or branch can be moved by
+whoever controls the action's repository, and the next run would execute what
+it then names with the job's token, which in the release and Dockerfile update
+jobs may write; a commit SHA names one tree for good. An action in this
+repository (`./...`) and an image (`docker://...`) are exempt. The pins MUST be
+kept current by Dependabot's `github-actions` updates of the repository root
+(§ 42.16), which move the SHA and rewrite the version comment together. A test
+MUST fail for a `uses:`, a commented-out one included, that is not in that
+form, and for a `.github/dependabot.yml` without that update.
+
 Both release workflows MUST run their respective validation checks before
 publishing artifacts, and MUST publish nothing unless CI has passed on the
 commit the tag names. CI has passed on a commit when the newest finished

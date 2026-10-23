@@ -172,7 +172,9 @@ client shared by every scrape of collectors with the same `region`,
 an exporter on EKS its credentials, with nothing to rotate: annotate the
 service account with the role, `eks.amazonaws.com/role-arn`, through the
 chart's `serviceAccount.annotations` (see the [chart
-README](../charts/prometheus-universal-exporter/README.md#s3-object-collectors)).
+README](../charts/prometheus-universal-exporter/README.md#s3-object-collectors)),
+or, for an existing account the chart runs the pods as, on that account
+itself.
 Elsewhere, put a key's two halves in a Secret and hand them in as the
 environment variables above, through `env` or `envFrom`, or mount the Secret
 and name its files with the credential keys.

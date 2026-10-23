@@ -173,7 +173,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 			want: []string{"maxUnavailable: 0\n"},
 		},
 		"no token mounted on the default account": {
-			args: []string{"--set", "serviceAccount.create=false"},
+			args: []string{"--set", "serviceAccount.create=false", "--set", "serviceAccount.name=default"},
 			want: []string{"serviceAccountName: default\n      automountServiceAccountToken: false"},
 		},
 		"debugging at edit": {

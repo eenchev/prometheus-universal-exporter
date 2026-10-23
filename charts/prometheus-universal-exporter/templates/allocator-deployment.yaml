@@ -56,14 +56,13 @@ spec:
         {{- $_ := set $podAnnotations "checksum/config" $checksum }}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "prometheus-universal-exporter.allocatorServiceAccountName" . }}
       {{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
       {{- /* A kubernetes discovery source lists EndpointSlices with the
-             token of a ServiceAccount of the allocator's own, which the
-             chart's Role allows to (allocator-rbac.yaml). */}}
-      serviceAccountName: {{ include "prometheus-universal-exporter.allocatorFullname" . }}
+             account's token, which the chart's Role allows to
+             (allocator-rbac.yaml). */}}
       automountServiceAccountToken: true
       {{- else }}
-      serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
       {{- /* Without a kubernetes discovery source the allocator never calls
              the Kubernetes API either. */}}
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}

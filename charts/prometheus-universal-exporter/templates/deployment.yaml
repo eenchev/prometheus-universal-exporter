@@ -70,8 +70,8 @@ spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
       {{- /* The exporter calls the Kubernetes API only for kubernetes
              collectors, which kubernetesAccess grants, so otherwise no token
-             is mounted, whichever account the pod runs as: the default one
-             included, with serviceAccount.create=false. */}}
+             is mounted, whichever account the pod runs as: an existing one
+             named with serviceAccount.create=false included. */}}
       automountServiceAccountToken: {{ or .Values.serviceAccount.automount (include "prometheus-universal-exporter.kubernetesAccess" . | eq "true") }}
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . | quote }}

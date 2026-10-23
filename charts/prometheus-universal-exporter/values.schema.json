@@ -41,6 +41,14 @@
         "automount": {"type": "boolean"},
         "annotations": {"$ref": "#/$defs/stringMap"},
         "name": {"type": "string"}
+      },
+      "if": {"properties": {"create": {"const": false}}, "required": ["create"]},
+      "then": {
+        "description": "An existing ServiceAccount is named, never assumed, and the chart never changes it: with create false, name must not be empty (write default for the namespace's default account), and annotations, which apply only to an account the chart creates, must be empty.",
+        "properties": {
+          "name": {"minLength": 1},
+          "annotations": {"maxProperties": 0}
+        }
       }
     },
 
@@ -649,6 +657,13 @@
           "additionalProperties": false,
           "properties": {
             "create": {"type": "boolean", "description": "With a kubernetes discovery source, let the allocator's ServiceAccount list EndpointSlices where the sources list them."}
+          }
+        },
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string", "description": "Run the allocator's pods as this existing ServiceAccount, which the chart then does not create; with a kubernetes discovery source the pods mount its token and rbac.create binds the Roles to it."}
           }
         },
         "networkPolicy": {

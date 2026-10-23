@@ -481,6 +481,8 @@ A dedicated ServiceAccount MAY be created for standard Kubernetes deployment con
 
 `kubernetes` collectors list objects with the exporter's own ServiceAccount, which `kubernetesAccess` grants, off by default. With `kubernetesAccess.enabled`, the exporter's pods and its ServiceAccount MUST set `automountServiceAccountToken: true`, whatever `serviceAccount.automount` says, and the chart MUST render, allowing the verb `list` alone on the `apiGroups` and `resources` of each entry of `kubernetesAccess.rules`, in that order, to the ServiceAccount the pods run as, in the release's namespace: a Role and a RoleBinding `<fullname>` in each namespace of `kubernetesAccess.namespaces`, in the release's namespace when it lists none; or, with `kubernetesAccess.clusterWide`, a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` in their place. Rendering MUST fail, by the values schema and, with the schema skipped, by the templates, naming `kubernetesAccess`, when it is enabled with no rules; when a rule's `apiGroups` or `resources` is empty or holds `*`; when a rule whose `apiGroups` holds `""` names `secrets`, which no `kubernetes` collector may list; and when `clusterWide` is set beside `namespaces`. While it is enabled, the service account token directory, `/var/run/secrets/kubernetes.io/serviceaccount`, MUST be among the paths no `extraVolumeMounts` entry may be at or below. Without it nothing of it MUST be rendered.
 
+With `serviceAccount.create`, true by default, the chart MUST render a ServiceAccount named `serviceAccount.name`, `<fullname>` when it is empty, carrying `serviceAccount.annotations`, and the exporter's pods MUST run as it. With `serviceAccount.create: false` the chart MUST NOT render a ServiceAccount, and the pods, and the `kubernetesAccess` bindings, MUST name the existing account `serviceAccount.name` names, `default` included when it is written out. Rendering MUST fail, by the values schema and, with the schema skipped, by the templates, when `serviceAccount.create` is false and `serviceAccount.name` is empty, the template's message naming `serviceAccount.name`, rather than falling back on the namespace's `default` account, which other workloads share and `kubernetesAccess` would grant to; and when `serviceAccount.create` is false and `serviceAccount.annotations` is not empty, the template's message saying that annotations apply only to an account the chart creates and belong on the existing account, since the chart never changes an account it did not create.
+
 ### 33.9 Network and security settings
 
 The chart SHOULD support:
@@ -879,6 +881,16 @@ source with `all_namespaces`. Without such a source none of them MUST be
 rendered, and the allocator's pods MUST run as the exporter's ServiceAccount
 with `serviceAccount.automount`.
 
+`allocator.serviceAccount.name`, empty by default, when set MUST run the
+allocator's pods as the existing account it names, with or without a
+`kubernetes` source, and the chart MUST NOT render `<fullname>-allocator`.
+With a `kubernetes` source the pods MUST set
+`automountServiceAccountToken: true`, and with `allocator.rbac.create` the
+Roles and ClusterRole above MUST be bound to the named account; with
+`allocator.rbac.create` false none of them MUST be rendered. Without a
+`kubernetes` source the pods MUST set `automountServiceAccountToken` from
+`serviceAccount.automount`.
+
 `allocator.staticTargets.expandEnv`, off by default, MUST render
 `--static-targets.expand-env` on the exporter pods in allocator mode, which
 read the static target file of the allocator's bundle as their own, and
@@ -1075,6 +1087,12 @@ The Helm chart README MUST document:
 - Configuration reload behavior
 - Extra volumes, volume mounts and command-line arguments, and which collisions
   the chart rejects
+- The service account: the one the chart creates, running as an existing one
+  named by `serviceAccount.name`, when a token is mounted and which account
+  `kubernetesAccess` binds, that annotations apply only to a created account,
+  and the allocator's account with `allocator.serviceAccount.name`
+- Mounting the TLS files of `tcp`, `redis` and `ldap` collectors from a Secret
+  through `extraVolumes` and `extraVolumeMounts`, with an example
 - Installation and upgrade from the published OCI repository, including the
   recommendation to pin a version
 - Use as a dependency of another chart, with the `condition` that switches it

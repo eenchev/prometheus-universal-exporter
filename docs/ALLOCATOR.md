@@ -705,7 +705,8 @@ becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A
 `kubernetes` discovery source, in a probe job or in the static targets, gives
 the allocator a ServiceAccount of its own, with its token mounted, and a
 Role in each namespace it lists, or a ClusterRole for `all_namespaces`,
-allowing `list` on EndpointSlices.
+allowing `list` on EndpointSlices; `allocator.serviceAccount.name` runs the
+allocator as an existing account instead, to which those Roles are bound.
 
 The files a `file_sd` source reads, and an `http_sd` source's
 `bearer_token_file` and `tls` files, must be in the allocator's pod:

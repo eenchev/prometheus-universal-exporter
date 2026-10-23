@@ -264,7 +264,16 @@ func applyLimitDefaults(l *model.Limits) {
 // jsonAnswerTypes are the request types whose answer is a JSON document the
 // exporter makes, so their decoder is json and their transform one that
 // reads JSON.
-var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes, fetch.RequestTypeRedis}
+var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes, fetch.RequestTypeRedis, fetch.RequestTypeLDAP}
+
+// typeArticle is the article a request type's name is read with: an
+// before a vowel, and before ldap, said letter by letter.
+func typeArticle(name string) string {
+	if name == fetch.RequestTypeLDAP || strings.ContainsAny(name[:min(len(name), 1)], "aeiou") {
+		return "an"
+	}
+	return "a"
+}
 
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
 // unknown transform and an unknown decoder, and infers the decoder a transform
@@ -295,18 +304,18 @@ func normalizeFormats(x *model.Collector) error {
 	}
 	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
 		// A grpc call, a dns lookup, a tlscert handshake, a kubernetes
-		// listing and a redis scrape are answered as JSON, whatever else
-		// their decoder could be.
+		// listing, a redis scrape and an ldap search are answered as JSON,
+		// whatever else their decoder could be.
 		switch x.Decoder.Type {
 		case "auto", "json":
 			x.Decoder.Type = "json"
 		default:
-			return fmt.Errorf("collector %q decodes with %s, but a %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, x.Request.Type)
+			return fmt.Errorf("collector %q decodes with %s, but %s %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, typeArticle(x.Request.Type), x.Request.Type)
 		}
 		switch x.Transform.Type {
 		case "jq", "yq", "python":
 		default:
-			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, x.Request.Type)
+			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, typeArticle(x.Request.Type), x.Request.Type)
 		}
 	}
 	if x.Request.Pagination != nil {

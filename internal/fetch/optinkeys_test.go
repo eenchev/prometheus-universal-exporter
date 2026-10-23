@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_redis || request_type_s3file || request_type_tcp
+//go:build !select_request_types || request_type_ldap || request_type_redis || request_type_s3file || request_type_tcp
 
 package fetch
 
@@ -11,4 +11,5 @@ var optInRequestKeys = map[string][]string{
 	RequestTypeS3File: {"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file"},
 	RequestTypeRedis:  {"db", "info_sections", "commands"},
 	RequestTypeTCP:    {"send", "terminator"},
+	RequestTypeLDAP:   {"bind_dn", "start_tls", "searches"},
 }

@@ -79,7 +79,8 @@ only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
 its required `target`, and for the opt-in [`redis`](REDIS.md#static-targets)
 only `timeout`, with the server as its required `target`, and for the opt-in
 [`tcp`](TCP.md#static-targets) only `timeout`, with the service, `host:port`,
-as its required `target`. An `http` or `graphite` target also takes static
+as its required `target`, and for the opt-in [`ldap`](LDAP.md#static-targets)
+only `timeout`, with the server as its required `target`. An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, inline or file-backed, as basic authentication or a bearer
 token; a basic username

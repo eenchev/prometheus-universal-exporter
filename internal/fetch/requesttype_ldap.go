@@ -1,0 +1,744 @@
+//go:build request_type_ldap
+
+package fetch
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+)
+
+// The ldap request type searches an LDAP directory, OpenLDAP, Active
+// Directory, 389 Directory Server or any other server of LDAPv3, and hands
+// the transforms what its searches found as one JSON document.
+//
+//	request:
+//	  type: ldap
+//	  bind_dn: cn=exporter,ou=services,dc=example,dc=org  # optional: anonymous without it
+//	  password_file: /etc/exporter/ldap-pass               # with bind_dn
+//	  start_tls: true                                      # optional
+//	  searches:
+//	    - name: people
+//	      base: ou=people,dc=example,dc=org
+//	      filter: (objectClass=person)
+//	      count_only: true
+//
+// The document is {"searches": {name: {"count": N, "references": R,
+// "entries": [{"dn": ..., "attributes": {name: [value, ...]}}]}}}, entries
+// left out of a count_only search's, which holds none of them.
+//
+// The probe's target is host, host:port, [v6]:port, or an ldap:// or
+// ldaps:// URL of one, port 389, or 636 for ldaps://, when it is left out;
+// ldaps://, or a tls block on a target that does not use start_tls, asks
+// for TLS from the start, start_tls for StartTLS on a plaintext
+// connection, and ldap:// with a tls block but no start_tls is refused, as
+// redis:// with one is. The exporter dials the target through the target
+// policy, as every type that reaches a server does, and makes one
+// connection for each scrape, which is closed when the scrape is over, for
+// redis's reasons (requesttype_redis.go): a scrape is a bind and a few
+// searches at most seconds apart.
+//
+// The password is read from password_file at every scrape, as every
+// credential file is, and never shown: a debug report shows BIND dn ***.
+//
+// The type is opt-in, built under its tag alone, and imports nothing
+// outside the standard library: the client is the BER of ldapber.go, and
+// the filters are parsed by ldapfilter.go.
+
+func init() {
+	registerRequestType(&RequestType{
+		Name:         RequestTypeLDAP,
+		Fields:       []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout"},
+		Validate:     validateLDAPRequest,
+		Fetch:        fetchLDAP,
+		CheckTarget:  checkLDAPTarget,
+		Label:        ldapLabel,
+		Method:       func(*model.Collector, RequestOverrides) string { return ldapMethod },
+		Display:      ldapDisplay,
+		Stage:        "ldap",
+		CheckFiles:   checkLDAPFiles,
+	})
+	templateEscapers["ldap_dn"] = ldapEscapeDNValue
+	templateEscapers["ldap_filter"] = func(value string) (string, error) { return ldapEscapeFilterValue(value), nil }
+}
+
+// The ports of a target that names none.
+const (
+	ldapDefaultPort  = "389"
+	ldapsDefaultPort = "636"
+)
+
+// ldapTimeout bounds a scrape with no deadline of its own.
+const ldapTimeout = 30 * time.Second
+
+// ldapMethod is the http_method label of a scrape.
+const ldapMethod = "SEARCH"
+
+// DefaultLDAPMaxEntries is how many entries a search that is not count_only
+// may match when its max_entries is left out; one more fails the scrape.
+const DefaultLDAPMaxEntries = 1000
+
+// ldapPageSize is how many entries a page of a search asks for. Active
+// Directory answers at most 1000 a page whatever is asked; 500 keeps each
+// message of a page small besides.
+const ldapPageSize = 500
+
+// ldapDefaultFilter is the filter of a search that sets none: every entry.
+const ldapDefaultFilter = "(objectClass=*)"
+
+// ldapStartTLSOID is the StartTLS extended operation's (RFC 4511 § 4.14).
+const ldapStartTLSOID = "1.3.6.1.4.1.1466.20037"
+
+var ldapSearchName = regexp.MustCompile(model.LDAPSearchNamePattern)
+
+// ldapScopes are the scopes' values in a SearchRequest, by name.
+var ldapScopes = map[string]int64{"base": 0, "one": 1, "sub": 2}
+
+func validateLDAPRequest(x *model.Collector) error {
+	r := &x.Request
+	t := r.TLS
+	if (t.CertFile == "") != (t.KeyFile == "") {
+		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
+	}
+	if t.ServerName != "" {
+		if _, err := canonicalHost(t.ServerName); err != nil {
+			return fmt.Errorf("collector %q request.tls.server_name %q: %w", x.Name, t.ServerName, err)
+		}
+	}
+	if r.BindDN != "" {
+		if HasPathParams(r.BindDN) {
+			return fmt.Errorf("collector %q request.bind_dn %q has a placeholder; the account is used as it is written", x.Name, r.BindDN)
+		}
+		if strings.TrimSpace(r.BindDN) == "" {
+			return fmt.Errorf("collector %q request.bind_dn is blanks alone; name the account's DN, or take the key out for an anonymous bind", x.Name)
+		}
+		if err := checkLDAPDN(r.BindDN); err != nil {
+			return fmt.Errorf("collector %q request.bind_dn %q is not a DN: %w", x.Name, r.BindDN, err)
+		}
+		if r.PasswordFile == "" {
+			return fmt.Errorf("collector %q sets request.bind_dn without request.password_file; a simple bind with a DN and no password is an unauthenticated bind, which a server takes without checking anything, so name the file of the account's password", x.Name)
+		}
+	}
+	if r.PasswordFile != "" {
+		if strings.TrimSpace(r.PasswordFile) == "" {
+			return fmt.Errorf("collector %q request.password_file is blanks alone; name the file of the password, or take the key out", x.Name)
+		}
+		if r.BindDN == "" {
+			return fmt.Errorf("collector %q sets request.password_file without request.bind_dn; a password is sent with the DN of its account, so name it in bind_dn", x.Name)
+		}
+	}
+	if len(r.Searches) == 0 {
+		return fmt.Errorf("collector %q has no request.searches; name at least one search, such as {name: people, base: \"ou=people,dc=example,dc=org\", filter: \"(objectClass=person)\"}", x.Name)
+	}
+	names := map[string]bool{}
+	for i := range r.Searches {
+		if err := checkLDAPSearch(&r.Searches[i], i, names); err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+	}
+	return nil
+}
+
+// checkLDAPSearch checks an entry of request.searches.
+func checkLDAPSearch(s *model.LDAPSearch, i int, names map[string]bool) error {
+	where := fmt.Sprintf("request.searches[%d]", i)
+	if !ldapSearchName.MatchString(s.Name) {
+		return fmt.Errorf("%s.name %q is not a name the document can hold the result under; write letters, digits and _, starting with a letter or _, as .searches.%s reaches it", where, s.Name, "people")
+	}
+	if names[s.Name] {
+		return fmt.Errorf("request.searches names %s twice; each search's result is put under its own name", s.Name)
+	}
+	names[s.Name] = true
+	marked, err := ldapMarked(templateField{where + ".base", s.Base, "ldap_dn"})
+	if err != nil {
+		return err
+	}
+	if err := checkLDAPDN(marked); err != nil {
+		return fmt.Errorf("%s.base %q is not a DN: %w", where, s.Base, err)
+	}
+	if HasPathParams(s.Scope) {
+		return fmt.Errorf("%s.scope %q has a placeholder; a placeholder may stand in base and filter alone", where, s.Scope)
+	}
+	if _, ok := ldapScopes[s.Scope]; !ok && s.Scope != "" {
+		return fmt.Errorf("%s.scope %q is not base, one or sub", where, s.Scope)
+	}
+	filter := s.Filter
+	if filter != "" {
+		if filter, err = ldapMarked(templateField{where + ".filter", s.Filter, "ldap_filter"}); err != nil {
+			return err
+		}
+		if _, err := parseLDAPFilter(filter); err != nil {
+			return fmt.Errorf("%s.filter: %w", where, err)
+		}
+	}
+	seen := map[string]bool{}
+	for j, attribute := range s.Attributes {
+		switch {
+		case HasPathParams(attribute):
+			return fmt.Errorf("%s.attributes[%d] %q has a placeholder; a placeholder may stand in base and filter alone", where, j, attribute)
+		case !ldapAttributeName.MatchString(attribute):
+			return fmt.Errorf("%s.attributes[%d] %q is not an attribute's name or OID, * or +", where, j, attribute)
+		case seen[strings.ToLower(attribute)]:
+			return fmt.Errorf("%s.attributes names %s twice", where, attribute)
+		}
+		seen[strings.ToLower(attribute)] = true
+	}
+	switch {
+	case s.CountOnly && len(s.Attributes) > 0:
+		return fmt.Errorf("%s (%s) sets count_only and attributes; a search that only counts its entries reads none of their attributes, so take attributes out", where, s.Name)
+	case s.CountOnly && s.MaxEntries != 0:
+		return fmt.Errorf("%s (%s) sets count_only and max_entries; a search that only counts holds no entry, and max_entries bounds the entries held, so take max_entries out", where, s.Name)
+	case s.MaxEntries < 0:
+		return fmt.Errorf("%s.max_entries must not be negative; leave it out for %d", where, DefaultLDAPMaxEntries)
+	}
+	return nil
+}
+
+// ldapSecurity is how a scrape's connection is secured.
+type ldapSecurity int
+
+const (
+	ldapPlain ldapSecurity = iota
+	ldapImplicitTLS
+	ldapStartTLS
+)
+
+// ldapAddress is a target as a scrape reaches it: host as the policy
+// matches it and TLS verifies it, the port, and the scheme it was written
+// with, "" for none.
+type ldapAddress struct {
+	host, port, scheme string
+}
+
+// parseLDAPTarget reads a target: host, host:port, [v6]:port, or an ldap://
+// or ldaps:// URL of one. Nothing else may come with it: the base is each
+// search's, the account the collector's.
+func parseLDAPTarget(raw string) (ldapAddress, error) {
+	var a ldapAddress
+	target := strings.TrimSpace(raw)
+	switch {
+	case strings.HasPrefix(target, "ldaps://"):
+		a.scheme, target = "ldaps", strings.TrimPrefix(target, "ldaps://")
+	case strings.HasPrefix(target, "ldap://"):
+		a.scheme, target = "ldap", strings.TrimPrefix(target, "ldap://")
+	case strings.Contains(target, "://"):
+		scheme, _, _ := strings.Cut(target, "://")
+		return a, fmt.Errorf("target %q has the scheme %s://; an ldap target is host, host:port, ldap://host:port or ldaps://host:port", raw, scheme)
+	}
+	target = strings.TrimSuffix(target, "/")
+	if strings.ContainsAny(target, "/?#@") {
+		return a, fmt.Errorf("target %q has a path, query or user in it; an ldap target is only the host and its port, the base is each search's and the account request.bind_dn", raw)
+	}
+	host, port := target, ""
+	if h, p, err := net.SplitHostPort(target); err == nil {
+		host, port = h, p
+	} else if strings.HasPrefix(target, "[") && strings.HasSuffix(target, "]") {
+		host = target[1 : len(target)-1]
+	} else if strings.Count(target, ":") == 1 {
+		return a, fmt.Errorf("target %q is not host or host:port; write an IPv6 address in brackets, as [2001:db8::1]:389", raw)
+	}
+	if host == "" {
+		return a, fmt.Errorf("target %q names no host; an ldap target is host or host:port", raw)
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return a, fmt.Errorf("target %q has the port %q; want a number from 1 to 65535", raw, port)
+		}
+	}
+	canonical, err := canonicalHost(host)
+	if err != nil {
+		return a, err
+	}
+	a.host, a.port = canonical, port
+	return a, nil
+}
+
+// security says how a scrape of a is secured: ldaps://, or a tls block on
+// a target that does not use start_tls, is TLS from the start; start_tls
+// is StartTLS on ldap:// or a bare host. ldap:// with a tls block and no
+// start_tls, and ldaps:// with start_tls, contradict each other.
+func (a ldapAddress) security(c *model.Collector) (ldapSecurity, error) {
+	configured := c.Request.TLS != model.TLSConfig{}
+	switch {
+	case a.scheme == "ldaps" && c.Request.StartTLS:
+		return 0, errors.New("target asks for TLS from the start with ldaps://, but the collector sets request.start_tls, which begins TLS on a plaintext connection; use ldap:// or a bare host:port with start_tls")
+	case a.scheme == "ldaps":
+		return ldapImplicitTLS, nil
+	case c.Request.StartTLS:
+		return ldapStartTLS, nil
+	case a.scheme == "ldap" && configured:
+		return 0, errors.New("target asks for plaintext with ldap://, but the collector sets request.tls; use ldaps://, a bare host:port, or set request.start_tls for StartTLS")
+	case configured:
+		return ldapImplicitTLS, nil
+	}
+	return ldapPlain, nil
+}
+
+// hostPort is what a scrape of a dials, port 636 for TLS from the start
+// and 389 otherwise when the target names none.
+func (a ldapAddress) hostPort(security ldapSecurity) string {
+	port := a.port
+	if port == "" {
+		port = ldapDefaultPort
+		if security == ldapImplicitTLS {
+			port = ldapsDefaultPort
+		}
+	}
+	return net.JoinHostPort(a.host, port)
+}
+
+// url is the url label of a scrape: ldap://host:port, or ldaps:// for TLS
+// from the start. StartTLS keeps ldap://, the port being LDAP's own.
+func (a ldapAddress) url(security ldapSecurity) string {
+	scheme := "ldap"
+	if security == ldapImplicitTLS {
+		scheme = "ldaps"
+	}
+	return scheme + "://" + a.hostPort(security)
+}
+
+func checkLDAPTarget(c *model.Collector, target string, _ bool) error {
+	a, err := parseLDAPTarget(target)
+	if err != nil {
+		return err
+	}
+	_, err = a.security(c)
+	return err
+}
+
+func ldapLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+	a, err := parseLDAPTarget(target)
+	if err != nil {
+		return "", err
+	}
+	security, err := a.security(c)
+	if err != nil {
+		return "", err
+	}
+	return a.url(security), nil
+}
+
+// ldapDisplay renders a target for logs and labels: as written, since it
+// holds no credentials, when it is one at all.
+func ldapDisplay(target string) string {
+	if _, err := parseLDAPTarget(target); err != nil {
+		return "<invalid target>"
+	}
+	return strings.TrimSpace(target)
+}
+
+// ldapSearchResult is a search's result as the document holds it. Entries
+// is nil for a count_only search, which leaves it out.
+type ldapSearchResult struct {
+	Count      int          `json:"count"`
+	References int          `json:"references"`
+	Entries    *[]ldapEntry `json:"entries,omitempty"`
+}
+
+// ldapDocument is a scrape as the transforms read it.
+type ldapDocument struct {
+	Searches map[string]*ldapSearchResult `json:"searches"`
+}
+
+// ldapCall is a search of a scrape, its placeholders filled and its filter
+// encoded.
+type ldapCall struct {
+	search *model.LDAPSearch
+	base   string
+	filter string
+	ber    []byte
+}
+
+// ldapCalls is what a scrape of c searches, each base and filter filled
+// from the probe's parameters, and the filter parsed again: a value
+// escaped as it is (ldapEscapeFilterValue) cannot change its structure,
+// which the load checked, and the parse is what encodes it.
+func ldapCalls(c *model.Collector, params map[string]string) ([]ldapCall, error) {
+	calls := make([]ldapCall, 0, len(c.Request.Searches))
+	for i := range c.Request.Searches {
+		s := &c.Request.Searches[i]
+		where := fmt.Sprintf("request.searches[%d]", i)
+		base, err := templateField{where + ".base", s.Base, "ldap_dn"}.render(params)
+		if err != nil {
+			return nil, err
+		}
+		filter := ldapDefaultFilter
+		if s.Filter != "" {
+			if filter, err = (templateField{where + ".filter", s.Filter, "ldap_filter"}).render(params); err != nil {
+				return nil, err
+			}
+		}
+		ber, err := parseLDAPFilter(filter)
+		if err != nil {
+			return nil, fmt.Errorf("%s.filter: %w", where, err)
+		}
+		calls = append(calls, ldapCall{search: s, base: base, filter: filter, ber: ber})
+	}
+	return calls, nil
+}
+
+// fetchLDAP makes a scrape's connection, secures it, binds, and answers the
+// document of the searches.
+func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
+	start := time.Now()
+	address, err := parseLDAPTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	security, err := address.security(c)
+	if err != nil {
+		return nil, err
+	}
+	calls, err := ldapCalls(c, overrides.Params)
+	if err != nil {
+		return nil, err
+	}
+	if overrides.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
+		defer cancel()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ldapTimeout)
+		defer cancel()
+	}
+	var password string
+	if c.Request.PasswordFile != "" {
+		if password, err = ReadCredentialFile(c.Request.PasswordFile); err != nil {
+			return nil, fmt.Errorf("reading request.password_file: %w", err)
+		}
+		if password == "" {
+			return nil, fmt.Errorf("request.password_file %s is empty; a simple bind with a DN and an empty password is an unauthenticated bind, which a server takes without checking anything, so it is never sent", c.Request.PasswordFile)
+		}
+	}
+	var cfg *tls.Config
+	if security != ldapPlain {
+		if cfg, err = tlsConfig(c.Request.TLS); err != nil {
+			return nil, fmt.Errorf("request.tls: %w", err)
+		}
+		if cfg.ServerName == "" {
+			cfg.ServerName = address.host
+		}
+	}
+	hostPort := address.hostPort(security)
+	// The host's name now; the address the connection is made to when it
+	// is made, as an http request's connections are checked.
+	if policy := policyOf(c); policy != nil {
+		guard := &policyGuard{policy: policy, hosts: map[string]bool{}}
+		if err := guard.check(ctx, &url.URL{Scheme: "ldap", Host: hostPort}); err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
+	}
+	label := address.url(security)
+	dialer := &net.Dialer{}
+	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", hostPort)
+	if err != nil {
+		if !errors.Is(err, ErrTargetRefused) {
+			err = ldapFailure(ctx, fmt.Errorf("connecting to %s: %w", hostPort, err))
+		}
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	// Every read and write ends at the scrape's deadline, or as soon as it
+	// is cancelled.
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
+	if security == ldapImplicitTLS {
+		tlsConn := tls.Client(conn, cfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return nil, ldapFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", hostPort, err))
+		}
+		conn = tlsConn
+	}
+	session := newLDAPConn(conn, responseLimit(c))
+	if security == ldapStartTLS {
+		if err := ldapStartTLSOn(ctx, session, label, cfg, hostPort); err != nil {
+			return nil, err
+		}
+	}
+	if err := ldapBind(ctx, session, label, c.Request.BindDN, password); err != nil {
+		return nil, err
+	}
+	doc := ldapDocument{Searches: map[string]*ldapSearchResult{}}
+	for _, call := range calls {
+		result, err := ldapSearch(ctx, session, label, call, deadline)
+		if err != nil {
+			return nil, err
+		}
+		doc.Searches[call.search.Name] = result
+	}
+	session.unbind()
+	body, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	// The document is held to the limit the messages were: JSON writes a
+	// control character as six bytes, \u0001, and a quote or backslash as
+	// two, so messages within the limit can make a document past it.
+	if limit := responseLimit(c); int64(len(body)) > limit {
+		return nil, model.MarkError(model.Errorf("the document of the searches is %d bytes as JSON, larger than the response limit of %d bytes, the values' control characters, quotes and backslashes taking more as JSON escapes them; raise request.max_response_bytes or limits.max_response_bytes, or narrow the searches", len(body), model.Size(limit)), model.ErrLimitExceeded)
+	}
+	return &HTTPResponse{
+		StatusCode: http.StatusOK,
+		NoStatus:   true,
+		Headers:    http.Header{"Content-Type": {"application/json"}},
+		Body:       body,
+		Target:     target,
+		Collector:  c.Name,
+		Duration:   time.Since(start),
+	}, nil
+}
+
+// ldapStartTLSOn sends StartTLS and, once the server agrees, makes the TLS
+// handshake on the connection.
+func ldapStartTLSOn(ctx context.Context, session *ldapConn, label string, cfg *tls.Config, hostPort string) error {
+	traceRequest(ctx, "STARTTLS", label, http.Header{"Ldap-Operation": {"STARTTLS"}}, "", false)
+	result, err := ldapOperation(session, berElement(ldapExtendedRequest, berString(ldapExtendedName, ldapStartTLSOID)), ldapExtendedResponse)
+	if err == nil && result.code != 0 {
+		err = result.err()
+	}
+	if err != nil {
+		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: %w", err))
+		traceOutcome(ctx, "error: "+err.Error())
+		return err
+	}
+	tlsConn := tls.Client(session.conn, cfg)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: TLS handshake with %s: %w", hostPort, err))
+		traceOutcome(ctx, "error: "+err.Error())
+		return err
+	}
+	if err := session.startTLS(tlsConn); err != nil {
+		err = fmt.Errorf("STARTTLS: %w", err)
+		traceOutcome(ctx, "error: "+err.Error())
+		return err
+	}
+	traceOutcome(ctx, "success, "+tls.VersionName(tlsConn.ConnectionState().Version))
+	return nil
+}
+
+// ldapShownBind is a bind as a debug report and a failure show it: its DN,
+// or anonymous, and its password as ***.
+func ldapShownBind(dn string) string {
+	if dn == "" {
+		return "BIND anonymous"
+	}
+	return "BIND " + ldapShown(dn) + " ***"
+}
+
+// ldapBind makes a simple bind, as dn with password, or anonymous with
+// neither, which also says the client speaks LDAPv3.
+func ldapBind(ctx context.Context, session *ldapConn, label, dn, password string) error {
+	shown := ldapShownBind(dn)
+	traceRequest(ctx, "BIND", label, http.Header{"Ldap-Operation": {shown}}, "", false)
+	op := berElement(ldapBindRequest, berInt(berInteger, 3), berString(berOctetString, dn), berString(ldapSimpleAuth, password))
+	result, err := ldapOperation(session, op, ldapBindResponse)
+	if err == nil && result.code != 0 {
+		err = result.err()
+	}
+	if err != nil {
+		err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
+		traceOutcome(ctx, "error: "+err.Error())
+		return err
+	}
+	traceOutcome(ctx, "success")
+	return nil
+}
+
+// ldapOperation sends an operation and reads the one response it has, of
+// the tag given.
+func ldapOperation(session *ldapConn, op []byte, response byte) (*ldapResult, error) {
+	id, err := session.send(op)
+	if err != nil {
+		return nil, err
+	}
+	m, err := session.await(id)
+	if err != nil {
+		return nil, err
+	}
+	if m.op != response {
+		return nil, fmt.Errorf("%w: the response's operation has the tag 0x%02x, not 0x%02x", errLDAPProtocol, m.op, response)
+	}
+	return decodeLDAPResult(m.content)
+}
+
+// ldapShownSearch is a search as a debug report and a failure show it.
+func ldapShownSearch(call ldapCall) string {
+	attributes := "1.1"
+	if len(call.search.Attributes) > 0 {
+		attributes = strings.Join(call.search.Attributes, ",")
+	}
+	return fmt.Sprintf("SEARCH %s base=%q scope=%s filter=%s attributes=%s", call.search.Name, ldapShown(call.base), ldapScopeOf(call.search), ldapShown(call.filter), attributes)
+}
+
+func ldapScopeOf(s *model.LDAPSearch) string {
+	if s.Scope == "" {
+		return "sub"
+	}
+	return s.Scope
+}
+
+// ldapSearch runs a search, a page at a time, and answers its result.
+func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapCall, deadline time.Time) (*ldapSearchResult, error) {
+	s := call.search
+	shown := ldapShownSearch(call)
+	attributes := s.Attributes
+	if len(attributes) == 0 {
+		// No attribute: the entries' DNs alone (RFC 4511 § 4.5.1.8).
+		attributes = []string{"1.1"}
+	}
+	encoded := make([][]byte, len(attributes))
+	for i, a := range attributes {
+		encoded[i] = berString(berOctetString, a)
+	}
+	maxEntries := s.MaxEntries
+	if maxEntries == 0 {
+		maxEntries = DefaultLDAPMaxEntries
+	}
+	result := &ldapSearchResult{}
+	var entries []ldapEntry
+	cookie := ""
+	for page := 1; ; page++ {
+		pageCtx := context.WithValue(ctx, pageKey{}, page)
+		traceRequest(pageCtx, "SEARCH", label, http.Header{"Ldap-Operation": {shown}}, "", false)
+		// The server is told how long is left, so it gives up when the
+		// scrape does.
+		timeLimit := int64(math.Ceil(time.Until(deadline).Seconds()))
+		op := berElement(ldapSearchRequest,
+			berString(berOctetString, call.base),
+			berInt(berEnumerated, ldapScopes[ldapScopeOf(s)]),
+			berInt(berEnumerated, 0), // neverDerefAliases
+			berInt(berInteger, 0),    // no size limit: max_entries is the exporter's to keep
+			berInt(berInteger, max(timeLimit, 1)),
+			berBool(false),
+			call.ber,
+			berElement(berSequence, encoded...),
+		)
+		before := result.Count
+		var err error
+		cookie, err = ldapSearchPage(session, op, cookie, s, result, &entries, maxEntries)
+		if err != nil {
+			err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
+			traceOutcome(pageCtx, "error: "+err.Error())
+			return nil, err
+		}
+		outcome := fmt.Sprintf("success, %d entries", result.Count-before)
+		if cookie != "" {
+			outcome += ", more to come"
+		}
+		traceOutcome(pageCtx, outcome)
+		if cookie == "" {
+			break
+		}
+	}
+	if !s.CountOnly {
+		if entries == nil {
+			entries = []ldapEntry{}
+		}
+		result.Entries = &entries
+	}
+	return result, nil
+}
+
+// ldapSearchPage sends a page of a search and reads its entries,
+// references and end, adding them to result; it returns the cookie of the
+// next page, "" when there is none.
+func ldapSearchPage(session *ldapConn, op []byte, cookie string, s *model.LDAPSearch, result *ldapSearchResult, entries *[]ldapEntry, maxEntries int) (string, error) {
+	id, err := session.send(op, ldapPagedControl(ldapPageSize, cookie))
+	if err != nil {
+		return "", err
+	}
+	for {
+		m, err := session.await(id)
+		if err != nil {
+			return "", err
+		}
+		switch m.op {
+		case ldapSearchEntry:
+			entry, err := decodeLDAPEntry(m.content, !s.CountOnly)
+			if err != nil {
+				return "", err
+			}
+			result.Count++
+			if !s.CountOnly {
+				if result.Count > maxEntries {
+					return "", fmt.Errorf("the search matches more than its max_entries, %d; narrow its base or filter, raise max_entries, or set count_only if the number is all the metrics need", maxEntries)
+				}
+				*entries = append(*entries, *entry)
+			}
+		case ldapSearchReference:
+			result.References++
+		case ldapSearchDone:
+			done, err := decodeLDAPResult(m.content)
+			if err != nil {
+				return "", err
+			}
+			if done.code != 0 {
+				return "", done.err()
+			}
+			return ldapPagedCookie(m.controls)
+		default:
+			return "", fmt.Errorf("%w: a response of the tag 0x%02x to a search", errLDAPProtocol, m.op)
+		}
+	}
+}
+
+// ldapFailure is the failure of a read, a write or a handshake: the
+// scrape's deadline or cancellation when that is what ended it, since the
+// connection's deadline is set to make it end. The connection's deadline is
+// the scrape's, and its timer can fire before the context's own, so a
+// connection that timed out is the deadline's failure whether or not the
+// context says so yet.
+func ldapFailure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		return fmt.Errorf("%w (%w)", ctxErr, err)
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w (%w)", context.DeadlineExceeded, err)
+	}
+	return err
+}
+
+// checkLDAPFiles reads the files a scrape reads, for --dry-run: the
+// password file, and the tls block's when the collector sets one.
+func checkLDAPFiles(c *model.Collector, t *model.StaticTarget) []string {
+	if t != nil {
+		return nil
+	}
+	var warnings []string
+	if file := c.Request.PasswordFile; file != "" {
+		password, err := ReadCredentialFile(file)
+		switch {
+		case err != nil:
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
+		case password == "":
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file %s is empty; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, file))
+		}
+	}
+	if c.Request.TLS != (model.TLSConfig{}) {
+		if _, err := tlsConfig(c.Request.TLS); err != nil {
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each connection, so one put in place later is used then)", c.Name, err))
+		}
+	}
+	return warnings
+}

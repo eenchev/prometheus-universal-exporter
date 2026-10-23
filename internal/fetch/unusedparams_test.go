@@ -27,6 +27,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeS3File:     `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 	RequestTypeRedis:      `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.commands or its label values names them`,
 	RequestTypeTCP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.send or its label values names them`,
+	RequestTypeLDAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in the base or filter of its request.searches or its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -43,6 +44,7 @@ var placeWords = []struct{ field, word string }{
 	{"request.args[", "args"},
 	{"request.commands[", "request.commands"},
 	{"request.send", "request.send"},
+	{"request.searches[", "request.searches"},
 	{"transform.labels.", "label values"},
 }
 
@@ -52,7 +54,7 @@ var placeWords = []struct{ field, word string }{
 // and no body; a grpc collector's message and metadata values; a localfile,
 // sshfile or s3file collector's path and nothing else of the request; a sql
 // collector's database and args; a redis collector's command arguments; a
-// tcp collector's send. The
+// tcp collector's send; an ldap collector's searches' base and filter. The
 // collector has a placeholder in each request key its type takes of those
 // that are filled, so a type that starts filling another place fails here
 // until the refusal names it.
@@ -103,6 +105,9 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		}
 		if slices.Contains(fields, "send") {
 			c.Request.Send = "get {{param_key:x}}\r\n"
+		}
+		if slices.Contains(fields, "searches") {
+			c.Request.Searches = []model.LDAPSearch{{Name: "n", Base: "ou={{param_ou:x}},dc=org", Filter: "(uid={{param_uid:x}})"}}
 		}
 		if err := readLabels(&c); err != nil {
 			t.Fatal(err)

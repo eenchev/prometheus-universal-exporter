@@ -195,6 +195,8 @@ func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in the arguments of its request.commands or its label values names them", strings.Join(unused, ", "), c.Name)
 	case RequestTypeTCP:
 		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.send or its label values names them", strings.Join(unused, ", "), c.Name)
+	case RequestTypeLDAP:
+		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in the base or filter of its request.searches or its label values names them", strings.Join(unused, ", "), c.Name)
 	case RequestTypeDNS, RequestTypeTLSCert, RequestTypeKubernetes:
 		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its label values names them", strings.Join(unused, ", "), c.Name)
 	case RequestTypeLocalFile, RequestTypeSSHFile, RequestTypeS3File:

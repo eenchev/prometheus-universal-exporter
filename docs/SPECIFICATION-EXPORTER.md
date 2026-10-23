@@ -18,7 +18,7 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a service that answers a line sent over TCP, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a service that answers a line sent over TCP, an LDAP directory, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
 The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), and the answers of text-protocol services to a line sent over TCP (`tcp`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -619,7 +619,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file`, `kubernetes`, `redis` and `tcp` are implemented;
+`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp` and `ldap` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -667,7 +667,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments want in the
-binary: `s3file`, for the AWS SDK it links, and `redis` and `tcp`, which
+binary: `s3file`, for the AWS SDK it links, and `redis`, `tcp` and `ldap`, which
 link nothing outside the standard library but reach servers most
 deployments of the exporter do not have. No build MAY carry one unless asked for it by its tag,
 and the source MUST list the opt-in types.
@@ -698,11 +698,11 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `kubernetes`, `redis` and `tcp` MUST
+  that driver. `dns`, `tlscert`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
   import nothing outside the standard library and the module's own packages
-  — no Kubernetes client library, no Redis client library, the stand-in
-  servers of `redis`'s tests (`internal/redistest`) and of `tcp`'s
-  (`internal/testutil`) included — and the test MUST find none of the other
+  — no Kubernetes, Redis or LDAP client library, the stand-in servers of
+  `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
+  and of `tcp`'s (`internal/testutil`) included — and the test MUST find none of the other
   types' modules in a build of any of them, and in a build of `tcp` alone no
   package a build of no request type lacks but the standard library's. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
@@ -2333,6 +2333,112 @@ types at build time): only a build asked for it carries it. Its keys:
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and
   list what a scrape would fail on as warnings of the `config` check.
+
+#### `ldap`
+
+An `ldap` collector searches an LDAP directory, any server of LDAPv3, and
+hands the transforms what its searches find as one JSON document. It is an
+opt-in type (§ 5.1, Selecting request types at build time): only a build
+asked for it carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `bind_dn` | none | The DN of a simple bind. A DN as RFC 4514 writes one, not blanks alone, no placeholder; only with `password_file`. Without it the bind is anonymous. |
+| `password_file` | none | The file of the bind's password. Not blanks alone; only with `bind_dn`. |
+| `start_tls` | `false` | Begin TLS with the StartTLS extended operation on a plaintext connection. |
+| `searches` | — | Required, one or more: entries of `name`, `base`, `scope`, `filter`, `attributes`, `count_only` and `max_entries`. |
+| `tls` | none | As `http`'s. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- The client MUST speak LDAPv3 in BER as RFC 4511 restricts it and MUST
+  link no LDAP client library.
+- `password_file` MUST be read at every scrape, not at load, its
+  surrounding whitespace taken off; a file that is missing, unreadable or
+  empty MUST fail the scrape naming the key and the file, never its
+  content, before anything is sent, since a simple bind with a DN and an
+  empty password is an unauthenticated bind. `--dry-run` MUST read it, and
+  the `tls` block's files when the block is set, and list what a scrape
+  would fail on as warnings of the `config` check.
+- A search's `name` MUST be letters, digits and `_`, not starting with a
+  digit, and unique among the collector's searches; its `base` a DN, `""`
+  the root DSE; its `scope` `base`, `one` or `sub`, `sub` when left out; its
+  `filter` an RFC 4515 filter in parentheses — and, or, not, equality,
+  substrings, `>=`, `<=`, presence, approximate and extensible match —
+  `(objectClass=*)` when left out, nesting `&`, `|` and `!` at most 32
+  deep; each of its `attributes` an attribute's name or OID with options,
+  `*` or `+`, each named once in any case. `count_only` MUST NOT go with
+  `attributes` or `max_entries`, and `max_entries` MUST NOT be negative,
+  `0` being the default of 1000. Each MUST be refused at load otherwise.
+- A placeholder MAY stand in a search's `base` and `filter` alone, and
+  there only in a value: an attribute's value of the base, filled escaped
+  as RFC 4514 escapes one, and an assertion's value of the filter, filled
+  escaped as RFC 4515 escapes one, so no probe's value can change the
+  base's RDNs or the filter's structure; a placeholder in a DN's attribute
+  type, a filter's attribute or structure, or any other key MUST be refused
+  at load.
+- A scrape MUST make one connection, begin TLS on it when `start_tls` is
+  set, send a simple bind, as `bind_dn` or anonymous, and then each search
+  in order, each answered before the next is sent, and end with an unbind.
+  A search MUST ask for its `attributes`, or for `1.1` when it has none, and
+  MUST carry the Simple Paged Results control (RFC 2696), not critical,
+  asking for pages of 500 entries and sending each page after the first
+  the cookie the last one ended with, until a page ends with none or with
+  no such control; it MUST send no size limit and, as its time limit, the
+  seconds left until the scrape's deadline. A continuation reference MUST
+  be counted and MUST NOT be followed. An operation answered with a result
+  other than `success` MUST fail the scrape with the operation, the
+  result's name and number and the server's diagnostic message, the bind's
+  password written `***`; a notice of disconnection MUST fail it with the
+  server's reason.
+- The answer MUST be a JSON document of `searches`, an object of each
+  search's result under its name: `count`, the entries it matched across
+  every page, `references`, the continuation references it answered, and,
+  unless it is `count_only`, `entries`, a list of each entry's `dn` and
+  `attributes`, an object of each attribute as the server named it, each a
+  list of its values as text. A `count_only` search MUST hold none of its
+  entries. A search that is not `count_only` matching more entries than its
+  `max_entries` MUST fail the scrape at the next one. A DN, an attribute's
+  name or a value that is not UTF-8 MUST fail the scrape naming the
+  attribute and the entry, and MUST NOT be put in the document with U+FFFD
+  in place of its bytes.
+- The messages of a scrape MUST be read against the response limit
+  together, counted in their bytes as they come off the connection, a
+  `count_only` search's among them. A message's declared length past what
+  the limit has left MUST fail the scrape before a byte of its content is
+  read, and no more MUST be held for one than the server has sent of it;
+  each failure past the limit MUST be a limit exceeded. A length of more
+  than four bytes, an indefinite length, an element longer than what
+  encloses it, a tag of more than one byte, a constructed string, and a
+  message of an ID the scrape is not waiting for MUST fail the scrape
+  saying it is no LDAP message. The document MUST be held to the response
+  limit as the messages are, one whose JSON is larger failing the scrape as
+  a limit exceeded, saying the document's size.
+- The target MUST be `host`, `host:port`, `[v6]:port`, or an `ldap://` or
+  `ldaps://` URL of one, port 389, or 636 for TLS from the start, when it
+  names none, with no user, path, query or other scheme, which MUST be
+  answered `400` before anything is sent, as a static target's is refused
+  at load. It is required. `ldaps://`, or a `tls` block without
+  `start_tls`, MUST make the scrape speak TLS from the start, and
+  `start_tls` MUST make it send StartTLS before the bind, either verifying
+  the certificate against `tls.server_name` or the target's host; a
+  refused StartTLS MUST fail the scrape. `ldap://` with a `tls` block and
+  no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
+  target lists MUST be applied to the host before the connection and to the
+  address connected to, as `http`'s are, a refused one answered `403`,
+  counted in `http_exporter_targets_refused_total`, and never connected to.
+- The connection, the TLS handshake and every read and write MUST end at
+  the scrape's deadline, 30 seconds without one, or when it is cancelled,
+  and a scrape ended so MUST fail with the deadline's error.
+- A failed scrape MUST be reported in the `ldap` stage. The decoder MUST
+  be `json`, as for `grpc`; another decoder, and a transform other than
+  `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each operation, `STARTTLS`,
+  `BIND` and each page of each `SEARCH`, by its name and `ldap://host:port`
+  (`ldaps://` for TLS from the start), with an `Ldap-Operation` header of
+  the bind's DN and its password as `***`, or `BIND anonymous`, and of the
+  search's name, base, scope, filter and attributes, and how each ended as
+  its outcome. The verbose `url` label MUST be `ldap://host:port` or
+  `ldaps://host:port`, and `http_method` MUST be `SEARCH`.
 - A static target MAY set `timeout` alone; a probe MAY set `timeout` and
   `param_<name>`.
 
@@ -2887,8 +2993,9 @@ nothing else of it there.
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
 stand-in database of the `sql` tests, `internal/kubetest`, the stand-in
-Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, and
-`internal/redistest`, the stand-in Redis server of the `redis` tests, MUST
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests,
+`internal/redistest`, the stand-in Redis server of the `redis` tests, and
+`internal/ldaptest`, the stand-in LDAP server of the `ldap` tests, MUST
 NOT be imported outside tests and MUST import nothing but the standard
 library. `internal/testutil` MAY hold
 helpers shared by the tests of several packages, the stand-in server of the
@@ -6553,7 +6660,7 @@ self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
 collector's refused buckets, a `dns` collector's refused names, and a
-`tlscert`, `redis` or `tcp` collector's refused servers; each of these types MUST
+`tlscert`, `redis`, `tcp` or `ldap` collector's refused servers; each of these types MUST
 have its series there, `0` before a refusal.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
@@ -8440,7 +8547,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
-`s3file`, `redis` or `tcp` collector MAY set `request.allowed_targets`
+`s3file`, `redis`, `tcp` or `ldap` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -26148,7 +26255,8 @@ The repository MUST include documentation covering:
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
-    `docs/S3FILE.md`, `redis` in `docs/REDIS.md` and `tcp` in `docs/TCP.md`, with `localfile` and `grpc` above and `http` in
+    `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md` and `ldap` in
+    `docs/LDAP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

@@ -26,15 +26,15 @@ carries, comma-separated:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=redis            # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=s3file,redis     # both opt-in types
+make build OPT_IN_REQUEST_TYPES=s3file,redis     # two opt-in types
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
 go build -tags "$(sh tools/request-type-tags.sh '' '' redis)" .
 ```
 
 The tag is `request_type_redis`, which is all `go build -tags
 request_type_redis .` needs by hand: every type of the default build, and
-`redis`; `-tags request_type_s3file,request_type_redis` adds both opt-in
-types. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
+`redis`; `-tags request_type_s3file,request_type_redis` adds those two
+opt-in types. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
 request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
 `REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=redis` builds the two, and
 `REQUEST_TYPES` may name `redis` itself, `REQUEST_TYPES=redis` building it

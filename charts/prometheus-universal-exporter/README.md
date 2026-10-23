@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, or the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, or the searches of an LDAP directory, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis` and `tcp` collectors in an image built with them
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis`, `tcp` and `ldap` collectors in an image built with them
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
@@ -591,6 +591,26 @@ and name `password_file: /var/run/prometheus-universal-exporter/redis/password`,
 A `tcp` collector sends a line, such as memcached's `stats`, over a TCP connection and reads the answer, for services whose statistics come that way: memcached, ZooKeeper's four-letter words, HAProxy's runtime API on a TCP socket. The type is opt-in, as `s3file` and `redis` are: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=tcp` (or `redis,tcp` for more than one), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
 
 Probe it with the service as the target, its port always named, `/probe?collector=memcached&target=memcached.cache:11211`. With `networkPolicy.egress` rules, add one for each service's port. The request's keys are in [Text protocols over TCP](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/TCP.md).
+
+## LDAP collectors
+
+An `ldap` collector searches an LDAP directory, OpenLDAP, Active Directory or any other LDAPv3 server, and reads the entries each search finds, or only their count. The type is opt-in, as `s3file` and `redis` are: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=ldap` (or `s3file,redis,tcp,ldap` for all four), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+The password of the account the collector binds as, its `bind_dn`, is a file it names with `password_file`, read at every scrape; mount it from a Secret through `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+extraVolumes:
+  - name: ldap-exporter
+    secret:
+      secretName: ldap-exporter
+      defaultMode: 0400
+extraVolumeMounts:
+  - name: ldap-exporter
+    mountPath: /var/run/prometheus-universal-exporter/ldap
+    readOnly: true
+```
+
+and name `password_file: /var/run/prometheus-universal-exporter/ldap/password` beside `bind_dn` in the collector. Probe it with the server as the target, `/probe?collector=directory&target=ldap.example.org`, or `ldaps://` for TLS from the start. With `networkPolicy.egress` rules, add one for the servers' port, 389, or 636 for LDAPS. The request's keys are in [LDAP directories](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/LDAP.md).
 
 ## Kubernetes collectors
 

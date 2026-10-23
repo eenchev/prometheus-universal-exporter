@@ -163,8 +163,10 @@ type templateField struct {
 	where string
 	text  string
 	// kind is "body", "header", "query", "graphite", "database", "arg"
-	// (a sql collector's args and a redis collector's command arguments)
-	// or "line" (a tcp collector's send), which decides the encoding.
+	// (a sql collector's args and a redis collector's command arguments),
+	// "line" (a tcp collector's send), or a kind of templateEscapers, such
+	// as an ldap collector's "ldap_dn" and "ldap_filter", which decides the
+	// encoding.
 	kind string
 }
 
@@ -216,6 +218,16 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	// A tcp collector's send, the line written to its server.
 	if HasPathParams(c.Request.Send) {
 		out = append(out, templateField{"request.send", c.Request.Send, "line"})
+	}
+	// The base and the filter of an ldap collector's searches, each value
+	// escaped as its place escapes one (ldapfilter.go).
+	for i, search := range c.Request.Searches {
+		if HasPathParams(search.Base) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].base", i), search.Base, "ldap_dn"})
+		}
+		if HasPathParams(search.Filter) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].filter", i), search.Filter, "ldap_filter"})
+		}
 	}
 	// A static target's own targets replace the collector's, placeholders
 	// and all.
@@ -281,8 +293,21 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 	return b.String(), nil
 }
 
+// templateEscapers are the encodings of the kinds of templated field a
+// request type registers itself, by kind, so that a build without the type
+// carries none of its code: each writes a value into its place, or says
+// why it cannot be.
+var templateEscapers = map[string]func(value string) (string, error){}
+
 // write encodes a value for its place.
 func (f templateField) write(p pathPlaceholder, value string) (string, error) {
+	if escape, ok := templateEscapers[f.kind]; ok {
+		written, err := escape(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: the value of %s: %w", f.where, p.Name, err)
+		}
+		return written, nil
+	}
 	switch f.kind {
 	case "header":
 		for _, r := range value {

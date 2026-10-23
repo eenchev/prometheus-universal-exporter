@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"encoding/pem"
@@ -163,9 +164,39 @@ func newSnowflakeStandIn(t *testing.T) *snowflakeStandIn {
 	sqlConnectHook.Store(&hook)
 	t.Cleanup(func() {
 		sqlConnectHook.Store(nil)
-		sqlPools.closeAll()
+		closeSnowflakePools(t)
 	})
 	return s
+}
+
+// closeSnowflakePools closes every pool and waits for their connections to
+// be closed. closeAll closes a pool's DB apart, and the driver's Close of a
+// connection asks the account to end its session: left behind, that request
+// can fail after the test, against a stand-in told to refuse or already
+// closed, and the driver's error for it is logged into the next test's
+// captured log.
+func closeSnowflakePools(t *testing.T) {
+	t.Helper()
+	sqlPools.mu.Lock()
+	var dbs []*sql.DB
+	for _, p := range sqlPools.pools {
+		dbs = append(dbs, p.db)
+	}
+	for p := range sqlPools.draining {
+		dbs = append(dbs, p.db)
+	}
+	sqlPools.mu.Unlock()
+	sqlPools.closeAll()
+	deadline := time.Now().Add(30 * time.Second)
+	for _, db := range dbs {
+		for db.Stats().OpenConnections > 0 {
+			if time.Now().After(deadline) {
+				t.Errorf("a pool still has %d connections open 30s after it was closed", db.Stats().OpenConnections)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 }
 
 // addresses is every address the connections' dialer was asked for.

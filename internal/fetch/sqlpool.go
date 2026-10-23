@@ -268,17 +268,28 @@ func (p *sqlPool) keepSockets(dc any, s *sqlSockets) {
 	}
 }
 
-// socketsOf is the network connections of the scrape's connection, nil when
-// none is known: a driver that dials by itself (vertica).
-func (p *sqlPool) socketsOf(conn *sql.Conn) *sqlSockets {
-	var s *sqlSockets
+// socketsOf is the network connections of the driver's connection dc
+// (sqlConnKey), nil when none is known: a driver that dials by itself
+// (vertica).
+func (p *sqlPool) socketsOf(dc any) *sqlSockets {
+	p.socketsMu.Lock()
+	defer p.socketsMu.Unlock()
+	return p.sockets[dc]
+}
+
+// sqlConnKey is the driver's connection of a scrape's conn, which the pool
+// keeps its sockets and idle uses by, nil when Raw fails. It is read once,
+// as soon as the scrape has the connection, before anything is run on it:
+// once a statement runs, database/sql may close the Conn from a goroutine of
+// its own (a rows' or transaction's context ending), and Conn.Raw is not
+// safe against that close (sqlTx).
+func sqlConnKey(conn *sql.Conn) any {
+	var key any
 	_ = conn.Raw(func(dc any) error {
-		p.socketsMu.Lock()
-		s = p.sockets[sqlDriverConn(dc)]
-		p.socketsMu.Unlock()
+		key = sqlDriverConn(dc)
 		return nil
 	})
-	return s
+	return key
 }
 
 // sqlIdleUse is when a scrape last had each connection of a pool, by the
@@ -293,14 +304,15 @@ type sqlIdleUse struct {
 	used    map[any]time.Time
 }
 
-// mark records that a scrape has conn now.
-func (u *sqlIdleUse) mark(conn *sql.Conn) {
-	_ = conn.Raw(func(dc any) error {
-		u.mu.Lock()
-		u.used[sqlDriverConn(dc)] = time.Now()
-		u.mu.Unlock()
-		return nil
-	})
+// mark records that a scrape has the driver's connection dc now
+// (sqlConnKey).
+func (u *sqlIdleUse) mark(dc any) {
+	if dc == nil {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.used[dc] = time.Now()
 }
 
 // expired says no scrape has had dc for the idle_timeout; one no scrape
@@ -357,9 +369,10 @@ func newSQLPoolCache() *sqlPoolCache {
 // idle_timeout), "room made" (an idle connection closed for a scrape at
 // max_per_target), "closed: " and why for a pool closed, "released" (its DB
 // closed, the last scrape using it done), "waiting: max_per_target" for a
-// scrape that waits for a connection, and "end abandoned" for a statement
-// whose end outlived the scrape's deadline, each with the target's
-// host:port.
+// scrape that waits for a connection, "ending" for a scrape's statement
+// beginning to end, before its connection is given back or closed, and "end
+// abandoned" for a statement whose end outlived the scrape's deadline, each
+// with the target's host:port.
 var sqlPoolEvent atomic.Pointer[func(event, address string)]
 
 func sqlEvent(event, address string) {
@@ -777,12 +790,13 @@ func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Col
 		traceSQL(ctx, key, len(args), false, err)
 		return nil, err
 	}
+	dc := sqlConnKey(conn)
 	if p.idle != nil {
-		p.idle.mark(conn)
+		p.idle.mark(dc)
 	}
 	traceSQL(ctx, key, len(args), p.made.Load() == before, nil)
 	result, finish, err := p.statement(ctx, conn, col, args)
-	c.end(ctx, p, conn, finish, giveUp)
+	c.end(ctx, p, conn, dc, finish, giveUp)
 	if err != nil {
 		return nil, err
 	}
@@ -860,11 +874,14 @@ const sqlEndGrace = 100 * time.Millisecond
 // closed, never given back, and the place and the pool given up only after
 // that, so that a connection still open holds its place at max_per_target.
 // A connection whose network connections are not known, of a driver that
-// dials by itself (vertica), holds its place until the driver returns.
-func (c *sqlPoolCache) end(ctx context.Context, p *sqlPool, conn *sql.Conn, finish, giveUp func()) {
+// dials by itself (vertica), holds its place until the driver returns. dc is
+// the driver's connection (sqlConnKey): conn itself is not touched until
+// finish has returned, when nothing but the scrape closes it.
+func (c *sqlPoolCache) end(ctx context.Context, p *sqlPool, conn *sql.Conn, dc any, finish, giveUp func()) {
+	sqlEvent("ending", p.key.address.hostPort)
 	rest := func(abandoned bool) {
 		if p.idle != nil {
-			p.idle.mark(conn)
+			p.idle.mark(dc)
 		}
 		if abandoned {
 			discardSQLConn(conn)
@@ -879,7 +896,7 @@ func (c *sqlPoolCache) end(ctx context.Context, p *sqlPool, conn *sql.Conn, fini
 		rest(false)
 		return
 	}
-	sockets := p.socketsOf(conn)
+	sockets := p.socketsOf(dc)
 	ended := make(chan struct{})
 	go func() {
 		defer close(ended)

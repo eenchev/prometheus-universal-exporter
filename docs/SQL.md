@@ -354,6 +354,15 @@ place at `max_per_target` until it is closed. A `vertica` connection, which
 the driver dials by itself, cannot be closed under the driver: it holds its
 place until the driver's end returns.
 
+A transaction is rolled back by the scrape, at the statement's end, even
+when the deadline comes while it is open: never by Go's `database/sql` on
+its own the moment the deadline comes, which would close the connection
+while the scrape still has it. A connection whose transaction was still open
+when the deadline came, or when the statement was ended before its rows were
+all read, is then closed rather than kept, unless its driver resets the
+connection's session and says whether it is still usable, as `postgres` and
+`mysql` do.
+
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `sql` collector names the server as

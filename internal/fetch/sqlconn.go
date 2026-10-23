@@ -241,8 +241,14 @@ func (c *sqlGuardedConn) Begin() (tx driver.Tx, err error) {
 	return c.guardTx(c.conn.Begin()) //nolint:staticcheck // SA1019: the driver's Begin, for a caller of the guard's
 }
 
+// BeginTx begins with the context the transaction's BEGIN is bounded by,
+// sqlBeginContext's when database/sql was given one: the transaction's own
+// context is one that does not end with the scrape (sqlTx).
 func (c *sqlGuardedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (tx driver.Tx, err error) {
 	defer c.recovered(&err)
+	if begin, ok := ctx.Value(sqlBeginContext{}).(context.Context); ok {
+		ctx = begin
+	}
 	if bc, ok := c.conn.(driver.ConnBeginTx); ok {
 		return c.guardTx(bc.BeginTx(ctx, opts))
 	}

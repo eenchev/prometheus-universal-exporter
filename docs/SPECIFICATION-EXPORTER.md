@@ -1778,7 +1778,15 @@ of objects, one a row, of its columns by name. Its keys:
   the bound comes first, the scrape MUST answer the rows it read, the
   connection MUST be closed and never given back to its pool, its network
   connections closed where the exporter dialed them, and it MUST hold its
-  place at `max_per_target` until it is closed.
+  place at `max_per_target` until it is closed. A statement's transaction
+  MUST be rolled back by the scrape at the statement's end, and MUST NOT be
+  rolled back, nor its connection closed, by database/sql on its own when
+  the scrape's context ends, while the scrape still holds the connection;
+  the transaction's BEGIN MUST still be bounded by the scrape's deadline. A
+  connection whose transaction was open when the scrape's context ended (its
+  deadline, or the statement ended before its rows were all read) MUST then
+  be closed, not given back, unless its driver's connection both resets its
+  session and says whether it is valid.
 - **Static targets** MAY set `timeout`, `username`, `password_file`,
   `private_key_file` (either credential file replacing the collector's) and
   `connections`; `params` fills the placeholders of `args` and `database`. A

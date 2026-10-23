@@ -48,6 +48,9 @@ type DB struct {
 	// DrainOnClose makes closing a result read the rows left in it, as
 	// mysql's and pgx's do, until the query's context ends.
 	DrainOnClose bool
+	// Closes, when set, is told each connection closed, without waiting for
+	// it to be read.
+	Closes chan struct{}
 
 	pingErr   error
 	txOptions []driver.TxOptions
@@ -183,6 +186,10 @@ func (c *conn) Close() error {
 	if !c.closed {
 		c.closed = true
 		c.db.closed.Add(1)
+		select {
+		case c.db.Closes <- struct{}{}:
+		default:
+		}
 		if c.nc != nil {
 			_ = c.nc.Close()
 		}

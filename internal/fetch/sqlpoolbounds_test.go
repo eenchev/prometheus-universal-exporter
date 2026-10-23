@@ -5,6 +5,7 @@ package fetch
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -299,6 +300,81 @@ func TestAStatementsEndThatHangsDoesNotHoldTheSQLScrapePastItsDeadline(t *testin
 	if f.db.Opened() != 2 || over.Load() {
 		t.Errorf("%d connections made, one made while another was open %v; want the abandoned one closed, never reused, before the second", f.db.Opened(), over.Load())
 	}
+}
+
+// database/sql never closes a scrape's connection behind it: a transaction
+// still open when the scrape's deadline comes is rolled back by the scrape,
+// at the statement's end, not by database/sql's own goroutine, whose close
+// of the connection would race the scrape's use of it (Conn.Raw, which a
+// close completing inside it hands a nil connection, a panic). The scrape
+// answers the rows it read, and the connection, whose driver cannot reset
+// its session, is closed after the rollback, never reused, as database/sql
+// would have closed it.
+func TestASQLConnectionIsNotClosedBehindTheScrapeAtItsDeadline(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
+	f.db.Closes = make(chan struct{}, 4)
+	const timeout = 50 * time.Millisecond
+	var behind atomic.Bool
+	// The statement's end waits past the deadline, and as long again for
+	// a close of the connection, which database/sql's goroutine made at once
+	// when the transaction had the scrape's context.
+	hook := func(event, _ string) {
+		if event != "ending" {
+			return
+		}
+		time.Sleep(timeout + 10*time.Millisecond)
+		select {
+		case <-f.db.Closes:
+			behind.Store(true)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	sqlPoolEvent.Store(&hook)
+	t.Cleanup(func() { sqlPoolEvent.Store(nil) })
+	c := f.collector(t, "db", SQLDriverPostgres, "q")
+	resp, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: timeout}, nil)
+	if err != nil || resp == nil || len(resp.Rows) != 1 {
+		t.Fatalf("%v, %+v; want the row read", err, resp)
+	}
+	if behind.Load() {
+		t.Fatal("the connection was closed at the deadline while the scrape still held it")
+	}
+	testutil.WaitFor(t, "the connection to be closed", func() bool { return f.db.Closed() == 1 })
+	if f.db.RolledBack() != 1 {
+		t.Errorf("rolled back %d transactions, want 1", f.db.RolledBack())
+	}
+	sqlPoolEvent.Store(nil)
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 30 * time.Second}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.db.Opened() != 2 {
+		t.Errorf("%d connections made, want the first closed and a second made", f.db.Opened())
+	}
+}
+
+// Many statements in transactions, run at once and each still running at
+// its scrape's deadline, each fail saying the deadline came first, none
+// panicking however database/sql's goroutines and the scrapes' interleave.
+func TestSQLTransactionsEndedAtTheirDeadlineAtOnceEachFailSo(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Block = make(chan struct{})
+	f.db.Results["slow"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
+	workers := 16
+	c := f.collector(t, "db", SQLDriverPostgres, "slow", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &workers} })
+	var scrapes sync.WaitGroup
+	for range workers {
+		scrapes.Go(func() {
+			for range 40 {
+				_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 10 * time.Millisecond}, nil)
+				if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("%v, want the deadline's failure", err)
+					return
+				}
+			}
+		})
+	}
+	scrapes.Wait()
 }
 
 // A pool a reload closed while a scrape used it is no longer counted once

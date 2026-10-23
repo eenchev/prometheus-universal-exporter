@@ -36,6 +36,8 @@ configured:
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included, and expired ones kept to be [revalidated](CONFIGURATION.md#revalidating-expired-responses). |
 | `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
 | `http_exporter_cache_revalidations_total` | counter | `http` and `graphite` collectors only, labelled `collector` and `result`, each series from zero: the trips that [revalidated](CONFIGURATION.md#revalidating-expired-responses) an expired cached response with `If-None-Match` or `If-Modified-Since`, with `result="not_modified"` when the target answered `304` and the kept body was decoded and transformed again, and `result="modified"` when it sent a new response the collector accepted. A conditional request whose answer failed the trip counts in neither. By collector alone: verbose mode adds no per-request series. Divided by the cache misses, the share of trips a validator spared the download of. |
+| `http_exporter_backoff_skipped_total` | counter | `0` for a collector without [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets): the probes and static target scrapes that failed at once without contacting their target, because the collector was backing off from it after its consecutive failed scrapes. Each failed as its fetch would have, so it counts as a failure, and in `http_exporter_cache_stale_served_total` when the last good result answered it. Per request too in verbose mode; a debug run is never counted. |
+| `http_exporter_targets_backing_off` | gauge | `0` for a collector without `failure_backoff`: the targets the collector is keeping its probes and scrapes from now, within their wait or with the one scrape after it in progress. A target is told apart as the response cache tells probes apart, so probes of one address with different parameters are as many targets. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
@@ -500,7 +502,8 @@ http_exporter_scrapes_total{http_method!=""}  # per request
 
 Everything in the self-metric set is republished except
 `http_exporter_cache_entries`, which counts what a collector's response cache
-holds and belongs to no single request. `http_exporter_request_last_scrape_timestamp_seconds`
+holds and belongs to no single request, and
+`http_exporter_targets_backing_off`, which counts the collector's targets. `http_exporter_request_last_scrape_timestamp_seconds`
 is the one series that exists only in verbose mode: the per-collector view has
 no timestamp of its own. Status codes carry `0` when the request failed before a
 response arrived, so a transport failure is distinguishable from an HTTP error.

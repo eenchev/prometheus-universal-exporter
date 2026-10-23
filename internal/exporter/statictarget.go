@@ -171,30 +171,48 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		}
 	}
 
-	// A static target scrape shares the collector's max_concurrent_probes with its
-	// probes, and waits for a slot within its budget rather than failing.
-	// One that finds no cache entry is a miss once it has its slot and goes
-	// to the target: one turned away, or cut short by the shutdown while it
-	// waited, fetched nothing in place of an entry.
-	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
-		if shuttingDown(ctx) {
-			s.abortedByShutdown(target, c)
-			return
-		}
-		count(func(st *serverStats) { countRejection(st, err) })
-		s.logCollectFailure(rec.read, log, "concurrency", err)
-		failed()
-		return
-	}
-	defer s.trips.release(c.Name)
-	if model.CacheTTL(c) > 0 {
-		count(func(st *serverStats) { st.cacheMisses++ })
-	}
-	trip := s.collect(ctx, collectJob{
+	job := collectJob{
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, revalidateKey: cacheKey, log: log,
 		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
-	})
+	}
+	// A target failure_backoff is backing off from is not contacted, and
+	// its scrape waits for no slot: it fails at once, as its fetch would
+	// have (backoff.go). It is told apart as the identical probe is, by the
+	// key of its request, whether or not the collector caches.
+	backoffKey := cacheKey
+	if c.FailureBackoff != nil && backoffKey == "" {
+		backoffKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
+	}
+	turn := s.backoffs.admit(c, backoffKey, address)
+	defer turn.settle(rec.read, backoffUnknown)
+	var trip collected
+	if turn != nil && turn.refusal != nil {
+		job.backingOff = turn.refusal
+		trip = s.collect(ctx, job)
+	} else {
+		// A static target scrape shares the collector's max_concurrent_probes
+		// with its probes, and waits for a slot within its budget rather than
+		// failing. One that finds no cache entry is a miss once it has its
+		// slot and goes to the target: one turned away, or cut short by the
+		// shutdown while it waited, fetched nothing in place of an entry.
+		if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
+			if shuttingDown(ctx) {
+				s.abortedByShutdown(target, c)
+				return
+			}
+			count(func(st *serverStats) { countRejection(st, err) })
+			s.logCollectFailure(rec.read, log, "concurrency", err)
+			failed()
+			return
+		}
+		defer s.trips.release(c.Name)
+		if model.CacheTTL(c) > 0 {
+			count(func(st *serverStats) { st.cacheMisses++ })
+		}
+		trip = s.collect(ctx, job)
+		s.settleBackoff(turn, rec.read, trip, log.attrs)
+	}
 	if trip.aborted {
 		failedOnPanic = nil
 		s.abortedByShutdown(target, c)

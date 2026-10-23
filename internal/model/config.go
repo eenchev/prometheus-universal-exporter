@@ -131,6 +131,11 @@ type Collector struct {
 	// MaxConcurrentProbes bounds the collector's trips to its targets at
 	// once; unset or 0 means DefaultMaxConcurrentProbes. See exporter/triplimit.go.
 	MaxConcurrentProbes int `yaml:"max_concurrent_probes"`
+	// FailureBackoff, when set, stops the collector's probes and static
+	// target scrapes from contacting a target that keeps failing, for a
+	// while that grows with each further failure. Nil leaves every trip to
+	// the target. See exporter/backoff.go.
+	FailureBackoff *FailureBackoffConfig `yaml:"failure_backoff,omitempty"`
 	// NameEscaping says what to do with a metric or label name that is not a
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
@@ -835,6 +840,47 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain CacheConfig
 	return n.Decode((*plain)(c))
 }
+
+// FailureBackoffConfig is a collector's failure_backoff: after After
+// consecutive failed trips to a target, its trips are answered as failed
+// without contacting it for Initial, the wait doubling with each further
+// failure up to Max. Each is nil until the load fills in its default
+// (config.validateFailureBackoff), so a value written 0 is told from one
+// left out.
+type FailureBackoffConfig struct {
+	After   *int      `yaml:"after"`
+	Initial *Duration `yaml:"initial"`
+	Max     *Duration `yaml:"max"`
+}
+
+var failureBackoffKeys = []string{"after", "initial", "max"}
+
+// UnmarshalYAML refuses the keys it does not know in the words the cache's
+// do, naming the block rather than the type, and explains the one-value
+// form. The keys of a mapping merged in with << are the block's own keys,
+// and a key that is an alias is the key it names (KeyName).
+func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Line, n.Value, n.Value)
+	}
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: failure_backoff must be a mapping with after, initial and max", n.Line)
+	}
+	for _, entry := range MappingEntries(n) {
+		if key := KeyName(entry.Key); !slices.Contains(failureBackoffKeys, key) {
+			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes after, initial and max", entry.Key.Line, key)
+		}
+	}
+	type plain FailureBackoffConfig
+	return n.Decode((*plain)(b))
+}
+
+// Defaults of failure_backoff's keys.
+const (
+	DefaultFailureBackoffAfter   = 3
+	DefaultFailureBackoffInitial = 30 * time.Second
+	DefaultFailureBackoffMax     = 10 * time.Minute
+)
 
 // CacheTTL is how long a collector's result answers repeats of its probe.
 func CacheTTL(c *Collector) time.Duration { return time.Duration(c.Cache.TTL) }

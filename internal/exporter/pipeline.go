@@ -62,6 +62,11 @@ type collectJob struct {
 	// collector that fetches. For every other trip it is nil, and collector
 	// makes the request.
 	requester *model.Collector
+	// backingOff, when set, is why failure_backoff keeps the trip from the
+	// target (backoff.go): the trip contacts nothing and fails with it in
+	// the fetch stage, under on_fetch_error, as the fetch it stands for
+	// would have.
+	backingOff error
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
@@ -141,6 +146,14 @@ type collected struct {
 	// Such a failure is never answered with a stale result
 	// (unauthorizedFailure).
 	unauthorized bool
+	// fetchFailed is set when the fetch failed, or answered with a status
+	// the collector does not accept, whatever error_handling made of it:
+	// what failure_backoff counts as the target's failure (backoff.go). A
+	// trip the target policy refused is not one.
+	fetchFailed bool
+	// skipped is set when failure_backoff kept the trip from the target
+	// (collectJob.backingOff).
+	skipped bool
 }
 
 // cutShort reports whether ctx was cancelled rather than run out of time: by
@@ -173,8 +186,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	defer func() {
 		// The last-scrape timestamp and the duration histogram describe a trip
 		// to the target, not an answer from the cache. A debug probe's trip
-		// is in neither.
-		if trace == nil {
+		// is in neither, nor is one backoff kept from the target.
+		if trace == nil && j.backingOff == nil {
 			rec.scraped(time.Now())
 			s.observeTargetScrape(rec.collector, time.Since(start))
 		}
@@ -222,6 +235,15 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if j.requester != nil {
 		requester = j.requester
 	}
+	if j.backingOff != nil {
+		// Nothing is sent, so nothing of the last response's is replaced
+		// in the self-metrics; the failure is the fetch's as the fetch's
+		// own would be, logged, carried on past or answered stale alike.
+		rec.update(func(x *serverStats) { x.backoffSkipped++ })
+		failure := stageFailed(fetch.FetchStage(requester), j.backingOff, c.ErrorHandling.OnFetchError)
+		failure.skipped = true
+		return failure
+	}
 	var response *fetch.HTTPResponse
 	var err error
 	revalidates := revalidatesFor(j)
@@ -263,6 +285,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		failure := stageFailed(fetch.FetchErrorStage(requester, err), err, c.ErrorHandling.OnFetchError, extra...)
 		failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
+		failure.fetchFailed = true
 		return failure
 	}
 	if response.GRPCCode != nil {
@@ -329,6 +352,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		failure := stageFailed("http_status", statusErr, c.ErrorHandling.OnFetchError, excerpt...)
 		failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
+		failure.fetchFailed = true
 		return failure
 	}
 	var set *model.MetricSet

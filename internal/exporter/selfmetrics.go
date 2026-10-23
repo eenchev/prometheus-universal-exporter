@@ -35,6 +35,9 @@ type statsValues struct {
 	// revalidated a cached response, by the target's answer: 304 Not
 	// Modified, or another (http_exporter_cache_revalidations_total).
 	revalidatedNotModified, revalidatedModified uint64
+	// backoffSkipped counts trips failure_backoff kept from their target
+	// (backoff.go).
+	backoffSkipped uint64
 	// invalidUTF8 counts label values and help texts whose invalid UTF-8
 	// was replaced.
 	invalidUTF8 uint64
@@ -142,6 +145,10 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503, and static target scrapes that found no slot in time, because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
 	{"http_exporter_probes_rejected_exporter_limit_total", model.CounterMetricType, "Probes of this collector answered 503, and static target scrapes that found no slot in time, because the exporter already had --probe.max-concurrent trips to targets in progress.", func(v statsValues) float64 { return float64(v.rejectedByExporter) }},
 	{"http_exporter_targets_refused_total", model.CounterMetricType, "Probes and static target scrapes whose target, or a redirect's, this collector's request.allowed_targets or denied_targets refused; a probe is answered 403.", func(v statsValues) float64 { return float64(v.refused) }},
+	{"http_exporter_backoff_skipped_total", model.CounterMetricType, "Probes and static target scrapes of this collector that failed at once without contacting their target, because failure_backoff was backing off from it after its consecutive failed scrapes; 0 without failure_backoff.", func(v statsValues) float64 { return float64(v.backoffSkipped) }},
+	// Which targets are backing off is the collector's to know, not any
+	// one request's.
+	{"http_exporter_targets_backing_off", model.GaugeMetricType, "Targets of this collector whose probes and static target scrapes failure_backoff keeps from them now, within their wait or with the one trip after it in progress; 0 without failure_backoff.", nil},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 	// The connections an sshfile collector keeps belong to the collector,
 	// shared by its requests and those of other collectors with the same
@@ -359,8 +366,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		requestTypes[collectors[i].Name] = collectors[i].Request.Type
 	}
 	collectorOnly := map[string]func(string) float64{
-		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
-		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
+		"http_exporter_cache_entries":       func(name string) float64 { return float64(cacheEntries[name]) },
+		"http_exporter_probes_in_flight":    func(name string) float64 { return float64(s.trips.count(name)) },
+		"http_exporter_targets_backing_off": func(name string) float64 { return float64(s.backoffs.backingOff(name)) },
 		"http_exporter_sshfile_connections": func(name string) float64 {
 			open, _ := fetch.CollectorConnections(requestTypes[name], name)
 			return float64(open)

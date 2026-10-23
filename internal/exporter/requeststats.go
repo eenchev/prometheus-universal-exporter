@@ -495,7 +495,7 @@ func (v *statsValues) absorb(o statsValues) {
 		{&v.missing, &o.missing}, {&v.scriptErrors, &o.scriptErrors}, {&v.limitErrors, &o.limitErrors},
 		{&v.emitted, &o.emitted}, {&v.cacheHits, &o.cacheHits}, {&v.cacheMisses, &o.cacheMisses},
 		{&v.coalesced, &o.coalesced}, {&v.rejected, &o.rejected}, {&v.rejectedByExporter, &o.rejectedByExporter},
-		{&v.refused, &o.refused}, {&v.staleServed, &o.staleServed}, {&v.invalidUTF8, &o.invalidUTF8},
+		{&v.refused, &o.refused}, {&v.staleServed, &o.staleServed}, {&v.backoffSkipped, &o.backoffSkipped}, {&v.invalidUTF8, &o.invalidUTF8},
 		{&v.seriesLeftOut, &o.seriesLeftOut}, {&v.linesSkipped, &o.linesSkipped},
 		{&v.pagesFetched, &o.pagesFetched}, {&v.pagesStopped, &o.pagesStopped},
 		{&v.revalidatedNotModified, &o.revalidatedNotModified}, {&v.revalidatedModified, &o.revalidatedModified},

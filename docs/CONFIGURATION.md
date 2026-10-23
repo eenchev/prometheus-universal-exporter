@@ -3886,8 +3886,9 @@ of the error:
 Within 30 seconds of a successful probe, repeats are answered from memory as
 above. After that the target is asked again; if it answers, the new result is
 served and stored. If the trip fails — the target is down, times out, answers
-an error status, its response cannot be decoded or transformed, or the
-collector is at `max_concurrent_probes` — and the last good result of the same
+an error status, its response cannot be decoded or transformed, the
+collector is at `max_concurrent_probes`, or it is
+[backing off](#backing-off-from-failing-targets) from the target — and the last good result of the same
 probe is less than 5m30s old, that result is answered with `200`. Past that,
 the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
 the target, and the last good result is kept only as a fallback.
@@ -4091,8 +4092,9 @@ Prometheus records the rejected scrape as `up` 0 with that reason, rather than
 as a timeout.
 
 Probes that make no trip take no slot: one answered from the
-[response cache](#response-caching), and one that
-[shares a request](#identical-probes-share-one-request) already in flight. A
+[response cache](#response-caching), one that
+[shares a request](#identical-probes-share-one-request) already in flight,
+and one [kept from a failing target](#backing-off-from-failing-targets). A
 [static target](STATIC-TARGETS.md) shares its collector's limit, but
 waits for a free slot within its scrape budget instead of failing at once,
 since nothing is waiting on its answer; if none frees up in time, the scrape
@@ -4125,6 +4127,88 @@ collector never holds up another collector's. `0`, the default, leaves only the
 per-collector limits; a negative value is a command-line error. Size it to the
 memory the exporter has, together with `--python.max-workers` (see
 [Python](PYTHON.md#how-scripts-run)).
+
+## Backing off from failing targets
+
+A target that is down fails every scrape, and every scrape still goes to it.
+One that does not answer at all holds a trip slot — of
+`max_concurrent_probes` and of `--probe.max-concurrent` — until its timeout,
+on every scrape, so a few dead endpoints can keep the slots full and turn
+away the probes of targets that answer. `failure_backoff` stops contacting a
+target that keeps failing, for a while:
+
+```yaml
+collectors:
+  - name: inventory_api
+    failure_backoff:
+      after: 3      # consecutive failed scrapes before backing off; at least 1, 3 when omitted
+      initial: 30s  # the first wait; 30s when omitted
+      max: 10m      # the longest wait; 10m, or initial when that is longer, when omitted
+```
+
+After `after` consecutive failed scrapes of a target, its probes and
+[static target](STATIC-TARGETS.md) scrapes fail at once, without contacting
+it, for `initial`. When the wait has passed, the next scrape goes to the
+target: if it fails, the next wait is twice the last, up to `max`; if it
+succeeds, the target is forgotten and every scrape goes to it again. Only
+that one scrape goes: while it is in progress, a probe identical to it
+[shares it](#identical-probes-share-one-request), and any other scrape of the
+target, such as a probe of a collector with `coalesce: false`, fails at once
+as during the wait. Without `failure_backoff` every scrape contacts the
+target. `after` below 1, an `initial` that is not a positive duration and a
+`max` shorter than `initial` are refused at load.
+
+A failed scrape is one whose fetch failed: the connection was refused or
+reset, it timed out, TLS failed, the target answered a status the collector
+does not [accept](REQUESTS.md#accepting-other-statuses), or the request type's own
+fetch failed — a file that is not there, a query a database refused. A target
+that answered something the decoder or the transform could not read is up,
+and counts as a success. Neither counts the scrape that
+[`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
+refused, one `max_concurrent_probes` or `--probe.max-concurrent` turned away
+before it started, or one cancelled because every probe waiting for it went
+away: nothing is known of the target from them.
+
+A scrape kept from the target fails as its fetch would have, in the fetch
+stage, with:
+
+```text
+http://10.0.0.7:8080/stats is backing off after 3 consecutive failed scrapes; next try after 2026-10-23T09:14:05Z
+```
+
+so everything that applies to a failed fetch applies to it: a probe is
+answered `502` under `error_handling.on_fetch_error: fail`, or carries on
+under `log` and `ignore` ([When a stage of the probe
+fails](#when-a-stage-of-the-probe-fails)), and
+[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+answers it with the last good result. A static target's scrape is `up` 0, or
+serves its last good result marked stale. Such a scrape takes no trip slot,
+sends nothing, and leaves `http_exporter_scrape_http_status_code` and
+`http_exporter_scrape_response_bytes` describing the last real request. Its
+failure is logged as any failure is, and its repeats are one failure to the
+[log](LOGGING.md#repeated-failures), however its count and time move; a
+target that starts to back off is logged once at warning level, with its
+failures and the time of its next try.
+
+A target is told apart as the [response cache](#response-caching) tells
+probes apart: the collector's definition, the target, the probe parameters
+and the forwarded headers. Probes with different `param_<name>` values back
+off apart, and a static target and the identical probe share one state. A
+collector remembers at most 10,000 targets that have failed, the one that
+failed longest ago forgotten first, since probe targets come from the query
+string; a target is forgotten as soon as a scrape of it succeeds, and a
+reload that removes or changes the collector forgets all of them. The state
+is in memory, per exporter process.
+
+A [debug probe](#debug-probes) or run always contacts the target, and changes
+nothing of the backoff; its report says when the target is backing off, and
+until when.
+
+`http_exporter_backoff_skipped_total` counts the scrapes answered without
+contacting their target, and `http_exporter_targets_backing_off` the targets
+the collector is keeping its scrapes from now
+([self-metrics](SELF-METRICS.md#collector-metrics)); both are `0` without
+`failure_backoff`.
 
 ## Memory
 
@@ -4844,6 +4928,14 @@ The report lists:
 - **Metrics:** the exposition a probe would have served, and before the
   report, the status a probe would have answered. Where `cache.stale_if_error`
   would have answered with the last good result, the report says so.
+- **Backoff:** where [`failure_backoff`](#backing-off-from-failing-targets)
+  is backing off from the target, a line under the first two says so, with
+  the failures and the time of the next try — `The target is backing off
+  after 3 consecutive failed scrapes (failure_backoff): probes and scrapes
+  fail without contacting it until 2026-10-23T09:14:05Z. This run contacted
+  it all the same, and changes nothing of that.` The debug probe contacts the
+  target whatever the backoff says, and its outcome neither starts, lengthens
+  nor ends one.
 
 A target can make most of that as long as it likes — the URL a redirect led
 to, a header's value, the message of a gRPC status, a metric's name — and a

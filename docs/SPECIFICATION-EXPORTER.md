@@ -6400,6 +6400,9 @@ http_exporter_cache_misses_total
 http_exporter_cache_entries
 http_exporter_cache_stale_served_total
 
+http_exporter_backoff_skipped_total
+http_exporter_targets_backing_off
+
 http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
@@ -6505,6 +6508,13 @@ origin: the requests the collector's rate limit, or a static target's own,
 made wait for their turn, and those it refused for a turn past their
 deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
 shutdown and be forgotten with a collector a reload removes.
+`http_exporter_backoff_skipped_total`, a counter, per collector and per
+request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
+per collector with no per-request series, MUST exist for every collector,
+`0` for one without `failure_backoff`: the probes and static target scrapes
+that failed without contacting their target because the collector was
+backing off from it, and the targets it keeps its trips from now (§ 42.13c).
+A debug run MUST NOT be counted in either.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -6662,10 +6672,12 @@ keeps working when verbose mode is switched on.
 Every self-metric family of section 22 MUST be republished with the labels
 `collector`, `http_method` and `url`, except the families that describe the
 collector rather than any request: `http_exporter_cache_entries`, which counts
-what a collector's response cache holds, and `http_exporter_probes_in_flight`,
-which counts its trips in progress. The two labels are the request
-type's (§ 5.1): for `http` the method and the URL described below, for
-`localfile` `READ` and the file's `file://` URL.
+what a collector's response cache holds, `http_exporter_probes_in_flight`,
+which counts its trips in progress, and `http_exporter_targets_backing_off`,
+which counts the targets its `failure_backoff` keeps its trips from
+(§ 42.13c). The two labels are the request type's (§ 5.1): for `http` the
+method and the URL described below, for `localfile` `READ` and the file's
+`file://` URL.
 
 In addition, verbose mode MUST expose
 
@@ -7331,7 +7343,9 @@ of its Python workers among them, MUST
 have its cached results dropped, since their keys carry the old definition,
 and MUST have its remembered failures forgotten (§ 25.1), as a removed
 collector's are, so that the first failure of the new definition is logged as
-a first failure and not as a repeat of the old one's; an unchanged collector
+a first failure and not as a repeat of the old one's, and MUST have the
+targets its `failure_backoff` was backing off from forgotten (§ 42.13c), as a
+removed collector's are; an unchanged collector
 MUST keep everything.
 
 What a reload changed — the collectors and static targets it removed,
@@ -27668,6 +27682,63 @@ many targets of one backend would reach it with no bound.
   that frees MUST be handed to the first waiter it can serve under both its
   collector's limit and the exporter's, not broadcast to every waiter.
 
+## 42.13c Backing off from failing targets
+
+A collector MAY set `failure_backoff`, with `after`, `initial` and `max`, to
+stop contacting a target that keeps failing. A target that does not answer
+holds a trip slot (§ 42.13b) until its timeout on every scrape, so without
+it a few dead endpoints can keep the slots full.
+
+- `after` MUST default to 3 and be at least 1, `initial` MUST default to
+  `30s` and be a positive duration, and `max` MUST default to `10m`, or
+  `initial` when that is longer, and MUST NOT be shorter than `initial`;
+  anything else MUST be refused at load, naming the collector and the key.
+  Without `failure_backoff` every probe and scrape MUST contact the target.
+- A trip MUST count as failed for backoff when its fetch failed — the
+  connection, a timeout, TLS, a status the collector does not accept, or the
+  request type's own fetch error — whatever `error_handling.on_fetch_error`
+  made of it. A decode, transform or validation failure MUST count as a
+  success: the target answered. A trip the target policy refused (§ 26.1),
+  one a trip limit turned away before it started (§ 42.13b) and one
+  cancelled because every probe waiting for it went away or the exporter
+  shut down MUST change nothing. Any success MUST forget the target.
+- After `after` consecutive failed trips, the target's probes and static
+  target scrapes MUST NOT contact it for `initial`. Each MUST fail at once in
+  the fetch stage with an error naming the target, the consecutive failures
+  and the time of the next try, RFC 3339 in UTC (`<target> is backing off
+  after 3 consecutive failed scrapes; next try after
+  2026-10-23T09:14:05Z`), and everything that applies to a failed fetch MUST
+  apply to it: `error_handling.on_fetch_error`, `cache.stale_if_error`
+  (§ 42.13.1), the failure log (§ 25.1), which MUST take its repeats for one
+  failure, and a static target's `http_exporter_target_up` 0. It MUST take no
+  trip slot, and MUST NOT change `http_exporter_scrape_http_status_code`,
+  `http_exporter_scrape_response_bytes`, the scrape-time histogram or the
+  last-scrape timestamp, which describe trips to the target.
+- When the wait has passed, the next trip MUST go to the target, and only
+  that one while it is in progress: a probe identical to it MUST share it as
+  any probe shares a trip in flight (§ 42.13a), and any other trip of the
+  target MUST fail at once as during the wait. Its failure MUST double the
+  wait, up to `max`; its success MUST forget the target. A trip let through
+  that ends without an outcome — turned away, cancelled, or panicking — MUST
+  let the next trip go to the target.
+- A target MUST be told apart as the response cache tells probes apart
+  (§ 42.13): probes differing in a `param_<name>` or another parameter of
+  the key MUST back off apart, and a static target and the identical probe
+  MUST share one state.
+- The targets remembered MUST be bounded per collector, at 10,000, the one
+  that failed longest ago forgotten first, since probe targets come from the
+  query string. A target MUST be forgotten when a trip to it succeeds, and a
+  reload that removes or changes the collector MUST forget all of its
+  targets (§ 24.1a); a trip of the collector as it was before such a reload
+  MUST NOT record its outcome afterwards.
+- A debug probe, debug scrape or run of the debug page MUST NOT ask or
+  change the state, and MUST say in its report when the target is backing
+  off (§ 42.17).
+- `http_exporter_backoff_skipped_total` MUST count the trips that failed
+  without contacting their target, and `http_exporter_targets_backing_off`
+  the targets within their wait or with the trip after it in progress
+  (§ 22).
+
 ## 42.14 Static targets
 
 The exporter MAY be started with an optional static target document:
@@ -28947,7 +29018,10 @@ share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
 A debug probe MUST NOT be answered from or fill the response cache, share a trip with a
-probe in flight (§ 42.13a), be counted in any self-metric but
+probe in flight (§ 42.13a), ask or change the state of `failure_backoff`
+(§ 42.13c) — it MUST contact the target while the collector is backing off
+from it, and its report MUST then say so, with the failures and the time of
+the next try — be counted in any self-metric but
 `http_exporter_debug_runs_total` (below) and the Python worker series, or be
 queued for OTLP. It reads the cache only for the stale result a probe would
 have answered with, and for the response a probe would revalidate, which it

@@ -344,6 +344,15 @@ Its `http_exporter_result_age_seconds` is how old the data is when the
 endpoint is read, worked out at every read: it grows between scrapes, and
 starts again from `0` at a scrape that goes to the target.
 
+A collector with [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets)
+stops contacting a target whose scrapes keep failing: once it is backing
+off, the target's scrape fails at once, without waiting for a slot, as its
+fetch would have — `up` 0, or its last good result marked stale — until the
+wait has passed. A target that never answers then holds no slot of its
+collector's `max_concurrent_probes` for its whole interval on every turn.
+A static target and the identical `/probe` request share one backoff, as
+they share cache entries.
+
 A read of the endpoint does not merge the targets' results each time: the
 merge is kept until a scrape publishes a result or a reload changes the
 targets, so reads between two scrapes, as from several Prometheus replicas,

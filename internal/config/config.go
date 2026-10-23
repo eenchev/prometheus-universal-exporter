@@ -145,6 +145,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if x.MaxConcurrentProbes < 0 {
 		return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 	}
+	if err := validateFailureBackoff(x); err != nil {
+		return err
+	}
 	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
 		return err
@@ -2163,6 +2166,36 @@ func normalizeErrorPolicy(collector, key string, value *string) error {
 }
 
 // validateCache checks a collector's cache when the configuration loads.
+// validateFailureBackoff checks failure_backoff and fills in its defaults:
+// after 3, initial 30s, and max 10m or initial when that is longer, so a
+// block that sets only initial past 10m is not refused for a max it did not
+// write.
+func validateFailureBackoff(c *model.Collector) error {
+	b := c.FailureBackoff
+	if b == nil {
+		return nil
+	}
+	if b.After == nil {
+		after := model.DefaultFailureBackoffAfter
+		b.After = &after
+	} else if *b.After < 1 {
+		return fmt.Errorf("collector %q failure_backoff.after must be at least 1, the consecutive failed scrapes of a target before its scrapes stop contacting it; got %d", c.Name, *b.After)
+	}
+	if b.Initial == nil {
+		initial := model.Duration(model.DefaultFailureBackoffInitial)
+		b.Initial = &initial
+	} else if *b.Initial <= 0 {
+		return fmt.Errorf("collector %q failure_backoff.initial must be a positive duration, such as 30s; got %s", c.Name, time.Duration(*b.Initial))
+	}
+	if b.Max == nil {
+		longest := max(model.Duration(model.DefaultFailureBackoffMax), *b.Initial)
+		b.Max = &longest
+	} else if *b.Max < *b.Initial {
+		return fmt.Errorf("collector %q failure_backoff.max %s must not be shorter than failure_backoff.initial %s", c.Name, time.Duration(*b.Max), time.Duration(*b.Initial))
+	}
+	return nil
+}
+
 func validateCache(c *model.Collector) error {
 	if c.Cache.TTL < 0 {
 		return fmt.Errorf("collector %q cache.ttl must not be negative", c.Name)

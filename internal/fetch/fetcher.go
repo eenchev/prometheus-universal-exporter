@@ -70,6 +70,11 @@ type HTTPResponse struct {
 	// a status the collector does not accept, StatusCode, Headers and Body
 	// are that page's (pagination.go). nil without request.pagination.
 	Pages *PagesRead
+	// Conditional says the request carried the validators of a cached
+	// response (revalidate.go), and NotModified that the target answered
+	// it 304 Not Modified: the response is then the cached one, its status
+	// and body, with its headers updated from the 304's.
+	Conditional, NotModified bool
 }
 
 // PagesRead is what request.pagination fetched for one trip.
@@ -825,6 +830,14 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, err
 		}
 	}
+	// A cached response is revalidated only by a request that may be
+	// conditional (Revalidable), and that the collector or the probe has
+	// not made conditional itself. No method is GET: a graphite request's,
+	// which leaves request.method unset.
+	cached := revalidationFrom(ctx)
+	if cached != nil && (overrides.pageURL != nil || (method != "" && method != http.MethodGet && method != http.MethodHead) || setsConditional(headers, forwarded)) {
+		cached = nil
+	}
 	start := time.Now()
 	limit := responseLimit(c)
 	// protocolErrors counts the attempts that ended with their HTTP/2
@@ -865,6 +878,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 				}
 				req.Header[k] = append([]string(nil), v...)
 			}
+		}
+		// Set on every attempt, so a retry and the request sent again
+		// after a new login are as conditional as the first.
+		if cached != nil {
+			setConditional(req, cached)
 		}
 
 		// A request refused here is refused again on every attempt, so
@@ -984,7 +1002,13 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 				continue
 			}
 		}
-		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
+		if cached != nil && resp.StatusCode == http.StatusNotModified {
+			// The cached response is current: it is the answer, as if
+			// it had been downloaded again.
+			traceOutcomeNote(requestContext, notModifiedNote(cached))
+			return &HTTPResponse{StatusCode: cached.StatusCode, Headers: revalidated(cached, resp.Header), Body: cached.Body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: true, NotModified: true}, nil
+		}
+		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: cached != nil}
 		// The answer of a request a redirect led to says so when the
 		// redirect left the collector's headers behind, so a 401 from
 		// there can be told from one the target gave.

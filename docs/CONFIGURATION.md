@@ -3865,7 +3865,8 @@ rotated credential file applies to a cached request once the entry expires; keep
 Only fully successful probes are cached; HTTP, decode, transform, and validation
 failures are not. `limits.max_cache_entries` bounds each collector's live
 entries and defaults to 1000, dropping expired entries first and then the ones
-closest to expiry.
+closest to expiry. An expired entry kept to be
+[revalidated](#revalidating-expired-responses) counts in it too.
 
 ### Serving the last good result when the target fails
 
@@ -3945,6 +3946,89 @@ cached metrics are still queued for OTLP export, while
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` continue to describe the last real target
 request.
+
+### Revalidating expired responses
+
+An `http` or `graphite` collector's cache also keeps, with each result, the
+response it was made from, when that response carried an `ETag` or a
+`Last-Modified` header. Once the result is no longer fresh, the next trip of
+the same probe asks the target whether the response is still current, as
+RFC 9110 describes: it sends `If-None-Match` with the `ETag` exactly as it was
+received, weak (`W/"..."`) or strong, and `If-Modified-Since` with the
+`Last-Modified` exactly as it was received.
+
+- A `304 Not Modified` answer means the kept response is still current. Its
+  body is used again, and the kept headers are updated from the 304's as
+  RFC 9111 § 4.3.4 says: each header the 304 sends, such as `ETag`,
+  `Last-Modified`, `Cache-Control`, `Expires` or `Date`, replaces the kept one,
+  except `Content-Length`, `Content-Encoding`, `Transfer-Encoding`,
+  `Content-Type`, `Content-Range` and the headers of the connection, which
+  describe a body the 304 does not have. The trip then goes on as if the
+  response had just been downloaded: it is decoded and transformed again,
+  every rule seeing the original status (`$status` is `200`, not `304`) and
+  the updated headers, and the new result is stored, fresh for `ttl`.
+  Only the download is saved; the series are made anew on every trip.
+- Any other answer is handled as any trip's is: a new response that the
+  collector accepts replaces the kept one, and a failing status fails the
+  trip.
+
+A 304 is never a failed status: it stands for the kept response, whose
+status the collector accepted. A 304 to a request that was not conditional
+on a kept response has nothing to stand for, and fails the probe as
+`received HTTP status 304 Not Modified to a request that was not conditional
+on a cached response`, unless `request.accept_status` names `304`. A request
+the collector makes conditional itself, with `If-None-Match` or
+`If-Modified-Since` in `request.headers` or forwarded, is sent as configured,
+and its answer is not taken for a revalidation.
+
+An expired entry whose response has a validator is not dropped when its
+`ttl` and `stale_if_error` have run out: it answers no probe, but stays for
+the next trip to revalidate, until a new result replaces it, a reload
+changes or removes the collector, or `limits.max_cache_entries` needs its
+place, of which it is the first to go. It counts in
+`http_exporter_cache_entries`. An entry without a validator is dropped at its
+expiry, as before. The kept response holds the body as it was downloaded, up
+to the collector's response limit, so each kept entry costs about the size
+of its response besides its series.
+
+Revalidation and [`stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+work together, in this order: a fresh result answers without a trip; past
+`ttl`, the trip is conditional when the kept response has a validator; a 304
+or a new response answers fresh; a trip that fails — the conditional request
+answered `500`, or a timeout — is answered with the stale result while it is
+within `stale_if_error`, and with the failure after it, even though the
+entry is still kept for the next revalidation.
+
+Only a response that one validator speaks for is revalidated: one fetched
+with `GET` or `HEAD`, the method of every `graphite` request but one too long
+for a URL, which is sent as a form with `POST`. A matching `If-None-Match`
+on another method asks the target for `412 Precondition Failed` rather than
+a 304. A collector with [`request.pagination`](REQUESTS.md#pagination)
+stores its pages merged into one response, which no page's validator
+speaks for, so its responses are neither kept nor revalidated. Every attempt
+of a conditional request carries the validators: a retry, and the request
+sent again after a `401` made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
+in again.
+
+Revalidation is on by default. A collector whose target sends validators it
+does not honour can turn it off:
+
+```yaml
+    cache:
+      ttl: 30s
+      revalidate: false
+```
+
+`http_exporter_cache_revalidations_total{collector,result}` counts the trips
+that revalidated a kept response, with `result="not_modified"` for a 304 and
+`result="modified"` for a new response the collector accepted.
+`http_exporter_scrape_http_status_code` shows `304` and
+`http_exporter_scrape_response_bytes` `0` after a 304, since they describe
+what the target sent. A [debug probe](#debug-probes) sends the conditional
+request the same probe would, and its report shows `If-None-Match` and
+`If-Modified-Since` among the request's headers and the outcome as
+`304 Not Modified; the cached body of <n> bytes was reused, with status 200`;
+it refreshes nothing, so the entry stays as it was.
 
 ## Identical probes share one request
 
@@ -4642,7 +4726,10 @@ it is given runs on the server:
 A run takes as long as a probe may — the timeout on the page, sent as
 Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
 target's interval — and at most 4 runs of the page are in progress at once;
-one more is answered `503`. A run reads and fills no cache, counts in no
+one more is answered `503`. A run fills no cache and is answered from none,
+reading only what a debug probe reads of it (a configured collector's stale
+result and the response it would
+[revalidate](#revalidating-expired-responses)), counts in no
 collector's self-metrics but the [Python worker
 series](SELF-METRICS.md#python-workers) of a configured collector's script,
 and logs one `debug run served` line at `info`. The page is behind
@@ -4811,8 +4898,11 @@ have answered. It takes the same parameters as the probe. For debug, `true`,
 `1` or an empty value turn it on and `false` or `0` leave the probe as it is;
 any other value is answered `400`.
 
-A debug probe always goes to the target, and leaves nothing behind. It does
-not read or fill the response cache, it does not share an identical probe in
+A debug probe always goes to the target, and leaves nothing behind. It is
+not answered from the response cache and does not fill it — it only reads the
+stale result a probe would have answered with, and the response a probe
+would [revalidate](#revalidating-expired-responses), sending the same
+conditional request without refreshing the entry — it does not share an identical probe in
 flight, and it is not exported over OTLP or counted in the self-metrics but
 `http_exporter_debug_runs_total`, which is what the report's line "records
 no self-metric but http_exporter_debug_runs_total" says. One thing is

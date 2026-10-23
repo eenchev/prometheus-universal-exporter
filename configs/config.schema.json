@@ -343,6 +343,10 @@
             "additionalProperties": false,
             "description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching.",
             "properties": {
+              "revalidate": {
+                "description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses.",
+                "type": "boolean"
+              },
               "stale_if_error": {
                 "description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure.",
                 "maximum": 0,

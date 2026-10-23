@@ -159,3 +159,17 @@ func traceOutcome(ctx context.Context, outcome string) {
 		r.Outcome, r.Duration = model.CutTo(outcome, model.MaxFailureBytes, false), time.Since(r.started)
 	}
 }
+
+// traceOutcomeNote adds note to the outcome of the last request recorded,
+// as a 304 that a cached response answered for says so (revalidate.go).
+func traceOutcomeNote(ctx context.Context, note string) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 {
+		t.requests[n-1].Outcome += note
+	}
+}

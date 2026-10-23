@@ -808,9 +808,13 @@ type CacheConfig struct {
 	// StaleIfError is how long after TTL a result stands in for a trip that
 	// fails.
 	StaleIfError Duration `yaml:"stale_if_error"`
+	// Revalidate, unset or true, asks the target again with the validators
+	// of an expired cached response, ETag and Last-Modified, so that an
+	// unchanged response is not downloaded again (exporter/cache.go).
+	Revalidate *bool `yaml:"revalidate,omitempty"`
 }
 
-var cacheConfigKeys = []string{"ttl", "stale_if_error"}
+var cacheConfigKeys = []string{"ttl", "stale_if_error", "revalidate"}
 
 // UnmarshalYAML refuses the keys it does not know, which a custom decoder
 // would otherwise let through, and explains the one-value form. The keys of
@@ -821,11 +825,11 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: cache must be a mapping with ttl and stale_if_error", n.Line)
+		return fmt.Errorf("line %d: cache must be a mapping with ttl, stale_if_error and revalidate", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(cacheConfigKeys, key) {
-			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", entry.Key.Line, key, strings.Join(cacheConfigKeys, " and "))
+			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])
 		}
 	}
 	type plain CacheConfig
@@ -838,6 +842,10 @@ func CacheTTL(c *Collector) time.Duration { return time.Duration(c.Cache.TTL) }
 // StaleIfError is how long after its TTL a collector's result stands in for a
 // trip that fails.
 func StaleIfError(c *Collector) time.Duration { return time.Duration(c.Cache.StaleIfError) }
+
+// Revalidates reports whether an expired cached response of the collector is
+// revalidated with a conditional request (cache.revalidate, true when unset).
+func Revalidates(c *Collector) bool { return c.Cache.Revalidate == nil || *c.Cache.Revalidate }
 
 // UsesCache reports whether the collector keeps results at all.
 func UsesCache(c *Collector) bool { return CacheTTL(c) > 0 || StaleIfError(c) > 0 }

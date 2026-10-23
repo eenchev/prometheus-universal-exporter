@@ -192,7 +192,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	}
 	trip := s.collect(ctx, collectJob{
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
-		rec: rec, display: address, cacheKey: cacheKey, log: log,
+		rec: rec, display: address, cacheKey: cacheKey, revalidateKey: cacheKey, log: log,
 		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
 	})
 	if trip.aborted {

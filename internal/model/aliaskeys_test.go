@@ -97,8 +97,8 @@ func TestAKeyThatIsAnAliasIsTheKeyItsAnchorHolds(t *testing.T) {
 		{name: "request's unknown key", document: "request: {*pth : /x}\n", want: "line 2: field pth not found in type model.TargetRequestConfig"},
 		{name: "cache", document: "cache: {*t : 1m, *s : 1h}\n"},
 		{name: "cache merging alias keys", document: "base: {c: &c {*t : 1m}, d: &d {*s : 1h, *t : 5m}}\ncache: {<<: [*c, *d]}\n"},
-		{name: "cache's unknown key", document: "cache: {*ttll : 1m}\n", want: `line 2: cache has the unknown key "ttll"; it takes ttl and stale_if_error`},
-		{name: "cache's alias of <<", document: "base: {c: &c {ttl: 1m}}\ncache: {*m : *c}\n", want: `line 3: cache has the unknown key "<<"; it takes ttl and stale_if_error`},
+		{name: "cache's unknown key", document: "cache: {*ttll : 1m}\n", want: `line 2: cache has the unknown key "ttll"; it takes ttl, stale_if_error and revalidate`},
+		{name: "cache's alias of <<", document: "base: {c: &c {ttl: 1m}}\ncache: {*m : *c}\n", want: `line 3: cache has the unknown key "<<"; it takes ttl, stale_if_error and revalidate`},
 	} {
 		document := names + test.document
 		var got aliasKeyBlocks
@@ -300,11 +300,11 @@ func cacheAsItWas(n *yaml.Node) (CacheConfig, error) {
 		return c, fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return c, fmt.Errorf("line %d: cache must be a mapping with ttl and stale_if_error", n.Line)
+		return c, fmt.Errorf("line %d: cache must be a mapping with ttl, stale_if_error and revalidate", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
 		if key := entry.Key.Value; !slices.Contains(cacheConfigKeys, key) {
-			return c, fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", entry.Key.Line, key, strings.Join(cacheConfigKeys, " and "))
+			return c, fmt.Errorf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])
 		}
 	}
 	err := n.Decode((*plainCache)(&c))

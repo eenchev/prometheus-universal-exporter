@@ -652,7 +652,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	}
 	result := s.collect(ctx, collectJob{
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
-		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
+		rec: rec, display: logTarget, cacheKey: p.cacheKey, revalidateKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
 			key:    p.failureKey(),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",

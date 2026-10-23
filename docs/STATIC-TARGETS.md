@@ -526,7 +526,7 @@ curl 'http://exporter:8080/static-targets?debug=legacy_eu'
 
 A debug scrape publishes nothing: the endpoint keeps serving the target's
 last scheduled result, and nothing is counted in the self-metrics but
-`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, but waits for a
+`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, revalidating the response the scrape would without refreshing it ([Revalidating expired responses](CONFIGURATION.md#revalidating-expired-responses)), but waits for a
 slot of the collector's `max_concurrent_probes` as the scrape would. A name no
 target in force has is answered `404`; `debug` takes one name and cannot be
 combined with `targets` (`400`); below `--web.debug=full` it is `403`. The

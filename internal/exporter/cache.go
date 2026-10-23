@@ -24,6 +24,11 @@ import (
 // until freshUntil, answering repeats of its probe without a trip to the
 // target, and then stale until expires, kept only to stand in for a trip that
 // fails (cache.stale_if_error).
+//
+// An entry with a response is also kept past expires, until
+// max_cache_entries pushes it out or a new result replaces it: answering
+// nothing, it is there for the next trip of its request to revalidate
+// (revalidation).
 type cacheEntry struct {
 	key        string
 	collector  string
@@ -31,6 +36,9 @@ type cacheEntry struct {
 	freshUntil time.Time
 	expires    time.Time
 	set        model.MetricSet
+	// response is the response the result was made from, kept when it
+	// carried a validator and the collector revalidates (fetch.KeepResponse).
+	response *fetch.CachedResponse
 	// index is the entry's place in its collector's expiryHeap.
 	index int
 }
@@ -154,7 +162,10 @@ func (c *responseCache) lookup(key string, now time.Time, stale bool) (model.Met
 		return model.MetricSet{}, time.Time{}, false
 	}
 	if !entry.expires.After(now) {
-		c.removeLocked(key)
+		// Kept to be revalidated, not to answer (cacheEntry).
+		if entry.response == nil {
+			c.removeLocked(key)
+		}
 		return model.MetricSet{}, time.Time{}, false
 	}
 	if !stale && !entry.freshUntil.After(now) {
@@ -169,11 +180,26 @@ func (c *responseCache) lookup(key string, now time.Time, stale bool) (model.Met
 	return set, entry.fetched, true
 }
 
+// Revalidation returns the response of the entry under key to revalidate,
+// when there is an entry that is no longer fresh and kept one.
+func (c *responseCache) Revalidation(key string, now time.Time) *fetch.CachedResponse {
+	if key == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.freshUntil.After(now) {
+		return nil
+	}
+	return entry.response
+}
+
 // Put stores a private copy of set under key, which readers then share, fresh for ttl and then kept
 // stale for StaleIfError more. When both are zero the collector does not
 // cache and nothing is stored.
 func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
-	c.PutFor(configRead{}, key, collector, set, ttl, staleIfError, maxEntries, now)
+	c.PutFor(configRead{}, key, collector, set, nil, ttl, staleIfError, maxEntries, now)
 }
 
 // PutFor is Put for a trip that read its collector as read says. Nothing is
@@ -182,7 +208,9 @@ func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, sta
 // is that of a collector that is gone, which a collector brought back under
 // the name with the same definition would be answered with, and which would
 // count in the max_cache_entries of the one now under the name.
-func (c *responseCache) PutFor(read configRead, key, collector string, set model.MetricSet, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
+//
+// response, when not nil, is kept with the result for revalidation.
+func (c *responseCache) PutFor(read configRead, key, collector string, set model.MetricSet, response *fetch.CachedResponse, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
 	if key == "" || ttl < 0 || staleIfError < 0 || ttl+staleIfError <= 0 {
 		return
 	}
@@ -192,7 +220,7 @@ func (c *responseCache) PutFor(read configRead, key, collector string, set model
 		return
 	}
 	freshUntil := now.Add(ttl)
-	c.putLocked(key, &cacheEntry{collector: collector, fetched: now, freshUntil: freshUntil, expires: freshUntil.Add(staleIfError), set: model.CloneMetricSet(set)})
+	c.putLocked(key, &cacheEntry{collector: collector, fetched: now, freshUntil: freshUntil, expires: freshUntil.Add(staleIfError), set: model.CloneMetricSet(set), response: response})
 	c.evictLocked(collector, maxEntries, now)
 }
 
@@ -202,6 +230,11 @@ func (c *responseCache) PutFor(read configRead, key, collector string, set model
 // together. The collector's heap has them in that order, so this only looks
 // at the entries it removes, and at one more: it runs on every Put, under the
 // one cache lock.
+//
+// An expired entry kept for revalidation stays while the collector is within
+// its budget, and is the first to go once it is not, the oldest first. It
+// may stand in front of expired entries without a response, which go when
+// a lookup or Stats meets them, or when the budget reaches them.
 func (c *responseCache) evictLocked(collector string, maxEntries int, now time.Time) {
 	if maxEntries <= 0 {
 		return
@@ -209,7 +242,7 @@ func (c *responseCache) evictLocked(collector string, maxEntries int, now time.T
 	entries := c.byCollector[collector]
 	for entries != nil && entries.Len() > 0 {
 		first := (*entries)[0]
-		if first.expires.After(now) && entries.Len() <= maxEntries {
+		if entries.Len() <= maxEntries && (first.expires.After(now) || first.response != nil) {
 			return
 		}
 		// Removing the collector's last entry drops its heap.
@@ -219,13 +252,13 @@ func (c *responseCache) evictLocked(collector string, maxEntries int, now time.T
 }
 
 // Stats sweeps expired entries and reports the entries held per collector,
-// stale ones included.
+// stale ones and those kept for revalidation included.
 func (c *responseCache) Stats(now time.Time) map[string]int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	counts := make(map[string]int, len(c.entries))
 	for key, entry := range c.entries {
-		if !entry.expires.After(now) {
+		if !entry.expires.After(now) && entry.response == nil {
 			c.removeLocked(key)
 			continue
 		}

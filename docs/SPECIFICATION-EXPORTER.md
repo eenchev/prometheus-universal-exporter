@@ -27332,7 +27332,8 @@ signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.
 
 ## 42.13 Collector response caching
 
-Each collector MUST support a `cache` mapping with two Go durations:
+Each collector MUST support a `cache` mapping with two Go durations, and
+`revalidate` (§ 42.13.2):
 
 ```yaml
 collectors:
@@ -27516,6 +27517,76 @@ for OTLP export. Target-request self-metrics such as
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` describe the last real target request and
 MUST NOT be altered by a cache hit.
+
+### 42.13.2 Revalidating expired responses
+
+An `http` or `graphite` collector that caches MUST keep, with each stored
+result, the response it was made from — status, headers and body as the
+target sent them, before the decode converted the body or rewrote a header —
+when that response carried an `ETag` or a `Last-Modified` header, the request
+was sent with `GET`, `HEAD` or no method of its own, the collector has no
+`request.pagination`, and `cache.revalidate` is not `false`. `revalidate` is
+a boolean key of the `cache` mapping and MUST default to `true`. A paginated
+collector's response is pages merged into one, which no page's validator
+speaks for, and MUST be neither kept nor revalidated. Another method MUST NOT
+be made conditional: a matching `If-None-Match` on it asks for `412
+Precondition Failed` (RFC 9110 § 13.1.2); a `graphite` request sent as a form
+with `POST`, because its expressions are too long for a URL, is such a
+request.
+
+When an entry with a kept response is no longer fresh, the next trip of its
+cache key MUST send `If-None-Match` with the kept `ETag` value exactly as
+received, a weak one included, and `If-Modified-Since` with the kept
+`Last-Modified` value exactly as received, each when the response had it.
+Every attempt of the request MUST carry them: a retry, and the request sent
+again after a `401` made `request.login` log in again (§ 42.6a). A request
+that `request.headers` or a forwarded header already makes conditional MUST
+be sent as configured and its answer MUST NOT be taken for a revalidation.
+
+A `304 Not Modified` answer to the conditional request MUST be answered with
+the kept response: its status and body, and its headers with every field the
+304 sent replacing that field's values, as RFC 9111 § 4.3.4 says, except
+`Content-Length`, `Content-Encoding`, `Transfer-Encoding`, `Content-Type`,
+`Content-Range`, the hop-by-hop fields and those the 304's `Connection`
+names, which MUST be kept as stored. The trip MUST then decode, transform and
+validate that response as one just downloaded, the rules reading the kept
+status (`$status`, `response.status_code`) and the updated headers, and on
+success MUST store the new result with the updated response, fresh for
+`ttl`. The 304 MUST NOT be checked against `accept_status`, and MUST NOT be
+treated as a failed status. The exporter MUST NOT cache the rendered answer
+in place of transforming again: only the download is saved. Any other answer
+MUST be handled as an unconditional trip's: an accepted one replaces the
+entry, a failing one fails the trip. A 304 to a request that was not made
+conditional on a kept response MUST fail the trip in the `http_status` stage
+with an error that says the request was not conditional on a cached
+response, unless the collector accepts `304`.
+
+An entry with a kept response MUST NOT be removed when its `ttl` and
+`stale_if_error` have run out: it MUST answer no probe, and MUST stay for the
+next trip to revalidate until a new result replaces it, a reload drops the
+collector's entries, or `limits.max_cache_entries` needs its place. Over the
+limit, expired entries MUST still go first, an expired entry kept for
+revalidation among them. `http_exporter_cache_entries` MUST count it. An
+entry without a kept response MUST expire as § 42.13 and § 42.13.1 say.
+
+Revalidation and `stale_if_error` MUST compose in this order: a fresh entry
+answers without a trip; past `ttl` the trip is conditional when the entry
+kept a response; a 304 or an accepted new response answers fresh; a trip that
+fails, the conditional request included, MUST be answered with the stale
+result while it is within `stale_if_error` (§ 42.13.1), and with the failure
+past it.
+
+Each trip that revalidated MUST be counted in
+`http_exporter_cache_revalidations_total{collector,result}`, a counter with a
+series from zero for each `result` of every `http` and `graphite` collector:
+`not_modified` for a 304 the kept response answered, `modified` for a new
+response the collector accepted. It has no per-request series in verbose
+mode, and is exported over OTLP with the other self-metrics. After a 304,
+`http_exporter_scrape_http_status_code` MUST be `304` and
+`http_exporter_scrape_response_bytes` `0`, which describe what the target
+sent. A debug probe's report (§ 42.17) MUST show the conditional headers
+among the request's headers, and the request's outcome MUST say `304 Not
+Modified` and that the cached body was reused, with its size and status.
 
 ## 42.13a Sharing identical probes in flight
 
@@ -28847,10 +28918,13 @@ The report's copy of the response MUST be made before the decode and MUST
 share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
-A debug probe MUST NOT read or fill the response cache, share a trip with a
+A debug probe MUST NOT be answered from or fill the response cache, share a trip with a
 probe in flight (§ 42.13a), be counted in any self-metric but
 `http_exporter_debug_runs_total` (below) and the Python worker series, or be
-queued for OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
+queued for OTLP. It reads the cache only for the stale result a probe would
+have answered with, and for the response a probe would revalidate, which it
+MUST revalidate with the same conditional request and MUST NOT refresh in the
+cache (§ 42.13.2). Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
@@ -29017,8 +29091,8 @@ logged; and `report`, the text report of a debug probe, whose first line names i
 debug run, the collector, whether it was written on the page, and what it
 read.
 
-The collector MUST NOT be put in force. A run MUST NOT read or fill the
-response cache, share a trip, reach the failure log or the exporter's log
+The collector MUST NOT be put in force. A run MUST NOT be answered from or
+fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log
 but for one `info` line per run, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be

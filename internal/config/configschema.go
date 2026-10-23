@@ -474,6 +474,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].cache":                                   {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
 		"collectors[].cache.ttl":                               {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
 		"collectors[].cache.stale_if_error":                    {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
+		"collectors[].cache.revalidate":                        {"description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses."},
 		"collectors[].max_concurrent_probes":                   {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
 		"collectors[].coalesce":                                {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
 		"collectors[].request":                                 requestSchemaRule(),

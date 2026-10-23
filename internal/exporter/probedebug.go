@@ -501,6 +501,9 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
 		scrape: p.static != nil, log: debugLog(p),
 		pasted: p.pasted, requester: p.requester,
+		// A debug probe revalidates the response the same probe would,
+		// and shows the conditional request; it keeps nothing.
+		revalidateKey: p.staleKey,
 	}
 	// An edited collector runs no Python, and is no collector of the
 	// configuration whose workers would count it.

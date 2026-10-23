@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -335,5 +336,39 @@ func BenchmarkCachePut(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// An entry kept with a response to revalidate outlives its expiry while the
+// collector is within max_cache_entries, answering nothing but handing its
+// response to a revalidation once it is no longer fresh; over the budget it
+// is the first to go. An entry without a response goes at its expiry.
+func TestAnEntryKeptForRevalidationOutlivesItsExpiry(t *testing.T) {
+	cache := newResponseCache()
+	now := time.Now()
+	set := model.MetricSet{Metrics: []model.Metric{{Name: "demo_value", Type: model.GaugeMetricType, Value: 1}}}
+	kept := &fetch.CachedResponse{StatusCode: http.StatusOK, Headers: http.Header{"Etag": {`"v1"`}}, Body: []byte("value=1")}
+	cache.PutFor(configRead{}, "kept", "c", set, kept, time.Minute, 0, 2, now)
+	cache.PutFor(configRead{}, "plain", "c", set, nil, time.Minute, 0, 2, now)
+	if got := cache.Revalidation("kept", now); got != nil {
+		t.Fatal("a fresh entry was handed to a revalidation")
+	}
+	later := now.Add(2 * time.Minute)
+	if _, _, ok := cache.GetStale("kept", later); ok {
+		t.Fatal("an expired entry answered")
+	}
+	if got := cache.Revalidation("kept", later); got != kept {
+		t.Fatalf("revalidation got %v, want the kept response", got)
+	}
+	if got := cache.Stats(later)["c"]; got != 1 {
+		t.Fatalf("%d entries after expiry, want the one kept", got)
+	}
+	cache.PutFor(configRead{}, "second", "c", set, nil, time.Minute, 0, 2, later)
+	cache.PutFor(configRead{}, "third", "c", set, nil, time.Minute, 0, 2, later)
+	if got := cache.Revalidation("kept", later); got != nil {
+		t.Fatal("the expired entry was kept over max_cache_entries")
+	}
+	if got := cache.Stats(later)["c"]; got != 2 {
+		t.Fatalf("%d entries, want 2", got)
 	}
 }

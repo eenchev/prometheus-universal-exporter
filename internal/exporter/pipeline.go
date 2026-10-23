@@ -34,6 +34,11 @@ type collectJob struct {
 	// display is the target as logs and self-metrics show it.
 	display  string
 	cacheKey string
+	// revalidateKey is the key of the cache entry whose response the trip
+	// revalidates (revalidatesFor): cacheKey for a trip that fills the
+	// cache, and the key the same probe would have for a debug probe, which
+	// reads the entry but writes nothing.
+	revalidateKey string
 	// budget bounds the trip when the probe has a deadline (scrapetimeout.go);
 	// a failure that ran out of it says so, and where it came from.
 	budget       time.Duration
@@ -219,10 +224,15 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 	var response *fetch.HTTPResponse
 	var err error
+	revalidates := revalidatesFor(j)
 	if j.pasted != nil {
 		response, err = pastedResponse(c, j.pasted)
 	} else {
-		response, err = fetch.FetchCollector(ctx, j.target, requester, j.overrides, j.headers)
+		fetchCtx := ctx
+		if revalidates {
+			fetchCtx = fetch.WithRevalidation(ctx, s.cache.Revalidation(j.revalidateKey, time.Now()))
+		}
+		response, err = fetch.FetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
@@ -260,13 +270,33 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 	trace.step(fetch.FetchStage(requester), "ok", time.Since(mark), fetchedNote(response, j.pasted != nil))
 	rec.update(func(x *serverStats) {
+		// A 304 is described as the target sent it, with no body; the
+		// response the trip goes on with is the cached one.
 		x.lastStatus = response.StatusCode
 		x.lastBytes = int64(len(response.Body))
+		if response.NotModified {
+			x.lastStatus, x.lastBytes = http.StatusNotModified, 0
+		}
 		if grpc {
 			x.grpcCode, x.grpcCalled = grpcCode, true
 		}
+		if response.NotModified {
+			x.revalidatedNotModified++
+		}
 	})
+	// The response as the target sent it, or as the cache kept it, is kept
+	// again with the result, before the decode converts the body or
+	// rewrites its headers.
+	var kept *fetch.CachedResponse
+	if revalidates && trace == nil {
+		kept = fetch.KeepResponse(response)
+	}
 	accepted := fetch.AcceptedStatus(requester, j.overrides, response.StatusCode)
+	if accepted && response.Conditional && !response.NotModified {
+		// A new response in place of the cached one; one whose status
+		// fails the trip revalidated nothing.
+		rec.update(func(x *serverStats) { x.revalidatedModified++ })
+	}
 	s.notePages(ctx, response, accepted, requester, rec, j.display, j.target)
 	if !accepted {
 		// The target's own explanation is usually in the body; the start of
@@ -277,6 +307,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		mark = time.Now()
 		statusErr := fmt.Errorf("received HTTP status %d", response.StatusCode)
+		if response.StatusCode == http.StatusNotModified && !response.Conditional {
+			// Only a request the exporter made conditional on a cached
+			// response is answered by that response.
+			statusErr = errors.New("received HTTP status 304 Not Modified to a request that was not conditional on a cached response, so there is no response to reuse")
+		}
 		if response.RedirectWithheld != "" {
 			// The status is the answer of a host a redirect led to, which
 			// was not sent what the collector identifies itself with
@@ -400,9 +435,21 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// probe's result is not kept either, nor that of a collector a reload
 	// removed or changed since the trip read it (PutFor).
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
-		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, kept, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	}
 	return collected{set: set, answer: answer, fetched: now}
+}
+
+// revalidatesFor reports whether j's trip revalidates a cached response, and
+// keeps the response it gets for the next trip to revalidate: the
+// collector caches and revalidates (cache.revalidate), its request is one a
+// validator speaks for (fetch.Revalidable), and the collector that makes the
+// request is the one that decodes it, which is not so of a debug page's run
+// on what another collector fetched, nor of a pasted response.
+func revalidatesFor(j collectJob) bool {
+	c := j.collector
+	return j.revalidateKey != "" && j.pasted == nil && j.requester == nil &&
+		model.UsesCache(c) && model.Revalidates(c) && fetch.Revalidable(c, j.overrides)
 }
 
 // transformRecorded transforms a decoded response, and counts in the
@@ -608,6 +655,9 @@ func fetchedNote(r *fetch.HTTPResponse, pasted bool) string {
 		return fmt.Sprintf("gRPC status %d, %d bytes", *r.GRPCCode, len(r.Body))
 	case r.NoStatus:
 		return fmt.Sprintf("%d bytes", len(r.Body))
+	}
+	if r.NotModified {
+		return fmt.Sprintf("304 Not Modified; the cached response was reused: status %d, %d bytes", r.StatusCode, len(r.Body))
 	}
 	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
 		note := fmt.Sprintf("status %d, %d bytes, %d pages", r.StatusCode, len(r.Body), len(p.Pages))

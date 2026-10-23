@@ -71,7 +71,7 @@ func dnsSystemServers(conf string) []string {
 func lookupCNAME(ctx context.Context, c *model.Collector, name string) ([]dnsAnswer, error) {
 	servers := []string{}
 	if c.Request.Server != "" {
-		server, _ := parseDNSServer(c.Request.Server)
+		server, _ := ParseDNSServer(c.Request.Server)
 		servers = append(servers, server)
 	} else {
 		conf, err := os.ReadFile(dnsResolvConf)

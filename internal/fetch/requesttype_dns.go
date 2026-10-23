@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -72,9 +71,6 @@ const (
 	dnsTCP = "tcp"
 )
 
-// dnsDefaultPort is the port of a server that names none.
-const dnsDefaultPort = "53"
-
 // dnsLookupTimeout bounds a lookup with no deadline of its own, as
 // sshConnectTimeout does a connection.
 const dnsLookupTimeout = 30 * time.Second
@@ -96,7 +92,7 @@ func validateDNSRequest(x *model.Collector) error {
 		return fmt.Errorf("collector %q has unknown request.record_type %q; want one of %s, in any case", x.Name, r.RecordType, strings.Join(model.DNSRecordTypes, ", "))
 	}
 	if r.Server != "" {
-		if _, err := parseDNSServer(r.Server); err != nil {
+		if _, err := ParseDNSServer(r.Server); err != nil {
 			return fmt.Errorf("collector %q request.server %w", x.Name, err)
 		}
 	}
@@ -104,37 +100,6 @@ func validateDNSRequest(x *model.Collector) error {
 		return fmt.Errorf("collector %q request.transport is %q; want udp, the default, which falls back to TCP for an answer too long for UDP as every resolver does, or tcp", x.Name, r.Transport)
 	}
 	return nil
-}
-
-// parseDNSServer reads request.server: host, host:port or [v6]:port, port
-// 53 when it names none. Nothing else may come with it.
-func parseDNSServer(raw string) (string, error) {
-	server := strings.TrimSpace(raw)
-	if server == "" {
-		return "", errors.New("is written with blanks alone; name the server, host:port, or leave the key out for the system's resolver")
-	}
-	if strings.ContainsAny(server, "/?#@") {
-		return "", fmt.Errorf("%q has a scheme, path, query or user in it; write the server as host or host:port, such as 10.0.0.53:53", raw)
-	}
-	host, port := server, dnsDefaultPort
-	if h, p, err := net.SplitHostPort(server); err == nil {
-		host, port = h, p
-	} else if strings.HasPrefix(server, "[") && strings.HasSuffix(server, "]") {
-		host = server[1 : len(server)-1]
-	} else if strings.Count(server, ":") == 1 {
-		return "", fmt.Errorf("%q is not host or host:port; write an IPv6 address in brackets, as [2001:db8::53]:53", raw)
-	}
-	if host == "" {
-		return "", fmt.Errorf("%q names no host", raw)
-	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
-		return "", fmt.Errorf("%q has the port %q; want a number from 1 to 65535", raw, port)
-	}
-	canonical, err := canonicalHost(host)
-	if err != nil {
-		return "", fmt.Errorf("%q: %w", raw, err)
-	}
-	return net.JoinHostPort(canonical, port), nil
 }
 
 // parseDNSTarget reads a target of c: a DNS name, or for record_type PTR an
@@ -159,19 +124,12 @@ func parseDNSTarget(c *model.Collector, raw string) (string, error) {
 	if _, literal := literalAddr(target); literal {
 		return "", fmt.Errorf("target %q is an IP address; ask for the names of an address with record_type PTR", raw)
 	}
-	name, err := canonicalHost(target)
-	if err != nil {
-		return "", err
+	name, err := CanonicalDNSName(target)
+	var refused *TargetRefusedError
+	if err != nil && !errors.As(err, &refused) {
+		return "", fmt.Errorf("target %w", err)
 	}
-	if len(name) > 253 {
-		return "", fmt.Errorf("target %q is %d characters long; a DNS name has at most 253", raw, len(name))
-	}
-	for label := range strings.SplitSeq(name, ".") {
-		if label == "" || len(label) > 63 {
-			return "", fmt.Errorf("target %q has a label %q; each label of a DNS name, between the dots, has from 1 to 63 characters", raw, label)
-		}
-	}
-	return name, nil
+	return name, err
 }
 
 // dnsDisplay renders a target for logs and labels: as written, since a dns
@@ -200,7 +158,7 @@ func dnsURI(c *model.Collector, name string) string {
 	if c.Request.Server == "" {
 		return "dns:" + name + query
 	}
-	server, _ := parseDNSServer(c.Request.Server)
+	server, _ := ParseDNSServer(c.Request.Server)
 	return "dns://" + server + "/" + name + query
 }
 
@@ -230,23 +188,14 @@ type dnsAnswer struct {
 	Port       *uint16 `json:"port,omitempty"`
 }
 
-// dnsResolver is the resolver of c: Go's own, with every question sent to
-// request.server when it is set and over TCP with transport tcp. With
-// udp, an answer marked truncated is asked again over TCP, as the resolver
-// always does.
+// dnsResolver is the resolver of c: DNSResolver with request.server and
+// request.transport.
 func dnsResolver(c *model.Collector) *net.Resolver {
-	server, _ := parseDNSServer(c.Request.Server)
-	tcp := c.Request.Transport == dnsTCP
-	dialer := &net.Dialer{}
-	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-		if c.Request.Server != "" {
-			address = server
-		}
-		if tcp {
-			network = "tcp"
-		}
-		return dialer.DialContext(ctx, network, address)
-	}}
+	server := ""
+	if c.Request.Server != "" {
+		server, _ = ParseDNSServer(c.Request.Server)
+	}
+	return DNSResolver(server, c.Request.Transport == dnsTCP)
 }
 
 // fetchDNS resolves a scrape's name and answers its records as JSON.
@@ -272,7 +221,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	doc := dnsDocument{Name: name, RecordType: dnsRecordType(c), Transport: cmp.Or(c.Request.Transport, dnsUDP), Answers: []dnsAnswer{}}
 	shownServer := "the system's resolver"
 	if c.Request.Server != "" {
-		doc.Server, _ = parseDNSServer(c.Request.Server)
+		doc.Server, _ = ParseDNSServer(c.Request.Server)
 		shownServer = doc.Server
 	}
 	// The record type goes in a header of its own: a debug report masks the

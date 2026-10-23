@@ -28040,13 +28040,14 @@ again at the next check.
 
 **Discovery.** A probe job's `discovery`, and an entry of the static target
 file's `discovered_targets`, MUST be a list of sources each setting exactly
-one of `file_sd`, `http_sd` and `kubernetes`, decoded strictly, with an
+one of `file_sd`, `http_sd`, `kubernetes` and `dns_sd`, decoded strictly, with an
 optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `<kind>_<index>`), `labels` (a label name, not starting with `__` nor `job`,
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`; a
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes` and
+`dns_sd`; a
 `timeout` written longer than it MUST be refused, and one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
@@ -28075,7 +28076,29 @@ slice with `any`, any other value refused at load; its targets MUST be each addr
 endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
 `host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
-`__meta_kubernetes_endpointslice_address_type` among them. An
+`__meta_kubernetes_endpointslice_address_type` among them. `dns_sd` MUST
+take `names` (at least one, each a DNS name of at most 253 characters and
+labels of 1 to 63, not an IP address nor holding `/?#@:[]`, written once,
+compared and asked in lower case without a trailing dot), `type` (`SRV`, the
+default, `A` or `AAAA`, any other value refused at load), `port` (1 to
+65535, required for `A` and `AAAA`, refused for `SRV`) and an optional
+`server` (`host` or `host:port`, port `53` by default, read as the `dns`
+request type's `request.server`, § 5.1); it MUST look each name up, in list
+order, as an absolute name with Go's resolver, sending every question to
+`server` when it is set and to the system's nameservers otherwise, all the
+names within its `timeout`, and MUST be built in every selection of request
+types. Each SRV record MUST be a target at its target host, lower-cased and
+without its trailing dot, and port, a record whose target is `.` none; each
+A or AAAA record a target at its address (IPv4-mapped addresses written as
+IPv4, IPv6 in brackets) and `port`. A name that does not exist or has no
+records of the type MUST give no targets and MUST NOT be a failure; any
+other lookup failure of any name MUST fail the answer. A target given twice,
+under one name or several, MUST be taken once with the labels of the first
+name in the list that gives it, and the targets MUST be sorted by address,
+so that the same records give the same answer in any order. Each target
+MUST have `__meta_dns_name`, the name asked, and an SRV target
+`__meta_dns_srv_record_target` (the host of its address) and
+`__meta_dns_srv_record_port`. An
 answer larger than 16 MiB (for `kubernetes`, a page of one slice), with
 more targets than its bound or that cannot be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be

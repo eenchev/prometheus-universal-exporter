@@ -45,6 +45,8 @@ func (s *sourceState) fetch(ctx context.Context, logger *slog.Logger) ([]discove
 			return nil, err
 		}
 		return flatten(groups, d.Labels, s.limit)
+	case d.DNSSD != nil:
+		return refreshDNSSD(ctx, d.DNSSD, d.Labels, s.limit, d.timeout())
 	default:
 		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit, d.timeout(), logger)
 	}

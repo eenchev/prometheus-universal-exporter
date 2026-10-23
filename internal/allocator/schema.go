@@ -174,8 +174,9 @@ func discoverySchemaRules() map[string]map[string]any {
 				map[string]any{"required": []string{"file_sd"}},
 				map[string]any{"required": []string{"http_sd"}},
 				map[string]any{"required": []string{"kubernetes"}},
+				map[string]any{"required": []string{"dns_sd"}},
 			},
-			"description": "One source: exactly one of file_sd, http_sd and kubernetes.",
+			"description": "One source: exactly one of file_sd, http_sd, kubernetes and dns_sd.",
 		},
 		"[].name": {"pattern": config.OptionalPattern(discoveryName.String()), "description": "Unique in its list, in the metrics and logs. Letters, digits, _, . and -, not starting with . or -. Defaults to the source's kind and place, such as file_sd_1."},
 		"[].labels": {
@@ -221,5 +222,19 @@ func discoverySchemaRules() map[string]map[string]any {
 		"[].kubernetes.address_type":      {"enum": []string{"IPv4", "IPv6", "any"}, "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family."},
 		"[].kubernetes.refresh_interval":  {"description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
 		"[].kubernetes.timeout":           {"description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
+		"[].dns_sd": {
+			"required":    []string{"names"},
+			"if":          map[string]any{"properties": map[string]any{"type": map[string]any{"enum": []string{"A", "AAAA"}}}, "required": []string{"type"}},
+			"then":        map[string]any{"required": []string{"port"}},
+			"else":        map[string]any{"not": map[string]any{"required": []string{"port"}}},
+			"description": "Names looked up in the DNS as Prometheus's dns_sd_configs looks them up: each SRV record a target at its target and port, or each A or AAAA record a target at its address and port.",
+		},
+		"[].dns_sd.names":            {"minItems": 1, "uniqueItems": true, "description": "The names looked up, each once, as absolute names, such as _metrics._tcp.example.com."},
+		"[].dns_sd.names[]":          {"minLength": 1, "pattern": `^[A-Za-z0-9_.-]+$`},
+		"[].dns_sd.type":             {"enum": config.OptionalEnum([]string{"SRV", "A", "AAAA"}), "description": "The record type asked for: SRV, the default, A or AAAA."},
+		"[].dns_sd.port":             {"minimum": 1, "maximum": 65535, "description": "The port of the targets of an A or AAAA source, required for those and refused for SRV, whose records carry their own."},
+		"[].dns_sd.server":           {"description": "A DNS server, host or host:port (port 53 by default), asked instead of the system's nameservers."},
+		"[].dns_sd.refresh_interval": {"description": "How often the names are looked up, at least 1s. Defaults to 30s."},
+		"[].dns_sd.timeout":          {"description": "How long the lookups of all the names may take together, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 	}
 }

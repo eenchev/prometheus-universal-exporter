@@ -780,10 +780,11 @@ allocator:
   # (probe_jobs). Each entry: name, a DNS-1123 label, which also names its
   # ScrapeConfig <fullname>-<name>; collector, one the configuration defines;
   # targets, at least one unless discovery finds them; and optionally params,
-  # labels, shard_key (target or address), discovery (file_sd, http_sd or
-  # kubernetes sources, see "Discovering targets" in docs/ALLOCATOR.md) and
-  # target_template. These are the keys the allocator's file takes, and any
-  # other key fails rendering, as the allocator would refuse it.
+  # labels, shard_key (target or address), discovery (file_sd, http_sd,
+  # kubernetes or dns_sd sources, see "Discovering targets" in
+  # docs/ALLOCATOR.md) and target_template. These are the keys the
+  # allocator's file takes, and any other key fails rendering, as the
+  # allocator would refuse it.
   #
   #   probeJobs:
   #     - name: websites

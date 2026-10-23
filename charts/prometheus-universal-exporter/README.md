@@ -1238,8 +1238,8 @@ rendering rather than stop the allocator at start.
 
 A large fleet need not be listed: a probe job's `discovery`, and the
 `discovered_targets` of `allocator.staticTargets.data`, name `file_sd`,
-`http_sd` or `kubernetes` sources whose targets the allocator allocates as
-written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
+`http_sd`, `kubernetes` or `dns_sd` sources whose targets the allocator
+allocates as written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
 
 ```yaml
 allocator:

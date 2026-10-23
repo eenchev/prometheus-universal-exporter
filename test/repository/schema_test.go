@@ -348,9 +348,13 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 				errs = append(errs, validateAgainstSchema(part.(map[string]any), value)...)
 			}
 		}
-		if condition, ok := schema["if"].(map[string]any); ok && len(validateAgainstSchema(condition, value)) == 0 {
-			if then, ok := schema["then"].(map[string]any); ok {
-				errs = append(errs, validateAgainstSchema(then, value)...)
+		if condition, ok := schema["if"].(map[string]any); ok {
+			branch := "then"
+			if len(validateAgainstSchema(condition, value)) > 0 {
+				branch = "else"
+			}
+			if rule, ok := schema[branch].(map[string]any); ok {
+				errs = append(errs, validateAgainstSchema(rule, value)...)
 			}
 		}
 		if anyOf, ok := schema["anyOf"].([]any); ok {
@@ -449,6 +453,16 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			}
 			if maxItems, ok := schema["maxItems"].(float64); ok && float64(len(x)) > maxItems {
 				errs = append(errs, fmt.Sprintf("%s: %d items, want at most %v", path, len(x), maxItems))
+			}
+			if unique, _ := schema["uniqueItems"].(bool); unique {
+				seen := map[string]bool{}
+				for _, item := range x {
+					text := fmt.Sprintf("%T %#v", item, item)
+					if seen[text] {
+						errs = append(errs, fmt.Sprintf("%s: %v is listed twice", path, item))
+					}
+					seen[text] = true
+				}
 			}
 			if items, ok := schema["items"].(map[string]any); ok {
 				for i, item := range x {

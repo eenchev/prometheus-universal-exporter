@@ -844,7 +844,7 @@ file takes, `name`, `collector`, `targets`, `params`, `labels`,
 it strictly, and MUST list at least one target or one discovery source; the
 values schema MUST declare exactly those keys, and of each discovery source
 exactly the allocator's (`name`, `labels`, `max_targets` and one of
-`file_sd`, `http_sd` and `kubernetes`, each with its own keys).
+`file_sd`, `http_sd`, `kubernetes` and `dns_sd`, each with its own keys).
 
 `allocator.extraVolumes` and `allocator.extraVolumeMounts`, empty by default,
 MUST be passed through unchanged into the allocator's pods, appended after the

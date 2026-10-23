@@ -3,6 +3,7 @@ package allocator
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -15,8 +16,8 @@ import (
 )
 
 // DiscoveryConfig is one discovery source of a probe job's or a
-// discovered_targets entry's discovery list: exactly one of FileSD, HTTPSD
-// and Kubernetes, with what the allocator makes of its answer.
+// discovered_targets entry's discovery list: exactly one of FileSD, HTTPSD,
+// Kubernetes and DNSSD, with what the allocator makes of its answer.
 type DiscoveryConfig struct {
 	// Name tells the source apart in the metrics and logs; it defaults to
 	// the source's kind and its place in the list, such as http_sd_0.
@@ -24,6 +25,7 @@ type DiscoveryConfig struct {
 	FileSD     *FileSDConfig     `yaml:"file_sd"`
 	HTTPSD     *HTTPSDConfig     `yaml:"http_sd"`
 	Kubernetes *KubernetesConfig `yaml:"kubernetes"`
+	DNSSD      *DNSSDConfig      `yaml:"dns_sd"`
 	// Labels sets a label of each discovered target to the value of one
 	// of the source's own labels, keyed by the label set: a meta label
 	// such as __meta_kubernetes_namespace, which would otherwise not reach
@@ -78,6 +80,24 @@ type KubernetesConfig struct {
 	Timeout         model.Duration `yaml:"timeout"`
 }
 
+// DNSSDConfig looks names up in the DNS as Prometheus's dns_sd_configs
+// does: SRV records, each a target at its target host and port, or A or
+// AAAA records, each a target at its address and Port.
+type DNSSDConfig struct {
+	// Names are looked up as absolute names, so the search domains of the
+	// system's resolver are never appended to them.
+	Names []string `yaml:"names"`
+	// Type is SRV, the default, A or AAAA.
+	Type string `yaml:"type"`
+	// Port is the port of an A or AAAA source's targets; an SRV record
+	// carries its own.
+	Port int `yaml:"port"`
+	// Server, host:port, is asked instead of the system's nameservers.
+	Server          string         `yaml:"server"`
+	RefreshInterval model.Duration `yaml:"refresh_interval"`
+	Timeout         model.Duration `yaml:"timeout"`
+}
+
 // The defaults and bounds of a discovery source.
 const (
 	// DefaultMaxDiscoveredTargets is --discovery.max-targets's default.
@@ -89,8 +109,14 @@ const (
 	DefaultHTTPSDRefresh = time.Minute
 	// DefaultKubernetesRefresh is how often EndpointSlices are listed.
 	DefaultKubernetesRefresh = 30 * time.Second
-	// DefaultDiscoveryTimeout bounds an http_sd request or a Kubernetes
-	// listing, or the source's refresh_interval when that is shorter.
+	// DefaultDNSSDRefresh is Prometheus's own for DNS service discovery.
+	DefaultDNSSDRefresh = 30 * time.Second
+	// DefaultDNSSDType is the record type a dns_sd source asks for by
+	// default.
+	DefaultDNSSDType = "SRV"
+	// DefaultDiscoveryTimeout bounds an http_sd request, a Kubernetes
+	// listing or a dns_sd source's lookups, or the source's
+	// refresh_interval when that is shorter.
 	DefaultDiscoveryTimeout = 10 * time.Second
 	// DefaultAddressType is the addressType of the EndpointSlices a
 	// kubernetes source takes by default.
@@ -115,7 +141,7 @@ var (
 	portName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 )
 
-// kind is the source's kind: file_sd, http_sd or kubernetes.
+// kind is the source's kind: file_sd, http_sd, kubernetes or dns_sd.
 func (d *DiscoveryConfig) kind() string {
 	switch {
 	case d.FileSD != nil:
@@ -124,6 +150,8 @@ func (d *DiscoveryConfig) kind() string {
 		return "http_sd"
 	case d.Kubernetes != nil:
 		return "kubernetes"
+	case d.DNSSD != nil:
+		return "dns_sd"
 	}
 	return ""
 }
@@ -139,6 +167,8 @@ func (d *DiscoveryConfig) refresh() time.Duration {
 		set, def = d.HTTPSD.RefreshInterval, DefaultHTTPSDRefresh
 	case d.Kubernetes != nil:
 		set, def = d.Kubernetes.RefreshInterval, DefaultKubernetesRefresh
+	case d.DNSSD != nil:
+		set, def = d.DNSSD.RefreshInterval, DefaultDNSSDRefresh
 	}
 	if set == 0 {
 		return def
@@ -159,13 +189,13 @@ func checkDiscovery(list []DiscoveryConfig, base string) error {
 	for i := range list {
 		d := &list[i]
 		kinds := 0
-		for _, set := range []bool{d.FileSD != nil, d.HTTPSD != nil, d.Kubernetes != nil} {
+		for _, set := range []bool{d.FileSD != nil, d.HTTPSD != nil, d.Kubernetes != nil, d.DNSSD != nil} {
 			if set {
 				kinds++
 			}
 		}
 		if kinds != 1 {
-			return fmt.Errorf("discovery source %d must set exactly one of file_sd, http_sd and kubernetes", i)
+			return fmt.Errorf("discovery source %d must set exactly one of file_sd, http_sd, kubernetes and dns_sd", i)
 		}
 		if d.Name == "" {
 			d.Name = d.kind() + "_" + strconv.Itoa(i)
@@ -209,6 +239,8 @@ func (d *DiscoveryConfig) check(base string) error {
 		return d.FileSD.check(base)
 	case d.HTTPSD != nil:
 		return d.HTTPSD.check(base, d.refresh())
+	case d.DNSSD != nil:
+		return d.DNSSD.check(d.refresh())
 	default:
 		return d.Kubernetes.check(d.refresh())
 	}
@@ -287,6 +319,70 @@ func (k *KubernetesConfig) check(refresh time.Duration) error {
 	return checkTimeout("kubernetes", k.Timeout, refresh)
 }
 
+func (n *DNSSDConfig) check(refresh time.Duration) error {
+	if len(n.Names) == 0 {
+		return errors.New("dns_sd.names must not be empty")
+	}
+	seen := map[string]bool{}
+	for i, raw := range n.Names {
+		name, err := dnsSDName(raw)
+		if err != nil {
+			return fmt.Errorf("dns_sd.names entry %w", err)
+		}
+		if seen[name] {
+			return fmt.Errorf("dns_sd.names lists %q twice", name)
+		}
+		seen[name] = true
+		n.Names[i] = name
+	}
+	if n.Type == "" {
+		n.Type = DefaultDNSSDType
+	}
+	switch n.Type {
+	case "SRV":
+		if n.Port != 0 {
+			return errors.New("dns_sd.port is set for type SRV, whose records carry their own ports; leave it out")
+		}
+	case "A", "AAAA":
+		if n.Port < 1 || n.Port > 65535 {
+			return fmt.Errorf("dns_sd.port must be a port from 1 to 65535 for type %s, whose records carry no port", n.Type)
+		}
+	default:
+		return fmt.Errorf("dns_sd.type %q must be SRV, A or AAAA", n.Type)
+	}
+	if n.Server != "" {
+		server, err := fetch.ParseDNSServer(n.Server)
+		if err != nil {
+			return fmt.Errorf("dns_sd.server %w", err)
+		}
+		n.Server = server
+	}
+	return checkTimeout("dns_sd", n.Timeout, refresh)
+}
+
+// dnsSDName reads a name of dns_sd.names: a DNS name, such as
+// _metrics._tcp.example.com, in lower case without a trailing dot, so that
+// a name written twice in two spellings is told, and every replica asks for
+// and labels its targets with the same one.
+func dnsSDName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("is empty")
+	}
+	if strings.ContainsAny(name, "/?#@:[]") {
+		return "", fmt.Errorf("%q is not a DNS name; the server is dns_sd.server and the port dns_sd.port", raw)
+	}
+	if _, err := netip.ParseAddr(name); err == nil {
+		return "", fmt.Errorf("%q is an IP address, not a name to look up", raw)
+	}
+	canonical, err := fetch.CanonicalDNSName(name)
+	var refused *fetch.TargetRefusedError
+	if errors.As(err, &refused) {
+		return "", fmt.Errorf("%q is not a DNS name: %s", raw, refused.Reason)
+	}
+	return canonical, err
+}
+
 // port is the port the targets are at: its name, or its number.
 func (k *KubernetesConfig) port() (name string, number int, err error) {
 	if n, convErr := strconv.Atoi(k.Port); convErr == nil {
@@ -324,6 +420,8 @@ func (d *DiscoveryConfig) timeout() time.Duration {
 		set = d.HTTPSD.Timeout
 	case d.Kubernetes != nil:
 		set = d.Kubernetes.Timeout
+	case d.DNSSD != nil:
+		set = d.DNSSD.Timeout
 	}
 	if set != 0 {
 		return time.Duration(set)

@@ -736,8 +736,8 @@
     "allocatorDiscoverySource": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A discovery source of the allocator: exactly one of file_sd, http_sd and kubernetes (internal/allocator DiscoveryConfig).",
-      "oneOf": [{"required": ["file_sd"]}, {"required": ["http_sd"]}, {"required": ["kubernetes"]}],
+      "description": "A discovery source of the allocator: exactly one of file_sd, http_sd, kubernetes and dns_sd (internal/allocator DiscoveryConfig).",
+      "oneOf": [{"required": ["file_sd"]}, {"required": ["http_sd"]}, {"required": ["kubernetes"]}, {"required": ["dns_sd"]}],
       "properties": {
         "name": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"},
         "labels": {"$ref": "#/$defs/stringMap", "description": "Labels set from the source's own, such as namespace: __meta_kubernetes_namespace."},
@@ -784,6 +784,22 @@
             "port": {"anyOf": [{"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}, {"type": "integer", "minimum": 1, "maximum": 65535}]},
             "include_not_ready": {"type": "boolean"},
             "address_type": {"enum": ["IPv4", "IPv6", "any"], "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, FQDN slices included."},
+            "refresh_interval": {"type": "string"},
+            "timeout": {"type": "string"}
+          }
+        },
+        "dns_sd": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["names"],
+          "if": {"required": ["type"], "properties": {"type": {"enum": ["A", "AAAA"]}}},
+          "then": {"required": ["port"]},
+          "else": {"not": {"required": ["port"]}},
+          "properties": {
+            "names": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"}},
+            "type": {"enum": ["SRV", "A", "AAAA"], "description": "The record type asked for: SRV, the default, A or AAAA."},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535, "description": "The targets' port, required for A and AAAA and refused for SRV."},
+            "server": {"type": "string"},
             "refresh_interval": {"type": "string"},
             "timeout": {"type": "string"}
           }

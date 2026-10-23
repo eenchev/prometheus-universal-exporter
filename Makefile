@@ -27,8 +27,8 @@ GOVULNCHECK_VERSION := v1.8.0
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 # OPT_IN_REQUEST_TYPES adds the opt-in request types, comma-separated, which
-# no build carries unless asked: `make build OPT_IN_REQUEST_TYPES=s3file,redis`.
-# See docs/S3FILE.md and docs/REDIS.md.
+# no build carries unless asked: `make build OPT_IN_REQUEST_TYPES=s3file,redis,tcp`.
+# See docs/S3FILE.md, docs/REDIS.md and docs/TCP.md.
 OPT_IN_REQUEST_TYPES ?=
 # SQL_DRIVERS adds the sql request type's opt-in database drivers,
 # comma-separated, for example `make build SQL_DRIVERS=oracle,snowflake`: any
@@ -49,7 +49,7 @@ build:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http kubernetes localfile redis s3file sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes localfile redis s3file sql sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -81,13 +81,13 @@ test-sql-drivers:
 # OPT_IN_REQUEST_TYPES is. A test keeps the list naming every opt-in type in
 # the tree.
 build-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
 
 # golangci-lint over the build with every opt-in request type, as ci.yml's
 # third lint step runs it: no other lint run compiles them beside the
 # default build's types.
 lint-opt-in-types: lint-version
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis)" && golangci-lint run --build-tags "$$tags"
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp)" && golangci-lint run --build-tags "$$tags"
 
 # The internal/fetch and repository tests of the build with every opt-in
 # request type, as ci.yml runs them: the opt-in types' tests beside the
@@ -95,7 +95,7 @@ lint-opt-in-types: lint-version
 # which a build of one type's tests reach only through make. Once and
 # without -race.
 test-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis)" && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp)" && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
 
 # Opt-in: the sql request type against real databases, which the
 # PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
@@ -120,7 +120,7 @@ test:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http kubernetes localfile redis s3file sql sshfile tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes localfile redis s3file sql sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \

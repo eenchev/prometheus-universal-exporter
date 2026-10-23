@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, or the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file` and `redis` collectors in an image built with them
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis` and `tcp` collectors in an image built with them
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
@@ -585,6 +585,12 @@ extraVolumeMounts:
 ```
 
 and name `password_file: /var/run/prometheus-universal-exporter/redis/password`, with `username` for an ACL user, in the collector. Probe it with the server as the target, `/probe?collector=redis&target=redis-master.cache:6379`, or `rediss://` for TLS. With `networkPolicy.egress` rules, add one for the servers' port, 6379 by default. The request's keys are in [Redis and Valkey](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/REDIS.md).
+
+## TCP collectors
+
+A `tcp` collector sends a line, such as memcached's `stats`, over a TCP connection and reads the answer, for services whose statistics come that way: memcached, ZooKeeper's four-letter words, HAProxy's runtime API on a TCP socket. The type is opt-in, as `s3file` and `redis` are: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=tcp` (or `redis,tcp` for more than one), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+Probe it with the service as the target, its port always named, `/probe?collector=memcached&target=memcached.cache:11211`. With `networkPolicy.egress` rules, add one for each service's port. The request's keys are in [Text protocols over TCP](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/TCP.md).
 
 ## Kubernetes collectors
 

@@ -162,9 +162,9 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header", "query", "graphite", "database" or "arg"
-	// (a sql collector's args and a redis collector's command arguments),
-	// which decides the encoding.
+	// kind is "body", "header", "query", "graphite", "database", "arg"
+	// (a sql collector's args and a redis collector's command arguments)
+	// or "line" (a tcp collector's send), which decides the encoding.
 	kind string
 }
 
@@ -212,6 +212,10 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 				out = append(out, templateField{fmt.Sprintf("request.commands[%d].command[%d]", i, j), arg, "arg"})
 			}
 		}
+	}
+	// A tcp collector's send, the line written to its server.
+	if HasPathParams(c.Request.Send) {
+		out = append(out, templateField{"request.send", c.Request.Send, "line"})
 	}
 	// A static target's own targets replace the collector's, placeholders
 	// and all.
@@ -295,6 +299,14 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		// the driver quoted as a literal, never as SQL, or sent to a redis
 		// server as one bulk string of a command, never parsed as more of
 		// it, so any text is safe.
+		return value, nil
+	case "line":
+		// Written into a line of a text protocol, such as memcached's
+		// stats, which a carriage return or a line feed ends: the probe's
+		// value could otherwise send a command of its own after it.
+		if strings.ContainsAny(value, "\r\n") {
+			return "", fmt.Errorf("%s: the value of %s holds a carriage return or a line feed, which would end the line request.send writes and start another", f.where, p.Name)
+		}
 		return value, nil
 	case "database":
 		if !sqlDatabaseName.MatchString(value) {

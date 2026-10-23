@@ -425,7 +425,7 @@ One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
 `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in
-`s3file` and `redis` — and under every transform: `transform.labels` are applied
+`s3file`, `redis` and `tcp` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
@@ -771,7 +771,7 @@ Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
 `graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target),
-[`tlscert`](TLSCERT.md) and [`redis`](REDIS.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
+[`tlscert`](TLSCERT.md), [`redis`](REDIS.md#the-target) and [`tcp`](TCP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
 collector may resolve, matched by name alone, and which buckets an
 [`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
 glob, since its target is a bucket:
@@ -790,7 +790,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert` and `redis` collector, and a
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `redis` and `tcp` collector, and a
 `dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
 refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
@@ -947,7 +947,7 @@ A proxy URL may carry credentials, `http://user:password@proxy:3128`, sent as
 environment applies to the whole exporter, and is read once, when the exporter
 first connects. In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
-affected, and neither are `sshfile`, `sql` and `redis` collectors, which
+affected, and neither are `sshfile`, `sql`, `redis` and `tcp` collectors, which
 connect to their hosts directly; `s3file` collectors go through the proxy, by the AWS
 SDK's own client, which reads the same variables.
 
@@ -1413,7 +1413,8 @@ verify rather than refusing it. A [`kubernetes`](KUBERNETES.md#outside-the-clust
 collector takes it only beside `api_server`, also without
 `insecure_skip_verify`, since it sends the API server a token. A
 [`redis`](REDIS.md#tls) collector takes it whole, and speaks TLS when it is
-set or the target is a `rediss://` URL.
+set or the target is a `rediss://` URL, and a [`tcp`](TCP.md#tls) collector
+takes it whole too, and speaks TLS when it is set.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

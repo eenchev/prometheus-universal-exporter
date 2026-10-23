@@ -313,6 +313,13 @@ type RequestConfig struct {
 	DB           int            `yaml:"db,omitempty"`
 	InfoSections []string       `yaml:"info_sections,omitempty"`
 	Commands     []RedisCommand `yaml:"commands,omitempty"`
+	// Send and Terminator belong to the tcp type: the text written once
+	// the connection is made, nothing when empty, and what the answer ends
+	// with, the answer ending when the server closes the connection when
+	// it is empty (fetch/requesttype_tcp.go). Left out of a collector
+	// written as YAML when empty, as the sql keys are.
+	Send       string `yaml:"send,omitempty"`
+	Terminator string `yaml:"terminator,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML

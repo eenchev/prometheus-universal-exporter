@@ -24,7 +24,8 @@ import (
 // certificates of a TLS handshake, s3file reads an object from S3 or a
 // store that speaks its API, kubernetes lists objects from a Kubernetes API
 // server, redis reads INFO and read-only commands from a Redis or Valkey
-// server. The type is required rather than defaulted so that no configuration means
+// server, tcp sends a line to a text-protocol service over TCP and reads
+// its answer. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields: the request keys it accepts. A key another type owns is an error
@@ -54,23 +55,26 @@ const (
 	RequestTypeS3File     = "s3file"
 	RequestTypeKubernetes = "kubernetes"
 	RequestTypeRedis      = "redis"
+	RequestTypeTCP        = "tcp"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links
 // the AWS SDK, which few deployments want in the binary, and redis, which
 // needs nothing outside the standard library, is kept out of the binary of
-// every deployment that has no Redis to read. A build carries one only when
+// every deployment that has no Redis to read, as tcp, which needs nothing
+// outside it either, is of every deployment with no text-protocol service
+// to read. A build carries one only when
 // asked, with its request_type_<name> tag, and its file is built
 // under that tag alone. A test keeps the list in step with the files'
 // constraints.
-var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis}
+var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them

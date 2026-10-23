@@ -101,8 +101,9 @@ default, which builds every request type but the opt-in ones, or a
 comma-separated list such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
 `OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
-leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)) and
-`redis` ([Redis and Valkey](REDIS.md#building-with-redis)).
+leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)),
+`redis` ([Redis and Valkey](REDIS.md#building-with-redis)) and `tcp`
+([Text protocols over TCP](TCP.md#building-with-tcp)).
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
@@ -200,6 +201,14 @@ pools, cluster routing and pub/sub a scrape of a few read-only commands has
 no use for, and whose readers allocate what a reply's length declares. The
 same test finds none of the other types' modules in a build of it, and the
 stand-in server of its tests (`internal/redistest`) is standard library
+alone too.
+
+Nor has the opt-in [`tcp`](TCP.md) request type: it writes a line and reads
+the answer with `net` and `crypto/tls`, the protocol being whatever the
+service's text is, which the decoders and transforms read as they read a
+body. A test finds that a build of it alone links no package that a build
+of no request type does not, but the standard library's, and the stand-in
+server of its tests (`internal/testutil`'s `TCPStub`) is standard library
 alone too.
 
 The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)

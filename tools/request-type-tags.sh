@@ -3,7 +3,7 @@
 # given as a comma-separated list, such as "http", with the sql request
 # type's opt-in database drivers given as a second comma-separated list, such
 # as "oracle,snowflake", and with the opt-in request types given as a third,
-# such as "s3file" or "s3file,redis". With no request types, or an empty list, every request
+# such as "s3file" or "s3file,redis,tcp". With no request types, or an empty list, every request
 # type but the opt-in ones is built; with no drivers, the sql type has its
 # three default ones (mysql, postgres, sqlserver); an opt-in type is built
 # only when the third list, or the first, names it.

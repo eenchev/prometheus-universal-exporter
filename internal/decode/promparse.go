@@ -2,6 +2,7 @@ package decode
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -1071,14 +1072,17 @@ func parsePromFloat(s []byte) (float64, error) {
 
 // promSignature identifies a label set regardless of the order of its
 // labels, which it puts in the order of their names; it is written after
-// signature, which is returned.
+// signature, which is returned. Each name and each value is written after
+// its length, so no two sets have one signature: a value may hold any byte,
+// as one that is not UTF-8 is kept until the transform repairs it, so no
+// byte can end one.
 func promSignature(signature []byte, labels []promLabel) []byte {
 	slices.SortFunc(labels, func(a, b promLabel) int { return bytes.Compare(a.name, b.name) })
 	for _, l := range labels {
+		signature = binary.AppendUvarint(signature, uint64(len(l.name)))
 		signature = append(signature, l.name...)
-		signature = append(signature, 0xff)
+		signature = binary.AppendUvarint(signature, uint64(len(l.value)))
 		signature = append(signature, l.value...)
-		signature = append(signature, 0xff)
 	}
 	return signature
 }

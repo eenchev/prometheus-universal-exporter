@@ -56,6 +56,16 @@ jobs:
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
               - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -256,6 +266,31 @@ jobs:
       - run: go vet ./...
         if: steps.changes.outputs.go == 'true'
       - run: go build ./...
+        if: steps.changes.outputs.go == 'true'
+      # The release builds archives for darwin too, from the same code: a
+      # file that compiles on Linux alone would otherwise first fail there,
+      # at release time. The two commands are linked as the release links
+      # them, which go build ./... does not do.
+      - name: Build for macOS
+        run: |
+          set -eu
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build ./...
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null .
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/pue-allocator
+          done
+        if: steps.changes.outputs.go == 'true'
+      # The image the release publishes, built from the Dockerfile and
+      # pushed nowhere, so a change that breaks its build fails here rather
+      # than in the release. Its --version shows the build stage stamped the
+      # revision in.
+      - name: Build the image
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -eu
+          docker build --build-arg VERSION=0.0.0-ci --build-arg "REVISION=${REVISION}" --tag prometheus-universal-exporter:ci .
+          docker run --rm prometheus-universal-exporter:ci --version | grep -F "$REVISION"
         if: steps.changes.outputs.go == 'true'
       # A build can carry only some request types. Vet and build each type on
       # its own too, so code one type needs cannot quietly depend on another.
@@ -678,6 +713,16 @@ jobs:
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
               - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -881,6 +926,16 @@ jobs:
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
               - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1065,6 +1120,16 @@ jobs:
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
               - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.

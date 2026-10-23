@@ -19,6 +19,13 @@ package decode
 // the bodies of the test of the difference itself (promemptylabel_test.go),
 // which compares the parser's reading of a body with the unswitched oracle's
 // reading of the same body without the labels.
+//
+// One change was made to the oracle itself, as a fix of a fault both
+// parsers had: its signature of a histogram's or a summary's label set
+// (oraclePromSignature) ended each name and value with the byte 0xff, which
+// a value may hold, so two sets could be one series. It now writes each
+// after its length, as the parser does. That changes nothing for a body in
+// which no value holds 0xff, whose sets the old signature told apart.
 
 import (
 	"bytes"
@@ -668,7 +675,8 @@ func oracleParsePromFloat(s string) (float64, error) {
 	return strconv.ParseFloat(s, 64)
 }
 
-// oraclePromSignature identifies a label set regardless of the order of its labels.
+// oraclePromSignature identifies a label set regardless of the order of its
+// labels, each name and value after its length.
 func oraclePromSignature(labels map[string]string) string {
 	keys := make([]string, 0, len(labels))
 	for k := range labels {
@@ -677,10 +685,7 @@ func oraclePromSignature(labels map[string]string) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte(0xff)
-		b.WriteString(labels[k])
-		b.WriteByte(0xff)
+		fmt.Fprintf(&b, "%d:%s%d:%s", len(k), k, len(labels[k]), labels[k])
 	}
 	return b.String()
 }

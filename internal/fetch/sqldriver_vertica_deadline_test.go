@@ -100,11 +100,17 @@ func (r *verticaStandInRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-// verticaStandInConnector makes connections of conn through newVerticaConn.
+// verticaStandInConnector makes connections of conn through newVerticaConn,
+// guarded as a pool's connector guards them (guardSQLConn), which gives a
+// transaction's BEGIN its bound (sqlBeginContext).
 type verticaStandInConnector struct{ conn *verticaStandIn }
 
 func (c verticaStandInConnector) Connect(context.Context) (driver.Conn, error) {
-	return newVerticaConn(c.conn)
+	conn, err := newVerticaConn(c.conn)
+	if err != nil {
+		return nil, err
+	}
+	return guardSQLConn(SQLDriverVertica, conn), nil
 }
 
 func (verticaStandInConnector) Driver() driver.Driver { return sqlDriverStub{} }

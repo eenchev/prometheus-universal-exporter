@@ -336,3 +336,93 @@ func runBodyIn(t *testing.T, ctx context.Context, c model.Collector, contentType
 	}
 	return Transform(ctx, d, r, &c, "python3")
 }
+
+// Two sets of labels are two histograms whatever bytes their values hold: a
+// value read from a response is repaired to UTF-8 only after the transform,
+// so a byte of the key's own is no end to it. {a="x\xfeb\xffy"} once took
+// the key of {a="x", b="y"} and counted its value.
+func TestHistogramLabelsOfAnyBytesAreTheirOwnHistogram(t *testing.T) {
+	rule := histogramRule("value", `(?m)^(?P<a>\S+) (?P<b>\S*) *(?P<value>\d+)$`, 6)
+	rule.Labels = []model.LabelRule{{Name: "a", Expression: "a"}, {Name: "b", Expression: "b"}}
+	c := model.Collector{Name: "h", Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{rule}}
+	if err := CheckMetricRule(&c, &c.Metrics[0]); err != nil {
+		t.Fatal(err)
+	}
+	set, err := runBody(t, c, "text/plain", "x\xfeb\xffy  5\nx y 7\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"a=x�b�y le=6:1 le=+Inf:1 sum=5 count=1",
+		"a=x b=y le=6:0 le=+Inf:1 sum=7 count=1",
+	}
+	if got := shownHistograms(set); !slices.Equal(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// histogramKey gives two sets the same key only when they are one series:
+// the same labels of a value, whichever bytes the names and values hold and
+// however many labels of an empty value either has.
+func TestHistogramKeysAreTheSameOnlyForOneSeries(t *testing.T) {
+	// Parts of the bytes that once ended a name or a value, and of what a
+	// length written before one looks like.
+	parts := []string{"", "a", "b", "x", "\xfe", "\xff", "\x00", "\x01", "\x02", "a\xffb", "\xfeb\xff", "x\xfeb\xff", "1", "\x01a", "\x01a\x01"}
+	var sets []map[string]string
+	for _, n1 := range []string{"a", "b"} {
+		for _, v1 := range parts {
+			sets = append(sets, map[string]string{n1: v1})
+			for _, v2 := range parts {
+				sets = append(sets, map[string]string{"a": v1, "b": v2})
+				sets = append(sets, map[string]string{n1: v1 + v2})
+				sets = append(sets, map[string]string{"a": v1, "b": v2, "c": ""})
+			}
+		}
+	}
+	same := func(x, y map[string]string) bool {
+		valued := func(m map[string]string) map[string]string {
+			out := map[string]string{}
+			for k, v := range m {
+				if v != "" {
+					out[k] = v
+				}
+			}
+			return out
+		}
+		return maps.Equal(valued(x), valued(y))
+	}
+	keys := make([]string, len(sets))
+	for i, set := range sets {
+		keys[i] = histogramKey(set)
+	}
+	for i := range sets {
+		for j := range i {
+			if (keys[i] == keys[j]) != same(sets[i], sets[j]) {
+				t.Fatalf("%q and %q: same key %t, one series %t", sets[i], sets[j], keys[i] == keys[j], same(sets[i], sets[j]))
+			}
+		}
+	}
+}
+
+// FuzzHistogramKey looks for two sets of two labels that are not one series
+// and share a key.
+func FuzzHistogramKey(f *testing.F) {
+	f.Add("a", "x\xfeb\xffy", "c", "", "a", "x", "b", "y")
+	f.Add("a", "\x01b", "", "", "a", "", "b", "")
+	f.Fuzz(func(t *testing.T, n1, v1, n2, v2, n3, v3, n4, v4 string) {
+		x := map[string]string{n1: v1, n2: v2}
+		y := map[string]string{n3: v3, n4: v4}
+		valued := func(m map[string]string) map[string]string {
+			for k, v := range m {
+				if v == "" {
+					delete(m, k)
+				}
+			}
+			return m
+		}
+		kx, ky := histogramKey(x), histogramKey(y)
+		if one := maps.Equal(valued(x), valued(y)); (kx == ky) != one {
+			t.Fatalf("%q and %q: same key %t, one series %t", x, y, kx == ky, one)
+		}
+	})
+}

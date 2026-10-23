@@ -247,13 +247,16 @@ func CheckLabelValueMapsAgree(x *model.Collector) error {
 		rule   int
 		values map[string]string
 	}
-	seen := map[string]mapped{}
+	// Keyed by both names apart: under name_escaping a name may hold any
+	// byte, a separator's too, so two names joined could be another two.
+	type ruleLabel struct{ rule, label string }
+	seen := map[ruleLabel]mapped{}
 	for i, rule := range x.Metrics {
 		for _, label := range rule.Labels {
 			if len(label.ValueMap) == 0 || rule.Name == "" {
 				continue
 			}
-			key := rule.Name + "\x00" + label.Name
+			key := ruleLabel{rule.Name, label.Name}
 			first, ok := seen[key]
 			if !ok {
 				seen[key] = mapped{rule: i, values: label.ValueMap}

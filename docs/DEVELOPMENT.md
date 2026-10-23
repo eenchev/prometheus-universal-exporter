@@ -2234,9 +2234,21 @@ each request type on its own too) and the repository's own tests,
 `test/repository` — run for changes to anything the repository tests read —
 Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
 `examples/`, `testdata/`, `docs/` and every top-level `*.md`, the
-`Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml` and
-`test/python/` (the filter's `go` output) — so a documentation-only change
-runs the repository tests too, which check the docs. The Helm lint/template
+`Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml`,
+`test/python/`, `.github/dependabot.yml`, `.gitignore`, `.githooks/`,
+`LICENSE` and `.artifacthub-repo.yml` (the filter's `go` output) — so a
+documentation-only change runs the repository tests too, which check the
+docs. `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every
+string literal of `test/repository`'s Go files that names an existing path
+of the repository, from its root, and fails for a file no pattern of the
+`go` output matches: a file those tests read whose change alone skipped them
+would merge unchecked. When it fails, add the file to the `go` output in all
+four jobs. Under the same output, `test` also builds the code for `darwin` on
+`amd64` and `arm64`, linking both commands, since the release builds archives
+for macOS from it, and builds the image from the `Dockerfile` with
+`docker build`, pushing nothing, and runs its `--version` to see the
+revision it was given; a change that breaks either fails on its pull request
+rather than at release time. The Helm lint/template
 checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
 files the chart steps render. A change under `charts/` runs the Go checks
 because the template guard above lives there and is worth least on exactly

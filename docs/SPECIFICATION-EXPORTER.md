@@ -1778,7 +1778,15 @@ of objects, one a row, of its columns by name. Its keys:
   the bound comes first, the scrape MUST answer the rows it read, the
   connection MUST be closed and never given back to its pool, its network
   connections closed where the exporter dialed them, and it MUST hold its
-  place at `max_per_target` until it is closed.
+  place at `max_per_target` until it is closed. A statement's transaction
+  MUST be rolled back by the scrape at the statement's end, and MUST NOT be
+  rolled back, nor its connection closed, by database/sql on its own when
+  the scrape's context ends, while the scrape still holds the connection;
+  the transaction's BEGIN MUST still be bounded by the scrape's deadline. A
+  connection whose transaction was open when the scrape's context ended (its
+  deadline, or the statement ended before its rows were all read) MUST then
+  be closed, not given back, unless its driver's connection both resets its
+  session and says whether it is valid.
 - **Static targets** MAY set `timeout`, `username`, `password_file`,
   `private_key_file` (either credential file replacing the collector's) and
   `connections`; `params` fills the placeholders of `args` and `database`. A
@@ -3632,6 +3640,8 @@ The parser MUST follow expfmt's rules:
   summary, histogram and untyped are errors.
 - Summary and histogram series are grouped by their labels without `quantile`
   and `le`, regardless of label order, and those two labels MUST be floats.
+  Two different label sets MUST be two series whatever bytes their values
+  hold, a value that is not UTF-8 among them.
 - Metric and label names MAY be quoted UTF-8, including the braces form
   `{"my.metric", key="value"} 1` for a metric name that is not a bare name.
   `__name__` is reserved, and a label name may appear once per sample.
@@ -4817,9 +4827,11 @@ MUST be counted in every bucket and `+Inf` in `+Inf` alone. NaN, a value that
 is no number and a missing value MUST be handled by the rule's `error_mode`
 and `required` as any rule's value is, the histogram counting the others
 under `log` and `ignore`. The values of one set of label values, a label with
-an empty value being none, MUST make one histogram, the histograms in the
-order of their first values; each MUST take one series of
-`limits.max_metrics` when its first value comes, and the values none. A rule
+an empty value being none, MUST make one histogram, and two different sets
+two whatever bytes the values hold, a value that is not UTF-8 among them;
+the histograms are in the order of their first values, and each MUST take
+one series of `limits.max_metrics` when its first value comes, and the
+values none. A rule
 that reads no value at all — an expression that gives none, items, nodes or
 elements selected none, no match, no rows — MUST make one histogram of count
 0 with every bucket and the sum 0 when its labels are all static, and none
@@ -9890,7 +9902,11 @@ CI SHOULD use changed-path detection to avoid running unrelated suites:
   build run when anything the repository tests read changes (§ 42.12): Go
   source and module files, the workflows, the chart, `configs`, `examples`,
   `testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
-  Makefile, `tools`, the lint configuration and `test/python`.
+  Makefile, `tools`, the lint configuration, `test/python`, the Dependabot
+  configuration, `.gitignore`, the git hooks, `LICENSE` and the Artifact Hub
+  repository file. A test MUST fail for a file a string literal of
+  `test/repository`'s sources names, from the repository root, that this
+  filter does not match.
 - The tests of the packages are split in two sides: the target allocator's,
   `cmd/pue-allocator` and `internal/allocator`, and the exporter's, every
   other package of the module but `test/repository`. CI MUST run a side's
@@ -25217,6 +25233,64 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   inside one statement ended by `;` is taken; the test fails without the
   exporter's own reading (`TestAVerticaStatementHoldingMoreThanOneIsRefused`).
 
+## 34.173 CI's go filter, a release published in order, and label-set keys of any bytes
+
+- Every file a string literal of `test/repository`'s Go files names, from
+  the repository root, is matched by `ci.yml`'s go filter, so a change to it
+  alone runs the repository tests; the test fails for `LICENSE`,
+  `.githooks/pre-commit`, `.github/dependabot.yml`, `.gitignore` and
+  `.artifacthub-repo.yml` without their patterns, and for a filter that
+  loses its pattern for `LICENSE` (§ 34.33).
+- The exporter release builds every archive, darwin's among them, their
+  checksums and the image, unpushed, before any step that publishes; pushes
+  the image under its version tag alone; creates the GitHub Release as a
+  draft, or finds it and replaces its assets on a rerun, and publishes it;
+  and moves `latest` and `MAJOR.MINOR` last, by the digest it pushed
+  (§ 42.12).
+- The release archives' binaries are linked with the Dockerfile's
+  `-ldflags`, the revision among them, from the values the image's build is
+  given (§ 42.12).
+- CI's job test builds the code for darwin on amd64 and arm64, linking both
+  commands, and builds the image from the Dockerfile with `docker build`,
+  pushing nothing, both under the go filter, which matches every file the
+  image's build reads (§ 42.12).
+- A regex histogram rule with labels `a` and `b` reading
+  `"x\xfeb\xffy  5\nx y 7\n"` makes two histograms, `{a="x�b�y"}`
+  of count 1 and sum 5 and `{a="x",b="y"}` of count 1 and sum 7, where the
+  key that ended names and values with 0xff and 0xfe gave both one histogram
+  of count 2 and sum 12 (TestHistogramLabelsOfAnyBytesAreTheirOwnHistogram).
+- Over label sets of one, two and three labels whose values are made of
+  0xfe, 0xff, NUL, short bytes that read as lengths and their
+  concatenations, two sets share a histogram key exactly when they are one
+  series, labels of an empty value left out
+  (TestHistogramKeysAreTheSameOnlyForOneSeries); FuzzHistogramKey searches
+  pairs of two-label sets for a shared key, seeded with the case above.
+- A Prometheus exposition with a histogram `{a="x\xffb\xffy"}` and a
+  histogram `{a="x",b="y"}` decodes to two series with their own sum, count
+  and bucket, where the signature that ended names and values with 0xff
+  failed the decode for a second `h_sum` sample
+  (TestPromParseLabelSetsOfAnyBytesAreTheirOwnSeries); over label sets
+  whose values hold 0xff, NUL and bytes that read as lengths, two sets share
+  a signature exactly when they are one set
+  (TestPromSignaturesAreTheSameOnlyForOneSet).
+- Under `name_escaping: underscores`, a rule `worker\x00up` with a label
+  `state` and a rule `worker` with a label `up\x00state` load with different
+  value maps, as two labels of two metrics, where the check that joined the
+  names with NUL refused them as one (TestLabelValueMapsOfOneNameMustAgree).
+
+## 34.174 A connection database/sql never closes behind the scrape
+
+- A postgres statement whose rows are read, and whose end is held past the
+  scrape's deadline (the "ending" event), finds its connection not closed by
+  database/sql behind the scrape: the scrape answers the row, rolls the
+  transaction back itself, then closes the connection, which the stand-in
+  driver cannot reset, and the next scrape makes a second one; it fails when
+  the transaction is begun with the scrape's context, database/sql's own
+  rollback closing the connection while the scrape holds it (§ 5.1).
+- Sixteen scrapes at once, each running forty postgres statements still
+  running at a 10ms deadline, each fail with the deadline's error and none
+  panics in Conn.Raw, a stress companion of the test above (§ 5.1).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -26516,7 +26590,11 @@ collectors page (§ 23) MUST list a label's parameters with the request's.
 ## 42.12 CI, container, and chart releases
 
 CI MUST materialize Go module checksums before running tests and MUST run the
-test, race, vet, build, and Helm validation checks.
+test, race, vet, build, and Helm validation checks. On every pull request
+whose changes the go filter (§ 34.33) matches, CI MUST also build the code
+for `darwin` on `amd64` and `arm64`, linking both commands, since the release
+builds archives for it, and MUST build the image from the Dockerfile without
+pushing it, so a change that breaks either fails before a release does.
 
 Known vulnerabilities MUST be reported by a workflow of its own, on every
 push and pull request and on a weekly schedule, for reference: it MUST NOT
@@ -26561,13 +26639,25 @@ MUST:
   `PYTHON_VERSION`, with the Dockerfile's pinned `lxml`, `PyYAML` and
   `python-dateutil`, and with the modules of `test/python/requirements.txt`
   installed and required, as CI does;
-- build release binaries for the documented target platforms; and
+- build release binaries for the documented target platforms, linked with
+  the `-ldflags` the Dockerfile links the image's with, the version and the
+  revision from the same values, so `--version` reports the same for an
+  archive's binary as for the image's;
 - create a GitHub Release containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
   is built for: macOS has no `sha256sum`, so beside the Linux command it MUST
-  give `shasum -a 256 -c`, which reads the same file.
+  give `shasum -a 256 -c`, which reads the same file; and
+- publish nothing before every archive, the checksums and the image are
+  built, the image without being pushed, and then publish in this order: the
+  image under its version tag alone; the GitHub Release, created as a draft
+  with its assets and then published; and last `latest` and `MAJOR.MINOR`,
+  moved to the digest the version tag was pushed with. A failure at any step
+  MUST leave `latest` and `MAJOR.MINOR` unmoved unless the Release is
+  published, and no Release published without its image. A rerun MUST
+  succeed where the Release already exists, draft or published, by replacing
+  its assets rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins
@@ -26637,7 +26727,10 @@ the job that runs it. They MUST also
 fail when a workflow runs the test suite without first setting up the image's
 Python and libraries, or runs `make ci` without installing golangci-lint and
 gopls; when the exporter release publishes its archives without the checksums
-file; and when the chart release pushes before checking its default image, or
+file, publishes anything before every archive and the image are built,
+publishes out of the order above, pushes the image with tags other than its
+version, or links an archive's binaries with other `-ldflags` than the
+image's; when CI builds no darwin binaries or no image; and when the chart release pushes before checking its default image, or
 signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.md
 § 42.12).
 

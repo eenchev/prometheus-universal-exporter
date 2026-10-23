@@ -280,28 +280,67 @@ func sqlReadOnlyTx(setup func(timeout time.Duration) []string) func(ctx context.
 
 // sqlTx runs a statement in a transaction begun with opts, after the
 // statements setup gives.
+//
+// database/sql rolls back a transaction whose context ends from a goroutine
+// of its own (Tx.awaitDone), and then closes the *sql.Conn it was begun on
+// when the driver's connection does not both reset its session and say
+// whether it is valid (beginDC's keepConnOnRollback), at whatever moment
+// that goroutine runs. The scrape still holds the Conn then and calls
+// Conn.Raw on it, to give it back or close it, and Raw is not safe against
+// that close: one that completes between Raw's check that the Conn is open
+// and its lock hands Raw a nil connection (sql.go grabConn), a panic. So
+// the transaction is begun with a context of its own, which ends only once
+// done or a failure has rolled it back, and nothing closes the Conn behind
+// the scrape; BEGIN is still bounded by ctx, which the guarded connection
+// gives the driver in its place (sqlBeginContext). done then does what
+// database/sql would have: when ctx ended while the transaction was open,
+// at the scrape's deadline or when the statement was ended before its rows
+// were all read, the connection is closed rather than given back, unless it
+// resets its session and says whether it is valid.
 func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	return func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
-		tx, err := conn.BeginTx(ctx, &opts)
+		keep := false
+		_ = conn.Raw(func(dc any) error {
+			_, resets := dc.(driver.SessionResetter)
+			_, validates := dc.(driver.Validator)
+			keep = resets && validates
+			return nil
+		})
+		txCtx, cancel := context.WithCancel(context.WithValue(context.WithoutCancel(ctx), sqlBeginContext{}, ctx))
+		tx, err := conn.BeginTx(txCtx, &opts)
 		if err != nil {
+			cancel()
 			return nil, nil, fmt.Errorf("beginning the read-only transaction: %w", err)
+		}
+		rollback := func() {
+			ended := ctx.Err() != nil
+			_ = tx.Rollback()
+			cancel()
+			if ended && !keep {
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
 		}
 		if setup != nil {
 			for _, s := range setup(timeout) {
 				if _, err := tx.ExecContext(ctx, s); err != nil {
-					_ = tx.Rollback()
+					rollback()
 					return nil, nil, fmt.Errorf("running %s: %w", s, err)
 				}
 			}
 		}
 		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
-			_ = tx.Rollback()
+			rollback()
 			return nil, nil, err
 		}
-		return rows, func() { _ = rows.Close(); _ = tx.Rollback() }, nil
+		return rows, func() { _ = rows.Close(); rollback() }, nil
 	}
 }
+
+// sqlBeginContext is the context key of the context a transaction's BEGIN
+// is bounded by, which the guarded connection gives the driver in place of
+// the transaction's own (sqlTx).
+type sqlBeginContext struct{}
 
 // sqlPlain runs a statement as it is, for a driver that has no read-only
 // transaction: the account must be one that can only read.

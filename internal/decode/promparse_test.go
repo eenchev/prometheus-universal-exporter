@@ -82,6 +82,61 @@ latency_seconds_count{path="/b"} 0
 	}
 }
 
+// Two label sets are two histograms whatever bytes their values hold: a
+// value that is not UTF-8 is kept for the transform to repair, so a byte
+// that ends a name or a value in a series' signature is no end to it.
+// {a="x\xffb\xffy"} once took the signature of {a="x",b="y"} and its
+// samples were counted in that series.
+func TestPromParseLabelSetsOfAnyBytesAreTheirOwnSeries(t *testing.T) {
+	metrics := parseOK(t, "# TYPE h histogram\n"+
+		"h_bucket{a=\"x\xffb\xffy\",le=\"+Inf\"} 1\nh_sum{a=\"x\xffb\xffy\"} 5\nh_count{a=\"x\xffb\xffy\"} 1\n"+
+		"h_bucket{a=\"x\",b=\"y\",le=\"+Inf\"} 2\nh_sum{a=\"x\",b=\"y\"} 7\nh_count{a=\"x\",b=\"y\"} 2\n")
+	if len(metrics) != 2 {
+		t.Fatalf("%d series, want 2: %#v", len(metrics), metrics)
+	}
+	for i, want := range []struct {
+		labels     map[string]string
+		sum        float64
+		count, inf uint64
+	}{{map[string]string{"a": "x\xffb\xffy"}, 5, 1, 1}, {map[string]string{"a": "x", "b": "y"}, 7, 2, 2}} {
+		m := metrics[i]
+		if !reflect.DeepEqual(m.Labels, want.labels) || m.Histogram.Sum != want.sum || m.Histogram.Count != want.count || len(m.Histogram.Buckets) != 1 || m.Histogram.Buckets[0].CumulativeCount != want.inf {
+			t.Errorf("series %d: %q %#v, want %q sum %g count %d", i, m.Labels, m.Histogram, want.labels, want.sum, want.count)
+		}
+	}
+}
+
+// promSignature gives two label sets one signature only when they are the
+// same set, whichever bytes their values hold.
+func TestPromSignaturesAreTheSameOnlyForOneSet(t *testing.T) {
+	values := []string{"a", "b", "x", "\xff", "\x00", "\x01", "\x02", "a\xffb", "x\xffb\xff", "\x01a", "\x01a\x01"}
+	var sets [][]promLabel
+	for _, v1 := range values {
+		for _, v2 := range values {
+			sets = append(sets, []promLabel{{name: []byte("a"), value: []byte(v1 + v2)}})
+			sets = append(sets, []promLabel{{name: []byte("b"), value: []byte(v1)}, {name: []byte("a"), value: []byte(v2)}})
+		}
+	}
+	shown := func(set []promLabel) map[string]string {
+		m := map[string]string{}
+		for _, l := range set {
+			m[string(l.name)] = string(l.value)
+		}
+		return m
+	}
+	signatures := make([]string, len(sets))
+	for i, set := range sets {
+		signatures[i] = string(promSignature(nil, set))
+	}
+	for i := range sets {
+		for j := range i {
+			if one := reflect.DeepEqual(shown(sets[i]), shown(sets[j])); (signatures[i] == signatures[j]) != one {
+				t.Fatalf("%q and %q: same signature %t, one set %t", shown(sets[i]), shown(sets[j]), signatures[i] == signatures[j], one)
+			}
+		}
+	}
+}
+
 func TestPromParseSummaryGroupsQuantilesSumAndCount(t *testing.T) {
 	metrics := parseOK(t, `# TYPE rpc_seconds summary
 rpc_seconds{quantile="0.5"} 0.2

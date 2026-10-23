@@ -176,7 +176,8 @@ the request's own keys, each file read at every scrape:
 - A collector with `api_server` has no namespace of its own and lists
   `namespaces`, or sets `all_namespaces`.
 
-Without `api_server`, `tls` and `bearer_token_file` are refused: the
+Without `api_server`, `tls`, even an empty block, and `bearer_token_file`
+are refused: the
 exporter's own cluster is reached with its pod's service account alone.
 `--dry-run` reads the token and TLS files as a scrape would and warns of one
 a scrape would fail on.

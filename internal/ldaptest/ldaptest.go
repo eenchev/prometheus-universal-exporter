@@ -704,6 +704,11 @@ func parseFilter(raw []byte) (*filter, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
+		// RFC 4511 gives substrings SIZE (1..MAX): a server answers one of
+		// none protocolError, as this one does.
+		if len(list) == 0 {
+			return nil, "", errors.New("a SubstringFilter with no substring")
+		}
 		f.attribute = string(a)
 		text := "(" + f.attribute + "="
 		for len(list) > 0 {

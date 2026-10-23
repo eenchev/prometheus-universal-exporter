@@ -122,7 +122,9 @@ against the system's roots and `tls.ca_file`, for the name
 [the one `http` takes](REQUESTS.md#tls): `cert_file` and `key_file` present
 a client certificate, both or neither, and `insecure_skip_verify` skips the
 verification. There is no scheme for TLS in the target: the block alone says
-it.
+it, and a `tls` block, even an empty one, makes the scrape speak TLS:
+`tls: {}` asks for TLS verified against the system's roots, never for
+plaintext, so the label of such a scrape is `tls://host:port`.
 
 ```yaml
 request:
@@ -135,7 +137,7 @@ request:
 ## What a scrape sends
 
 A scrape makes one connection, speaks TLS over it when the collector has a
-`tls` block, writes `send` when it is set, reads the answer and closes the
+`tls` block, even an empty one, writes `send` when it is set, reads the answer and closes the
 connection; the next scrape makes its own. `send` is written as it is,
 nothing added: a protocol whose commands end with a line feed or `\r\n`
 needs it written at the end of `send`, and ZooKeeper's four-letter words take
@@ -144,10 +146,19 @@ since some servers stop answering a client that has closed it.
 
 A placeholder in `send` is filled from the probe's `param_<name>`
 parameter, as a path's is ([Path parameters](REQUESTS.md#path-parameters)),
-with its default when the probe gives none. A value holding a carriage
-return or a line feed is refused, answered `400` before the connection is
-made, since it would end the line `send` writes and start another, a command
-of the probe's choosing; any other value is written as it is. A probe
+with its default when the probe gives none. The value may hold only
+letters, digits and `. _ - : / @ + = , %`; any other character, a blank, a
+`;`, `|`, `&`, a quote, a `#`, a line break or another control character,
+or a letter outside ASCII, is refused, answered `400` naming the parameter
+and the character before the connection is made. Refusing line breaks alone
+would not do: these servers split a line on more than its end. HAProxy's
+runtime API runs each `;`-separated command of a line, so the example below
+with `param_proxy=-1;disable server app/app1` would disable a server, and
+memcached, ZooKeeper and NUT split a command's arguments on blanks, so a
+value with a blank adds an argument. The characters allowed are those that
+name a proxy, a server, a UPS or a key, and none of them separates or quotes,
+so a value is always one argument of the command `send` writes. A default
+is held to the same characters, checked when the collector loads. A probe
 parameter that no placeholder of `send` or of a label value names is refused,
 as for every type.
 
@@ -228,8 +239,16 @@ the four-letter words its `4lw.commands.whitelist` names, `mntr` among them:
 
 HAProxy's runtime API on a TCP socket, `stats socket ipv4@0.0.0.0:9999 level
 user` in its configuration, each proxy's and server's sessions and whether
-it is up, from `show stat`'s CSV. Its header line begins `# pxname`, which
-is the first column's name:
+it is serving, from `show stat`'s CSV. Its header line begins `# pxname`,
+which is the first column's name. Whether a frontend or a server serves is
+the first word of its status, more than a `value_map`, which matches whole
+texts, can read: HAProxy 2.8 writes `UP 1/3` for a server going down,
+`NOLB`, `DRAIN` and `no check` for servers that serve, and `DOWN 1/2`,
+`MAINT`, `MAINT (via app/app1)` and `DOWN (agent)` for ones that do not,
+and `STOP` for a stopped frontend. A `pre_script`
+([Python](PYTHON.md#what-data-is)) adds a column, `up`, for the rule to
+read, `0` for a status that begins `DOWN`, `MAINT` or `STOP`, or is empty,
+and `1` for any other:
 
 ```yaml
   - name: haproxy
@@ -238,6 +257,12 @@ is the first column's name:
       send: "show stat\n"
     transform:
       type: csv
+      pre_script: |
+        def up(status):
+            if not status or status.startswith(("DOWN", "MAINT", "STOP")):
+                return 0
+            return 1
+        data = [dict(row, up=up(row.get("status"))) for row in data]
     metrics:
       - name: haproxy_current_sessions
         expression: scur
@@ -255,12 +280,8 @@ is the first column's name:
           - name: server
             expression: svname
       - name: haproxy_up
-        description: 1 when the proxy or server is UP or OPEN
-        expression: status
-        value_map:
-          UP: 1
-          OPEN: 1
-          "*": 0
+        description: 1 when the proxy or server is serving
+        expression: up
         labels:
           - name: proxy
             expression: "# pxname"

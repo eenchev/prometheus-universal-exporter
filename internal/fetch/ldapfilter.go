@@ -44,21 +44,36 @@ var ldapAttributeName = regexp.MustCompile(model.LDAPAttributePattern)
 // errLDAPPlaceholderPlace is the refusal of a placeholder outside a value.
 var errLDAPPlaceholderPlace = errors.New("a placeholder may stand only in a value, where its value is escaped, never in an attribute's name or in the filter's structure")
 
-// ldapFilterParser reads a filter's text.
+// ldapFilterParser reads a filter's text. filled says the text is a
+// filter with its placeholders filled in, at a scrape, rather than the
+// filter as written, at load (ldapSubstrings).
 type ldapFilterParser struct {
-	text string
-	pos  int
+	text   string
+	pos    int
+	filled bool
 }
 
-// parseLDAPFilter parses a filter and returns its BER.
+// parseLDAPFilter parses a filter as it is written, its placeholders marked
+// (ldapMarked), and returns its BER.
 func parseLDAPFilter(text string) ([]byte, error) {
+	return (&ldapFilterParser{text: text}).parse()
+}
+
+// parseFilledLDAPFilter parses a filter whose placeholders a scrape filled
+// in, and returns its BER.
+func parseFilledLDAPFilter(text string) ([]byte, error) {
+	return (&ldapFilterParser{text: text, filled: true}).parse()
+}
+
+// parse reads the whole of p's text as one filter.
+func (p *ldapFilterParser) parse() ([]byte, error) {
+	text := p.text
 	if text == "" {
 		return nil, errors.New("the filter is empty")
 	}
 	if !strings.HasPrefix(text, "(") {
 		return nil, fmt.Errorf("the filter %q does not begin with (; write it in parentheses, as (%s)", text, text)
 	}
-	p := &ldapFilterParser{text: text}
 	ber, err := p.filter(0)
 	if err != nil {
 		return nil, err
@@ -194,6 +209,19 @@ func (p *ldapFilterParser) item() ([]byte, error) {
 			tag = 0x82 // final
 		}
 		substrings = append(substrings, berString(tag, decoded))
+	}
+	if len(substrings) == 0 {
+		// RFC 4511 gives a SubstringFilter at least one substring, and a
+		// server refuses one with none, so (cn=**) would fail every scrape.
+		// As written it is refused at load. Made so by placeholders filled
+		// with empty values, (cn=*{{param_x:}}*), it asks for a value
+		// holding the empty string, which every value does: it is sent as
+		// the presence filter, as (cn={{param_x:}}*) is, which fills in
+		// to (cn=*).
+		if !p.filled {
+			return nil, fmt.Errorf("the filter's item %q is a substring match with no substring between its wildcards, which RFC 4511 does not allow; write (%s=*) for the entries that have the attribute", item, attribute)
+		}
+		return berString(0x87, attribute), nil
 	}
 	return berElement(0xa4, berString(berOctetString, attribute), berElement(berSequence, substrings...)), nil
 }

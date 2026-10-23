@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -574,6 +575,51 @@ type TLSConfig struct {
 	// and sent as SNI, when the target is addressed by something else, such
 	// as an IP address.
 	ServerName string `yaml:"server_name" json:"server_name,omitempty"`
+	// Set says the tls key was written, even as an empty mapping: a request
+	// type that may speak TLS or not, such as tcp, ldap, redis, grpc and
+	// sql, speaks it when the block is written, so tls: {} asks for TLS
+	// verified with the system roots and never leaves a scrape plaintext.
+	// It is part of the value, so a block compared with TLSConfig{} is set
+	// when it was written. UnmarshalYAML sets it.
+	Set bool `yaml:"-" json:"-"`
+}
+
+// UnmarshalYAML reads a tls block, recording that it was written (Set). A
+// mapping a merge key (<<) or an alias supplies is written like one spelt
+// out, since the decoder reads it the same way.
+func (t *TLSConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain TLSConfig
+	n = resolveAlias(n)
+	if n.Kind != yaml.MappingNode {
+		return notAMapping(n, "model.TLSConfig")
+	}
+	// Node.Decode does not refuse unknown keys the way the file's decoder
+	// does, so they are checked here, or a misspelt key would be ignored.
+	if err := checkKnownKeys(n, reflect.TypeOf(plain{}), "model.TLSConfig"); err != nil {
+		return err
+	}
+	var out plain
+	if err := n.Decode(&out); err != nil {
+		return err
+	}
+	*t = TLSConfig(out)
+	t.Set = true
+	return nil
+}
+
+// MarshalYAML writes Set as written: true, so the YAML of a collector, which
+// a reload compares to tell a changed collector (config.encodedDefinition)
+// and the exporter's cache key is made from (collectorFingerprint), differs
+// between tls: {} and no tls block, which scrape differently.
+func (t TLSConfig) MarshalYAML() (any, error) {
+	type plain TLSConfig
+	if !t.Set {
+		return plain(t), nil
+	}
+	return struct {
+		Settings plain `yaml:",inline"`
+		Written  bool  `yaml:"written"`
+	}{plain(t), true}, nil
 }
 
 // ResponseConfig is a collector's response block: how to read the body the

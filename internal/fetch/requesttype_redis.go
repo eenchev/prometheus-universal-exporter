@@ -329,8 +329,8 @@ func parseRedisTarget(raw string) (redisAddress, error) {
 }
 
 // useTLS says whether a scrape of a goes over TLS: rediss://, or a tls
-// block on a target that did not ask for plaintext with redis://, which
-// the two together contradict.
+// block, even an empty one (model.TLSConfig.Set), on a target that did not
+// ask for plaintext with redis://, which the two together contradict.
 func (a redisAddress) useTLS(c *model.Collector) (bool, error) {
 	configured := c.Request.TLS != model.TLSConfig{}
 	if a.plain && configured {

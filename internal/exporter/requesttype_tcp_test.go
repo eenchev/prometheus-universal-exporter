@@ -72,9 +72,9 @@ collectors:
 // A tcp collector's probe gives the series its regex rules read from the
 // server's text; the verbose self-metrics label the scrape with
 // tcp://host:port and SEND; a refused target is answered 403 and counted;
-// a target without a port, and a placeholder value with a line feed, are
-// answered 400 before anything is sent; and the collectors page hints the
-// target as host:port.
+// a target without a port, and a placeholder value with a line feed or a
+// ';', are answered 400 before anything is sent; and the collectors page
+// hints the target as host:port.
 func TestATCPCollectorProbe(t *testing.T) {
 	exp, server := tcpExporter(t)
 	recorder := probeOnce(t, exp, "/probe?collector=memcached&target="+server.Addr, nil)
@@ -93,11 +93,18 @@ func TestATCPCollectorProbe(t *testing.T) {
 		t.Errorf("a target without a port: %d %s", recorder.Code, recorder.Body)
 	}
 	accepted := server.Accepted()
-	if recorder := probeOnce(t, exp, "/probe?collector=zookeeper&param_word=mntr%0Akill&target="+server.Addr, nil); recorder.Code == http.StatusOK || !strings.Contains(recorder.Body.String(), "holds a carriage return or a line feed") {
+	if recorder := probeOnce(t, exp, "/probe?collector=zookeeper&param_word=mntr%0Akill&target="+server.Addr, nil); recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "the value of param_word holds a line break (U+000A)") {
 		t.Errorf("a line feed in a parameter: %d %s", recorder.Code, recorder.Body)
 	}
 	if server.Accepted() != accepted {
 		t.Error("a line feed in a parameter was sent")
+	}
+	// HAProxy's runtime API would run the command after the ';'.
+	if recorder := probeOnce(t, exp, "/probe?collector=zookeeper&param_word=mntr%3Bkill&target="+server.Addr, nil); recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "the value of param_word holds ';' (U+003B)") {
+		t.Errorf("a ';' in a parameter: %d %s", recorder.Code, recorder.Body)
+	}
+	if server.Accepted() != accepted {
+		t.Error("a ';' in a parameter was sent")
 	}
 	metrics := probeOnce(t, exp, "/self-metrics", nil).Body.String()
 	for _, want := range []string{

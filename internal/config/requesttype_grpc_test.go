@@ -3,9 +3,13 @@
 package config
 
 import (
+	"context"
+	"io"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
@@ -212,5 +216,40 @@ func TestGRPCTargetCodesAreWrittenWhenTheFileIsLoaded(t *testing.T) {
 	request.Retry.Codes[0] = "SOMETIMES"
 	if err := ValidateStaticTargetsAgainst(f, cfg); err == nil || !strings.Contains(err.Error(), "request.retry.codes") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// A tls block written empty, tls: {}, makes a grpc call to a bare target
+// TLS, verified with the system roots, and its label grpcs://; it used to
+// be the zero block and the call plaintext. grpc:// with the block is
+// refused.
+func TestAnEmptyTLSBlockMakesAGRPCCallTLS(t *testing.T) {
+	cfg, err := Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: health
+    request:
+      type: grpc
+      rpc: grpc.health.v1.Health/Check
+      tls: {}
+    transform: {type: jq}
+    metrics: [{name: serving, expression: .status}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	// The stand-in reads, which makes the handshake, until the client goes.
+	server := testutil.NewTLSTCPStub(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+	if label, err := fetch.RequestLabelFor(server.Addr, c, fetch.RequestOverrides{}); err != nil || !strings.HasPrefix(label, "grpcs://"+server.Addr) {
+		t.Errorf("label %q, %v", label, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// The stand-in's certificate is not among the system roots: the
+	// handshake was made, and failed on the certificate.
+	if _, err := fetch.FetchCollector(ctx, server.Addr, c, fetch.RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Errorf("a TLS server: %v", err)
+	}
+	if _, err := fetch.RequestLabelFor("grpc://"+server.Addr, c, fetch.RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "target asks for plaintext with grpc://, but the collector sets request.tls") {
+		t.Errorf("grpc:// with tls: {}: %v", err)
 	}
 }

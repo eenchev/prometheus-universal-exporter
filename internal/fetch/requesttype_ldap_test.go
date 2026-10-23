@@ -368,6 +368,8 @@ func TestLDAPFiltersAreParsed(t *testing.T) {
 		`(cn=a\2)`:               "ends in an escape",
 		"(cn>=a*)":               "has * in a value of ~=, >= or <=",
 		"(cn=a(b)":               "has ( inside",
+		"(cn=**)":                "is a substring match with no substring between its wildcards, which RFC 4511 does not allow; write (cn=*)",
+		"(&(uid=a)(cn=***))":     `the filter's item "cn=***" is a substring match with no substring`,
 		strings.Repeat("(!", 40) + "(cn=a)" + strings.Repeat(")", 40): "nests &, | and ! more than 32 deep",
 	} {
 		if _, err := parseLDAPFilter(filter); err == nil || !strings.Contains(err.Error(), want) {
@@ -377,6 +379,37 @@ func TestLDAPFiltersAreParsed(t *testing.T) {
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "request.searches[0].filter: ") {
 			t.Errorf("%s loaded: %v", filter, err)
 		}
+	}
+}
+
+// A substring filter whose substrings placeholders fill in empty,
+// (cn=*{{param_x:}}*), asks for a value holding the empty string, which
+// every value does: it is sent as the presence filter (cn=*), as
+// (cn={{param_x:}}*) fills in to, never as a SubstringFilter of no
+// substring, which RFC 4511 forbids and a server refuses. With a value it
+// is the substring filter it is written as.
+func TestAnLDAPSubstringFilterFilledEmptyIsPresence(t *testing.T) {
+	server := ldaptest.New(t)
+	ldapPeople(server)
+	c := ldapCollector(t, func(c *model.Collector) {
+		c.Request.Searches[0].Base = "dc=example,dc=org"
+		c.Request.Searches[0].Filter = "(&(objectClass=person)(cn=*{{param_x:}}*))"
+		c.Request.Searches[0].Attributes = nil
+		c.Request.Searches[0].CountOnly = true
+	})
+	body, err := ldapScrape(t, c, server.Addr, nil)
+	if err != nil || !strings.Contains(body, `"count":2,`) {
+		t.Errorf("an empty value: %s %v", body, err)
+	}
+	if last := ldapLastSearch(server); last.Filter != "(&(objectClass=person)(cn=*))" {
+		t.Errorf("the filter sent %s", last.Filter)
+	}
+	body, err = ldapScrape(t, c, server.Addr, map[string]string{"param_x": "Turing"})
+	if err != nil || !strings.Contains(body, `"count":1,`) {
+		t.Errorf("a value: %s %v", body, err)
+	}
+	if last := ldapLastSearch(server); last.Filter != "(&(objectClass=person)(cn=*Turing*))" {
+		t.Errorf("the filter sent %s", last.Filter)
 	}
 }
 

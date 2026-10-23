@@ -251,9 +251,9 @@ func TestATCPCollectorFillsSendsPlaceholders(t *testing.T) {
 	if got := <-sent; got != "LIST VAR rack1\n" {
 		t.Errorf("sent %q", got)
 	}
-	for _, value := range []string{"ups\nFSD ups", "ups\rFSD ups"} {
+	for value, character := range map[string]string{"ups\nFSD ups": "a line break (U+000A)", "ups\rFSD": "a line break (U+000D)"} {
 		_, err := tcpScrape(t, c, server.Addr, map[string]string{"param_ups": value})
-		if err == nil || !strings.Contains(err.Error(), "request.send: the value of param_ups holds a carriage return or a line feed") {
+		if err == nil || !strings.Contains(err.Error(), "request.send: the value of param_ups holds "+character) {
 			t.Errorf("%q: %v", value, err)
 		}
 	}
@@ -262,6 +262,57 @@ func TestATCPCollectorFillsSendsPlaceholders(t *testing.T) {
 	}
 	if err := CheckPathParams(c, RequestOverrides{Params: map[string]string{"param_ups": "a", "param_other": "b"}}); err == nil || !strings.Contains(err.Error(), "param_other") || !strings.Contains(err.Error(), "request.send") {
 		t.Errorf("an unused parameter: %v", err)
+	}
+}
+
+// A placeholder's value in send may hold only letters, digits and
+// . _ - : / @ + = , %: HAProxy's runtime API runs each ';'-separated command
+// of a line, so docs/TCP.md's own example with param_proxy=-1;disable
+// server app/app1 would disable a server, and a blank or a quote would add
+// an argument. Each is refused before the connection is made, naming the
+// parameter and the character; every allowed character is sent. A default
+// is held to the same characters when the collector loads.
+func TestATCPCollectorHoldsSendsValuesToOneArgument(t *testing.T) {
+	sent := make(chan string, 32)
+	server := testutil.NewTCPStub(t, func(conn net.Conn) {
+		line, _ := testutil.ReadUntil(conn, "\n")
+		sent <- line
+	})
+	c := tcpCollector(t, func(c *model.Collector) { c.Request.Send = "show stat {{param_proxy:-1}} -1 -1\n" })
+	for value, character := range map[string]string{
+		"-1;disable server app/app1": `';' (U+003B)`,
+		"web 2":                      "a blank (U+0020)",
+		`web"`:                       `'"' (U+0022)`,
+		"web'":                       `'\'' (U+0027)`,
+		"web|x":                      `'|' (U+007C)`,
+		"web&x":                      `'&' (U+0026)`,
+		"web#x":                      `'#' (U+0023)`,
+		"web\tx":                     "a control character (U+0009)",
+		"web\x00":                    "a control character (U+0000)",
+		"wéb":                        `'é' (U+00E9)`,
+		"web\xff":                    "a byte that is not UTF-8",
+	} {
+		_, err := tcpScrape(t, c, server.Addr, map[string]string{"param_proxy": value})
+		if err == nil || !strings.Contains(err.Error(), "request.send: the value of param_proxy holds "+character+"; a value written into request.send may hold only letters, digits and . _ - : / @ + = , %") {
+			t.Errorf("%q: %v", value, err)
+		}
+		if err := CheckPathParams(c, RequestOverrides{Params: map[string]string{"param_proxy": value}}); err == nil {
+			t.Errorf("%q: the probe's check took it", value)
+		}
+	}
+	if n := server.Accepted(); n != 0 {
+		t.Errorf("a refused value was sent: %d connections", n)
+	}
+	allowed := "Web-1.app_2:3/x@y+z=w,v%20"
+	if _, err := tcpScrape(t, c, server.Addr, map[string]string{"param_proxy": allowed}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sent; got != "show stat "+allowed+" -1 -1\n" {
+		t.Errorf("sent %q", got)
+	}
+	bad := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Send: "show stat {{param_proxy:-1;x}}\n"}}
+	if err := ValidateRequest(bad); err == nil || !strings.Contains(err.Error(), `collector "stats" request.send: the default of param_proxy holds ';' (U+003B)`) {
+		t.Errorf("a default with ';': %v", err)
 	}
 }
 

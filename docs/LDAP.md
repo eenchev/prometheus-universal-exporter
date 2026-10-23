@@ -165,7 +165,11 @@ way the server's certificate is verified against the system's roots and
 `tls.ca_file`, for the name `tls.server_name` or else the target's host.
 The block is [the one `http` takes](REQUESTS.md#tls): `cert_file` and
 `key_file` present a client certificate, and `insecure_skip_verify` skips
-the verification.
+the verification. A `tls` block, even an empty one, counts: `tls: {}` on a
+bare `host:port` speaks TLS from the start, port 636 when the target names
+none, verified against the system's roots, and the label is `ldaps://`, so
+the bind's password never goes out in plaintext on 389 because the block
+holds no keys.
 
 ```yaml
 request:
@@ -181,7 +185,7 @@ request:
       count_only: true
 ```
 
-`ldap://` with a `tls` block and no `start_tls` is refused, the two saying
+`ldap://` with a `tls` block, empty or not, and no `start_tls` is refused, the two saying
 opposite things, and so is `ldaps://` with `start_tls`, TLS being begun
 twice. A server that refuses StartTLS fails the scrape, with the server's
 words, before the password is sent.
@@ -196,7 +200,7 @@ before the next is sent:
 | `name` | — | **Required.** The name the result is put under in the document, letters, digits and `_`, not starting with a digit, unique among the collector's searches. |
 | `base` | `""`, the root DSE | The DN the search starts at, such as `ou=people,dc=example,dc=org`; `""` with `scope: base` reads the root DSE, the server's `namingContexts` and `supportedControl` among its attributes. |
 | `scope` | `sub` | `base`, the base entry alone; `one`, the entries right under it; `sub`, the base and everything under it. |
-| `filter` | `(objectClass=*)` | The filter the entries are matched with, as [RFC 4515](https://www.rfc-editor.org/rfc/rfc4515) writes one, in parentheses: `&`, `\|`, `!`, `=`, `=*`, substrings with `*`, `>=`, `<=`, `~=` and extensible match, such as `(userAccountControl:1.2.840.113556.1.4.803:=2)`; a `(`, `)`, `*` or `\` in a value is written `\28`, `\29`, `\2a` or `\5c`. |
+| `filter` | `(objectClass=*)` | The filter the entries are matched with, as [RFC 4515](https://www.rfc-editor.org/rfc/rfc4515) writes one, in parentheses: `&`, `\|`, `!`, `=`, `=*`, substrings with `*`, `>=`, `<=`, `~=` and extensible match, such as `(userAccountControl:1.2.840.113556.1.4.803:=2)`; a `(`, `)`, `*` or `\` in a value is written `\28`, `\29`, `\2a` or `\5c`. A substring match with nothing between its wildcards, `(cn=**)`, is refused when the configuration loads: RFC 4511 does not allow one, and every scrape would fail on it; `(cn=*)` is the presence filter. |
 | `attributes` | none: the DNs alone | The attributes each entry is read with, such as `[cn, mail]`, by name or OID, `*` for every user attribute and `+` for every operational one. Left out, the search asks for `1.1`, no attribute at all. |
 | `count_only` | `false` | Count the entries, holding none of them: the result has no `entries`. Not with `attributes` or `max_entries`. |
 | `max_entries` | `1000` | The most entries a search that is not `count_only` may match; one more fails the scrape, asking for a narrower filter or `count_only`. |
@@ -260,6 +264,15 @@ attribute's value, filled escaped as RFC 4514 escapes one, so a probe's
 in an attribute's name, in the filter's structure, as a whole DN, or in any
 other key — `name`, `scope`, `attributes`, `bind_dn` — is refused when the
 configuration loads.
+
+A probe's empty value is no value, and the placeholder's default stands in
+for it; only an empty default, `{{param_x:}}`, fills a placeholder with
+nothing. A substring match that is left with no substring by that,
+`(cn=*{{param_x:}}*)` filled as `(cn=**)`, asks for a value holding the
+empty string, which every value does, so it is sent as the presence filter
+`(cn=*)`, the same filter `(cn={{param_x:}}*)` fills in to. A substring
+match of no substring is never sent as one: RFC 4511 does not allow it, and
+a server refuses it.
 
 ```yaml
 searches:

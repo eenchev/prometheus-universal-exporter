@@ -337,8 +337,9 @@ HTTP service discovery does, sending `X-Prometheus-Refresh-Interval-Seconds`.
 `timeout`, no longer than the refresh interval, bounds the request; left
 out, it is `10s`, or the refresh interval when that is shorter; `bearer_token_file` holds a token sent as `Authorization:
 Bearer`, read again at every refresh; `tls` is the exporter's `tls` block
-(`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`).
-Redirects are not followed, and an answer that is not `200` fails.
+(`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`),
+for an `https` URL only: a `tls` block, even an empty one, beside an `http`
+URL is refused at load, since the request would never use it. Redirects are not followed, and an answer that is not `200` fails.
 
 **`kubernetes`** lists the `discovery.k8s.io/v1` EndpointSlices of the
 cluster the allocator runs in, every `refresh_interval`, `30s` by default,

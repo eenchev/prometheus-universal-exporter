@@ -41,9 +41,14 @@ import (
 // between scrapes would need a keepalive, an idle timeout and a limit of
 // its own.
 //
-// send may hold {{param_name}} placeholders, filled from the probe; a value
-// holding a carriage return or a line feed is refused, since it would end
-// the line the configuration wrote and start a command of the probe's.
+// send may hold {{param_name}} placeholders, filled from the probe. A value
+// may hold only letters, digits and . _ - : / @ + = , % (lineValue), and
+// any other is refused before the connection is made: a line break would
+// end the line the configuration wrote, but so would less, since these
+// servers split a line on more than its end. HAProxy's runtime API runs
+// each ';'-separated command of a line, and memcached, ZooKeeper and NUT
+// split arguments on blanks, so a value with a ';' or a blank could add a
+// command or an argument of the probe's.
 //
 // Reading stops once the answer ends with terminator, which stays in the
 // body, or, without one, when the server closes the connection. Either way
@@ -109,8 +114,16 @@ func validateTCPRequest(x *model.Collector) error {
 	if HasPathParams(r.Terminator) {
 		return fmt.Errorf("collector %q request.terminator %q has a placeholder; the end of the answer is matched as it is written", x.Name, r.Terminator)
 	}
-	if _, err := (templateField{"request.send", r.Send, "line"}).parse(); err != nil {
+	placeholders, err := (templateField{"request.send", r.Send, "line"}).parse()
+	if err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	// A default is held to what a probe's value is, here rather than at
+	// every scrape that leaves the parameter out.
+	for _, p := range placeholders {
+		if character, refused := lineValueRefused(p.Default); p.HasDefault && refused {
+			return fmt.Errorf("collector %q request.send: the default of %s holds %s; %s", x.Name, p.Name, character, lineValueRule)
+		}
 	}
 	return nil
 }
@@ -150,7 +163,9 @@ func parseTCPTarget(raw string) (tcpAddress, error) {
 	return tcpAddress{host: canonical, hostPort: net.JoinHostPort(canonical, port)}, nil
 }
 
-// tcpSecure says whether a scrape of c speaks TLS: when it sets a tls block.
+// tcpSecure says whether a scrape of c speaks TLS: when it writes a tls
+// block, even an empty one (model.TLSConfig.Set), which asks for TLS
+// verified with the system roots rather than leaving the scrape plaintext.
 func tcpSecure(c *model.Collector) bool {
 	return c.Request.TLS != model.TLSConfig{}
 }

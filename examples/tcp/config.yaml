@@ -160,8 +160,23 @@ collectors:
     request:
       type: tcp
       send: "show stat\n"
+    # Whether a frontend or a server is serving is the first word of its
+    # status, which a value_map, matching whole texts, cannot read: HAProxy
+    # writes "UP 1/3" for a server going down, "DOWN 1/2" for one coming
+    # up and "MAINT (via app/app1)" for one in maintenance through the
+    # server it tracks. The pre_script adds a column, up, for haproxy_up to
+    # read: 0 for a status beginning DOWN, MAINT or STOP (a stopped
+    # frontend), or an empty one; 1 for any other, which is serving: UP,
+    # OPEN, NOLB and DRAIN (up, though the balancer sends it no new
+    # sessions), and "no check" (up, with no health check).
     transform:
       type: csv
+      pre_script: |
+        def up(status):
+            if not status or status.startswith(("DOWN", "MAINT", "STOP")):
+                return 0
+            return 1
+        data = [dict(row, up=up(row.get("status"))) for row in data]
     # Each series carries its proxy, its frontend, backend or server, and
     # which of the three it is: the first rule's labels, anchored as
     # &haproxy, are every other rule's, *haproxy.
@@ -217,14 +232,8 @@ collectors:
         expression: hrsp_5xx
         required: false
         labels: *haproxy
-      # UP for a server whose checks pass and OPEN for a frontend are 1;
-      # DOWN, MAINT, and a server's "no check" when it has no health check,
-      # are 0.
+      # The column the pre_script added.
       - name: haproxy_up
-        description: 1 when the frontend is open or the server is up
-        expression: status
-        value_map:
-          UP: 1
-          OPEN: 1
-          "*": 0
+        description: 1 when the frontend, backend or server is serving
+        expression: up
         labels: *haproxy

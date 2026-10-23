@@ -1198,8 +1198,9 @@ keys:
   `grpcs://host:port`, with a port from 1 to 65535; any other scheme, a path,
   a query or a user MUST be refused, a probe's with `400` before anything is
   called and a static target's at load. A bare target MUST be plaintext;
-  `grpcs://` or any `tls` key MUST make the call TLS, and `grpc://` with a
-  `tls` key MUST be refused.
+  `grpcs://` or a written `tls` block MUST make the call TLS, an empty one
+  (`tls: {}`) as much as one with keys, verified with the system roots, and
+  `grpc://` with a written `tls` block MUST be refused.
 - A target's host MUST be handed to grpc-go as a DNS name or address
   (`dns:///host:port`) in every form of target, so that a host named like one
   of grpc-go's resolvers, such as `unix-abstract` or `passthrough`, is that
@@ -1667,18 +1668,20 @@ of objects, one a row, of its columns by name. Its keys:
   (`false`, `true`); `snowflake` `warehouse`, `role` and `schema`; `vertica`
   `tlsmode` (`none`, `server`, `server-strict`). `sslmode`, `tls`, `encrypt`,
   `ssl`, `secure` and `tlsmode` say whether TLS is used; left out, a
-  collector with a `tls` key MUST use TLS, verified against
-  `tls.server_name` or the target's host, and one without none
+  collector with a written `tls` block, an empty one (`tls: {}`) as much as
+  one with keys, MUST use TLS, verified against `tls.server_name` or the
+  target's host, and one without none
   (`snowflake` always uses TLS). A value of the option that does not verify
-  the certificate MUST skip the verification; a `tls` key beside a value that
-  uses no TLS, `tls.ca_file` or `tls.server_name` beside a value that does
+  the certificate MUST skip the verification; a written `tls` block, even an
+  empty one, beside a value that uses no TLS, `tls.ca_file` or `tls.server_name` beside a value that does
   not verify the certificate (`postgres` `require`, `mysql` `skip-verify`,
   `vertica` `server`), saying to use the verifying value or leave them out,
   and `tls.server_name` for `oracle`, which sets the name itself, MUST be
   refused at load; `cert_file` and `key_file` MAY be set beside a value that
   does not verify. `sqlserver` with `encrypt` `false` or left
-  out and no `tls` key MUST NOT verify the certificate of the login's TLS,
-  and with a `tls` key MUST verify it as the keys say; unless `encrypt` is
+  out and no `tls` block MUST NOT verify the certificate of the login's TLS,
+  and with a written `tls` block MUST verify it as the keys say, with the
+  system roots for an empty one; unless `encrypt` is
   `disable`, a server answering that it does not support encryption MUST
   fail the scrape, saying to enable encryption on the server or write
   `encrypt: disable`, before the login is sent; and, unless `encrypt` is
@@ -2093,7 +2096,7 @@ keys:
 | `max_objects` | 10000 | Zero or more, `0` the default; negative MUST be refused at load. |
 | `max_response_bytes` | 10 MiB | As every type's response limit (below). |
 | `api_server` | the exporter's own cluster's | An `https` URL with a host, a path or not, and no user, query or fragment; anything else MUST be refused at load. |
-| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it. With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
+| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it, a written `tls` block even when empty (`tls: {}`). With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
 
 - The core group's `secrets` MUST be refused at load, by the exporter and
   by the schema (§ 24.3): their values would pass through the transforms.
@@ -2177,7 +2180,7 @@ carries it. Its keys:
 | `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
 | `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
 | `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
-| `tls` | none | As `http`'s; set, the scrape speaks TLS. |
+| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
 - The client MUST speak RESP2 and MUST NOT send `HELLO`; it MUST link no
@@ -2241,9 +2244,11 @@ carries it. Its keys:
   `rediss://` URL of one, port 6379 when it names none, with no user,
   path, query or other scheme, which MUST be answered `400` before
   anything is sent, as a static target's is refused at load. It is
-  required. `rediss://`, or a `tls` block, MUST make the scrape speak TLS,
-  verifying the certificate against `tls.server_name` or the target's
-  host; `redis://` with a `tls` block MUST be refused. The target lists
+  required. `rediss://`, or a written `tls` block, an empty one (`tls: {}`)
+  as much as one with keys, MUST make the scrape speak TLS, verifying the
+  certificate against `tls.server_name` or the target's host, with the
+  system roots and `ca_file`'s; `redis://` with a written `tls` block MUST
+  be refused. The target lists
   MUST be applied to the host before the connection and to the address
   connected to, as `http`'s are, a refused one answered `403`, counted in
   `http_exporter_targets_refused_total`, and never connected to.
@@ -2285,7 +2290,7 @@ types at build time): only a build asked for it carries it. Its keys:
 | --- | --- | --- |
 | `send` | none | The text written once the connection is made; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
 | `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
-| `tls` | none | As `http`'s; set, the scrape speaks TLS. |
+| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
 - `send` and `terminator` written `""` MUST be the keys left out. Either
@@ -2293,12 +2298,19 @@ types at build time): only a build asked for it carries it. Its keys:
   `send` that does not parse or names a filter MUST be refused at load, as
   MUST a `tls` block with one of `cert_file` and `key_file` alone.
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
-  default, written as it is; a value holding a carriage return or a line
-  feed MUST be refused with `400`, before the connection is made, so that a
-  probe cannot end the line and send a command of its own. A probe
+  default, written as it is. A value MUST hold only ASCII letters, digits
+  and `. _ - : / @ + = , %`; a value holding any other character, a blank,
+  `;`, `|`, `&`, a quote, `#`, a control character or a character outside
+  ASCII, MUST be refused with `400` before the connection is made, the
+  refusal naming the parameter and the character, so that a probe cannot
+  end the line, add a `;`-separated command (HAProxy's runtime API runs
+  every one on a line) or add an argument. A default holding such a
+  character MUST be refused at load. A probe
   parameter that no placeholder of `send` or of a label value names MUST be
   refused, the refusal naming `request.send`.
-- A scrape MUST make one connection, speak TLS over it when `tls` is set,
+- A scrape MUST make one connection, speak TLS over it when a `tls` block is
+  written, an empty one (`tls: {}`) as much as one with keys, verifying the
+  certificate with the system roots and `ca_file`'s,
   write `send` when it is set, nothing added to it, read the answer and
   close the connection; it MUST NOT close its writing half before the
   answer is read. With `terminator`, reading MUST stop once the bytes read
@@ -2365,8 +2377,10 @@ asked for it carries it. Its keys:
   `filter` an RFC 4515 filter in parentheses — and, or, not, equality,
   substrings, `>=`, `<=`, presence, approximate and extensible match —
   `(objectClass=*)` when left out, nesting `&`, `|` and `!` at most 32
-  deep; each of its `attributes` an attribute's name or OID with options,
-  `*` or `+`, each named once in any case. `count_only` MUST NOT go with
+  deep, and a substring match with no substring between its wildcards,
+  `(cn=**)`, which RFC 4511 does not allow, MUST be refused, saying to
+  write `(cn=*)` for presence; each of its `attributes` an attribute's name
+  or OID with options, `*` or `+`, each named once in any case. `count_only` MUST NOT go with
   `attributes` or `max_entries`, and `max_entries` MUST NOT be negative,
   `0` being the default of 1000. Each MUST be refused at load otherwise.
 - A placeholder MAY stand in a search's `base` and `filter` alone, and
@@ -2375,7 +2389,10 @@ asked for it carries it. Its keys:
   escaped as RFC 4515 escapes one, so no probe's value can change the
   base's RDNs or the filter's structure; a placeholder in a DN's attribute
   type, a filter's attribute or structure, or any other key MUST be refused
-  at load.
+  at load. A substring match that placeholders filled with empty values
+  leave with no substring, `(cn=*{{param_x:}}*)`, MUST be sent as the
+  presence filter `(cn=*)`, as `(cn={{param_x:}}*)` fills in to, and never
+  as a SubstringFilter of no substring.
 - A scrape MUST make one connection, begin TLS on it when `start_tls` is
   set, send a simple bind, as `bind_dn` or anonymous, and then each search
   in order, each answered before the next is sent, and end with an unbind.
@@ -2417,12 +2434,14 @@ asked for it carries it. Its keys:
   `ldaps://` URL of one, port 389, or 636 for TLS from the start, when it
   names none, with no user, path, query or other scheme, which MUST be
   answered `400` before anything is sent, as a static target's is refused
-  at load. It is required. `ldaps://`, or a `tls` block without
-  `start_tls`, MUST make the scrape speak TLS from the start, and
+  at load. It is required. `ldaps://`, or a written `tls` block without
+  `start_tls`, an empty one (`tls: {}`) as much as one with keys, MUST
+  make the scrape speak TLS from the start, port 636 for a bare host, so
+  that the bind's password never goes out in plaintext, and
   `start_tls` MUST make it send StartTLS before the bind, either verifying
   the certificate against `tls.server_name` or the target's host; a
-  refused StartTLS MUST fail the scrape. `ldap://` with a `tls` block and
-  no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
+  refused StartTLS MUST fail the scrape. `ldap://` with a written `tls`
+  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
   target lists MUST be applied to the host before the connection and to the
   address connected to, as `http`'s are, a refused one answered `403`,
   counted in `http_exporter_targets_refused_total`, and never connected to.
@@ -28745,7 +28764,8 @@ from the directory of the file naming them, read again at every refresh.
 `http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
 asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
 optional `bearer_token_file` read again at every refresh and a `tls` block
-(only for `https`), without following redirects. Both MUST read a list of
+(only for `https`: a written one, even empty, with an `http` URL MUST be
+refused at load), without following redirects. Both MUST read a list of
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and

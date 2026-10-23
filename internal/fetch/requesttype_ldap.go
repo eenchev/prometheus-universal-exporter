@@ -270,7 +270,9 @@ func parseLDAPTarget(raw string) (ldapAddress, error) {
 }
 
 // security says how a scrape of a is secured: ldaps://, or a tls block on
-// a target that does not use start_tls, is TLS from the start; start_tls
+// a target that does not use start_tls, is TLS from the start, an empty
+// block as much as one with keys (model.TLSConfig.Set), so tls: {} never
+// sends the bind's password in plaintext; start_tls
 // is StartTLS on ldap:// or a bare host. ldap:// with a tls block and no
 // start_tls, and ldaps:// with start_tls, contradict each other.
 func (a ldapAddress) security(c *model.Collector) (ldapSecurity, error) {
@@ -384,7 +386,7 @@ func ldapCalls(c *model.Collector, params map[string]string) ([]ldapCall, error)
 				return nil, err
 			}
 		}
-		ber, err := parseLDAPFilter(filter)
+		ber, err := parseFilledLDAPFilter(filter)
 		if err != nil {
 			return nil, fmt.Errorf("%s.filter: %w", where, err)
 		}

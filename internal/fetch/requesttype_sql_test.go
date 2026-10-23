@@ -22,6 +22,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/sqltest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"gopkg.in/yaml.v3"
 )
 
 // sqlFixture is a stand-in database that every connection of the sql
@@ -775,11 +776,15 @@ func TestEveryBuildWithSQLHasTheDefaultDrivers(t *testing.T) {
 }
 
 // The TLS of a connection is the driver option's, or, left out, verified
-// TLS with a tls key and none without: off is nil, verify checks the
+// TLS with a tls block, even an empty one, and none without: off is nil, verify checks the
 // certificate against server_name or the host, and a mode without
 // verification skips the check.
 func TestTheTLSOfASQLConnection(t *testing.T) {
 	d := sqlDriverTable[SQLDriverPostgres]
+	var emptyTLS model.TLSConfig
+	if err := yaml.Unmarshal([]byte("{}"), &emptyTLS); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		options  map[string]string
 		tls      model.TLSConfig
@@ -792,6 +797,8 @@ func TestTheTLSOfASQLConnection(t *testing.T) {
 		{map[string]string{"sslmode": "verify-full"}, model.TLSConfig{}, true, false, "db.example"},
 		{map[string]string{"sslmode": "require"}, model.TLSConfig{}, true, true, "db.example"},
 		{map[string]string{"sslmode": "disable"}, model.TLSConfig{}, false, false, ""},
+		// tls: {}, a block written empty: verified TLS, as with a key.
+		{nil, emptyTLS, true, false, "db.example"},
 	} {
 		base := &sqlBase{tls: tc.tls}
 		config, digest, err := sqlTLSConfig(d, base, tc.options, "db.example")

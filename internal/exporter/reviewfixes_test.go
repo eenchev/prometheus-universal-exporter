@@ -94,6 +94,12 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 			if !field.IsExported() || key == "" {
 				continue
 			}
+			if key == "-" && typ == reflect.TypeOf(model.TLSConfig{}) && field.Name == "Set" {
+				// Written by TLSConfig's MarshalYAML, as written: true, so
+				// a leaf like the others, which must change the key.
+				out = append(out, leaf{prefix + field.Name, append(append([]int(nil), index...), i)})
+				continue
+			}
 			if key == "-" {
 				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" {
 					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)

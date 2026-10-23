@@ -130,8 +130,10 @@ name `tls.server_name` or else the target's host. The block is
 [the one `http` takes](REQUESTS.md#tls): `cert_file` and `key_file` present a
 client certificate, to a server started with `tls-auth-clients yes`, and
 `insecure_skip_verify` skips the verification. A bare `host:port` with a
-`tls` block speaks TLS; `redis://` with one is refused, the two saying
-opposite things.
+`tls` block speaks TLS, and a `tls` block, even an empty one, counts:
+`tls: {}` asks for TLS verified against the system's roots, and the label
+is `rediss://`. `redis://` with a `tls` block, empty or not, is refused, the
+two saying opposite things.
 
 ```yaml
 request:

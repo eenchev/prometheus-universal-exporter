@@ -19,8 +19,9 @@ import (
 // commands of examples/tcp, cut short but in their order and form: STAT
 // lines ending in CRLF and END; a name, a tab and a value on each line,
 // the version and the state text; and show stat's CSV, whose frontend has
-// no queue and whose servers have no HTTP responses counted.
-const (
+// no queue and whose servers have no HTTP responses counted, with a
+// stopped frontend and a server in each state tcpExampleStatuses lists.
+var (
 	tcpExampleStats = "STAT pid 1\r\nSTAT uptime 3600\r\nSTAT version 1.6.29\r\nSTAT curr_connections 10\r\nSTAT total_connections 250\r\n" +
 		"STAT cmd_get 100\r\nSTAT cmd_set 40\r\nSTAT cmd_flush 0\r\nSTAT cmd_touch 2\r\nSTAT get_hits 90\r\nSTAT get_misses 10\r\n" +
 		"STAT bytes_read 52000\r\nSTAT bytes_written 98000\r\nSTAT limit_maxbytes 67108864\r\nSTAT bytes 4096\r\nSTAT curr_items 120\r\nSTAT evictions 3\r\nEND\r\n"
@@ -30,8 +31,42 @@ const (
 		"web,FRONTEND,,,3,10,262124,120,1000,2000,0,0,0,,,,,OPEN,,,,,,,,,1,2,0,,,,0,1,0,4,,,,0,110,2,5,3,\n" +
 		"app,app1,0,0,2,5,,80,700,1500,,0,,0,0,0,0,UP,1,1,0,0,0,600,0,,1,3,1,,80,,2,1,,3,L7OK,200,1,,,,,,\n" +
 		"app,app2,1,2,0,3,,40,300,500,,0,,4,0,0,0,DOWN,1,1,0,3,1,30,30,,1,3,2,,40,,2,0,,2,L4CON,,0,,,,,,\n" +
-		"app,BACKEND,1,2,2,6,26213,120,1000,2000,0,0,,4,0,0,0,UP,1,1,0,,0,600,0,,1,3,0,,120,,1,1,,4,,,,0,110,2,5,3,\n\n"
+		"app,BACKEND,1,2,2,6,26213,120,1000,2000,0,0,,4,0,0,0,UP,1,1,0,,0,600,0,,1,3,0,,120,,1,1,,4,,,,0,110,2,5,3,\n" +
+		"admin,FRONTEND,,,0,0,100,0,0,0,0,0,0,,,,,STOP,,,,,,,,,1,4,0,,,,0,0,0,0,,,,0,0,0,0,0,\n" +
+		tcpExampleServerRows + "\n"
 )
+
+// tcpExampleStatuses are the states HAProxy 2.8 writes in show stat's
+// status column for a server, by the server's name in the stand-in, and
+// whether the server is serving: going down (UP 1/3), up but taking no
+// new sessions from the balancer (NOLB) or draining (DRAIN), and serving
+// without a health check (no check), all serving; coming up (DOWN 1/2), in
+// maintenance, itself or through the server it tracks, down by its agent,
+// and a cell left empty, none serving.
+var tcpExampleStatuses = []struct {
+	name, status string
+	up           bool
+}{
+	{"going_down", "UP 1/3", true},
+	{"nolb", "NOLB", true},
+	{"drain", "DRAIN", true},
+	{"unchecked", "no check", true},
+	{"coming_up", "DOWN 1/2", false},
+	{"maint", "MAINT", false},
+	{"tracking", "MAINT (via app/app1)", false},
+	{"agent_down", "DOWN (agent)", false},
+	{"empty", "", false},
+}
+
+// tcpExampleServerRows are app2's row of show stat for each state of
+// tcpExampleStatuses, under its name.
+var tcpExampleServerRows = func() string {
+	var b strings.Builder
+	for _, s := range tcpExampleStatuses {
+		b.WriteString("app," + s.name + ",1,2,0,3,,40,300,500,,0,,4,0,0,0," + s.status + ",1,1,0,3,1,30,30,,1,3,2,,40,,2,0,,2,L4CON,,0,,,,,,\n")
+	}
+	return b.String()
+}()
 
 // tcpExampleServer answers stats as memcached does, keeping the connection
 // for the next command, and mntr and show stat as ZooKeeper and HAProxy
@@ -103,6 +138,18 @@ func TestTheTCPExamplesReadTheirServices(t *testing.T) {
 			absent: []string{"haproxy_queued_requests" + frontend, "haproxy_session_limit" + app1, "haproxy_http_responses_5xx_total" + app1},
 		},
 	} {
+		if collector == "haproxy" {
+			// A stopped frontend is not open; each server's state is up
+			// as it serves, the status read by its first word.
+			c.want = append(c.want, `haproxy_up{name="FRONTEND",proxy="admin",type="frontend"} 0`)
+			for _, s := range tcpExampleStatuses {
+				up := "0"
+				if s.up {
+					up = "1"
+				}
+				c.want = append(c.want, `haproxy_up{name="`+s.name+`",proxy="app",type="server"} `+up)
+			}
+		}
 		recorder := httptest.NewRecorder()
 		exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+server.Addr+"&collector="+collector, nil))
 		body := recorder.Body.String()

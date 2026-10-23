@@ -3,9 +3,13 @@
 package config
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/ldaptest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -58,5 +62,57 @@ func TestAnLDAPCollectorDecodesJSON(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", transform, err)
 		}
+	}
+}
+
+// A tls block written empty, tls: {}, makes an ldap scrape of a bare
+// host:port speak TLS from the start, verified with the system roots, and
+// its label ldaps://: the bind's password never goes to a plaintext server,
+// which used to be where it went. ldap:// with the block is refused.
+func TestAnEmptyTLSBlockMakesAnLDAPScrapeSpeakTLS(t *testing.T) {
+	password := testutil.WriteFile(t, "password", "secret")
+	cfg, err := Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: directory
+    request:
+      type: ldap
+      tls: {}
+      bind_dn: cn=exporter,dc=example,dc=org
+      password_file: `+password+`
+      searches:
+        - name: people
+          base: ou=people,dc=example,dc=org
+          count_only: true
+    transform: {type: jq}
+    metrics: [{name: people, expression: .searches.people.count}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	scrape := func(target string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := fetch.FetchCollector(ctx, target, c, fetch.RequestOverrides{}, nil)
+		return err
+	}
+	secure := ldaptest.NewTLS(t)
+	if label, err := fetch.RequestLabelFor(secure.Addr, c, fetch.RequestOverrides{}); err != nil || label != "ldaps://"+secure.Addr {
+		t.Errorf("label %q, %v", label, err)
+	}
+	// The stand-in's certificate is not among the system roots.
+	if err := scrape(secure.Addr); err == nil || !strings.Contains(err.Error(), "TLS handshake with "+secure.Addr) {
+		t.Errorf("a TLS server: %v", err)
+	}
+	plain := ldaptest.New(t)
+	if err := scrape(plain.Addr); err == nil {
+		t.Error("a plaintext server was scraped")
+	}
+	for _, r := range plain.Requests() {
+		if r.Op == "BIND" {
+			t.Errorf("the bind went to a plaintext server: %+v", r)
+		}
+	}
+	if _, err := fetch.RequestLabelFor("ldap://"+plain.Addr, c, fetch.RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "target asks for plaintext with ldap://, but the collector sets request.tls") {
+		t.Errorf("ldap:// with tls: {}: %v", err)
 	}
 }

@@ -18,10 +18,13 @@ import (
 // The answers of the stand-in services the examples of docs/TCP.md are
 // tried against, as memcached 1.6, ZooKeeper 3.8 and HAProxy 2.8 write
 // them, cut short.
-const (
+var (
 	tcpDocsMemcached = "STAT pid 1\r\nSTAT uptime 3600\r\nSTAT curr_connections 10\r\nSTAT curr_items 120\r\nSTAT bytes 4096\r\nSTAT limit_maxbytes 67108864\r\nSTAT get_hits 90\r\nSTAT get_misses 10\r\nSTAT evictions 0\r\nEND\r\n"
 	tcpDocsMntr      = "zk_version\t3.8.4-9316c2a7a97e1666d8f4593f34dd6fc36ecc436c, built on 2024-02-12 22:16 UTC\nzk_server_state\tleader\nzk_avg_latency\t0.5\nzk_znode_count\t42\nzk_open_file_descriptor_count\t61\n"
-	tcpDocsShowStat  = "# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,dreq,dresp,ereq,econ,eresp,wretr,wredis,status,\nweb,FRONTEND,,,3,10,262124,120,1000,2000,0,0,0,,,,,OPEN,\nweb,app1,0,0,2,5,,80,700,1500,,0,,0,0,0,0,UP,\nweb,app2,0,0,0,3,,40,300,500,,0,,1,0,0,0,DOWN,\n\n"
+	tcpDocsShowStat  = "# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,dreq,dresp,ereq,econ,eresp,wretr,wredis,status,\nweb,FRONTEND,,,3,10,262124,120,1000,2000,0,0,0,,,,,OPEN,\nweb,app1,0,0,2,5,,80,700,1500,,0,,0,0,0,0,UP,\nweb,app2,0,0,0,3,,40,300,500,,0,,1,0,0,0,DOWN,\n" +
+		"web,app3,0,0,0,3,,40,300,500,,0,,1,0,0,0,UP 1/3,\nweb,app4,0,0,0,3,,40,300,500,,0,,1,0,0,0,no check,\n" +
+		"web,app5,0,0,0,3,,40,300,500,,0,,1,0,0,0,MAINT (via web/app1),\nweb,app6,0,0,0,3,,40,300,500,,0,,1,0,0,0,DOWN 1/2,\n" +
+		"admin,FRONTEND,,,0,0,100,0,0,0,0,0,0,,,,,STOP,\n\n"
 )
 
 // tcpDocsServer answers as memcached does to stats, keeping the
@@ -53,7 +56,9 @@ func tcpDocsServer(conn net.Conn) {
 // The examples of docs/TCP.md work as written against stand-in services,
 // in a build with the type: memcached's connections, items, memory, hits
 // and misses; ZooKeeper's numbers by name and whether it leads; HAProxy's
-// sessions and states by proxy and server, read from show stat's CSV; the
+// sessions and states by proxy and server, read from show stat's CSV, a
+// status by its first word, going down still up and coming up still down;
+// the
 // TLS block and the placeholder example load, and so do the static targets
 // against the collectors.
 func TestTCPDocumentationExamples(t *testing.T) {
@@ -80,6 +85,8 @@ func TestTCPDocumentationExamples(t *testing.T) {
 			`haproxy_current_sessions{proxy="web",server="FRONTEND"} 3`, `haproxy_current_sessions{proxy="web",server="app1"} 2`,
 			`haproxy_sessions_total{proxy="web",server="app2"} 40`,
 			`haproxy_up{proxy="web",server="FRONTEND"} 1`, `haproxy_up{proxy="web",server="app1"} 1`, `haproxy_up{proxy="web",server="app2"} 0`,
+			`haproxy_up{proxy="web",server="app3"} 1`, `haproxy_up{proxy="web",server="app4"} 1`, `haproxy_up{proxy="web",server="app5"} 0`,
+			`haproxy_up{proxy="web",server="app6"} 0`, `haproxy_up{proxy="admin",server="FRONTEND"} 0`,
 		},
 	} {
 		recorder := httptest.NewRecorder()

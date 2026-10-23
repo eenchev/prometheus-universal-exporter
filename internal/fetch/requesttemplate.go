@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -293,6 +295,47 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 	return b.String(), nil
 }
 
+// lineValueRule is why a placeholder's value in a tcp collector's send is
+// held to lineValue (lineValueRefused).
+const lineValueRule = "a value written into request.send may hold only letters, digits and . _ - : / @ + = , %, since the server reads send as commands, and a blank, a ';', a quote or a line break could make the value an argument or a command of its own"
+
+// lineValue is the characters a placeholder's value in a tcp collector's
+// send may hold. The value lands in a line of a text protocol, and those
+// protocols split it on more than the line break: HAProxy's runtime API
+// runs each ';'-separated command of a line, and memcached, ZooKeeper and
+// NUT split a command's arguments on blanks. So a value is held to what
+// names a thing, a proxy, a server, a UPS or a key, and nothing that
+// separates or quotes: a probe's value stays one argument and adds none.
+var lineValue = regexp.MustCompile(`^[A-Za-z0-9._\-:/@+=,%]*$`)
+
+// lineValueRefused names the first character of value lineValue does not
+// take, and says whether there is one. A blank, a line break and a control
+// character are named, as a quoted glyph would not show them; any other
+// is shown with its code point.
+func lineValueRefused(value string) (string, bool) {
+	if lineValue.MatchString(value) {
+		return "", false
+	}
+	for rest := value; rest != ""; {
+		r, size := utf8.DecodeRuneInString(rest)
+		rest = rest[size:]
+		switch {
+		case r == utf8.RuneError && size == 1:
+			return "a byte that is not UTF-8", true
+		case lineValue.MatchString(string(r)):
+			continue
+		case r == ' ':
+			return "a blank (U+0020)", true
+		case r == '\r' || r == '\n':
+			return fmt.Sprintf("a line break (%U)", r), true
+		case unicode.IsControl(r):
+			return fmt.Sprintf("a control character (%U)", r), true
+		}
+		return fmt.Sprintf("%q (%U)", r, r), true
+	}
+	return "", false
+}
+
 // templateEscapers are the encodings of the kinds of templated field a
 // request type registers itself, by kind, so that a build without the type
 // carries none of its code: each writes a value into its place, or says
@@ -326,11 +369,8 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		// it, so any text is safe.
 		return value, nil
 	case "line":
-		// Written into a line of a text protocol, such as memcached's
-		// stats, which a carriage return or a line feed ends: the probe's
-		// value could otherwise send a command of its own after it.
-		if strings.ContainsAny(value, "\r\n") {
-			return "", fmt.Errorf("%s: the value of %s holds a carriage return or a line feed, which would end the line request.send writes and start another", f.where, p.Name)
+		if character, refused := lineValueRefused(value); refused {
+			return "", fmt.Errorf("%s: the value of %s holds %s; %s", f.where, p.Name, character, lineValueRule)
 		}
 		return value, nil
 	case "database":

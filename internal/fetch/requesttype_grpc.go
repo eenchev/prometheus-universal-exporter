@@ -429,9 +429,9 @@ func parseGRPCTarget(raw string) (grpcAddress, error) {
 	return a, nil
 }
 
-// useTLS says whether a call to a goes over TLS: grpcs://, or a tls block
-// on a target that did not ask for plaintext with grpc://, which the two
-// together contradict.
+// useTLS says whether a call to a goes over TLS: grpcs://, or a tls block,
+// even an empty one (model.TLSConfig.Set), on a target that did not ask
+// for plaintext with grpc://, which the two together contradict.
 func (a grpcAddress) useTLS(c *model.Collector) (bool, error) {
 	configured := c.Request.TLS != model.TLSConfig{}
 	if a.plain && configured {

@@ -97,20 +97,6 @@ func revalidatingCollector(name string, ttl time.Duration) model.Collector {
 	return c
 }
 
-// outOfDate makes every cached entry no longer fresh, and, with expired,
-// past its stale window too, as the clock would.
-func outOfDate(server *Server, expired bool) {
-	server.cache.mu.Lock()
-	defer server.cache.mu.Unlock()
-	past := time.Now().Add(-time.Second)
-	for _, entry := range server.cache.entries {
-		entry.freshUntil = past
-		if expired {
-			entry.expires = past
-		}
-	}
-}
-
 // An expired cached response that carried an ETag and a Last-Modified is
 // asked for again with If-None-Match and If-Modified-Since, as received; a
 // 304 answers with the kept body, which the rules read again with the

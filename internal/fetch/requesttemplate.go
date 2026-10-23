@@ -162,7 +162,8 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header", "query", "graphite", "database" or "arg",
+	// kind is "body", "header", "query", "graphite", "database" or "arg"
+	// (a sql collector's args and a redis collector's command arguments),
 	// which decides the encoding.
 	kind string
 }
@@ -201,6 +202,15 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	for i, arg := range c.Request.Args {
 		if HasPathParams(arg) {
 			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
+		}
+	}
+	// The arguments of a redis collector's commands, sent as values, as a
+	// sql collector's args are.
+	for i, cmd := range c.Request.Commands {
+		for j, arg := range cmd.Command {
+			if j > 0 && HasPathParams(arg) {
+				out = append(out, templateField{fmt.Sprintf("request.commands[%d].command[%d]", i, j), arg, "arg"})
+			}
 		}
 	}
 	// A static target's own targets replace the collector's, placeholders
@@ -282,8 +292,9 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		return value, nil
 	case "arg":
 		// Sent as a value, bound to the statement or written into it by
-		// the driver quoted as a literal, never as SQL, so any text is
-		// safe.
+		// the driver quoted as a literal, never as SQL, or sent to a redis
+		// server as one bulk string of a command, never parsed as more of
+		// it, so any text is safe.
 		return value, nil
 	case "database":
 		if !sqlDatabaseName.MatchString(value) {

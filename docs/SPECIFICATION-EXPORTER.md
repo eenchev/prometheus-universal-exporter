@@ -18,7 +18,7 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
 The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for it, objects in S3 (`s3file`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`) and the INFO and read-only commands of Redis and Valkey servers (`redis`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -619,7 +619,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file` and `kubernetes` are implemented;
+`tlscert`, `s3file`, `kubernetes` and `redis` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -666,10 +666,11 @@ added without deciding which types it belongs to.
 Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
-type but the opt-in ones. An opt-in type is one whose libraries few
-deployments want in the binary, `s3file` and the AWS SDK it links: no build
-MAY carry it unless asked for it by its tag, and the source MUST list the
-opt-in types.
+type but the opt-in ones. An opt-in type is one few deployments want in the
+binary: `s3file`, for the AWS SDK it links, and `redis`, which links nothing
+outside the standard library but reaches a server most deployments of the
+exporter do not have. No build MAY carry one unless asked for it by its tag,
+and the source MUST list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
@@ -697,10 +698,11 @@ opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert` and `kubernetes` MUST import nothing
-  outside the standard library and the module's own packages — no
-  Kubernetes client library — and the test MUST find none of the other
-  types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  that driver. `dns`, `tlscert`, `kubernetes` and `redis` MUST import
+  nothing outside the standard library and the module's own packages — no
+  Kubernetes client library, no Redis client library, the stand-in server
+  of `redis`'s tests (`internal/redistest`) included — and the test MUST
+  find none of the other types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
   configuration in a default build with it, and none of them in the default
@@ -2158,6 +2160,108 @@ keys:
   across the cluster, or with `api_server` its URL before that path, and
   `http_method` MUST be `LIST`.
 
+#### `redis`
+
+A `redis` collector reads a Redis or Valkey server, which speak the same
+protocol: its INFO, and the replies of read-only commands its configuration
+lists, handed to the transforms as one JSON document. It is an opt-in type
+(§ 5.1, Selecting request types at build time): only a build asked for it
+carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `username` | none | An ACL user, logged in as with `AUTH username password`. No blank, control character or placeholder; only with `password_file`. |
+| `password_file` | none | The file of the password `AUTH` sends. Not blanks alone. Without it no `AUTH` is sent. |
+| `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
+| `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
+| `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
+| `tls` | none | As `http`'s; set, the scrape speaks TLS. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- The client MUST speak RESP2 and MUST NOT send `HELLO`; it MUST link no
+  Redis client library.
+- `password_file` MUST be read at every scrape, not at load, its
+  surrounding whitespace taken off; a file that is missing, unreadable or
+  empty MUST fail the scrape naming the key and the file, never its
+  content. `--dry-run` MUST read it, and the `tls` block's files when the
+  block is set, and list what a scrape would fail on as warnings of the
+  `config` check.
+- A scrape MUST send, in order, `AUTH` when `password_file` is set,
+  `SELECT` when `db` is not `0`, then `INFO <section>` for each entry of
+  `info_sections`, one command each, or `INFO` alone when `info_sections`
+  and `commands` are both unset, and then each entry of `commands`. A
+  collector with `commands` and no `info_sections` MUST send no `INFO`.
+  Each command MUST be answered before the next is sent. An error reply to
+  any of them MUST fail the scrape with the command and the server's text,
+  `AUTH`'s password written `***`.
+- A `commands` entry's `name` MUST be letters, digits and `_`, not starting
+  with a digit, and unique among the collector's entries. Its `command`
+  MUST name one of these, by name or by name and subcommand, in any case,
+  with the arguments after it each allows, and MUST be refused at load
+  otherwise, the refusal listing them: `DBSIZE`, `LASTSAVE`, `ROLE`,
+  `SLOWLOG LEN`, `CLUSTER INFO` (none); `GET`, `STRLEN`, `TYPE`, `TTL`,
+  `PTTL`, `LLEN`, `SCARD`, `ZCARD`, `HLEN`, `HGETALL`, `XLEN`,
+  `XINFO STREAM`, `XINFO GROUPS`, `MEMORY USAGE`, `OBJECT ENCODING`,
+  `OBJECT FREQ`, `OBJECT IDLETIME`, `OBJECT REFCOUNT` (a key); `LINDEX`,
+  `SISMEMBER`, `ZSCORE`, `HGET`, `HEXISTS`, `XPENDING`, `XINFO CONSUMERS`
+  (two); `ZCOUNT`, `ZLEXCOUNT` (three); `EXISTS`, `PFCOUNT` (one or more);
+  `HMGET` (two or more). No command that writes, lists keys, dumps a
+  collection without a bound, blocks, or shows the server's settings or
+  other clients (`CONFIG GET`, `CLIENT LIST`) MAY be among them. An
+  argument after the command's name and subcommand MAY hold
+  `{{param_name}}` placeholders, filled from the probe and sent as one
+  bulk string whatever it holds; a placeholder in the name or the
+  subcommand MUST be refused at load.
+- The answer MUST be a JSON document of `info`, present when INFO was
+  sent, an object of each section by its heading in lower case with `_`
+  for a blank, each an object of its `name:value` lines; and `commands`,
+  present when commands were sent, each reply under its entry's name. A
+  value of INFO that is a JSON number MUST be one, written as the server
+  wrote it, whatever its size; one made of `name=value` pairs joined by
+  commas, such as a keyspace line, MUST be an object of them, each value
+  read the same way; any other MUST be its text. A command's reply MUST
+  be: an integer a number, a simple or bulk string its text, a nil `null`,
+  an array a list; `HGETALL`'s and `XINFO STREAM`'s an object of their
+  names and values, `XINFO GROUPS`'s and `XINFO CONSUMERS`'s a list of such
+  objects, and `CLUSTER INFO`'s an object of its lines read as INFO's are.
+  A section named in `info_sections` that the server answers with no
+  section MUST fail the scrape naming it.
+- The replies of a scrape MUST be read against the response limit
+  together, counted in their bytes as they come off the connection. A bulk
+  string's declared length past what the limit has left MUST fail the
+  scrape before a byte of it is read, and no more MUST be held for one than
+  the server has sent of it; an array's declared length MUST fail it when
+  its elements, at three bytes each, could not fit; arrays MUST NOT nest
+  deeper than 16, nor a line other than a bulk string's data be longer than
+  64 KiB. Each failure past the limit MUST be a limit exceeded; a reply
+  that is no RESP2 reply MUST fail the scrape saying so.
+- The target MUST be `host`, `host:port`, `[v6]:port`, or a `redis://` or
+  `rediss://` URL of one, port 6379 when it names none, with no user,
+  path, query or other scheme, which MUST be answered `400` before
+  anything is sent, as a static target's is refused at load. It is
+  required. `rediss://`, or a `tls` block, MUST make the scrape speak TLS,
+  verifying the certificate against `tls.server_name` or the target's
+  host; `redis://` with a `tls` block MUST be refused. The target lists
+  MUST be applied to the host before the connection and to the address
+  connected to, as `http`'s are, a refused one answered `403`, counted in
+  `http_exporter_targets_refused_total`, and never connected to.
+- Each scrape MUST make its own connection and close it when the scrape
+  is over. The connection, the TLS handshake and every read and write MUST
+  end at the scrape's deadline, 30 seconds without one, or when it is
+  cancelled, and a scrape ended so MUST fail with the deadline's error.
+- A failed scrape MUST be reported in the `redis` stage. The decoder MUST
+  be `json`, as for `grpc`; another decoder, and a transform other than
+  `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each command sent, `AUTH` and
+  `SELECT` among them, by its name and `redis://host:port/db` (`rediss://`
+  over TLS), with the command's words in a `Redis-Command` header,
+  `AUTH`'s password as `***`, and the reply's kind, or the error, as its
+  outcome. The verbose `url` label MUST be `redis://host:port/db` or
+  `rediss://host:port/db`, and `http_method` MUST be `COMMANDS` for a
+  collector with `commands` and `INFO` otherwise.
+- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
+  `param_<name>`.
+
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
 a trip that fails. Omitting `cache`, or setting both to `0s`, MUST disable
@@ -2708,8 +2812,9 @@ nothing else of it there.
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
-stand-in database of the `sql` tests, and `internal/kubetest`, the stand-in
-Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, MUST
+stand-in database of the `sql` tests, `internal/kubetest`, the stand-in
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, and
+`internal/redistest`, the stand-in Redis server of the `redis` tests, MUST
 NOT be imported outside tests and MUST import nothing but the standard
 library. `internal/testutil` MAY hold
 helpers shared by the tests of several packages and MUST NOT be imported
@@ -6309,7 +6414,7 @@ returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
-collector's refused buckets.
+collector's refused buckets and a `redis` collector's refused servers.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
 for `http` collectors, `0` for one without `request.pagination`, per
@@ -8183,8 +8288,8 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` or
-`s3file` collector MAY set `request.allowed_targets`
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
+`s3file` or `redis` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -25583,8 +25688,8 @@ The repository MUST include documentation covering:
     collector's keys, the target, and static targets: `graphite` in
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
-    `kubernetes` in `docs/KUBERNETES.md` and the opt-in `s3file` in
-    `docs/S3FILE.md`, with `localfile` and `grpc` above and `http` in
+    `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
+    `docs/S3FILE.md` and `redis` in `docs/REDIS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

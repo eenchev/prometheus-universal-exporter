@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file` collectors in an image built with them
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file` and `redis` collectors in an image built with them
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
@@ -565,6 +565,26 @@ config:
 ```
 
 and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+
+## Redis collectors
+
+A `redis` collector reads a Redis or Valkey server's INFO, and the replies of read-only commands such as a queue's `LLEN`. The type is opt-in, as `s3file` is: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=redis` (or `s3file,redis` for both), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+The password, when the server wants one, is a file the collector names with `password_file`, read at every scrape; mount it from a Secret through `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+extraVolumes:
+  - name: redis-exporter
+    secret:
+      secretName: redis-exporter
+      defaultMode: 0400
+extraVolumeMounts:
+  - name: redis-exporter
+    mountPath: /var/run/prometheus-universal-exporter/redis
+    readOnly: true
+```
+
+and name `password_file: /var/run/prometheus-universal-exporter/redis/password`, with `username` for an ACL user, in the collector. Probe it with the server as the target, `/probe?collector=redis&target=redis-master.cache:6379`, or `rediss://` for TLS. With `networkPolicy.egress` rules, add one for the servers' port, 6379 by default. The request's keys are in [Redis and Valkey](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/REDIS.md).
 
 ## Kubernetes collectors
 

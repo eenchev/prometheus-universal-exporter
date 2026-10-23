@@ -9,7 +9,7 @@ make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
-make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file adds s3file
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis adds s3file and redis
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
@@ -43,7 +43,7 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file` and `redis`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
@@ -54,6 +54,7 @@ the ones above them in this list:
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 | `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |
 | `internal/kubetest` | A stand-in Kubernetes API server for the tests of `internal/kubeapi` and of the `kubernetes` type: an HTTPS server answering a listing of the objects a test gave it a page at a time, as the limit asks, with continue tokens, refusing a request without the token of its service account directory with `401`, answering `403` and `404` as the API server does, slow to answer when told to, and recording the requests; it writes the service account directory and sets the environment of a pod. It imports nothing but the standard library. |
+| `internal/redistest` | A stand-in Redis server for the `redis` type's tests: a TCP or TLS server, its self-signed certificate written to a file, answering RESP2 commands as Redis and Valkey do — AUTH with or without a username against the password it was given, NOAUTH before it, SELECT of the databases 0 to 15, INFO of the sections a test gave it, all or one by name, and any other command with the raw reply the test set — with a hook that answers a command with any bytes, to play a broken, hostile or silent server, and the commands it was sent recorded. It imports the standard library alone; imported only by tests. |
 | `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the type's build tag, so a build without the type compiles no SSH code even for its tests. |
 
 A package's tests live beside it, unless they need more than it can import: a
@@ -667,16 +668,16 @@ when it is run with that build's tags
 
 ### Opt-in request types
 
-A type the default build leaves out, `s3file`, lives in its
+A type the default build leaves out, `s3file` or `redis`, lives in its
 `internal/fetch/requesttype_<name>.go` under its own tag alone,
 
 ```go
 //go:build request_type_s3file
 ```
 
-as do the files only it needs (`s3source.go`) and its tests, so a build
-carries it only when its tag is given: `sh tools/request-type-tags.sh '' ''
-s3file`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
+as do the files only it needs (`s3source.go`, `redisresp.go`) and its tests,
+so a build carries it only when its tag is given: `sh tools/request-type-tags.sh '' ''
+s3file,redis`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
 default build's types, and `REQUEST_TYPES` may name it like any type. Shared
 code it uses names its tag beside the others' (`filereads.go`,
 `localfile_directory.go`). Each type built on its own includes it, in the
@@ -687,7 +688,7 @@ build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,
 as CI does, and a test keeps their lists naming every opt-in type of the
 tree. The default build's tests know an opt-in type's request keys without
 the type (`optInRequestKeys`, `internal/fetch`), and its schema rows
-(`s3fileSchemaKeys`) are compiled in the default build, which checks that
+(`s3fileSchemaKeys`, `redisSchemaKeys`) are compiled in the default build, which checks that
 every constrained key of the schemas has a row, and compared with the
 exporter's verdicts against the schema the binary generates, in a build
 with the type (`built: true`), since the committed schemas, the default
@@ -815,7 +816,7 @@ make schemas
 ```
 
 The committed files are the schemas of a build with every request type but
-the opt-in ones — no `s3file` in the `request.type` enum — and the sql type's
+the opt-in ones — no `s3file` or `redis` in the `request.type` enum — and the sql type's
 default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and
@@ -846,7 +847,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and `s3file`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes`, `s3file` and `redis`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so

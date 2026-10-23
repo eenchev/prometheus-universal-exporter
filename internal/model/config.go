@@ -299,6 +299,15 @@ type RequestConfig struct {
 	FieldSelector string   `yaml:"field_selector,omitempty"`
 	MaxObjects    int      `yaml:"max_objects,omitempty"`
 	APIServer     string   `yaml:"api_server,omitempty"`
+	// DB, InfoSections and Commands belong to the redis type, with
+	// Username and PasswordFile above: the logical database selected, 0
+	// when left out, the sections of INFO read, and the read-only commands
+	// whose replies the document holds besides (fetch/requesttype_redis.go).
+	// Left out of a collector written as YAML when empty, as the sql keys
+	// are.
+	DB           int            `yaml:"db,omitempty"`
+	InfoSections []string       `yaml:"info_sections,omitempty"`
+	Commands     []RedisCommand `yaml:"commands,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -381,6 +390,23 @@ const KubernetesGroupPattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0
 
 // DNSRecordTypes are the values of a dns collector's request.record_type.
 var DNSRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
+
+// RedisCommand is one entry of a redis collector's request.commands: the
+// name its reply is put under in the document, and the command with its
+// arguments, each argument sent as it is written, its placeholders filled.
+type RedisCommand struct {
+	Name    string   `yaml:"name"`
+	Command []string `yaml:"command"`
+}
+
+// RedisInfoSectionPattern is what a section of a redis collector's
+// request.info_sections is written with: INFO's own section names are
+// lower-case words. The exporter and the schema hold them to it alike.
+const RedisInfoSectionPattern = `^[a-z_]+$`
+
+// RedisCommandNamePattern is what request.commands[].name is written with:
+// a name a jq path reaches as .commands.<name>.
+const RedisCommandNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how

@@ -76,7 +76,8 @@ setting being a target of its own for the collector's limits, and for
 only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
 `timeout`, with no `target` at all, and for the opt-in
 [`s3file`](S3FILE.md#static-targets) `path` and `timeout`, with the bucket as
-its required `target`. An `http` or `graphite` target also takes static
+its required `target`, and for the opt-in [`redis`](REDIS.md#static-targets)
+only `timeout`, with the server as its required `target`. An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, inline or file-backed, as basic authentication or a bearer
 token; a basic username

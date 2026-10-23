@@ -1087,7 +1087,7 @@
             ]
           },
           "target": {
-            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one, the name to resolve, or for PTR the address, for a dns one, or host, host:port or [v6]:port for a tlscert one. A kubernetes collector takes none: leave it out.",
+            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one, the name to resolve, or for PTR the address, for a dns one, or host, host:port or [v6]:port for a tlscert one, or host, host:port, [v6]:port or a redis:// or rediss:// URL of one for a redis one. A kubernetes collector takes none: leave it out.",
             "type": [
               "string",
               "number",

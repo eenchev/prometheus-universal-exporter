@@ -174,6 +174,10 @@ func TestRequestTypeTagsScript(t *testing.T) {
 		{"s3file", "", "s3file"}:           "select_request_types,request_type_s3file",
 		{"", "snowflake", "s3file"}:        "sql_driver_snowflake,minicore_disabled,request_type_s3file",
 		{"sql,s3file", "oracle", "s3file"}: "select_request_types,request_type_sql,request_type_s3file,sql_driver_oracle",
+		{"", "", "redis"}:                  "request_type_redis",
+		{"", "", "s3file,redis"}:           "request_type_s3file,request_type_redis",
+		{"redis", "", ""}:                  "select_request_types,request_type_redis",
+		{"http", "", "redis,s3file"}:       "select_request_types,request_type_http,request_type_redis,request_type_s3file",
 	} {
 		got, stderr, err := withOptIn(lists[0], lists[1], lists[2])
 		if err != nil || got != want {

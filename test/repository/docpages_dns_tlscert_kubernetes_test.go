@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_dns || request_type_kubernetes || request_type_tlscert
+//go:build !select_request_types || request_type_dns || request_type_kubernetes || request_type_redis || request_type_tlscert
 
 package repository
 
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// The helpers of the tests of docs/DNS.md, docs/TLSCERT.md and
-// docs/KUBERNETES.md.
+// The helpers of the tests of docs/DNS.md, docs/TLSCERT.md,
+// docs/KUBERNETES.md and docs/REDIS.md.
 
 // pageBlocks returns the fenced blocks of a page in the given language.
 func pageBlocks(t *testing.T, path, language string) []string {

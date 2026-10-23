@@ -114,14 +114,15 @@ func optInRequestTypes(t *testing.T) []string {
 // it, links the gRPC and protobuf modules only when the type is grpc, the
 // SSH and SFTP modules only when it is sshfile, and the AWS SDK only when
 // it is s3file; a build of graphite, http and localfile together links none
-// of them, nor does one of dns, tlscert and kubernetes, which need nothing
-// outside the standard library; and the default build, of every type but the opt-in
-// s3file, links gRPC's and SSH's and no AWS SDK, which only a build asking
-// for s3file (OPT_IN_REQUEST_TYPES) links. go list is asked of the main package, the exporter as it ships;
+// of them, nor does one of dns, tlscert and kubernetes, or of redis alone,
+// which need nothing outside the standard library; and the default build, of
+// every type but the opt-in s3file and redis, links gRPC's and SSH's and no
+// AWS SDK, which only a build asking for s3file (OPT_IN_REQUEST_TYPES) links,
+// and a build asking for redis alone does not. go list is asked of the main package, the exporter as it ships;
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "localfile", "s3file", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,kubernetes,tlscert"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "localfile", "redis", "s3file", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,kubernetes,redis,tlscert"} {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestType string
@@ -145,7 +146,10 @@ func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
 	if found := linksAny(all, s3fileModules); len(found) > 0 {
 		t.Errorf("the default build links %s, which only a build with the opt-in s3file type may", strings.Join(found, ", "))
 	}
-	for _, build := range []struct{ types, optIn string }{{"", "s3file"}, {"http", "s3file"}} {
+	if found := linksAny(linkedPackagesOf(t, "", "", "redis"), s3fileModules); len(found) > 0 {
+		t.Errorf("OPT_IN_REQUEST_TYPES=redis links %s, which only a build with the opt-in s3file type may", strings.Join(found, ", "))
+	}
+	for _, build := range []struct{ types, optIn string }{{"", "s3file"}, {"http", "s3file"}, {"", "s3file,redis"}} {
 		packages := linkedPackagesOf(t, build.types, "", build.optIn)
 		for _, module := range []string{"github.com/aws/aws-sdk-go-v2/service/s3", "github.com/aws/aws-sdk-go-v2/config"} {
 			if len(linksAny(packages, []string{module})) == 0 {

@@ -219,6 +219,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"tlscert":    {"the TLS certificate", "TLS certificates"},
 	"kubernetes": {"Kubernetes objects", "Kubernetes objects"},
 	"s3file":     {"objects in S3", ""},
+	"redis":      {"a Redis or Valkey server", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

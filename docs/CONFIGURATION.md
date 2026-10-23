@@ -2312,6 +2312,13 @@ For `s3file`, in a build that [asks for it](S3FILE.md#building-with-s3file),
 `endpoint`, `path_style`, `access_key_id_file`, `secret_access_key_file`,
 `session_token_file`, `allowed_targets` and `denied_targets` apply too; its
 table is in [Objects in S3](S3FILE.md#a-collector).
+
+For `redis`, in a build that [asks for it](REDIS.md#building-with-redis), no
+key is required: `info_sections` names the sections of INFO read, the
+default ones when left out, and `commands` the read-only commands whose
+replies are read besides; `username` and `password_file`, `db`, `tls`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
 <!-- /request-types -->
 
 <!-- request-types: all -->
@@ -2332,7 +2339,9 @@ and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
 `tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
 name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
-since the collector lists what its configuration names.
+since the collector lists what its configuration names. `redis` accepts
+`timeout` and `param_<name>`, and requires a `target`, the server,
+`host:port` or a `redis://` or `rediss://` URL of it.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -2391,7 +2400,7 @@ their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
-links the AWS SDK, below. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, and the opt-in `redis` nothing outside it either. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2399,20 +2408,25 @@ drivers](SQL.md#building-with-more-drivers)).
 
 An opt-in type is one no build carries unless asked, the default build and
 the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB. `OPT_IN_REQUEST_TYPES` adds one to the types a build carries,
-whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like any
-type:
+6.7 MB, and `redis`, which needs nothing outside the standard library and is
+left out of the builds of deployments with no Redis to read.
+`OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
+carries, whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like
+any type:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=s3file
-docker build --build-arg OPT_IN_REQUEST_TYPES=s3file -t exporter:s3file .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file)" .
+make build OPT_IN_REQUEST_TYPES=s3file,redis
+docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis)" .
 ```
 
-Its tag alone, `request_type_s3file`, adds it to a default build. A collector
-of an opt-in type is refused by a build without it with a message that says
-the type is opt-in and how to build with it ([Building with
-s3file](S3FILE.md#building-with-s3file)).
+Its tag alone, `request_type_s3file` or `request_type_redis`, adds a type to
+a default build, and the two tags together both. A collector of an opt-in
+type is refused by a build without it with a message that says the type is
+opt-in and how to build with it ([Building with
+s3file](S3FILE.md#building-with-s3file), [Building with
+redis](REDIS.md#building-with-redis)).
 
 ### When a metric cannot be extracted
 
@@ -5073,6 +5087,7 @@ nothing there.
 - [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
 - [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
+- [REDIS.md](REDIS.md) — the opt-in `redis` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

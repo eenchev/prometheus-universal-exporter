@@ -26484,6 +26484,33 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   no token on the default account (`TestChartRendersItsOptions`, adjusted:
   an unnamed existing account now fails rendering).
 
+## 34.188 Backing off only on a budget worth trusting, and parse_time before 1970
+
+- `TestFailureBackoffIsCheckedAndFilledIn` (extended): `failure_backoff.min_budget` defaults to `1s`, takes a value written, and `0s` or a negative duration is refused at load naming the collector and the key.
+- `TestATimeoutBelowTheMinimumBudgetDoesNotBackTheTargetOff`: with `failure_backoff {after: 3}`, three probes carrying `X-Prometheus-Scrape-Timeout-Seconds: 0.01` time out against a target answering in 100ms and none is counted; the next probe with Prometheus's budget reaches the target and succeeds, and no target is remembered.
+- `TestATimeoutBelowTheMinimumBudgetNeitherCountsNorResets`: two failed probes, then a timeout below `min_budget`, leave the target contacted; the next failure is the third, and the probe after it backs off.
+- `TestATimeoutOfTheMinimumBudgetCounts`: with `min_budget: 50ms`, a probe whose 100ms budget runs out against a hung target counts, and with `after: 1` the next probe backs off.
+- `TestARefusedConnectionCountsWithASmallBudget`: a refused connection within a 300ms budget, below the 1s floor, counts, and with `after: 1` the next probe backs off.
+- `TestValueHelpersInJQMatchTheSharedVectors` and `TestValueHelpersInPythonMatchTheSharedVectors` (extended vectors): `parse_time` reads moments before 1970 and in year `0000` alike in jq and Python — `Wed, 31 Dec 1969 23:59:59 GMT` is -1 and `Thu, …` of the same date is refused for its weekday, `Wed, 31 Dec 1969 23:00:00 -0100` is 0, `0000-02-01T00:00:00Z` is -62164540800, and the first and last moments of year `0000` and of its February are read in RFC 3339 and as HTTP dates.
+
+## 34.189 Empty tls blocks, tcp send values, empty LDAP substrings and HAProxy states
+
+- `TestAnEmptyTLSBlockMakesATCPScrapeSpeakTLS`: a tcp collector whose `tls` block is written empty, `tls: {}` — spelt out, as an alias of an anchored empty mapping, merged in with `<<:` from a request that holds it, and in a collector file — is labelled `tls://host:port` and makes a TLS handshake with a TLS stand-in, failing on its certificate, which the system roots do not hold; it used to be the zero block, and the scrape plaintext.
+- `TestAReloadSeesAnEmptyTLSBlockWritten`: a reload from a tcp collector without `tls` to the same collector with `tls: {}` reports the collector changed, as the YAML a reload and the cache key compare now writes the block as written.
+- `TestAnEmptyTLSBlockMakesAnLDAPScrapeSpeakTLS`: an ldap collector with `tls: {}`, a bind DN and a password file is labelled `ldaps://` for a bare `host:port` and makes a TLS handshake with a TLS stand-in; against a plaintext stand-in the scrape fails and the stand-in receives no bind; `ldap://` with the block is refused.
+- `TestAnEmptyTLSBlockMakesARedisScrapeSpeakTLS`: a redis collector with `tls: {}` is labelled `rediss://` for a bare `host:port` and makes a TLS handshake with a TLS stand-in; `redis://` with the block is refused.
+- `TestAnEmptyTLSBlockMakesAGRPCCallTLS`: a grpc collector with `tls: {}` is labelled `grpcs://` for a bare target and its call fails on the certificate of a TLS stand-in; `grpc://` with the block is refused.
+- `TestAnEmptyTLSBlockAsksASQLCollectorForTLS`: a postgres collector with `tls: {}` beside `sslmode: disable` is refused at load, and with no `sslmode` it loads; `TestTheTLSOfASQLConnection` (extended): a `tls: {}` read from YAML gives verified TLS for the target's host.
+- `TestAnEmptyTLSBlockWithoutAPIServerIsRefused`: a kubernetes collector with `tls: {}` and no `api_server` is refused at load.
+- `TestDiscoveryIsCheckedAtLoad` (extended): an `http_sd` source with an `http` URL and a `tls` block read from YAML as `{}` is refused, as one with a key is.
+- `TestATCPCollectorHoldsSendsValuesToOneArgument`: a placeholder of `send` given `-1;disable server app/app1` (docs/TCP.md's HAProxy example), a blank, a double or single quote, `|`, `&`, `#`, a tab, a NUL, `é` or a byte that is not UTF-8 is refused before any connection, by the scrape and by the probe's parameter check, naming the parameter and the character; a value of every allowed character, `Web-1.app_2:3/x@y+z=w,v%20`, is sent as it is; a default holding `;` is refused at load.
+- `TestATCPCollectorFillsSendsPlaceholders` (changed): a carriage return or a line feed in a value is refused as a line break, naming its code point.
+- `TestATCPCollectorProbe` (extended): a probe whose `param_word` holds a line feed or a `;` is answered `400` naming the parameter and the character, and the service is not connected to.
+- `TestLDAPFiltersAreParsed` (extended): `(cn=**)` and `(&(uid=a)(cn=***))`, substring matches with no substring, are refused by the parser and at load, saying RFC 4511 does not allow them and to write `(cn=*)`.
+- `TestAnLDAPSubstringFilterFilledEmptyIsPresence`: `(&(objectClass=person)(cn=*{{param_x:}}*))` probed without `param_x` sends `(&(objectClass=person)(cn=*))` and counts every person, to a stand-in that now answers a SubstringFilter of no substring `protocolError` as a server does; with `param_x=Turing` it sends `(cn=*Turing*)` and counts one.
+- `TestTheTCPExamplesReadTheirServices` (extended): examples/tcp's haproxy collector reads `haproxy_up` from the column its `pre_script` adds: 1 for servers whose status is `UP 1/3`, `NOLB`, `DRAIN` and `no check`, 0 for `DOWN 1/2`, `MAINT`, `MAINT (via app/app1)`, `DOWN (agent)` and an empty status, and 0 for a `STOP` frontend, with no rule failing.
+- `TestTCPDocumentationExamples` (extended): docs/TCP.md's HAProxy example reads `UP 1/3` and `no check` as 1 and `MAINT (via web/app1)`, `DOWN 1/2` and a `STOP` frontend as 0.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -2257,8 +2257,16 @@ carries it. Its keys:
   over TLS), with the command's words in a `Redis-Command` header,
   `AUTH`'s password as `***`, and the reply's kind, or the error, as its
   outcome. The verbose `url` label MUST be `redis://host:port/db` or
-  `rediss://host:port/db`, and `http_method` MUST be `COMMANDS` for a
-  collector with `commands` and `INFO` otherwise.
+  `rediss://host:port/db`, and `http_method` MUST be `INFO` for a
+  collector without `commands`, `COMMANDS` for one with `commands` and no
+  `info_sections`, and `INFO+COMMANDS` for one with both.
+- A reply holding bytes that are not UTF-8 — a bulk or simple string, a
+  name of a reply's pairs, `CLUSTER INFO`'s or `INFO`'s text — MUST fail the
+  scrape, naming the command, and MUST NOT be put in the document with
+  U+FFFD in place of those bytes.
+- The document MUST be held to the response limit as the replies are: one
+  whose JSON is larger than the limit MUST fail the scrape as a limit
+  exceeded, saying the document's size.
 - A static target MAY set `timeout` alone; a probe MAY set `timeout` and
   `param_<name>`.
 
@@ -6414,7 +6422,9 @@ returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
-collector's refused buckets and a `redis` collector's refused servers.
+collector's refused buckets, a `dns` collector's refused names, and a
+`tlscert` or `redis` collector's refused servers; each of these types MUST
+have its series there, `0` before a refusal.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
 for `http` collectors, `0` for one without `request.pagination`, per
@@ -25753,6 +25763,29 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   TestTheCommittedSchemaComparisonsRunInTheDefaultBuild).
 - internal/redistest is a package only tests import, standard library
   alone (TestInternalPackagesAreLayered and the vulnerability check's list).
+
+## 34.178 Redis text and document limits, its method label, refused-target series and the example config's builds
+
+- A redis reply holding bytes that are not UTF-8 fails the scrape naming
+  the command — a bulk string, a name of HGETALL's pairs, CLUSTER INFO's
+  text and INFO's — and UTF-8 text such as `café` is taken
+  (TestARedisReplyThatIsNotTextFailsTheScrape).
+- A redis document whose JSON is past the response limit, its replies
+  within it, fails the scrape as a limit exceeded saying it is the
+  document as JSON, and the same length of plain text is taken
+  (TestARedisDocumentPastTheResponseLimitFailsTheScrape).
+- A redis collector with info_sections and commands both is labelled
+  `INFO+COMMANDS` (TestARedisCollectorPutsEachCommandsReplyUnderItsName).
+- A dns collector's denied name is answered 403 and counted in
+  `http_exporter_targets_refused_total`, where it has a series
+  (TestADNSCollectorCountsTheNamesItRefuses).
+- A tlscert collector's refused target is answered 403 and counted in
+  `http_exporter_targets_refused_total`, where it has a series
+  (TestATLSCertCollectorCountsTheTargetsItRefuses).
+- Every test of test/repository that loads configs/config.example.yaml is
+  built only with http and localfile, the example's request types, so a
+  build of a single other type does not fail on it
+  (TestTheTestsThatLoadTheExampleConfigNeedItsRequestTypes).
 
 # 35. Documentation requirements
 

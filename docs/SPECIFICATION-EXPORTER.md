@@ -1152,6 +1152,15 @@ keys:
   called and a static target's at load. A bare target MUST be plaintext;
   `grpcs://` or any `tls` key MUST make the call TLS, and `grpc://` with a
   `tls` key MUST be refused.
+- A target's host MUST be handed to grpc-go as a DNS name or address
+  (`dns:///host:port`) in every form of target, so that a host named like one
+  of grpc-go's resolvers, such as `unix-abstract` or `passthrough`, is that
+  name looked up over DNS, and behind a proxy the name of the proxy's
+  `CONNECT`, and never selects a resolver or a unix socket. The host `unix`,
+  in any case, MUST be refused as a malformed target is, with a message that
+  says grpc-go would dial it as a unix socket: grpc-go dials the address
+  `unix:<port>`, which is what a proxied target stays, as a unix socket
+  whatever produced it. Nothing MUST be dialled for a refused target.
 - At load, each placeholder of the message MUST take its default, or a
   stand-in of its filter's kind when it has none, and the message MUST then be
   JSON.

@@ -379,10 +379,8 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 
 // grpcAddress is a grpc target as it is dialled.
 type grpcAddress struct {
-	// dial is what the connection is made to: host:port, or a dns:///
-	// target as given.
-	dial string
-	// hostPort is the server's host:port, for labels and logs.
+	// hostPort is the server's host:port, which the connection is made to
+	// (grpcConnCache.get) and labels and logs name.
 	hostPort string
 	// tls says grpcs:// asked for TLS; plain says grpc:// asked for
 	// plaintext. Neither leaves it to the collector's tls block.
@@ -391,7 +389,7 @@ type grpcAddress struct {
 
 // parseGRPCTarget reads a target: host:port, dns:///host:port, or a
 // grpc:// or grpcs:// URL of host:port. The port is required: gRPC has no
-// port of its own to fall back on.
+// port of its own to fall back on. The host unix is refused.
 func parseGRPCTarget(raw string) (grpcAddress, error) {
 	raw = strings.TrimSpace(raw)
 	var a grpcAddress
@@ -418,11 +416,16 @@ func parseGRPCTarget(raw string) (grpcAddress, error) {
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return a, fmt.Errorf("target %q has the port %q; want a number from 1 to 65535", raw, port)
 	}
-	a.hostPort = net.JoinHostPort(host, port)
-	a.dial = a.hostPort
-	if strings.HasPrefix(raw, "dns:///") {
-		a.dial = "dns:///" + a.hostPort
+	// grpc-go dials an address unix:<path> as a unix socket, whatever
+	// resolver produced it, and behind a proxy the address is the host:port
+	// as written, never resolved: unix:8443 would be the socket 8443 on the
+	// exporter's own machine, reached without the proxy or allowed_targets.
+	// Every other host is safe as a name: grpc-go is handed dns:///host:port
+	// (grpcConnCache.get), so unix-abstract or passthrough is only a name.
+	if strings.EqualFold(host, "unix") {
+		return a, fmt.Errorf("target %q names the host unix, which grpc-go would dial as a unix socket on the exporter's machine; a grpc target is a TCP server, host:port, such as queue.internal:9090", raw)
 	}
+	a.hostPort = net.JoinHostPort(host, port)
 	return a, nil
 }
 

@@ -1647,6 +1647,19 @@ No series carries the page's name: Prometheus labels every series with the
 target it probed (`instance`), which already tells two pages apart.
 `statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
 
+[`examples/tcp/`](../examples/tcp/config.yaml) reads three services that
+report their statistics as text over TCP, with the opt-in
+[`tcp`](TCP.md) request type, so in a build with it
+(`make build OPT_IN_REQUEST_TYPES=tcp`): memcached's `stats`, read up to its
+`END` line, ZooKeeper's `mntr` and HAProxy's `show stat`, the first two with
+regular expressions and HAProxy's CSV by its columns. Its
+[`static-targets.yaml`](../examples/tcp/static-targets.yaml) scrapes a
+memcached pair, a ZooKeeper ensemble and an HAProxy:
+
+```sh
+curl 'http://localhost:8080/probe?collector=memcached&target=localhost:11211'
+```
+
 ### Mapping text to values and scaling them
 
 When a status has an order — up, degraded, down — one number per status is

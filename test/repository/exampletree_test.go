@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 )
 
 // The examples are whatever YAML lies under examples/, at any depth: a file
@@ -121,5 +123,66 @@ func TestAnExampleFileIsAConfigurationOrAStaticTargetFile(t *testing.T) {
 		if got != want || (err == nil) != (want != "") {
 			t.Errorf("%q: kind=%q err=%v, want %q", document, got, err, want)
 		}
+	}
+}
+
+// exampleTypesNotBuilt are the request types an example's collectors use
+// that this build of the tests lacks, sorted: an example of an opt-in type,
+// such as examples/tcp, is loaded and checked against the schema in a build
+// with its type, as CI's build with every opt-in type is, and skipped in one
+// without, which would refuse it as the exporter does. A static target
+// file's are those of the configuration beside it.
+func exampleTypesNotBuilt(t *testing.T, tree exampleTree, path string) []string {
+	t.Helper()
+	if slices.Contains(tree.staticTargets, path) {
+		for _, candidate := range tree.configs {
+			if filepath.Dir(candidate) == filepath.Dir(path) {
+				path = candidate
+			}
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Collectors []struct {
+			Request struct {
+				Type string `yaml:"type"`
+			} `yaml:"request"`
+		} `yaml:"collectors"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	built := fetch.BuiltRequestTypes()
+	var missing []string
+	for _, collector := range document.Collectors {
+		if name := collector.Request.Type; name != "" && !slices.Contains(built, name) && !slices.Contains(missing, name) {
+			missing = append(missing, name)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+// An example is skipped for the request types a build lacks and for no
+// other reason: examples/tcp is skipped without the tcp type, the static
+// target file beside it with it, and an example of the default build's
+// types never is.
+func TestAnExampleIsSkippedOnlyForATypeTheBuildLacks(t *testing.T) {
+	tree := shippedExamples(t)
+	if !slices.Contains(tree.configs, "examples/tcp/config.yaml") || !slices.Contains(tree.staticTargets, "examples/tcp/static-targets.yaml") {
+		t.Fatalf("examples/tcp is not among the examples: %v %v", tree.configs, tree.staticTargets)
+	}
+	tcpBuilt := slices.Contains(fetch.BuiltRequestTypes(), "tcp")
+	for _, path := range []string{"examples/tcp/config.yaml", "examples/tcp/static-targets.yaml"} {
+		got := exampleTypesNotBuilt(t, tree, path)
+		if want := []string{"tcp"}; tcpBuilt && len(got) != 0 || !tcpBuilt && !slices.Equal(got, want) {
+			t.Errorf("%s: the types not built are %v, with tcp built %v", path, got, tcpBuilt)
+		}
+	}
+	if got := exampleTypesNotBuilt(t, tree, "examples/open-meteo/config.yaml"); slices.Contains(fetch.BuiltRequestTypes(), "http") && len(got) != 0 {
+		t.Errorf("examples/open-meteo/config.yaml: the types not built are %v", got)
 	}
 }

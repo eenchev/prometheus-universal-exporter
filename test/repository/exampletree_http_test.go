@@ -22,6 +22,9 @@ func TestExampleStaticTargetFilesMatchTheSchemaAndTheirConfiguration(t *testing.
 	schema := loadSchemaFile(t, staticTargetsSchemaFile)
 	for _, path := range tree.staticTargets {
 		t.Run(path, func(t *testing.T) {
+			if missing := exampleTypesNotBuilt(t, tree, path); len(missing) > 0 {
+				t.Skipf("this build lacks the request types %v", missing)
+			}
 			if errs := validateAgainstSchema(schema, readYAMLDocument(t, path)); len(errs) > 0 {
 				t.Errorf("%s does not match the schema:\n%s", path, strings.Join(errs, "\n"))
 			}

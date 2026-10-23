@@ -10298,11 +10298,17 @@ MUST take their list from the directory tree rather than from a file name
 pattern or a written list, telling a configuration from a static target file
 by its content, and MUST fail on a YAML file there that is neither. An
 example's static target file MUST be valid against the configuration in its
-directory, as startup checks the two. An example SHOULD also be run in the
+directory, as startup checks the two. An example of an opt-in request type
+(`examples/tcp`) MUST be loaded, and checked against the schema the build
+generates, in a build with its type, as CI's build with every opt-in type
+runs the repository's tests, and MUST be skipped, for that reason alone, in
+a build without it; every other example is checked against the committed
+schemas. An example SHOULD also be run in the
 default suite against a local stand-in answering in the service's documented
 shape, asserting every series and the request the collector sent, as the
 Filebeat, Open-Meteo, ECB, METAR, mempool.space, Prometheus demo, Frankfurter,
-USGS and scrapethissite.com examples are.
+USGS and scrapethissite.com examples are, and the tcp example in a build
+with its type.
 
 ## 34.32 Regression tests
 
@@ -26402,6 +26408,26 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   internal/ldaptest is a package only tests import, left out of the
   vulnerability scan, and ci.yml's filters match it
   (TestEachSideOfCIRunsWhenAFileItsTestsNeedChanges).
+
+## 34.186 The tcp examples
+
+- examples/tcp, in a build with the type, reads stand-ins answering as
+  memcached, a ZooKeeper leader and HAProxy do: memcached's gauges, counters
+  and commands by name; ZooKeeper's numbers by name, its packets, that it
+  leads and its synced followers, never its version or state as a number;
+  HAProxy's sessions, limits, queues, bytes, errors and states by proxy,
+  name and type, an empty cell making no series; and no rule fails
+  (TestTheTCPExamplesReadTheirServices).
+- An example is skipped only for the request types a build lacks:
+  examples/tcp and its static target file without tcp and not with it, an
+  http example never in a build with http
+  (TestAnExampleIsSkippedOnlyForATypeTheBuildLacks).
+- The examples that load, match the schema and run their scripts are
+  checked against the schema the build generates and skipped without one
+  of their types (TestShippedConfigurationsMatchTheSchema,
+  TestTheShippedFilesMatchTheSchemasAsTheyDid,
+  TestShippedExampleScriptsSatisfyTheContract,
+  TestExampleStaticTargetFilesMatchTheSchemaAndTheirConfiguration).
 
 # 35. Documentation requirements
 

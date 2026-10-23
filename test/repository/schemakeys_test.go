@@ -442,7 +442,10 @@ func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[strin
 	delete(forwarded, "pattern")
 	delete(forwarded, "not")
 	forwarded["type"] = []any{"string", "number", "boolean"}
-	for _, condition := range schemaNode(t, schema, "collectors[].request")["allOf"].([]any) {
+	// A build of one type whose keys need no condition, such as tcp, has
+	// no allOf.
+	conditions, _ := schemaNode(t, schema, "collectors[].request")["allOf"].([]any)
+	for _, condition := range conditions {
 		condition := condition.(map[string]any)
 		condition["then"] = map[string]any{"required": condition["then"].(map[string]any)["required"]}
 	}
@@ -721,22 +724,33 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 // Every shipped configuration and target file, the examples among them,
 // matches its schema as it matched the schema as it was: nothing shipped is
 // flagged by a rule the schemas gained with "" being the key left out — a
-// rule's name, a grpc collector's descriptors, a value_map's keys.
+// rule's name, a grpc collector's descriptors, a value_map's keys. An
+// example is checked against the schemas this build generates, which are
+// the committed ones in the default build and name an opt-in type in a build
+// with it, and skipped in a build without one of its types.
 func TestTheShippedFilesMatchTheSchemasAsTheyDid(t *testing.T) {
-	schemas := loadKeySchemas(t)
+	schemas, built := loadKeySchemas(t), builtKeySchemas(t)
 	examples := shippedExamples(t)
 	files := 0
 	for _, kind := range []struct {
-		files       []string
-		now, before map[string]any
+		files                 []string
+		now, before           map[string]any
+		builtNow, builtBefore map[string]any
 	}{
-		{append([]string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}, examples.configs...), schemas.configuration, schemas.configurationWas},
-		{append([]string{"configs/static-targets.example.yaml"}, examples.staticTargets...), schemas.targetFile, schemas.targetFileWas},
+		{append([]string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}, examples.configs...), schemas.configuration, schemas.configurationWas, built.configuration, built.configurationWas},
+		{append([]string{"configs/static-targets.example.yaml"}, examples.staticTargets...), schemas.targetFile, schemas.targetFileWas, built.targetFile, built.targetFileWas},
 	} {
 		for _, file := range kind.files {
 			files++
+			now, before := kind.now, kind.before
+			if strings.HasPrefix(file, "examples/") {
+				if len(exampleTypesNotBuilt(t, examples, file)) > 0 {
+					continue
+				}
+				now, before = kind.builtNow, kind.builtBefore
+			}
 			document := readYAMLDocument(t, file)
-			if now, before := validateAgainstSchema(kind.now, document), validateAgainstSchema(kind.before, document); len(now) != 0 || len(before) != 0 {
+			if now, before := validateAgainstSchema(now, document), validateAgainstSchema(before, document); len(now) != 0 || len(before) != 0 {
 				t.Errorf("%s: the schema says %v, and as it was %v", file, now, before)
 			}
 		}

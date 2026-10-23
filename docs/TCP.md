@@ -192,6 +192,10 @@ envelope, with no status (`$status` is `null`, Python's
 
 ## Examples
 
+[`examples/tcp/`](../examples/tcp/config.yaml) holds complete collectors for
+memcached, ZooKeeper and HAProxy, with more of each one's statistics than
+below, and static targets for them.
+
 ZooKeeper's `mntr`, each number it reports as a series of one family by its
 name, and whether the server is the ensemble's leader. The server answers
 the four-letter words its `4lw.commands.whitelist` names, `mntr` among them:

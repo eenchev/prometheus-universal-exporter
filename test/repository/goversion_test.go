@@ -430,14 +430,21 @@ func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The version input of the golangci-lint action, whose step is the only
-	// place CI names a linter version.
-	action := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+(?:[ \t]+#.*)?\s+with:\s+version:[ \t]*(\S+)`).FindSubmatch(workflow)
-	if action == nil {
+	// The version input of each golangci-lint action, whose steps are the
+	// only places CI names a linter version: the lint job's and the one of
+	// each request type's job.
+	steps := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+`).FindAll(workflow, -1)
+	actions := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+(?:[ \t]+#.*)?\s+with:\s+version:[ \t]*(\S+)`).FindAllSubmatch(workflow, -1)
+	if len(actions) == 0 {
 		t.Fatal("ci.yml no longer pins a golangci-lint version")
 	}
-	if got := string(action[1]); got != pinned {
-		t.Fatalf("ci.yml lints with %s but the Makefile installs %s; a clean `make lint` would not mean a clean CI run", got, pinned)
+	if len(actions) != len(steps) {
+		t.Errorf("ci.yml uses the golangci-lint action %d times and names its version first in %d of them", len(steps), len(actions))
+	}
+	for _, action := range actions {
+		if got := string(action[1]); got != pinned {
+			t.Errorf("ci.yml lints with %s but the Makefile installs %s; a clean `make lint` would not mean a clean CI run", got, pinned)
+		}
 	}
 }
 

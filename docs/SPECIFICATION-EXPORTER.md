@@ -755,8 +755,8 @@ and the source MUST list the opt-in types.
   build-opt-in-types`, `make lint-opt-in-types` and `make
   test-opt-in-types`, which `make ci` includes, do, and a test MUST keep
   their lists naming every opt-in type of the tree; each single-type
-  selection, an opt-in type's included, is vetted, built and tested as
-  below.
+  selection, an opt-in type's included, is vetted, built, linted (§ 34.33)
+  and tested as below.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, over the exporter's packages
   when they are to run (§ 34.33), which `make test-request-types` runs over
@@ -10421,7 +10421,15 @@ of their own, the builds (vet, the default build, darwin's, the image's and
 those with the opt-in drivers and request types) in another, and each
 single-type selection's vet and build in that selection's job of the
 single-type matrix, not in a loop in one job: the job that runs the
-repository's checks and the exporter's tests MUST NOT also run them. Every job that runs Go checks MUST start with the same setup
+repository's checks and the exporter's tests MUST NOT also run them. Each job
+of that matrix MUST also lint its selection's build alone with golangci-lint,
+at the version and action pin of the linters' job, with the tags
+`tools/request-type-tags.sh` prints for the type, under the `go` output: the
+linters' job lints builds that carry every type, in which a helper only
+another type's code or tests call is used, so a helper a single-type build
+leaves unused is reported nowhere else. `make lint-request-types`, which
+`make ci` includes, MUST lint the same builds, and a test MUST keep its loop
+naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment, and MUST gate its steps on that filter's outputs rather than with

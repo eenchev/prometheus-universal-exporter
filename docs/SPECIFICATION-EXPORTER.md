@@ -25648,6 +25648,112 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   (TestASnowflakeResultInMoreThanOneChunkFailsAtOnce,
   TestTheSnowflakeDriversLogGoesToTheExportersLogger).
 
+## 34.177 The opt-in redis request type
+
+- A redis collector with nothing but its type sends INFO alone and answers
+  its sections as a document, each by its heading in lower case, a number
+  as a JSON number written as the server wrote it, a 64-bit counter with
+  every digit, other text as text (`7.2.4`, `00000000`, `55.12%`), and a
+  keyspace or replica line of name=value pairs as an object
+  (TestARedisCollectorAnswersINFOAsADocument).
+- info_sections sends one INFO for each section and the document holds
+  those alone; a section the server answers with nothing fails the scrape
+  naming it (TestARedisCollectorAsksForItsSectionsOneByOne).
+- password_file logs in with AUTH password, or AUTH username password with
+  username, the file read at every scrape; a refused password fails the
+  scrape with the server's WRONGPASS and never the password, and a server
+  that wants a password from a collector without one fails it with NOAUTH
+  (TestARedisCollectorLogsInWithItsPasswordFile).
+- db selects its database with SELECT after the login, db 0 sends none, a
+  database the server lacks fails the scrape, and the url label carries the
+  database (TestARedisCollectorSelectsItsDatabase).
+- Each command's reply is put under its name, an integer as a number, a
+  bulk string as text, nil as null, an array as a list, HGETALL as an
+  object, XINFO GROUPS as a list of objects, CLUSTER INFO as an object of
+  its lines; a placeholder in an argument is filled from the probe, a
+  collector of commands alone sends no INFO, its http_method is COMMANDS
+  and INFO's is INFO, an unused probe parameter names request.commands,
+  and an error reply fails the scrape with the command and the server's
+  words (TestARedisCollectorPutsEachCommandsReplyUnderItsName).
+- A redis collector's keys are refused at load: a command not on the list,
+  CONFIG GET, CLIENT LIST and KEYS among them, a command with arguments it
+  does not take, a placeholder in a command's name or subcommand, a broken
+  placeholder, a command entry without a command, a name given twice or
+  that jq cannot reach, a username without password_file, a negative db, a
+  section of INFO not in lower case or named twice, a key of another type,
+  half a client certificate; its targets are host, host:port, [v6]:port,
+  redis:// or rediss://, port 6379 by default, a scheme, user, path or bad
+  port refused, and redis:// with a tls block refused
+  (TestARedisCollectorsKeysAndTargetsAreChecked).
+- A tls block or a rediss:// target speaks TLS and verifies the server
+  against tls.ca_file; an unknown authority fails the handshake, and
+  plaintext to a TLS server fails the scrape (TestARedisCollectorSpeaksTLS).
+- The cloud metadata service, a denied target and one not allowed are
+  refused before any connection, and an allowed one is read
+  (TestARedisCollectorKeepsToItsTargetLists).
+- A scrape's replies are held to the response limit together: INFO past a
+  small limit, a bulk string's or an array's declared length past what is
+  left, are refused as a limit exceeded; arrays nested past 16, a length
+  that is no number, a reply that is no RESP2 and a line past 64 KiB as no
+  RESP2 reply; a declared length of 1 GB under a 2 GiB limit, followed by a
+  few bytes, allocates no more than what came
+  (TestARedisServersRepliesAreHeldToTheResponseLimit).
+- A server that never answers fails the scrape with the deadline's error
+  at the probe's deadline, and at a probe's timeout
+  (TestARedisServerThatNeverAnswersFailsAtTheDeadline).
+- A debug trace shows AUTH with its password as ***, SELECT and each
+  command, by name and redis://host:port/db with a Redis-Command header,
+  and each reply's kind; --dry-run warns of a missing password file
+  (TestARedisScrapeIsTracedWithoutItsPassword).
+- A connection refused fails the scrape naming the address
+  (TestARedisConnectionRefusedFailsTheScrape).
+- requesttype_redis.go, redisresp.go and the type's tests are built under
+  request_type_redis alone, redis is in knownRequestTypes and
+  optInRequestTypes, and optInRequestKeys lists db, info_sections and
+  commands (TestEveryRequestTypeFileHasItsSelectionConstraint,
+  TestBuildTagsSelectTheRequestTypeFiles, TestTheOptInRequestKeysAreTheTypesOwn).
+- A build without redis, the default build among them, refuses a redis
+  collector at load saying it is opt-in and naming OPT_IN_REQUEST_TYPES=redis
+  and request_type_redis (TestABuildWithoutRedisRefusesARedisCollector).
+- A redis collector's decoder is json without a warning, its command's
+  name is written in upper case and an argument YAML reads as a number is
+  sent as its text, and a transform or decoder that cannot read JSON is
+  refused (TestARedisCollectorDecodesJSON).
+- Through the exporter, a redis probe answers its series, a queue named by
+  param_queue among them; the verbose self-metrics label it
+  redis://host:port/db with INFO or COMMANDS; a denied target is answered
+  403 and counted in http_exporter_targets_refused_total; a target with a
+  path is answered 400; the collectors page hints the target
+  (TestARedisCollectorProbe).
+- A debug probe of a redis collector shows AUTH masked, SELECT, the command
+  and the document, and never the password (TestADebugProbeOfARedisCollector).
+- The examples of docs/REDIS.md work as written against the stand-in
+  server: memory, hit ratio and keys by database, a queue's length for the
+  probe's queue, replicas' lag and bytes behind, a stream's groups; the TLS
+  example and the static targets load (TestRedisDocumentationExamples).
+- tools/request-type-tags.sh takes redis as an opt-in type, alone, with
+  s3file and in REQUEST_TYPES (TestRequestTypeTagsScript); CI and the
+  Makefile build, test and lint the opt-in types s3file and redis, ci.yml's
+  lint step with request_type_redis,request_type_s3file
+  (TestCIBuildsEveryOptInRequestType); a build of redis alone and the
+  default build with it link no gRPC, SSH or AWS module
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- info_sections[] and commands[].name get one verdict from the schema and
+  the exporter in a build with redis
+  (TestSchemaAndExporterAgreeOnRedisKeysWrittenEmpty), and are held to text
+  alone (TestTheKeysHeldToTextAloneAreTheSchemas).
+- The README, the chart README's opening, docs/TLSCERT.md's sentence of the
+  types taking a tls block, docs/REDIS.md's static targets section and
+  every marked request-type list name redis; the committed schema
+  comparisons run in a build without it
+  (TestReadmeOpeningNamesEveryRequestType, TestTheChartDescribesEverySource,
+  TestSentencesNameTheRequestTypesThatTakeAKey,
+  TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet,
+  TestMarkedListsNameEveryRequestType,
+  TestTheCommittedSchemaComparisonsRunInTheDefaultBuild).
+- internal/redistest is a package only tests import, standard library
+  alone (TestInternalPackagesAreLayered and the vulnerability check's list).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

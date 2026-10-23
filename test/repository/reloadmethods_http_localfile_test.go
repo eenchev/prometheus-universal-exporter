@@ -1,3 +1,5 @@
+//go:build !select_request_types || (request_type_http && request_type_localfile)
+
 package repository
 
 import (
@@ -19,7 +21,7 @@ import (
 // mistake to be refused.
 func TestTheReloadPagesNameEveryMethodTheEndpointTakes(t *testing.T) {
 	const path = "configs/config.example.yaml"
-	cfg, err := config.Load(path)
+	cfg, err := config.Load("configs/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

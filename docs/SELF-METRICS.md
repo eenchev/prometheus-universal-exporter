@@ -571,7 +571,8 @@ metadata are left out, as a query string is.
 A [`redis`](REDIS.md#errors-and-self-metrics) collector's scrapes carry
 `redis://host:port/db`, `rediss://` over TLS, and `http_method="INFO"` when
 the scrape sends INFO alone, `http_method="COMMANDS"` when it sends the
-collector's commands; the commands and their arguments are left out, as a
+collector's commands alone, and `http_method="INFO+COMMANDS"` when it sends
+`info_sections`' INFOs and the commands; the commands and their arguments are left out, as a
 query string is.
 
 A request URL is an unbounded label value and each combination now carries a

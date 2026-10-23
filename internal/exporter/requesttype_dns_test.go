@@ -208,3 +208,23 @@ func TestAPythonTransformReadsADNSDocument(t *testing.T) {
 		t.Errorf("%d %v, want %v", recorder.Code, got, want)
 	}
 }
+
+// A dns collector's name its denied_targets lists is answered 403 and
+// counted in http_exporter_targets_refused_total, which a dns collector
+// has a series in, as every type with targets to refuse does.
+func TestADNSCollectorCountsTheNamesItRefuses(t *testing.T) {
+	address := dnsResponder(t)
+	yaml := strings.Replace(dnsCollectors, "      server: SERVER\n", "      server: "+address+"\n      denied_targets: [blocked.example.test]\n", 1)
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", yaml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	if recorder := probeOnce(t, server, "/probe?collector=records&target=blocked.example.test", nil); recorder.Code != http.StatusForbidden {
+		t.Fatalf("a denied name: %d %s", recorder.Code, recorder.Body)
+	}
+	if metrics := probeOnce(t, server, "/self-metrics", nil).Body.String(); !strings.Contains(metrics, `http_exporter_targets_refused_total{collector="records"} 1`) {
+		t.Errorf("the refusal is not counted:\n%s", metrics)
+	}
+}

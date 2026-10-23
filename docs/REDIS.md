@@ -352,6 +352,11 @@ Arrays nest at most 16 deep and a line of a reply, but a string's data, is
 at most 64 KiB; a server past either, or one that answers no RESP2 at all,
 fails the scrape saying it is no RESP2 reply.
 
+The document the replies make is held to the same limit: JSON writes a
+control character as six bytes (`\u0001`) and a quote or a backslash as two,
+so replies within the limit can make a document past it, which fails the
+scrape as a limit exceeded too, saying how large the document was.
+
 The connection, the TLS handshake and every command end at the probe's
 deadline, its `timeout` or the scrape's, 30 seconds without one: a server
 that stops answering fails the scrape when it comes, with the deadline's
@@ -385,7 +390,9 @@ Requests
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)
 a scrape is labelled `url="redis://host:port/db"`, `rediss://` over TLS, and
 `http_method="INFO"` when it sends `INFO` alone, `http_method="COMMANDS"`
-when it sends the collector's commands.
+when it sends the collector's commands alone, and
+`http_method="INFO+COMMANDS"` when it sends `info_sections`' `INFO`s and the
+commands.
 
 ## Limitations
 
@@ -394,6 +401,12 @@ when it sends the collector's commands.
 - **No Sentinel or cluster routing.** A collector reads the server its
   target names; a cluster's nodes are each a target, and a command on a key
   another node holds fails with the `MOVED` error.
+- **Text values only.** The document is JSON, whose strings are text, so a
+  reply holding bytes that are not UTF-8 — a serialized object, a
+  compressed value, a counter written in binary, or a hash field named so —
+  fails the scrape, naming the command, rather than being put in the
+  document with U+FFFD in place of those bytes. Read such a key's size or
+  kind instead, with `STRLEN`, `TYPE` or `OBJECT ENCODING`.
 - **One connection per scrape.** No connection is kept between scrapes, so
   each scrape costs a TCP handshake, and a TLS one with TLS.
 - **No `CONFIG GET`, `CLIENT LIST` or `LATENCY`.** What they show beyond
@@ -407,6 +420,8 @@ when it sends the collector's commands.
 | `INFO: the server answered: NOAUTH Authentication required.` | The server wants a password: set `password_file`. |
 | `AUTH ***: the server answered: WRONGPASS ...` | The password, or the user: an ACL user needs `username`. |
 | `AUTH ***: the server answered: ERR AUTH <password> called without any password configured ...` | The server wants none: take `password_file` out. |
+| `GET session:1: the reply holds bytes that are not UTF-8 text, ...` | The key holds binary data: read its size or kind (see [Limitations](#limitations)). |
+| `the document of the replies is ... bytes as JSON, larger than the response limit ...` | The replies hold control characters JSON escapes: raise `max_response_bytes`, or ask for less. |
 | `... sends CONFIG, which is not among the read-only commands a redis collector may send` | Only the [listed commands](#commands) are taken. |
 | `INFO keyspace ...: the server answered no section` | The section's name: `INFO everything` lists those the server has. |
 | `LLEN ...: the server answered: WRONGTYPE ...` | The key holds another kind of value: `TYPE` says which. |

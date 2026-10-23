@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -58,6 +59,22 @@ func (e *redisError) Error() string { return "the server answered: " + e.text }
 
 // errRedisProtocol marks a reply that is no RESP2 reply at all.
 var errRedisProtocol = errors.New("not a RESP2 reply")
+
+// errRedisNotText is the failure of a reply holding bytes that are not
+// UTF-8: the document is JSON, whose strings are text, and a value put in it
+// would have each such byte replaced with U+FFFD, a different value, with
+// nothing to say so. A key holding a serialized object, a compressed value
+// or a counter written in binary is read with a command that answers its
+// size or its kind instead, such as STRLEN, TYPE or OBJECT ENCODING.
+var errRedisNotText = errors.New("the reply holds bytes that are not UTF-8 text, which the JSON document cannot hold as they are; a redis collector reads values stored as text, and the size or kind of others, with STRLEN, TYPE or OBJECT ENCODING")
+
+// redisText is a reply's text, or errRedisNotText.
+func redisText(b []byte) (string, error) {
+	if !utf8.Valid(b) {
+		return "", errRedisNotText
+	}
+	return string(b), nil
+}
 
 // redisConn is one connection to a server, with the budget of what its
 // replies may still take.
@@ -263,12 +280,16 @@ func redisJSON(reply any, shape redisReplyShape) (any, error) {
 		}
 		return out, nil
 	case redisInfoText:
-		text, ok := reply.([]byte)
+		raw, ok := reply.([]byte)
 		if !ok {
 			return nil, fmt.Errorf("the reply is %s, not text of name:value lines", redisKind(reply))
 		}
+		text, err := redisText(raw)
+		if err != nil {
+			return nil, err
+		}
 		values := map[string]any{}
-		for line := range strings.SplitSeq(string(text), "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			if name, value, ok := strings.Cut(strings.TrimRight(line, "\r"), ":"); ok && name != "" {
 				values[name] = redisInfoValue(value)
 			}
@@ -286,9 +307,9 @@ func redisPlainJSON(reply any) (any, error) {
 	case int64:
 		return v, nil
 	case redisSimple:
-		return string(v), nil
+		return redisText([]byte(v))
 	case []byte:
-		return string(v), nil
+		return redisText(v)
 	case *redisError:
 		return nil, v
 	case []any:
@@ -315,15 +336,19 @@ func redisObject(reply any) (map[string]any, error) {
 	out := make(map[string]any, len(items)/2)
 	for i := 0; i < len(items); i += 2 {
 		var name string
+		var err error
 		switch key := items[i].(type) {
 		case []byte:
-			name = string(key)
+			name, err = redisText(key)
 		case redisSimple:
-			name = string(key)
+			name, err = redisText([]byte(key))
 		case int64:
 			name = strconv.FormatInt(key, 10)
 		default:
 			return nil, fmt.Errorf("a name of the reply's pairs is %s, not a string", redisKind(items[i]))
+		}
+		if err != nil {
+			return nil, err
 		}
 		value, err := redisPlainJSON(items[i+1])
 		if err != nil {

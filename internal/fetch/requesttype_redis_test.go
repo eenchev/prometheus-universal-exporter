@@ -228,6 +228,13 @@ func TestARedisCollectorPutsEachCommandsReplyUnderItsName(t *testing.T) {
 	if method := RequestMethodFor(redisCollector(t), RequestOverrides{}); method != "INFO" {
 		t.Errorf("method %q", method)
 	}
+	both := redisCollector(t, func(c *model.Collector) {
+		c.Request.InfoSections = []string{"memory"}
+		c.Request.Commands = []model.RedisCommand{{Name: "role", Command: []string{"ROLE"}}}
+	})
+	if method := RequestMethodFor(both, RequestOverrides{}); method != "INFO+COMMANDS" {
+		t.Errorf("the method of info_sections and commands together: %q", method)
+	}
 	if err := CheckPathParams(c, RequestOverrides{Params: map[string]string{"param_queue": "a", "param_other": "b"}}); err == nil || !strings.Contains(err.Error(), "param_other") || !strings.Contains(err.Error(), "request.commands") {
 		t.Errorf("an unused parameter: %v", err)
 	}
@@ -511,4 +518,53 @@ func TestARedisConnectionRefusedFailsTheScrape(t *testing.T) {
 // build does: db, info_sections and commands (checkOptInRequestKeys).
 func TestTheOptInRequestKeysAreRedissOwn(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeRedis)
+}
+
+// A reply holding bytes that are not UTF-8 fails the scrape naming the
+// command, never put in the document with U+FFFD in their place: a bulk
+// string, a name of HGETALL's pairs, CLUSTER INFO's text and INFO's.
+func TestARedisReplyThatIsNotTextFailsTheScrape(t *testing.T) {
+	server := redistest.New(t)
+	server.SetInfo(redistest.Section{Name: "Server", Lines: []string{"redis_version:7.2.4", "os:\xff\xfe"}})
+	server.Reply("GET v", redistest.Bulk("ok\xffok"))
+	server.Reply("HGETALL h", "*2\r\n"+redistest.Bulk("\xc3")+redistest.Bulk("1"))
+	server.Reply("CLUSTER INFO", redistest.Bulk("cluster_state:\xff\r\n"))
+	for command, words := range map[string][]string{"GET v": {"GET", "v"}, "HGETALL h": {"HGETALL", "h"}, "CLUSTER INFO": {"CLUSTER", "INFO"}} {
+		c := redisCollector(t, func(c *model.Collector) {
+			c.Request.Commands = []model.RedisCommand{{Name: "v", Command: words}}
+		})
+		_, err := redisScrape(t, c, server.Addr, nil)
+		if !errors.Is(err, errRedisNotText) || !strings.Contains(err.Error(), command) {
+			t.Errorf("%s: %v", command, err)
+		}
+	}
+	if _, err := redisScrape(t, redisCollector(t), server.Addr, nil); !errors.Is(err, errRedisNotText) || !strings.Contains(err.Error(), "INFO") {
+		t.Errorf("INFO: %v", err)
+	}
+	server.Reply("GET v", redistest.Bulk("caf\u00e9"))
+	c := redisCollector(t, func(c *model.Collector) {
+		c.Request.Commands = []model.RedisCommand{{Name: "v", Command: []string{"GET", "v"}}}
+	})
+	if body, err := redisScrape(t, c, server.Addr, nil); err != nil || body != "{\"commands\":{\"v\":\"caf\u00e9\"}}" {
+		t.Errorf("UTF-8 text: %s %v", body, err)
+	}
+}
+
+// The document is held to the response limit as the replies are: replies
+// within it whose control characters JSON writes six bytes each fail the
+// scrape as a limit exceeded, and the same length of plain text is taken.
+func TestARedisDocumentPastTheResponseLimitFailsTheScrape(t *testing.T) {
+	server := redistest.New(t)
+	c := redisCollector(t, func(c *model.Collector) {
+		c.Request.MaxResponseBytes = 1000
+		c.Request.Commands = []model.RedisCommand{{Name: "v", Command: []string{"GET", "v"}}}
+	})
+	server.Reply("GET v", redistest.Bulk(strings.Repeat("\x01", 400)))
+	if _, err := redisScrape(t, c, server.Addr, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "as JSON") {
+		t.Errorf("a document past the limit: %v", err)
+	}
+	server.Reply("GET v", redistest.Bulk(strings.Repeat("x", 400)))
+	if _, err := redisScrape(t, c, server.Addr, nil); err != nil {
+		t.Errorf("plain text within the limit: %v", err)
+	}
 }

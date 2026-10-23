@@ -88,10 +88,12 @@ const redisDefaultPort = "6379"
 const redisTimeout = 30 * time.Second
 
 // The http_method labels of a scrape: INFO when it sends INFO alone,
-// COMMANDS when it sends the configuration's commands.
+// COMMANDS when it sends the configuration's commands alone, and
+// INFO+COMMANDS when it sends info_sections' INFOs and the commands.
 const (
 	redisMethodInfo     = "INFO"
 	redisMethodCommands = "COMMANDS"
+	redisMethodBoth     = "INFO+COMMANDS"
 )
 
 // redisCommandRule is what a command of request.commands may be sent with:
@@ -369,10 +371,13 @@ func redisURL(a redisAddress, secure bool, db int) string {
 }
 
 func redisMethod(c *model.Collector, _ RequestOverrides) string {
-	if len(c.Request.Commands) > 0 {
-		return redisMethodCommands
+	switch {
+	case len(c.Request.Commands) == 0:
+		return redisMethodInfo
+	case len(c.Request.InfoSections) > 0:
+		return redisMethodBoth
 	}
-	return redisMethodInfo
+	return redisMethodCommands
 }
 
 // redisDisplay renders a target for logs and labels: as written, since it
@@ -547,14 +552,18 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 			return nil, err
 		}
 		if call.name == "" {
-			text, ok := reply.([]byte)
+			raw, ok := reply.([]byte)
 			if !ok {
 				return nil, fmt.Errorf("%s: the reply is %s, not INFO's text", redisShownCommand(call.args), redisKind(reply))
+			}
+			text, err := redisText(raw)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", redisShownCommand(call.args), err)
 			}
 			if doc.Info == nil {
 				doc.Info = map[string]map[string]any{}
 			}
-			if parseRedisInfo(string(text), doc.Info) == 0 && call.section != "" {
+			if parseRedisInfo(text, doc.Info) == 0 && call.section != "" {
 				return nil, fmt.Errorf("INFO %s: the server answered no section; it has none of that name (INFO everything lists those it has)", call.section)
 			}
 			continue
@@ -571,6 +580,12 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
+	}
+	// The document is held to the limit the replies were: JSON writes a
+	// control character as six bytes, \u0001, and a quote or backslash as
+	// two, so replies within the limit can make a document past it.
+	if limit := responseLimit(c); int64(len(body)) > limit {
+		return nil, model.MarkError(model.Errorf("the document of the replies is %d bytes as JSON, larger than the response limit of %d bytes, the replies' control characters, quotes and backslashes taking more as JSON escapes them; raise request.max_response_bytes or limits.max_response_bytes, or ask for less", len(body), model.Size(limit)), model.ErrLimitExceeded)
 	}
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,

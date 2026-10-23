@@ -18,7 +18,7 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
 The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for it, objects in S3 (`s3file`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`) and the INFO and read-only commands of Redis and Valkey servers (`redis`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -619,7 +619,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file` and `kubernetes` are implemented;
+`tlscert`, `s3file`, `kubernetes` and `redis` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -666,10 +666,11 @@ added without deciding which types it belongs to.
 Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
-type but the opt-in ones. An opt-in type is one whose libraries few
-deployments want in the binary, `s3file` and the AWS SDK it links: no build
-MAY carry it unless asked for it by its tag, and the source MUST list the
-opt-in types.
+type but the opt-in ones. An opt-in type is one few deployments want in the
+binary: `s3file`, for the AWS SDK it links, and `redis`, which links nothing
+outside the standard library but reaches a server most deployments of the
+exporter do not have. No build MAY carry one unless asked for it by its tag,
+and the source MUST list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
@@ -697,10 +698,11 @@ opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert` and `kubernetes` MUST import nothing
-  outside the standard library and the module's own packages — no
-  Kubernetes client library — and the test MUST find none of the other
-  types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  that driver. `dns`, `tlscert`, `kubernetes` and `redis` MUST import
+  nothing outside the standard library and the module's own packages — no
+  Kubernetes client library, no Redis client library, the stand-in server
+  of `redis`'s tests (`internal/redistest`) included — and the test MUST
+  find none of the other types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
   configuration in a default build with it, and none of them in the default
@@ -811,14 +813,15 @@ opt-in types.
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
+| `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
 `retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
-the basic and bearer credential keys, `accept_status` and `login`. No probe
-parameter MAY set or change `login`.
+the basic and bearer credential keys, `accept_status`, `login` and
+`rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 
 ##### Pagination
 
@@ -902,6 +905,49 @@ the page. An answer of one page MUST be the page byte for byte; the merged
 document of several MUST be written again as JSON, each number as it was
 written, the first page's status and headers, without its
 `Content-Length`.
+
+##### Rate limiting
+
+`request.rate_limit` MUST bound how fast the collector asks one origin of its
+targets. It is the `http` and `graphite` types' alone; a collector of any
+other type that sets it MUST be refused at load as setting a key that does
+not apply to its type. Its keys:
+
+- `requests_per_second`, **required**: a number greater than 0; 0, a
+  negative number, NaN and an infinity MUST be refused at load, naming the
+  collector and the key.
+- `burst`: how many requests MAY be sent at once after a pause, at least 1;
+  0 or less MUST be refused at load. Left out, it MUST be 1, filled in when
+  the configuration loads.
+
+- The limit MUST be kept for each pair of collector and origin — the scheme,
+  the host in lower case, and the port, the scheme's own when the URL leaves
+  it out — so that two collectors asking one host are limited apart and one
+  collector's requests never wait on another's. A static target's own
+  `rate_limit` MUST replace the collector's for its requests, both keys
+  together, `burst` 1 when it leaves it out, and MUST have a limit of its
+  own for each origin, apart from the one the collector's other targets
+  share there.
+- Every request sent MUST take a turn, against the origin it is sent to:
+  each attempt of `retry`, each page of `pagination`, each hop of a followed
+  redirect, once the redirect's checks have passed, and each request of a
+  `login`. A turn MUST come at once while the bucket, which holds `burst`
+  turns and fills again at `requests_per_second`, has one, and otherwise
+  when it fills enough for one.
+- A request whose turn would come at or past its deadline — the probe's or
+  the scrape's, with the probe's `timeout`, or a login's own — MUST fail at
+  once, without waiting, with an error naming the limit, the origin, the
+  wait and the time left, and MUST NOT be retried:
+  `rate limit of 2 requests per second for http://legacy.example:80 would
+  delay the request past its deadline: it would wait 1.5s for its turn, and
+  800ms is left; ...`. A wait cut short MUST give its turn back.
+- A debug run's requests (§ 42.17) MUST take their turns as any other's, and
+  MUST NOT be counted in the collector's self-metrics (§ 22).
+- The buckets MUST be bounded: one that has filled again MAY be forgotten,
+  holding nothing a new one would not, and no more than 10,000 MUST be kept,
+  the least recently used forgotten first beyond that. A reload MUST forget
+  the buckets of the collectors it removed, and the exporter's shutdown
+  every bucket.
 
 #### `localfile`
 
@@ -1076,7 +1122,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1114,7 +1160,7 @@ lines: it only pulls. Its keys:
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
   `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
-  `login`, and `targets`, `from` and `until`, which replace the collector's. A static target's
+  `login`, `rate_limit`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
   the probe parameters of the same name, so it shares cached results with a
@@ -1152,6 +1198,15 @@ keys:
   called and a static target's at load. A bare target MUST be plaintext;
   `grpcs://` or any `tls` key MUST make the call TLS, and `grpc://` with a
   `tls` key MUST be refused.
+- A target's host MUST be handed to grpc-go as a DNS name or address
+  (`dns:///host:port`) in every form of target, so that a host named like one
+  of grpc-go's resolvers, such as `unix-abstract` or `passthrough`, is that
+  name looked up over DNS, and behind a proxy the name of the proxy's
+  `CONNECT`, and never selects a resolver or a unix socket. The host `unix`,
+  in any case, MUST be refused as a malformed target is, with a message that
+  says grpc-go would dial it as a unix socket: grpc-go dials the address
+  `unix:<port>`, which is what a proxied target stays, as a unix socket
+  whatever produced it. Nothing MUST be dialled for a refused target.
 - At load, each placeholder of the message MUST take its default, or a
   stand-in of its filter's kind when it has none, and the message MUST then be
   JSON.
@@ -1572,7 +1627,12 @@ of objects, one a row, of its columns by name. Its keys:
   detection (cloud metadata services, AWS STS) MUST be off, and a result's
   chunks after the first, at cloud storage URLs, MUST NOT be fetched; such a
   result MUST fail the scrape at once, not at the deadline, saying it came in
-  more than one chunk and to return fewer rows or columns. A connection to
+  more than one chunk and to return fewer rows or columns. The exporter MUST
+  fail it from the account's answer naming the chunks, before gosnowflake
+  sees the answer, so that the driver's chunk downloader never starts: it
+  can miss the signal of a failed download and wait forever, past the
+  scrape's deadline, keeping the connection and its place at
+  `max_per_target`. A connection to
   the account that the policy refuses MUST fail the connection, or the
   statement it was made for, at once with the policy's refusal, though the
   driver would retry it until the deadline. A build with
@@ -1797,9 +1857,9 @@ of objects, one a row, of its columns by name. Its keys:
   exporter's log at its level, with `sql_driver` naming the driver, never to
   stdout, stderr or a file of the driver's own unless gosnowflake's client
   configuration file (`sf_client_config.json`) names one. gosnowflake's
-  error for each try at a result's later chunk, which the exporter refuses,
-  MUST be logged at debug, the scrape's failure saying what happened; its
-  other errors MUST stay errors. A server's answer
+  error for a statement the exporter fails for a result in more than one
+  chunk MUST be logged at debug, the scrape's failure saying what happened;
+  its other errors MUST stay errors. A server's answer
   routing a `sqlserver` connection to another host MUST be refused by the
   exporter's dialer, and the documentation MUST say so.
 - A failed statement MUST be reported in the `sql` stage, naming the server.
@@ -2099,6 +2159,116 @@ keys:
   verbose `url` label MUST be `kubernetes:` and the path of the listing
   across the cluster, or with `api_server` its URL before that path, and
   `http_method` MUST be `LIST`.
+
+#### `redis`
+
+A `redis` collector reads a Redis or Valkey server, which speak the same
+protocol: its INFO, and the replies of read-only commands its configuration
+lists, handed to the transforms as one JSON document. It is an opt-in type
+(§ 5.1, Selecting request types at build time): only a build asked for it
+carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `username` | none | An ACL user, logged in as with `AUTH username password`. No blank, control character or placeholder; only with `password_file`. |
+| `password_file` | none | The file of the password `AUTH` sends. Not blanks alone. Without it no `AUTH` is sent. |
+| `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
+| `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
+| `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
+| `tls` | none | As `http`'s; set, the scrape speaks TLS. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- The client MUST speak RESP2 and MUST NOT send `HELLO`; it MUST link no
+  Redis client library.
+- `password_file` MUST be read at every scrape, not at load, its
+  surrounding whitespace taken off; a file that is missing, unreadable or
+  empty MUST fail the scrape naming the key and the file, never its
+  content. `--dry-run` MUST read it, and the `tls` block's files when the
+  block is set, and list what a scrape would fail on as warnings of the
+  `config` check.
+- A scrape MUST send, in order, `AUTH` when `password_file` is set,
+  `SELECT` when `db` is not `0`, then `INFO <section>` for each entry of
+  `info_sections`, one command each, or `INFO` alone when `info_sections`
+  and `commands` are both unset, and then each entry of `commands`. A
+  collector with `commands` and no `info_sections` MUST send no `INFO`.
+  Each command MUST be answered before the next is sent. An error reply to
+  any of them MUST fail the scrape with the command and the server's text,
+  `AUTH`'s password written `***`.
+- A `commands` entry's `name` MUST be letters, digits and `_`, not starting
+  with a digit, and unique among the collector's entries. Its `command`
+  MUST name one of these, by name or by name and subcommand, in any case,
+  with the arguments after it each allows, and MUST be refused at load
+  otherwise, the refusal listing them: `DBSIZE`, `LASTSAVE`, `ROLE`,
+  `SLOWLOG LEN`, `CLUSTER INFO` (none); `GET`, `STRLEN`, `TYPE`, `TTL`,
+  `PTTL`, `LLEN`, `SCARD`, `ZCARD`, `HLEN`, `HGETALL`, `XLEN`,
+  `XINFO STREAM`, `XINFO GROUPS`, `MEMORY USAGE`, `OBJECT ENCODING`,
+  `OBJECT FREQ`, `OBJECT IDLETIME`, `OBJECT REFCOUNT` (a key); `LINDEX`,
+  `SISMEMBER`, `ZSCORE`, `HGET`, `HEXISTS`, `XPENDING`, `XINFO CONSUMERS`
+  (two); `ZCOUNT`, `ZLEXCOUNT` (three); `EXISTS`, `PFCOUNT` (one or more);
+  `HMGET` (two or more). No command that writes, lists keys, dumps a
+  collection without a bound, blocks, or shows the server's settings or
+  other clients (`CONFIG GET`, `CLIENT LIST`) MAY be among them. An
+  argument after the command's name and subcommand MAY hold
+  `{{param_name}}` placeholders, filled from the probe and sent as one
+  bulk string whatever it holds; a placeholder in the name or the
+  subcommand MUST be refused at load.
+- The answer MUST be a JSON document of `info`, present when INFO was
+  sent, an object of each section by its heading in lower case with `_`
+  for a blank, each an object of its `name:value` lines; and `commands`,
+  present when commands were sent, each reply under its entry's name. A
+  value of INFO that is a JSON number MUST be one, written as the server
+  wrote it, whatever its size; one made of `name=value` pairs joined by
+  commas, such as a keyspace line, MUST be an object of them, each value
+  read the same way; any other MUST be its text. A command's reply MUST
+  be: an integer a number, a simple or bulk string its text, a nil `null`,
+  an array a list; `HGETALL`'s and `XINFO STREAM`'s an object of their
+  names and values, `XINFO GROUPS`'s and `XINFO CONSUMERS`'s a list of such
+  objects, and `CLUSTER INFO`'s an object of its lines read as INFO's are.
+  A section named in `info_sections` that the server answers with no
+  section MUST fail the scrape naming it.
+- The replies of a scrape MUST be read against the response limit
+  together, counted in their bytes as they come off the connection. A bulk
+  string's declared length past what the limit has left MUST fail the
+  scrape before a byte of it is read, and no more MUST be held for one than
+  the server has sent of it; an array's declared length MUST fail it when
+  its elements, at three bytes each, could not fit; arrays MUST NOT nest
+  deeper than 16, nor a line other than a bulk string's data be longer than
+  64 KiB. Each failure past the limit MUST be a limit exceeded; a reply
+  that is no RESP2 reply MUST fail the scrape saying so.
+- The target MUST be `host`, `host:port`, `[v6]:port`, or a `redis://` or
+  `rediss://` URL of one, port 6379 when it names none, with no user,
+  path, query or other scheme, which MUST be answered `400` before
+  anything is sent, as a static target's is refused at load. It is
+  required. `rediss://`, or a `tls` block, MUST make the scrape speak TLS,
+  verifying the certificate against `tls.server_name` or the target's
+  host; `redis://` with a `tls` block MUST be refused. The target lists
+  MUST be applied to the host before the connection and to the address
+  connected to, as `http`'s are, a refused one answered `403`, counted in
+  `http_exporter_targets_refused_total`, and never connected to.
+- Each scrape MUST make its own connection and close it when the scrape
+  is over. The connection, the TLS handshake and every read and write MUST
+  end at the scrape's deadline, 30 seconds without one, or when it is
+  cancelled, and a scrape ended so MUST fail with the deadline's error.
+- A failed scrape MUST be reported in the `redis` stage. The decoder MUST
+  be `json`, as for `grpc`; another decoder, and a transform other than
+  `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each command sent, `AUTH` and
+  `SELECT` among them, by its name and `redis://host:port/db` (`rediss://`
+  over TLS), with the command's words in a `Redis-Command` header,
+  `AUTH`'s password as `***`, and the reply's kind, or the error, as its
+  outcome. The verbose `url` label MUST be `redis://host:port/db` or
+  `rediss://host:port/db`, and `http_method` MUST be `INFO` for a
+  collector without `commands`, `COMMANDS` for one with `commands` and no
+  `info_sections`, and `INFO+COMMANDS` for one with both.
+- A reply holding bytes that are not UTF-8 — a bulk or simple string, a
+  name of a reply's pairs, `CLUSTER INFO`'s or `INFO`'s text — MUST fail the
+  scrape, naming the command, and MUST NOT be put in the document with
+  U+FFFD in place of those bytes.
+- The document MUST be held to the response limit as the replies are: one
+  whose JSON is larger than the limit MUST fail the scrape as a limit
+  exceeded, saying the document's size.
+- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
+  `param_<name>`.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -2650,8 +2820,9 @@ nothing else of it there.
 `internal/grpctest` and `internal/sshtest`, the stand-in gRPC and SSH
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
-stand-in database of the `sql` tests, and `internal/kubetest`, the stand-in
-Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, MUST
+stand-in database of the `sql` tests, `internal/kubetest`, the stand-in
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, and
+`internal/redistest`, the stand-in Redis server of the `redis` tests, MUST
 NOT be imported outside tests and MUST import nothing but the standard
 library. `internal/testutil` MAY hold
 helpers shared by the tests of several packages and MUST NOT be imported
@@ -6161,6 +6332,9 @@ http_exporter_series_limit_exceeded_total
 http_exporter_logins_total
 http_exporter_login_failures_total
 
+http_exporter_rate_limit_waits_total
+http_exporter_rate_limit_refused_total
+
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
@@ -6248,7 +6422,9 @@ returned, `0` before one. They MUST be exported over OTLP as every other
 self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
-collector's refused buckets.
+collector's refused buckets, a `dns` collector's refused names, and a
+`tlscert` or `redis` collector's refused servers; each of these types MUST
+have its series there, `0` before a refusal.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
 for `http` collectors, `0` for one without `request.pagination`, per
@@ -6261,7 +6437,14 @@ and `graphite` collectors, `0` for one without `request.login`, per
 collector and with no per-request series: the logins the collector's login,
 or a static target's own, made, and those of them that failed (§ 42.6a). The
 counts MUST start at 0 at the exporter's shutdown and be forgotten with a
-collector a reload removes.
+collector a reload removes. `http_exporter_rate_limit_waits_total` and
+`http_exporter_rate_limit_refused_total`, counters, MUST exist only for
+`http` and `graphite` collectors, `0` for one without `request.rate_limit`,
+per collector and with no per-request series, never labelled by target or
+origin: the requests the collector's rate limit, or a static target's own,
+made wait for their turn, and those it refused for a turn past their
+deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
+shutdown and be forgotten with a collector a reload removes.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -6733,7 +6916,10 @@ Recommended behavior:
 - `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
   build and linking the endpoints and `/collectors`; with the lifecycle API
   on it MUST list `/-/reload` with every method the endpoint takes, `POST`
-  and `PUT`, and no other. Only `/` itself MUST be
+  and `PUT`, and no other. It MUST show when the last reload that put
+  something in force did, and what it changed, as § 24.1a says it, and
+  before the first that the exporter has not been reloaded since it
+  started. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -7042,9 +7228,25 @@ The exporter MUST reload when asked, not only when the watch finds a change:
   which MUST default to off. Without the flag the endpoint MUST answer `403`
   saying how to enable it; any other method MUST answer `405` with
   `Allow: POST, PUT`. The endpoint MUST be protected by `web.basic_auth` like
-  `/probe` and the self-metrics path. It MUST answer `200` when every file was accepted,
+  `/probe` and the self-metrics path, and refuse a request of another
+  site's page as every endpoint does (§ 42.5). It MUST answer `200` when every file was accepted,
   and `500` with the reason when one was rejected, the previous configuration
   staying in force.
+
+Whatever its trigger — the watch, `SIGHUP`, `/-/reload` or a bundle of the
+allocator — a reload that puts the configuration in force MUST say on its
+`configuration reloaded` line, at `info`, under `changes`, the collectors
+it added, removed and changed, and one that puts the static target file in
+force on its `static targets reloaded` line the static targets: as
+`collectors added: a, b; collectors removed: c; collectors changed: d`, the
+lists that are not empty in that order, each sorted, or `no changes` when
+none is. A collector MUST be changed when its fingerprint (§ 42.13)
+differs, which the reload MUST read from those it works out to follow the
+configuration, encoding no definition for it, and a static target when
+anything in its entry differs. Each list MUST name at most 10 and count the
+rest (`and 3 more`). A refused reload MUST NOT change what the last said.
+The landing page (§ 23) MUST show the time of the last reload that put
+something in force, and what it changed, both files' changes together.
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before
@@ -8096,8 +8298,8 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert` or
-`s3file` collector MAY set `request.allowed_targets`
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
+`s3file` or `redis` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -8645,10 +8847,11 @@ The steps MUST be:
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
   `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
-  `pagination` or `login` is listed under `details.request_policies` with
+  `pagination`, `login` or `rate_limit` is listed under `details.request_policies` with
   those settings as normalised for use, `retry.statuses` as
   `retry_statuses`, an empty list as `[]`, `retry.retry_after` as
-  `retry_after: true`, a `pagination` with its defaults filled in, a `login` with the header
+  `retry_after: true`, a `pagination` with its defaults filled in, a
+  `rate_limit` with its `burst` filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);
@@ -23092,10 +23295,11 @@ The drivers' TLS and encryption, one statement, keepalives and cancel requests; 
   (case, precision, Nullable, LowCardinality, UNSIGNED), and every other type
   name, generated over every driver's names, numeric or not as before.
 - A Snowflake result with a chunk at a cloud storage URL fails at once,
-  before the scrape's deadline, with "reading the rows: the statement's
-  result came from Snowflake in more than one chunk, ...; return fewer rows
-  or columns ..."; the storage host is never dialed; a result in one chunk
-  is read; another failure reading the rows is left as it is.
+  before the scrape's deadline, with "running the statement: the
+  statement's result came from Snowflake in more than one chunk, ...;
+  return fewer rows or columns ..." (first "reading the rows: ...", until
+  the exporter failed the statement before the driver saw the chunks); the
+  storage host is never dialed; a result in one chunk is read.
 - tools/request-type-tags.sh gives minicore_disabled after
   sql_driver_snowflake, once, with or without request types; ci.yml's lint
   of the opt-in drivers' build names the tags the script gives; a build of
@@ -23429,6 +23633,9 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
   (TestTheSnowflakeDriversChunkErrorsAreLoggedAtDebug); every other line of
   the driver's log, at each level and in each form, is read as before, the
   old function the oracle (TestOnlyTheSnowflakeChunkErrorChangedLevel).
+  Both tests were removed once the exporter stopped the driver from trying
+  the chunks at all: the line it logs at debug is now the statement's
+  failure (TestTheSnowflakeDriversLogGoesToTheExportersLogger).
 - A connection the pool's connector hands to database/sql calls the driver
   exactly as the driver's own connection would be called, in the same order
   with the same arguments, giving the same results and errors, for fakes
@@ -25291,6 +25498,295 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   running at a 10ms deadline, each fail with the deadline's error and none
   panics in Conn.Raw, a stress companion of the test above (§ 5.1).
 
+## 34.175 Other sites' requests, reload changes, OTLP redirects, gRPC scheme hosts, signed releases and rate limits
+
+- Every endpoint behind the cross-site guard — `/`, `/collectors`, `/probe`,
+  the self-metrics path, the static targets path, `/debug`, `/debug/run`
+  and `/-/reload` — answers `403` saying the request comes from another
+  site to a request marked `Sec-Fetch-Site: cross-site`, `same-site` or
+  `Cross-Site`, with the exporter's Basic Auth credential attached and with
+  Basic Auth off; the refused probes never contact their target and the
+  refused reloads leave the configuration in force as it was, though its
+  file changed; the same requests marked `same-origin` or `none`, or with
+  no `Sec-Fetch-Site`, are not refused, and the probes among them contact
+  the target; `/health` and `/ready` answer `200` to cross-site and
+  same-site requests (§ 42.5).
+- The debug page opened at `full` with a collector and a target in its URL
+  fills in the target, and its script, its strings and comments taken out,
+  names `run` only where it defines it, in the click handler of *Run* and in
+  the run-as-you-type timer, so nothing runs when the page opens; a call of
+  `run()` on opening fails the test (§ 42.17).
+- A reload of an unchanged configuration and static target file logs
+  `configuration reloaded` and `static targets reloaded` at `INFO` with
+  `changes` `no changes`, and makes that the manager's last reload, with its
+  time; a reload that removes a collector, adds two, changes one, removes a
+  static target, adds one and changes one logs `collectors added: d, e;
+  collectors removed: b; collectors changed: c` and `static targets added:
+  t3; static targets removed: t2; static targets changed: t1`, and the last
+  reload is both together; a refused reload logs neither line and leaves the
+  last reload as it was (§ 24.1a).
+- A reload that adds 13 collectors names the first 10, sorted, and `and 3
+  more` (§ 24.1a).
+- The landing page says the exporter has not been reloaded since it
+  started, and after a reload that adds a collector, removes one and adds a
+  static target, the reload's time in RFC 3339 and `collectors added: third;
+  collectors removed: second; static targets added: two`; after an
+  unchanged reload, `no changes` (§ 23).
+- A reload through an exporter that changes one collector and adds one
+  says so, the configuration manager encoding no definition of its own for
+  it, and the reload encodes 5 definitions in all: the 3 of the new
+  configuration and the 2 of the former one it still names, whose
+  fingerprints no probe had made (§ 24.1a).
+- An OTLP endpoint that answers 302, 307 or 308 to another host is not
+  followed: the other host receives nothing, `otlp.headers` and the body
+  included, the endpoint is asked once, the export counts as a failure, its
+  data points are dropped and counted, and the warning says the redirect was
+  not followed, names `otlp.endpoint` and carries the status and the
+  `location_host`, never a header's value
+  (TestOTLPExportsDoNotFollowRedirects). A redirected attempt's error names
+  the status, the host its `Location` leads to, or `no host` without one, and
+  says it was not followed (TestARedirectedOTLPAttemptSaysWhereItLed). Both
+  fail when the OTLP client follows redirects.
+- A `grpc` target `unix:<port>`, `unix-abstract:<port>` or
+  `passthrough:<port>`, probed by a process of its own with and without
+  `HTTPS_PROXY` naming a local stub proxy and with and without
+  `allowed_targets` naming its host, never reaches the unix socket or the
+  abstract socket that name would select: `unix` is refused naming the host
+  before the proxy is asked anything, and behind the proxy the others are the
+  `CONNECT` of the target as written
+  (TestGRPCATargetNamedLikeAResolverIsAHostName); `unix:8443`, `UNIX:8443`,
+  `dns:///unix:8443` and `grpcs://unix:8443` are refused at the target check,
+  and `unix-abstract:9090` and `passthrough:9090` are ordinary targets
+  (TestGRPCTargets). Both fail when the target is handed to grpc-go as
+  written.
+- The exporter release pushes its image with an SBOM (`sbom: true`) and the
+  full provenance (`provenance: mode=max`), and signs it with
+  `cosign sign --yes` by the digest its push step reported, after the push
+  and before the Release and the move of `latest` and `MAJOR.MINOR`, keyless
+  and never by a tag, verifying the signature against `release.yml`'s
+  identity; the test fails without the SBOM, the provenance or the signing
+  step, for a signature by tag or with a key, and for a signature out of
+  that order (§ 42.12).
+- The exporter release signs the checksums file into
+  `prometheus-universal-exporter-<version>-sha256sums.txt.sigstore.json`
+  with `cosign sign-blob --bundle`, after the checksums are built and before
+  the Release, verifies it, and publishes the bundle both where it creates
+  the Release and where a rerun replaces its assets; the test fails when
+  either command leaves the bundle out (§ 42.12).
+- Each release workflow grants `id-token: write` to exactly the one job that
+  runs cosign and never at its top, and the write grants list the exporter
+  release's job with `id-token` beside `contents` and `packages` (§ 42.12).
+- The Snowflake stand-in's cleanup closes every pool and waits for their
+  connections to be closed, so the driver's request ending a session,
+  refused by a stand-in told to refuse, no longer fails after its test and
+  logs "failed to close session" into the next test's captured log, as it
+  did into TestTheSnowflakeDriversLogGoesToTheExportersLogger.
+- `request.rate_limit` sends `burst` requests to an origin at once and the
+  rest `1/requests_per_second` apart: with 2 a second and a burst of 3, six
+  requests wait 0, 0, 0, then 500ms each, on a test clock; the waits are
+  counted in the collector's count but a debug run's, which waits as well,
+  and the debug trace says how long a request waited and why
+  (TestRateLimitSpacesRequestsAfterTheBurst).
+- The limit is kept by collector and origin: two collectors asking one
+  origin, and one collector asking two, each send their first request at
+  once, and only a second request of the same collector to the same origin
+  is refused (TestRateLimitIsPerCollectorAndOrigin).
+- A request whose turn would come past its deadline fails at once, with the
+  limit, the origin and the wait in the error, is not retried though
+  `retry.attempts` is 3, and is counted as refused
+  (TestRateLimitRefusesAWaitPastTheDeadline); a followed redirect refused
+  so is not retried either, one refusal counted and nothing more sent
+  (TestARedirectRefusedByTheRateLimitIsNotRetried).
+- Every request sent takes a turn: each attempt of a retry, each page of
+  `request.pagination`, a followed redirect's hop, shown with its wait in
+  the trace, and a login's request (TestRateLimitCountsEveryRequestSent);
+  a `graphite` collector's requests wait as an `http` collector's do
+  (TestAGraphiteCollectorsRateLimitSpacesItsRequests).
+- A static target's `rate_limit` replaces the collector's and has a bucket
+  of its own at the origin, so the collector's used-up turn holds none of
+  the target's, and a target's `requests_per_second` of 0 is refused at
+  load (TestAStaticTargetsRateLimitReplacesTheCollectors).
+- At most `rateLimitMaxBuckets` buckets are kept, the least recently used
+  dropped first, and every bucket that has filled again is dropped when a
+  new one is asked for (TestRateLimitBucketsAreBounded); a reload drops the
+  buckets and counts of the collectors it removed
+  (TestRateLimitsFollowTheConfiguration), and the shutdown all of them; a wait cut short gives its turn
+  back (TestACutShortRateLimitWaitGivesItsTurnBack); two spellings of an
+  origin share one bucket (TestRequestOrigin).
+- Every built type but `http` and `graphite` refuses `request.rate_limit` at
+  load as a key that does not apply to it; a `requests_per_second` of 0,
+  below 0, NaN or infinite, and a `burst` of 0 are refused, and `burst` left
+  out is filled in as 1 (TestRateLimitIsCheckedWhenItLoads).
+- A probe the rate limit refuses fails saying why and is counted in
+  `http_exporter_rate_limit_refused_total{collector}`; a collector without a
+  limit has the families at 0, and they are `http` and `graphite`'s alone
+  (TestAProbeRefusedByTheRateLimitIsCounted).
+- `--dry-run` lists `rate_limit` under `request_policies` with `burst`
+  filled in, and refuses a `burst` of 0 as startup words it
+  (TestDryRunReportsTheRateLimit); the configuration and static target
+  schemas describe `rate_limit` as `http` and `graphite`'s, require
+  `requests_per_second` above 0 and hold `burst` to at least 1
+  (TestTheSchemasHaveTheRateLimit).
+
+## 34.176 A Snowflake result in more than one chunk never reaches the driver's downloader
+
+- With the snowflake tag, a result whose chunk the stand-in account serves
+  itself, with the chunk's failure lined up inside the driver's reader's
+  window (the request for the chunk held until the driver, from inside its
+  look for a failure, takes the fields of its log line, through a log context
+  hook registered at startup, and the reader's wait coming only after the
+  download has logged and signalled its failure), fails the scrape at once
+  with the statement's failure for a result in more than one chunk, without
+  the chunk asked for and without an ERROR line, and the next scrape at
+  max_per_target 1 returns its rows within a second; before the fix the
+  driver's reader waited forever, past the deadline, the scrape and its
+  connection never returned
+  (TestASnowflakeResultInMoreThanOneChunkCannotHangTheScrape).
+- With the snowflake tag, the transport answers the account's answer to a
+  statement, or to an ask for its result (a path under /queries/), that names
+  chunks, plain or gzipped, with the statement's failure (success false, code
+  262000, the exporter's sentence), noting it in the request's context; the
+  same answer at another path or with another status, and a result with an
+  empty chunk list, pass on with their body whole; a refused connection and
+  another host stay a 403 and another failure stays an error
+  (TestTheSnowflakeTransportChangesOnlyARefusedConnectionOrAChunkedResult).
+- With the snowflake tag, a result in more than one chunk fails with
+  "running the statement: the statement's result came from Snowflake in more
+  than one chunk, ..." before the deadline and logs no ERROR line; the
+  driver's line for that failure is DEBUG, the same words at fatal, or
+  another message with the same code, stay ERROR
+  (TestASnowflakeResultInMoreThanOneChunkFailsAtOnce,
+  TestTheSnowflakeDriversLogGoesToTheExportersLogger).
+
+## 34.177 The opt-in redis request type
+
+- A redis collector with nothing but its type sends INFO alone and answers
+  its sections as a document, each by its heading in lower case, a number
+  as a JSON number written as the server wrote it, a 64-bit counter with
+  every digit, other text as text (`7.2.4`, `00000000`, `55.12%`), and a
+  keyspace or replica line of name=value pairs as an object
+  (TestARedisCollectorAnswersINFOAsADocument).
+- info_sections sends one INFO for each section and the document holds
+  those alone; a section the server answers with nothing fails the scrape
+  naming it (TestARedisCollectorAsksForItsSectionsOneByOne).
+- password_file logs in with AUTH password, or AUTH username password with
+  username, the file read at every scrape; a refused password fails the
+  scrape with the server's WRONGPASS and never the password, and a server
+  that wants a password from a collector without one fails it with NOAUTH
+  (TestARedisCollectorLogsInWithItsPasswordFile).
+- db selects its database with SELECT after the login, db 0 sends none, a
+  database the server lacks fails the scrape, and the url label carries the
+  database (TestARedisCollectorSelectsItsDatabase).
+- Each command's reply is put under its name, an integer as a number, a
+  bulk string as text, nil as null, an array as a list, HGETALL as an
+  object, XINFO GROUPS as a list of objects, CLUSTER INFO as an object of
+  its lines; a placeholder in an argument is filled from the probe, a
+  collector of commands alone sends no INFO, its http_method is COMMANDS
+  and INFO's is INFO, an unused probe parameter names request.commands,
+  and an error reply fails the scrape with the command and the server's
+  words (TestARedisCollectorPutsEachCommandsReplyUnderItsName).
+- A redis collector's keys are refused at load: a command not on the list,
+  CONFIG GET, CLIENT LIST and KEYS among them, a command with arguments it
+  does not take, a placeholder in a command's name or subcommand, a broken
+  placeholder, a command entry without a command, a name given twice or
+  that jq cannot reach, a username without password_file, a negative db, a
+  section of INFO not in lower case or named twice, a key of another type,
+  half a client certificate; its targets are host, host:port, [v6]:port,
+  redis:// or rediss://, port 6379 by default, a scheme, user, path or bad
+  port refused, and redis:// with a tls block refused
+  (TestARedisCollectorsKeysAndTargetsAreChecked).
+- A tls block or a rediss:// target speaks TLS and verifies the server
+  against tls.ca_file; an unknown authority fails the handshake, and
+  plaintext to a TLS server fails the scrape (TestARedisCollectorSpeaksTLS).
+- The cloud metadata service, a denied target and one not allowed are
+  refused before any connection, and an allowed one is read
+  (TestARedisCollectorKeepsToItsTargetLists).
+- A scrape's replies are held to the response limit together: INFO past a
+  small limit, a bulk string's or an array's declared length past what is
+  left, are refused as a limit exceeded; arrays nested past 16, a length
+  that is no number, a reply that is no RESP2 and a line past 64 KiB as no
+  RESP2 reply; a declared length of 1 GB under a 2 GiB limit, followed by a
+  few bytes, allocates no more than what came
+  (TestARedisServersRepliesAreHeldToTheResponseLimit).
+- A server that never answers fails the scrape with the deadline's error
+  at the probe's deadline, and at a probe's timeout
+  (TestARedisServerThatNeverAnswersFailsAtTheDeadline).
+- A debug trace shows AUTH with its password as ***, SELECT and each
+  command, by name and redis://host:port/db with a Redis-Command header,
+  and each reply's kind; --dry-run warns of a missing password file
+  (TestARedisScrapeIsTracedWithoutItsPassword).
+- A connection refused fails the scrape naming the address
+  (TestARedisConnectionRefusedFailsTheScrape).
+- requesttype_redis.go, redisresp.go and the type's tests are built under
+  request_type_redis alone, redis is in knownRequestTypes and
+  optInRequestTypes, and optInRequestKeys lists db, info_sections and
+  commands (TestEveryRequestTypeFileHasItsSelectionConstraint,
+  TestBuildTagsSelectTheRequestTypeFiles, TestTheOptInRequestKeysAreTheTypesOwn).
+- A build without redis, the default build among them, refuses a redis
+  collector at load saying it is opt-in and naming OPT_IN_REQUEST_TYPES=redis
+  and request_type_redis (TestABuildWithoutRedisRefusesARedisCollector).
+- A redis collector's decoder is json without a warning, its command's
+  name is written in upper case and an argument YAML reads as a number is
+  sent as its text, and a transform or decoder that cannot read JSON is
+  refused (TestARedisCollectorDecodesJSON).
+- Through the exporter, a redis probe answers its series, a queue named by
+  param_queue among them; the verbose self-metrics label it
+  redis://host:port/db with INFO or COMMANDS; a denied target is answered
+  403 and counted in http_exporter_targets_refused_total; a target with a
+  path is answered 400; the collectors page hints the target
+  (TestARedisCollectorProbe).
+- A debug probe of a redis collector shows AUTH masked, SELECT, the command
+  and the document, and never the password (TestADebugProbeOfARedisCollector).
+- The examples of docs/REDIS.md work as written against the stand-in
+  server: memory, hit ratio and keys by database, a queue's length for the
+  probe's queue, replicas' lag and bytes behind, a stream's groups; the TLS
+  example and the static targets load (TestRedisDocumentationExamples).
+- tools/request-type-tags.sh takes redis as an opt-in type, alone, with
+  s3file and in REQUEST_TYPES (TestRequestTypeTagsScript); CI and the
+  Makefile build, test and lint the opt-in types s3file and redis, ci.yml's
+  lint step with request_type_redis,request_type_s3file
+  (TestCIBuildsEveryOptInRequestType); a build of redis alone and the
+  default build with it link no gRPC, SSH or AWS module
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- info_sections[] and commands[].name get one verdict from the schema and
+  the exporter in a build with redis
+  (TestSchemaAndExporterAgreeOnRedisKeysWrittenEmpty), and are held to text
+  alone (TestTheKeysHeldToTextAloneAreTheSchemas).
+- The README, the chart README's opening, docs/TLSCERT.md's sentence of the
+  types taking a tls block, docs/REDIS.md's static targets section and
+  every marked request-type list name redis; the committed schema
+  comparisons run in a build without it
+  (TestReadmeOpeningNamesEveryRequestType, TestTheChartDescribesEverySource,
+  TestSentencesNameTheRequestTypesThatTakeAKey,
+  TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet,
+  TestMarkedListsNameEveryRequestType,
+  TestTheCommittedSchemaComparisonsRunInTheDefaultBuild).
+- internal/redistest is a package only tests import, standard library
+  alone (TestInternalPackagesAreLayered and the vulnerability check's list).
+
+## 34.178 Redis text and document limits, its method label, refused-target series and the example config's builds
+
+- A redis reply holding bytes that are not UTF-8 fails the scrape naming
+  the command — a bulk string, a name of HGETALL's pairs, CLUSTER INFO's
+  text and INFO's — and UTF-8 text such as `café` is taken
+  (TestARedisReplyThatIsNotTextFailsTheScrape).
+- A redis document whose JSON is past the response limit, its replies
+  within it, fails the scrape as a limit exceeded saying it is the
+  document as JSON, and the same length of plain text is taken
+  (TestARedisDocumentPastTheResponseLimitFailsTheScrape).
+- A redis collector with info_sections and commands both is labelled
+  `INFO+COMMANDS` (TestARedisCollectorPutsEachCommandsReplyUnderItsName).
+- A dns collector's denied name is answered 403 and counted in
+  `http_exporter_targets_refused_total`, where it has a series
+  (TestADNSCollectorCountsTheNamesItRefuses).
+- A tlscert collector's refused target is answered 403 and counted in
+  `http_exporter_targets_refused_total`, where it has a series
+  (TestATLSCertCollectorCountsTheTargetsItRefuses).
+- Every test of test/repository that loads configs/config.example.yaml is
+  built only with http and localfile, the example's request types, so a
+  build of a single other type does not fail on it
+  (TestTheTestsThatLoadTheExampleConfigNeedItsRequestTypes).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -25331,8 +25827,8 @@ The repository MUST include documentation covering:
     collector's keys, the target, and static targets: `graphite` in
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
-    `kubernetes` in `docs/KUBERNETES.md` and the opt-in `s3file` in
-    `docs/S3FILE.md`, with `localfile` and `grpc` above and `http` in
+    `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
+    `docs/S3FILE.md` and `redis` in `docs/REDIS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -25848,7 +26344,12 @@ export MUST stop, and the data points of that request and of every request of
 the export not yet sent MUST be kept for the next export, except where a
 newer value of the same series has been queued since; those of the requests
 the endpoint accepted before it MUST NOT be kept, and the self-metric
-snapshot MUST NOT be kept, since the next export takes a new one. Any other
+snapshot MUST NOT be kept, since the next export takes a new one. A 3xx
+response MUST NOT be followed (§ 42.15 rule 9): it is a misconfigured
+endpoint, refused as below, and its warning MUST say that the redirect was
+not followed, name `otlp.endpoint` as what to change, and carry the status
+and, as `location_host`, the host its `Location` leads to (`no host` when it
+names none), never a header's value. Any other
 non-2xx response MUST NOT be retried, and the data points of that request,
 and only those, MUST be dropped rather than kept, since the endpoint would
 refuse them again; the export MUST go on with its next request. Each refused
@@ -26067,7 +26568,20 @@ When enabled, the exporter MUST require valid Basic Authentication for
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
 when enabled, `/debug` and `/debug/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
-liveness and readiness probes can operate without credentials. In allocator mode, until the first bundle,
+liveness and readiness probes can operate without credentials.
+
+A browser sends the exporter's credential, once typed in, with every request
+to the exporter, those a page of another site makes included, and a page of
+another site can reach an exporter on the visitor's own network without
+any. Every endpoint but `/health` and `/ready` MUST therefore answer `403`,
+with a body saying why, to a request whose `Sec-Fetch-Site` is `cross-site`
+or `same-site` (in any case), with Basic Authentication on or off, before
+the credential is checked, a target contacted or a reload made. A request
+whose `Sec-Fetch-Site` is `same-origin` or `none`, or that has none, as
+Prometheus's scrapes and other clients that are not browsers do, MUST NOT
+be refused for it. `/-/reload` MUST keep taking `POST` and `PUT` (§ 24.1a).
+The `Origin` header MUST NOT be compared with the request's `Host`, which a
+reverse proxy in front of the exporter may rewrite. In allocator mode, until the first bundle,
 which carries `web.basic_auth`, is in force, every one of them MUST answer
 `503` instead (§ 42.14e): what the credential protects MUST NOT
 be served before the exporter knows whether one is required.
@@ -26648,16 +27162,33 @@ MUST:
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
   is built for: macOS has no `sha256sum`, so beside the Linux command it MUST
-  give `shasum -a 256 -c`, which reads the same file; and
+  give `shasum -a 256 -c`, which reads the same file;
+- push the image with an SBOM and the full provenance of its build
+  (buildx's `sbom: true` and `provenance: mode=max`) attached as
+  attestations;
+- sign the image with cosign, keyless with the workflow's OIDC identity, by
+  the digest its push reported, never by a tag, which could be moved to other
+  content between the push and the signature, and verify that signature
+  against the workflow's identity; `latest` and `MAJOR.MINOR`, moved to the
+  same digest, are covered by it;
+- sign the checksums file, the same way, into a Sigstore bundle,
+  `prometheus-universal-exporter-<version>-sha256sums.txt.sigstore.json`,
+  verify it, and publish the bundle with the archives. The release
+  documentation MUST give the commands that verify the bundle
+  (`cosign verify-blob --bundle`) and the image (`cosign verify`), each
+  naming the issuer `https://token.actions.githubusercontent.com` and an
+  identity that matches only `release.yml` run for an exporter release tag;
+  and
 - publish nothing before every archive, the checksums and the image are
   built, the image without being pushed, and then publish in this order: the
-  image under its version tag alone; the GitHub Release, created as a draft
-  with its assets and then published; and last `latest` and `MAJOR.MINOR`,
-  moved to the digest the version tag was pushed with. A failure at any step
-  MUST leave `latest` and `MAJOR.MINOR` unmoved unless the Release is
-  published, and no Release published without its image. A rerun MUST
-  succeed where the Release already exists, draft or published, by replacing
-  its assets rather than creating it again.
+  image under its version tag alone, then its signature and the checksums'
+  signature; the GitHub Release, created as a draft with its assets, the
+  checksums' bundle among them, and then published; and last `latest` and
+  `MAJOR.MINOR`, moved to the digest the version tag was pushed with. A
+  failure at any step MUST leave `latest` and `MAJOR.MINOR` unmoved unless
+  the Release is published, and no Release published without its image. A
+  rerun MUST succeed where the Release already exists, draft or published,
+  by replacing its assets rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins
@@ -26673,12 +27204,14 @@ Every workflow MUST set `permissions` at its top, granting no write there, so
 no job runs with the repository's default token, which may write to
 everything; a job that has to write MUST grant itself only the scopes it
 needs. CI and the vulnerability check MUST NOT write at all. The exporter
-release's publishing job MAY write `contents` (the GitHub Release) and
-`packages` (the image); the chart release's MAY write `contents`, `packages`
+release's publishing job MAY write `contents` (the GitHub Release),
+`packages` (the image) and `id-token` (cosign's keyless signatures of the
+image and the checksums); the chart release's MAY write `contents`, `packages`
 (the chart and its Artifact Hub metadata) and `id-token` (cosign's keyless
 signature); the Dockerfile update job MAY write `contents` and
-`pull-requests` (the branch and the pull request it opens). A test MUST hold
-the write grants to that list, failing for a workflow without top-level
+`pull-requests` (the branch and the pull request it opens). `id-token` MUST
+be granted to exactly the job of each release workflow that signs. A test
+MUST hold the write grants to that list, failing for a workflow without top-level
 permissions, for a write granted at the top, and for a job's write grant that
 is not on the list.
 
@@ -26729,7 +27262,10 @@ Python and libraries, or runs `make ci` without installing golangci-lint and
 gopls; when the exporter release publishes its archives without the checksums
 file, publishes anything before every archive and the image are built,
 publishes out of the order above, pushes the image with tags other than its
-version, or links an archive's binaries with other `-ldflags` than the
+version or without its SBOM and full provenance, signs the image other than
+by the digest it pushed, after `latest` moves or before the push, does not
+sign the checksums file before the Release or leaves its bundle out of the
+Release's assets, grants `id-token` to a job that does not sign, or links an archive's binaries with other `-ldflags` than the
 image's; when CI builds no darwin binaries or no image; and when the chart release pushes before checking its default image, or
 signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.md
 § 42.12).
@@ -27924,9 +28460,12 @@ probe or a static target.
    with its scheme and the port it writes, and not the host alone. A request that follows no redirect MUST NOT be made
    to do any of this work.
 9. These rules MUST NOT change what a request that follows no redirect, or
-   only redirects on its own origin, sends, but for the `Referer` of rule 4;
-   nor the redirects of the OTLP exporter's own requests (§ 42.1), which
-   follow the HTTP client's defaults. A retry MUST start again at the first
+   only redirects on its own origin, sends, but for the `Referer` of rule 4.
+   The OTLP exporter's own requests (§ 42.1) MUST NOT follow redirects at
+   all: Go would send `otlp.headers`, which carry the endpoint's API keys
+   and tenant, and the body to wherever a redirect points, another host and
+   plain `http://` included. A 3xx answer to an export MUST be handled as
+   § 42.1 says. A retry MUST start again at the first
    URL with everything the first request carried.
 
 
@@ -28175,7 +28714,9 @@ and MUST answer `200` with a `text/plain` report of it, with
 - every request sent, with retries and redirects, its method, URL, headers
   and outcome, a redirect with the headers it was sent and the names of the
   ones withheld from it (§ 42.15c); a request of `request.pagination` with
-  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a `grpc`
+  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a request
+  that waited for its turn under `request.rate_limit` with how long and why,
+  its duration counted from when it was sent (§ 5.1, `http`); a `grpc`
   call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
   the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the
@@ -28335,7 +28876,9 @@ runs relative to itself, so it works under a proxy's path prefix. It MUST
 run a collector on demand and a moment after an edit, a run cancelling the
 one before it, and MUST start from the collector, and at `full` the target
 or the static target, its URL names (`collector`, `target`,
-`static_target`), as the collectors page links it. It MUST offer the
+`static_target`), as the collectors page links it. It MUST NOT run anything
+when it opens, whatever its URL names, until the visitor asks for a run or
+edits a field: a link on any page can set the URL. It MUST offer the
 configured collectors at every level, and the fetch and the static target's
 scrape at `full` only.
 

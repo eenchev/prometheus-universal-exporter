@@ -1203,7 +1203,7 @@
                 }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file and docs/KUBERNETES.md for kubernetes.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file, docs/KUBERNETES.md for kubernetes and docs/REDIS.md for redis.",
             "properties": {
               "accept_codes": {
                 "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
@@ -1252,7 +1252,7 @@
                 "type": "array"
               },
               "allowed_targets": {
-                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql and tlscert; dns matches its names by name alone, and a PTR target by address; for s3file, whose target is a bucket, the buckets it may read, by name or glob, and no address.",
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql, tlscert and redis; dns matches its names by name alone, and a PTR target by address; for s3file, whose target is a bucket, the buckets it may read, by name or glob, and no address.",
                 "items": {
                   "minLength": 1,
                   "not": {
@@ -1350,6 +1350,37 @@
                   "boolean"
                 ]
               },
+              "commands": {
+                "description": "redis: read-only commands whose replies the document holds under .commands.\u003cname\u003e, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold.",
+                      "items": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "name": {
+                      "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "command"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "connections": {
                 "additionalProperties": false,
                 "description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections.",
@@ -1429,6 +1460,11 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "db": {
+                "description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md.",
+                "minimum": 0,
+                "type": "integer"
               },
               "denied_targets": {
                 "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is.",
@@ -1557,6 +1593,15 @@
                   "string",
                   "integer"
                 ]
+              },
+              "info_sections": {
+                "description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads.",
+                "items": {
+                  "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything.",
+                  "pattern": "^[a-z_]+$",
+                  "type": "string"
+                },
+                "type": "array"
               },
               "keepalive_count_max": {
                 "description": "sshfile: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3.",
@@ -2170,7 +2215,7 @@
                     "minimum": 1024
                   }
                 ],
-                "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+                "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -2409,7 +2454,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made.",
+                "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -2487,6 +2532,26 @@
                   "minLength": 1,
                   "pattern": "^[^\\x00-\\x1F\\x7F]*$"
                 },
+                "type": "object"
+              },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: the most requests a second the collector sends to one origin (scheme, host and port) of its targets, every attempt, page, followed redirect and login request counted where it is sent. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once. Each collector has its own limit for an origin. No probe parameter sets or changes it. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
                 "type": "object"
               },
               "record_type": {
@@ -2719,7 +2784,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. Not blanks alone.",
+                "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"

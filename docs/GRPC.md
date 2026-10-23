@@ -85,6 +85,12 @@ is refused: the method is `rpc`. Its host is written as an `http` target's
 is, an address or a name in ASCII, an internationalised name in its `xn--`
 form: with any other character the target is refused, `403`, before a
 connection is made ([Restricting targets](REQUESTS.md#restricting-targets)).
+The host is always a server's name or address, looked up over DNS, never one
+of grpc-go's own target schemes: `unix-abstract:8443` and `passthrough:8443`
+are the hosts `unix-abstract` and `passthrough`, directly and behind a proxy.
+The host `unix`, in any case and any form of target, is refused, since
+grpc-go dials `unix:8443` as the unix socket `8443` on the exporter's machine,
+past the proxy and `allowed_targets`. A unix socket cannot be a target.
 A static target's target is checked when the
 file loads, and a probe's before anything is called, answered `400` when it is
 malformed.

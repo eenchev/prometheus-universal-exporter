@@ -73,7 +73,7 @@ func init() {
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
 			"targets", "from", "until",
-			"allowed_targets", "denied_targets", "accept_status", "login",
+			"allowed_targets", "denied_targets", "accept_status", "login", "rate_limit",
 		},
 		Overrides: []string{
 			"path", "timeout", "insecure_skip_verify",
@@ -85,7 +85,7 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"targets", "from", "until",
-			"accept_status", "login",
+			"accept_status", "login", "rate_limit",
 		},
 		URLPath:            true,
 		Validate:           validateGraphiteRequest,

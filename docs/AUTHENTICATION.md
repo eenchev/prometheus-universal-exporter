@@ -436,7 +436,11 @@ is kept from reaching further than that:
   header and a JSON body, neither of which such a page can send without
   first asking the exporter (a CORS preflight), which the exporter never
   allows; a run without the header is answered `403`, and one the browser
-  marks as coming from another site (`Sec-Fetch-Site`) too. The page cannot
+  marks as coming from another site (`Sec-Fetch-Site`) too, as every
+  endpoint refuses it ([Requests from other sites](#requests-from-other-sites)).
+  The page fills in the collector and the target its address names, which a
+  link on any page can set, and runs nothing until *Run* is pressed or a
+  field edited, so following such a link fetches nothing. The page cannot
   be framed. The debug URLs only read, with `GET`, and answer `text/plain`
   with `nosniff`, which a browser never runs as a page.
 - **The server's files and credentials.** A collector written on the page
@@ -457,6 +461,37 @@ is kept from reaching further than that:
   target's answer is on every probe. An expression of the other transforms
   runs on the server against the response, bounded by the probe's deadline,
   the collector's limits and 4 runs of the page at a time.
+
+## Requests from other sites
+
+Once the exporter's Basic Auth credential has been typed into a browser, the
+browser sends it with every request to the exporter, those a page of another
+site makes included: a link, an image, a redirect or a form posted from that
+page is enough, and needs no script. Such a page could make a logged-in
+browser probe a target of its choosing through a collector that holds a
+credential, which the exporter would send there unless the collector's
+[target policy](REQUESTS.md#restricting-targets) keeps it to its own targets,
+post a form to `/-/reload`, or open the debug page on a target of its
+choosing. Without Basic Auth the same page could still reach an exporter on
+the visitor's own network, at `localhost` or on an intranet, which the page's
+own site cannot reach.
+
+So every endpoint but `/health` and `/ready` refuses, with `403` and before
+the credential is checked, a request the browser marks as made by another
+site's page: `Sec-Fetch-Site: cross-site`, or `same-site`, which another
+port or subdomain of the same site gets, no more the exporter's than another
+site is. The exporter's own pages are `same-origin` and an address typed in or
+a bookmark is `none`; both pass. Prometheus, curl and every other client
+that is not a browser send no `Sec-Fetch-Site` and pass too, so scrapes are
+not affected. A page cannot set or remove the header itself. One
+consequence: a link to the exporter on another page — a dashboard, the
+Prometheus targets page on another port — is refused when followed; open the
+address directly instead.
+
+A browser too old to send `Sec-Fetch-Site` (every current one sends it) is
+not refused: its `Origin` is not compared with the request's own host, since
+a reverse proxy in front of the exporter may rewrite the `Host`, and the
+comparison would then refuse the exporter's own pages.
 
 ## Credentials from a Kubernetes Secret
 

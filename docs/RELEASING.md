@@ -80,17 +80,26 @@ out in an order that a failure at any step leaves consistent:
    A compile error of one platform alone, or a broken image build, fails the
    release here, with nothing published.
 2. The image is pushed under its version tag alone, `1.0.0`, from the build
-   above, which it does not repeat.
-3. The GitHub Release is created as a draft with the archives and the
-   checksums file, and then published, so it never shows without them.
-4. `latest` and `1.0` are moved to the image the version tag names, by its
+   above, which it does not repeat, with an SBOM of what it holds and the
+   full provenance of its build (`mode=max`) attached as attestations.
+3. The image is signed with cosign by the digest the push reported, not by
+   its tag, which could be moved between the push and the signature, and
+   the checksums file is signed into a Sigstore bundle,
+   `prometheus-universal-exporter-1.0.0-sha256sums.txt.sigstore.json`. Both
+   signatures are keyless: their certificates name `release.yml` and the tag
+   it ran for, and each is verified before the release goes on.
+4. The GitHub Release is created as a draft with the archives, the
+   checksums file and its bundle, and then published, so it never shows
+   without them.
+5. `latest` and `1.0` are moved to the image the version tag names, by its
    digest (`docker buildx imagetools create`), when the release is the newest
    of all or of its line.
 
-A failure at step 2 or 3 leaves `latest` and `1.0` where they were; a
-failure at step 4 leaves a published Release whose image is out under its
+A failure at steps 2 to 4 leaves `latest` and `1.0` where they were; a
+failure at step 5 leaves a published Release whose image is out under its
 version. Re-running the release repeats every step: the image is built and
-pushed again under the same tag, and the Release, which `gh release create`
+pushed again under the same tag and signed again, the checksums are signed
+again, and the Release, which `gh release create`
 would refuse because it exists, is found with `gh release view` and its
 assets replaced (`gh release upload --clobber`) before it is published, if
 it was left a draft. The tags then move as on the first run. The archives'
@@ -109,6 +118,37 @@ reads the same file:
 
 ```sh
 shasum -a 256 --ignore-missing -c prometheus-universal-exporter-1.0.0-sha256sums.txt
+```
+
+The checksums are only as good as the file they are read from, so check its
+signature first: download the bundle beside it and run
+
+```sh
+cosign verify-blob prometheus-universal-exporter-1.0.0-sha256sums.txt \
+  --bundle prometheus-universal-exporter-1.0.0-sha256sums.txt.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/eenchev/prometheus-universal-exporter/\.github/workflows/release\.yml@refs/tags/exporter/prometheus-universal-exporter-v[0-9]+\.[0-9]+\.[0-9]+$'
+```
+
+A file that verifies was signed by the exporter's release workflow for a
+release tag, and every archive whose checksum it names is then checked by
+`sha256sum -c`.
+
+To verify the image, by its digest or by a tag, which `cosign verify`
+resolves to the digest; `latest` and `1.0` point at the digest the version
+was signed by, so the one signature covers them:
+
+```sh
+cosign verify ghcr.io/eenchev/prometheus-universal-exporter:1.0.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/eenchev/prometheus-universal-exporter/\.github/workflows/release\.yml@refs/tags/exporter/prometheus-universal-exporter-v[0-9]+\.[0-9]+\.[0-9]+$'
+```
+
+The image's SBOM and provenance are read from the registry:
+
+```sh
+docker buildx imagetools inspect ghcr.io/eenchev/prometheus-universal-exporter:1.0.0 --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/eenchev/prometheus-universal-exporter:1.0.0 --format '{{ json .Provenance }}'
 ```
 
 ## Helm chart

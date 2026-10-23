@@ -137,6 +137,9 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	// one.
 	m.OnPrepare(s.prepareReload)
 	m.OnInstall(s.followReload)
+	// What a reload changed, which it logs, is told by the same fingerprints
+	// (keptFingerprint).
+	m.SetFingerprint(s.keptFingerprint)
 	return s
 }
 
@@ -253,7 +256,9 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/ready", s.readyHandler)
-	protected := func(handler http.HandlerFunc) http.HandlerFunc { return s.basicAuthMiddleware(handler) }
+	// Every endpoint but /health and /ready refuses what a page of another
+	// site makes a browser send (crosssite.go), with Basic Auth on or off.
+	protected := func(handler http.HandlerFunc) http.HandlerFunc { return sameOriginOnly(s.basicAuthMiddleware(handler)) }
 	// The answers Prometheus scrapes are gzipped when it asks (middleware.go).
 	mux.HandleFunc(s.selfMetricsEndpoint(), compressed(protected(s.metricsHandler)))
 	mux.HandleFunc(s.staticTargetsEndpoint(), compressed(protected(s.staticTargetsHandler)))

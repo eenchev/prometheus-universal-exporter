@@ -101,7 +101,8 @@ default, which builds every request type but the opt-in ones, or a
 comma-separated list such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
 `OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
-leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)).
+leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)) and
+`redis` ([Redis and Valkey](REDIS.md#building-with-redis)).
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
@@ -189,6 +190,17 @@ and no Kubernetes client library (`k8s.io/client-go`), whose dependencies
 would add some tens of megabytes to the binary for what a few `GET`s with a
 continue token do. The same test finds none of the other types' modules in a
 build of it.
+
+Nor has the opt-in [`redis`](REDIS.md) request type, which a build carries
+only when `OPT_IN_REQUEST_TYPES` names it: it speaks RESP2, the protocol of
+Redis and Valkey, over `net` and `crypto/tls` with a client of its own of
+some two hundred lines (`internal/fetch/redisresp.go`), and no Redis client
+library (`github.com/redis/go-redis`, `github.com/gomodule/redigo`), whose
+pools, cluster routing and pub/sub a scrape of a few read-only commands has
+no use for, and whose readers allocate what a reply's length declares. The
+same test finds none of the other types' modules in a build of it, and the
+stand-in server of its tests (`internal/redistest`) is standard library
+alone too.
 
 The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
 has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token

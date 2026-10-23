@@ -250,6 +250,11 @@ answer, such as `400` or `401`,
 would be given again: the data points of that request are dropped and counted
 rather than sent again forever, the warning quotes the start of the endpoint's
 explanation as `response_body`, and the export goes on with its next request.
+A redirect (`3xx`) is not followed, since that would send `otlp.headers` and
+the data to wherever the endpoint points, another host or plain `http://`
+included: it is refused the same way, and its warning says the redirect was
+not followed and carries the status and, as `location_host`, the host it
+leads to. Set `otlp.endpoint` to the URL the export should go to.
 An endpoint can also accept a request but reject some of
 its data points, saying so in the answer's `partialSuccess`: those points are
 counted in `http_exporter_otlp_points_dropped_total` too, and the warning

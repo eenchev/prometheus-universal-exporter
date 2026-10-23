@@ -23,6 +23,7 @@ import (
 // statement on a database, dns resolves a name, tlscert reads the
 // certificates of a TLS handshake, s3file reads an object from S3 or a
 // store that speaks its API, kubernetes lists objects from a Kubernetes API
+// server, redis reads INFO and read-only commands from a Redis or Valkey
 // server. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -52,21 +53,24 @@ const (
 	RequestTypeTLSCert    = "tlscert"
 	RequestTypeS3File     = "s3file"
 	RequestTypeKubernetes = "kubernetes"
+	RequestTypeRedis      = "redis"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links
-// the AWS SDK, which few deployments want in the binary. A build carries one
-// only when asked, with its request_type_<name> tag, and its file is built
+// the AWS SDK, which few deployments want in the binary, and redis, which
+// needs nothing outside the standard library, is kept out of the binary of
+// every deployment that has no Redis to read. A build carries one only when
+// asked, with its request_type_<name> tag, and its file is built
 // under that tag alone. A test keeps the list in step with the files'
 // constraints.
-var optInRequestTypes = []string{RequestTypeS3File}
+var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -203,6 +207,7 @@ func FileWarnings(c *model.Collector, t *model.StaticTarget) []string {
 // scrapes which collectors and static targets are in force now
 // (RequestType.Follow).
 func FollowConfiguration(collectors []model.Collector, targets []model.StaticTarget) {
+	rateLimits.follow(collectors)
 	for _, name := range BuiltRequestTypes() {
 		if rt := RequestTypes[name]; rt.Follow != nil {
 			rt.Follow(collectors, targets)
@@ -211,8 +216,10 @@ func FollowConfiguration(collectors []model.Collector, targets []model.StaticTar
 }
 
 // CloseConnections closes every connection a built type keeps across
-// scrapes, for the exporter's shutdown.
+// scrapes, for the exporter's shutdown, and forgets the rate limits' buckets
+// and counts with them.
 func CloseConnections() {
+	rateLimits.reset()
 	for _, name := range BuiltRequestTypes() {
 		if rt := RequestTypes[name]; rt.CloseConnections != nil {
 			rt.CloseConnections()
@@ -279,7 +286,8 @@ func ReadFiles(c *model.Collector) (paths []string, read string) {
 //
 //	//go:build request_type_<name>
 //
-// so -tags request_type_s3file is a default build with s3file added. Building
+// so -tags request_type_s3file is a default build with s3file added, and
+// -tags request_type_s3file,request_type_redis one with both. Building
 // with -tags select_request_types,request_type_http carries only the listed
 // ones; the others, and everything only they import, are left out of the
 // binary.
@@ -362,6 +370,9 @@ func ValidateRequest(c *model.Collector) error {
 		return err
 	}
 	if err := validateRetryStatuses(c); err != nil {
+		return err
+	}
+	if err := validateRateLimit(c); err != nil {
 		return err
 	}
 	return rt.Validate(c)
@@ -479,6 +490,11 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	}
 	if err := checkTargetRetryStatuses(t, c); err != nil {
 		return fmt.Errorf("target %q %w", t.Name, err)
+	}
+	if t.Request.RateLimit != nil {
+		if err := checkRateLimit(t.Request.RateLimit); err != nil {
+			return fmt.Errorf("target %q request.rate_limit%w", t.Name, err)
+		}
 	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {

@@ -76,7 +76,8 @@ setting being a target of its own for the collector's limits, and for
 only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
 `timeout`, with no `target` at all, and for the opt-in
 [`s3file`](S3FILE.md#static-targets) `path` and `timeout`, with the bucket as
-its required `target`. An `http` or `graphite` target also takes static
+its required `target`, and for the opt-in [`redis`](REDIS.md#static-targets)
+only `timeout`, with the server as its required `target`. An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, inline or file-backed, as basic authentication or a bearer
 token; a basic username
@@ -94,6 +95,12 @@ target that sets its own credential in the header the collector's login
 sends its token in makes no login. A target's `login` is part of the key
 its answers are cached under, so targets that log in differently share no
 answer.
+An `http` or `graphite` target may set its own
+[`rate_limit`](REQUESTS.md#rate-limiting), checked as a collector's is, which
+replaces the collector's for that target's requests, both keys together:
+they have a limit of their own for each origin they go to, apart from the
+one the collector's other targets share there. It changes no answer, so it
+is no part of the cache key.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the

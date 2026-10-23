@@ -425,10 +425,34 @@ func otlpBackoff(retries int) time.Duration {
 type otlpRefusedError struct {
 	status int
 	body   string
+	// redirect is set for a 3xx answer, which is not followed; location is
+	// the host its Location names, empty when it names none.
+	redirect bool
+	location string
 }
 
 func (e *otlpRefusedError) Error() string {
+	if e.redirect {
+		return fmt.Sprintf("the OTLP endpoint answered %d, a redirect to %s, which is not followed: set otlp.endpoint to the URL the export should go to", e.status, e.locationText())
+	}
 	return fmt.Sprintf("the OTLP endpoint answered %d", e.status)
+}
+
+func (e *otlpRefusedError) locationText() string {
+	if e.location == "" {
+		return "no host"
+	}
+	return e.location
+}
+
+// redirectHost is the host a redirect's Location names, resolved against the
+// URL redirected, or empty when it names none.
+func redirectHost(resp *http.Response) string {
+	location, err := resp.Location()
+	if err != nil {
+		return ""
+	}
+	return location.Host
 }
 
 // otlpAnswer is how one attempt ended: whether a failure is worth retrying and
@@ -456,7 +480,11 @@ const otlpResponseLimit = 1 << 20
 // sendOTLP makes one attempt.
 func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
 	// One connection to the collector is reused from export to export.
-	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: tlsSettings}, true, timeout)
+	// Redirects are not followed: Go would send otlp.headers, which carry
+	// the endpoint's API keys and tenant, and the body to wherever the
+	// endpoint points, another host and plain http:// included. A redirect
+	// is a misconfigured endpoint, refused below for the operator to fix.
+	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: tlsSettings}, false, timeout)
 	if err != nil {
 		return otlpAnswer{}, fmt.Errorf("OTLP TLS configuration: %w", err)
 	}
@@ -487,6 +515,8 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
 		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
 		return otlpAnswer{retryable: true, wait: retryAfter(resp.Header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		return otlpAnswer{}, &otlpRefusedError{status: resp.StatusCode, body: bodyExcerpt(answer), redirect: true, location: redirectHost(resp)}
 	default:
 		return otlpAnswer{}, &otlpRefusedError{status: resp.StatusCode, body: bodyExcerpt(answer)}
 	}
@@ -1649,6 +1679,11 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 			}
 			if refused.body != "" {
 				attrs = append(attrs, "response_body", refused.body)
+			}
+			if refused.redirect {
+				attrs = append(attrs, "location_host", refused.locationText())
+				s.logger.Warn("OTLP endpoint answered a redirect, which is not followed; its data points are dropped; set otlp.endpoint to the URL the export should go to", attrs...)
+				continue
 			}
 			s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", attrs...)
 			continue

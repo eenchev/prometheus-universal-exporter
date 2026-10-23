@@ -180,6 +180,9 @@ func TestGRPCTargets(t *testing.T) {
 		"grpc://10.0.0.5:9090":        "grpc://10.0.0.5:9090/" + getStats,
 		"grpcs://queue.internal:9090": "grpcs://queue.internal:9090/" + getStats,
 		"grpcs://[::1]:9090/":         "grpcs://[::1]:9090/" + getStats,
+		// Names of grpc-go's resolvers are host names like any other.
+		"unix-abstract:9090": "grpc://unix-abstract:9090/" + getStats,
+		"passthrough:9090":   "grpc://passthrough:9090/" + getStats,
 	} {
 		if err := CheckTarget(c, target, true); err != nil {
 			t.Errorf("%s: %v", target, err)
@@ -200,6 +203,10 @@ func TestGRPCTargets(t *testing.T) {
 		"queue.internal:9090/x":         "has a path",
 		"grpc://user@queue.internal:90": "has a path, query or user",
 		"queue.internal:0":              "want a number from 1 to 65535",
+		"unix:8443":                     "names the host unix, which grpc-go would dial as a unix socket",
+		"UNIX:8443":                     "names the host unix",
+		"dns:///unix:8443":              "names the host unix",
+		"grpcs://unix:8443":             "names the host unix",
 	} {
 		if err := CheckTarget(c, target, false); err == nil || !strings.Contains(err.Error(), fragment) {
 			t.Errorf("%s: %v, want %q", target, err, fragment)

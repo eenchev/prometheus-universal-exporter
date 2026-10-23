@@ -2250,6 +2250,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
+| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin. See [Rate limiting](REQUESTS.md#rate-limiting). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -2261,8 +2262,8 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`allowed_schemes`, `accept_status`, `allowed_targets` and `denied_targets` —
-and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+`allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` and
+`rate_limit` — and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
 For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
 so is `descriptors`, where its message types come from — `reflection`,
@@ -2311,6 +2312,13 @@ For `s3file`, in a build that [asks for it](S3FILE.md#building-with-s3file),
 `endpoint`, `path_style`, `access_key_id_file`, `secret_access_key_file`,
 `session_token_file`, `allowed_targets` and `denied_targets` apply too; its
 table is in [Objects in S3](S3FILE.md#a-collector).
+
+For `redis`, in a build that [asks for it](REDIS.md#building-with-redis), no
+key is required: `info_sections` names the sections of INFO read, the
+default ones when left out, and `commands` the read-only commands whose
+replies are read besides; `username` and `password_file`, `db`, `tls`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
 <!-- /request-types -->
 
 <!-- request-types: all -->
@@ -2331,7 +2339,9 @@ and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
 `tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
 name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
-since the collector lists what its configuration names.
+since the collector lists what its configuration names. `redis` accepts
+`timeout` and `param_<name>`, and requires a `target`, the server,
+`host:port` or a `redis://` or `rediss://` URL of it.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -2390,7 +2400,7 @@ their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
-links the AWS SDK, below. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, and the opt-in `redis` nothing outside it either. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2398,20 +2408,25 @@ drivers](SQL.md#building-with-more-drivers)).
 
 An opt-in type is one no build carries unless asked, the default build and
 the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB. `OPT_IN_REQUEST_TYPES` adds one to the types a build carries,
-whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like any
-type:
+6.7 MB, and `redis`, which needs nothing outside the standard library and is
+left out of the builds of deployments with no Redis to read.
+`OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
+carries, whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like
+any type:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=s3file
-docker build --build-arg OPT_IN_REQUEST_TYPES=s3file -t exporter:s3file .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file)" .
+make build OPT_IN_REQUEST_TYPES=s3file,redis
+docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis)" .
 ```
 
-Its tag alone, `request_type_s3file`, adds it to a default build. A collector
-of an opt-in type is refused by a build without it with a message that says
-the type is opt-in and how to build with it ([Building with
-s3file](S3FILE.md#building-with-s3file)).
+Its tag alone, `request_type_s3file` or `request_type_redis`, adds a type to
+a default build, and the two tags together both. A collector of an opt-in
+type is refused by a build without it with a message that says the type is
+opt-in and how to build with it ([Building with
+s3file](S3FILE.md#building-with-s3file), [Building with
+redis](REDIS.md#building-with-redis)).
 
 ### When a metric cannot be extracted
 
@@ -4322,6 +4337,34 @@ what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counte
 in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
 from different triggers never interleave: one runs at a time.
 
+### What a reload changed
+
+Each file a reload puts in force is logged with what it changed, under
+`changes`: the `configuration reloaded` line names the collectors added,
+removed and changed, and the `static targets reloaded` line the static
+targets, each list sorted, or says `no changes`:
+
+```json
+{"level":"INFO","msg":"configuration reloaded","trigger":"sighup","collectors":12,"collector_files":3,"changes":"collectors added: queue_depth; collectors removed: legacy_status; collectors changed: weather"}
+{"level":"INFO","msg":"static targets reloaded","trigger":"sighup","targets":40,"changes":"no changes"}
+```
+
+A collector is changed when anything in its definition differs, in the
+configuration file or in a collector file, which is also what drops its
+cached results (see [Response caching](#response-caching)); a static target
+when anything in its entry differs, the file's defaults it takes included.
+Each list names ten and counts the rest — `collectors added: a01, …, a10
+and 30 more` — so a reload that replaces a whole file writes a line of
+bounded length. Whatever triggered it, the watch, `SIGHUP`, `/-/reload` or a
+bundle from the [target allocator](ALLOCATOR.md), a reload says the same, and
+a rejected reload puts nothing in force and changes nothing.
+
+The landing page at `/` shows when the last reload put something in force,
+and what it changed, both files' changes together; before the first it says
+the exporter has not been reloaded since it started. How long ago that was
+is `http_exporter_config_last_reload_success_timestamp_seconds`
+([Configuration reloads](SELF-METRICS.md#configuration-reloads)).
+
 Whatever the trigger, the exporter's state follows the new configuration: a
 removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
 those of its [Python workers](SELF-METRICS.md#python-workers) with them,
@@ -4411,7 +4454,9 @@ a visitor of the exporter's pages do.
 `/debug` runs one collector and shows the series a probe would answer, the
 stages, what was logged, the requests sent and the response read and,
 folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
-and, with *Run as you type* on, a moment after each edit. The landing page
+and, with *Run as you type* on, a moment after each edit, and never when it
+opens: the collector and the target its address names are filled in and
+wait for *Run*, since a link on any page can name them. The landing page
 links it, and `/collectors` links each collector into it, the collector
 chosen and, at `full`, with the target entered in the collector's form.
 
@@ -4555,6 +4600,10 @@ The report lists:
   request retried has a line of the wait taken and why, `then waited 3s, as
   Retry-After asked`, or of why it was not retried: `not retried: its
   Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time`.
+  A request that waited for its turn under
+  [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line of how long
+  and why: `sent after waiting 500ms for its turn under the rate limit of 2
+  requests per second for http://legacy.example:80`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4831,13 +4880,13 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination` or
-`login` is listed under `details.request_policies`, by name, with those
+`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination`,
+`login` or `rate_limit` is listed under `details.request_policies`, by name, with those
 settings as they will be applied — `2XX` as `2xx`, `not_found` as
 `NOT_FOUND`, `retry.statuses` as `retry_statuses`, `[]` included,
 `retry.retry_after` as `retry_after: true`, a `pagination` with its defaults,
 `max_pages: 10` among them, a `login` with the `header` and `prefix` its
-token is sent with — so a list that lets through more or less than meant, a
+token is sent with, a `rate_limit` with its `burst` — so a list that lets through more or less than meant, a
 pagination that asks the target for more pages than meant, or a token sent
 where it was not meant to go, shows before it is deployed. A login is shown
 with the files its secrets are read from, never what they hold, and a field
@@ -5028,7 +5077,7 @@ nothing there.
 ## Related pages
 
 - [PYTHON.md](PYTHON.md) — the Python transform and pre-script API.
-- [REQUESTS.md](REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, restricting targets, TLS and per-scrape overrides.
+- [REQUESTS.md](REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, rate limiting, restricting targets, TLS and per-scrape overrides.
 - [LOCALFILE.md](LOCALFILE.md) — the `localfile` request type.
 - [GRAPHITE.md](GRAPHITE.md) — the `graphite` request type and decoder.
 - [GRPC.md](GRPC.md) — the `grpc` request type.
@@ -5038,6 +5087,7 @@ nothing there.
 - [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
 - [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
+- [REDIS.md](REDIS.md) — the opt-in `redis` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // The exporter's HTML pages: the landing page at /, as Prometheus exporters
@@ -75,7 +76,12 @@ type landingPage struct {
 	StaticTargetsPath    string
 	StaticTargets        int
 	StaticTargetsViaOTLP int
-	Docs                 string
+	// Reloaded says a reload has put something in force since the exporter
+	// started; ReloadedAt is when the last did, and ReloadChanges what it
+	// changed (config.ReloadSummary).
+	Reloaded                  bool
+	ReloadedAt, ReloadChanges string
+	Docs                      string
 }
 
 var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE html>
@@ -97,6 +103,13 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 
 <h2>Static targets</h2>
 <p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
+{{- end}}
+
+<h2>Configuration</h2>
+{{- if .Reloaded}}
+<p>Last reloaded at {{.ReloadedAt}}: {{.ReloadChanges}}.</p>
+{{- else}}
+<p>Not reloaded since the exporter started.</p>
 {{- end}}
 
 <h2>Endpoints</h2>
@@ -134,6 +147,11 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 		Collectors:        len(cfg.Collectors),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
 		Docs:              landingDocs,
+	}
+	if last, ok := s.manager.LastReload(); ok {
+		page.Reloaded = true
+		page.ReloadedAt = last.At.UTC().Format(time.RFC3339)
+		page.ReloadChanges = last.Changes
 	}
 	for _, target := range staticTargetsOf(file) {
 		page.StaticTargets++

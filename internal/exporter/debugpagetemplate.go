@@ -358,7 +358,10 @@ for (const field of document.querySelectorAll("textarea, input, select")) {
   field.addEventListener(field.tagName === "SELECT" ? "change" : "input", schedule);
 }
 $("run").addEventListener("click", run);
-run();
+// Nothing runs until the visitor presses Run or edits a field: the page
+// takes its collector and target from its URL, which a link on any page
+// can set, and running on opening would make that link a run the visitor
+// never asked for.
 </script>
 </body>
 </html>

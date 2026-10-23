@@ -387,3 +387,30 @@ func TestAStaticTargetFileReloadedAlonePreparesNothing(t *testing.T) {
 		t.Errorf("preparing the configuration again encoded %d collectors' definitions more, want none", got-7)
 	}
 }
+
+// What a reload changed, which it logs, is told by the fingerprints the
+// reload prepared and those kept with the configuration followed: the
+// manager encodes no definition of its own for it, and the reload encodes
+// each collector of its configuration once, as it does to follow it, even
+// when no probe made a fingerprint of the configuration before it.
+func TestWhatAReloadChangedIsToldByTheFingerprintsMade(t *testing.T) {
+	r := newReloadable(t, cachedDocument("kept", "changed"), "")
+	var encoded, encodedByTheManager atomic.Int64
+	hook := func() { encoded.Add(1) }
+	fingerprintedHook.Store(&hook)
+	t.Cleanup(func() { fingerprintedHook.Store(nil) })
+	config.SetDefinitionEncoded(func() { encodedByTheManager.Add(1) })
+	t.Cleanup(func() { config.SetDefinitionEncoded(nil) })
+	r.reloadTo(strings.Replace(cachedDocument("kept", "changed", "added"), "changed_value", "renamed_value", 1))
+	if last, _ := r.manager.LastReload(); last.Changes != "collectors added: added; collectors changed: changed" {
+		t.Errorf("the reload says it changed %q", last.Changes)
+	}
+	if got := encodedByTheManager.Load(); got != 0 {
+		t.Errorf("the manager encoded %d collectors' definitions to tell what the reload changed, want none", got)
+	}
+	// Three of the new configuration, and the two of the former one that
+	// the new one still names, whose fingerprints no probe had made.
+	if got := encoded.Load(); got != 5 {
+		t.Errorf("the reload encoded %d collectors' definitions, want 5", got)
+	}
+}

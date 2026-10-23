@@ -72,7 +72,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			return nil, err
 		}
 	}
-	key := grpcConnKey{dial: address.dial, tls: secure, policy: policy, proxied: proxied}
+	key := grpcConnKey{dial: address.hostPort, tls: secure, policy: policy, proxied: proxied}
 	if secure {
 		key.settings = c.Request.TLS
 		if overrides.InsecureSkipVerify != nil {

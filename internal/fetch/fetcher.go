@@ -176,6 +176,10 @@ type RequestOverrides struct {
 	// graphite collector's; no probe parameter sets it, so a probe can
 	// neither change where a login goes nor what it sends (login.go).
 	Login *model.LoginConfig
+	// RateLimit is a static target's request.rate_limit, replacing an
+	// http or graphite collector's; no probe parameter sets it, so a probe
+	// cannot ask a target faster than its configuration allows.
+	RateLimit *model.RateLimitConfig
 	// pageURL is the URL of a page after the first that request.pagination
 	// asks for, sent instead of the one the target and the request make
 	// (pagination.go). Only the pagination sets it.
@@ -730,6 +734,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if err != nil {
 		return nil, err
 	}
+	// Every request the trip sends from here on, its login's, its
+	// redirects' and its retries' among them, waits for its turn under the
+	// rate limit (ratelimit.go).
+	ctx = withRateLimit(ctx, c, overrides)
 	requestContext := ctx
 	cancel := func() {}
 	if overrides.Timeout > 0 {
@@ -859,7 +867,14 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			}
 		}
 
+		// A request refused here is refused again on every attempt, so
+		// it ends the trip.
+		waited, err := waitRateLimit(requestContext, req.URL)
+		if err != nil {
+			return nil, err
+		}
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
+		traceRateLimitWait(requestContext, req.URL, waited, false)
 		resp, err := client.Do(req)
 		if err != nil {
 			// Go's error quotes the whole URL, request.query included.
@@ -901,9 +916,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			}
 			// A refused target is refused again on every attempt, and so
 			// is a redirect that would send the body, or show the client
-			// certificate, to a host that is not trusted.
+			// certificate, to a host that is not trusted, and one the rate
+			// limit would delay past the deadline.
 			var redirectRefused *redirectRefusedError
-			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) {
+			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) && !errors.Is(err, errRateLimitRefused) {
 				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
 					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}

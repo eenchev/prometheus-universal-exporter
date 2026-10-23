@@ -583,7 +583,15 @@ func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
 		req = req.Clone(req.Context())
 		req.Host = t.host
 	}
+	// A login's request waits for its turn under the rate limit of the
+	// trip that needed the token, as the trip's own requests do: it is a
+	// request to its origin like any other.
+	waited, err := waitRateLimit(req.Context(), req.URL)
+	if err != nil {
+		return nil, err
+	}
 	traceLogin(req.Context(), req.Method, req.URL, req.Header, req.Host)
+	traceRateLimitWait(req.Context(), req.URL, waited, false)
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
 		traceOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())

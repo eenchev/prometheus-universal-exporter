@@ -1285,6 +1285,26 @@
                   "boolean"
                 ]
               },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
+              },
               "retry": {
                 "additionalProperties": false,
                 "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
@@ -2353,6 +2373,26 @@
                   "boolean"
                 ]
               },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
+              },
               "retry": {
                 "additionalProperties": false,
                 "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
@@ -2465,7 +2505,7 @@
             ]
           },
           "target": {
-            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one, the name to resolve, or for PTR the address, for a dns one, or host, host:port or [v6]:port for a tlscert one. A kubernetes collector takes none: leave it out.",
+            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one, the name to resolve, or for PTR the address, for a dns one, or host, host:port or [v6]:port for a tlscert one, or host, host:port, [v6]:port or a redis:// or rediss:// URL of one for a redis one. A kubernetes collector takes none: leave it out.",
             "type": [
               "string",
               "number",

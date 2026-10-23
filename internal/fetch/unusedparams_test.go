@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // The refusal of a probe parameter nothing uses names the places a
@@ -23,6 +25,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeTLSCert:    `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeKubernetes: `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeS3File:     `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeRedis:      `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.commands or its label values names them`,
 }
 
 // placeWords are the words the refusal has for each place a placeholder is
@@ -37,6 +40,7 @@ var placeWords = []struct{ field, word string }{
 	{"request.targets[", "request.targets"},
 	{"request.database", "request.database"},
 	{"request.args[", "args"},
+	{"request.commands[", "request.commands"},
 	{"transform.labels.", "label values"},
 }
 
@@ -45,7 +49,7 @@ var placeWords = []struct{ field, word string }{
 // and no place its type does not have: a graphite collector's expressions,
 // and no body; a grpc collector's message and metadata values; a localfile,
 // sshfile or s3file collector's path and nothing else of the request; a sql
-// collector's database and args. The
+// collector's database and args; a redis collector's command arguments. The
 // collector has a placeholder in each request key its type takes of those
 // that are filled, so a type that starts filling another place fails here
 // until the refusal names it.
@@ -90,6 +94,9 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		}
 		if slices.Contains(fields, "args") {
 			c.Request.Args = []string{"{{param_arg:x}}"}
+		}
+		if slices.Contains(fields, "commands") {
+			c.Request.Commands = []model.RedisCommand{{Name: "n", Command: []string{"LLEN", "{{param_key:x}}"}}}
 		}
 		if err := readLabels(&c); err != nil {
 			t.Fatal(err)

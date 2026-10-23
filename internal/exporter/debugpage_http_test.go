@@ -658,3 +658,25 @@ func TestTheDebugPageNotesTheLoadsWarningsAndTheRunsLogs(t *testing.T) {
 		t.Errorf("a run whose rule carried on without its series: %+v", answer)
 	}
 }
+
+// The page takes its collector and target from its URL, which a link on any
+// page can set, so it runs nothing when it opens: run is called when Run is
+// pressed and by the run-as-you-type timer, which only an edit sets, and
+// nowhere else.
+func TestTheDebugPageNeverRunsOnOpening(t *testing.T) {
+	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
+	server.SetDebug(DebugFull)
+	page := getPage(t, server, "/debug?collector=rooms&target=https://attacker.example/")
+	script := page[strings.Index(page, "<script>"):strings.LastIndex(page, "</script>")]
+	requireContains(t, script, `asked.get("target")`, `$("target").value = asked.get("target")`)
+	// The script's code alone: its strings and comments taken out.
+	code := regexp.MustCompile(`"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|//[^\n]*`).ReplaceAllString(script, "")
+	var uses []string
+	for _, use := range regexp.MustCompile(`(?:^|[^\w.$])run\b.{0,6}`).FindAllString(code, -1) {
+		uses = append(uses, strings.TrimSpace(use))
+	}
+	want := []string{"run() {", "(run, 600)", "run);"}
+	if !slices.Equal(uses, want) {
+		t.Errorf("the page's script uses run at %q, want only its definition, the click handler and the timer: %q", uses, want)
+	}
+}

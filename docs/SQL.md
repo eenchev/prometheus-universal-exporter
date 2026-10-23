@@ -475,11 +475,18 @@ label name the drivers a build has; of a build without the `sql` type,
   part of a result with the answer and leaves a larger result's other chunks
   at presigned cloud storage URLs, which the exporter does not connect to:
   they are not the account's host, and the target lists cannot allow them.
-  Such a statement fails at once — `reading the rows: the statement's result
-  came from Snowflake in more than one chunk, ...; return fewer rows or
-  columns, with WHERE, GROUP BY or LIMIT, so that the whole result comes in
-  one chunk` — rather than at the scrape's deadline. Aggregate in the
-  statement, so that it returns the few rows a metric needs.
+  Such a statement fails at once — `running the statement: the statement's
+  result came from Snowflake in more than one chunk, ...; return fewer rows
+  or columns, with WHERE, GROUP BY or LIMIT, so that the whole result comes
+  in one chunk` — rather than at the scrape's deadline. Aggregate in the
+  statement, so that it returns the few rows a metric needs. The exporter
+  fails it when the answer naming the chunks comes, before gosnowflake sees
+  it, so that the driver never starts fetching them: gosnowflake (v1.19.1)
+  can miss the signal of a chunk download that failed and wait for the chunk
+  forever, past the scrape's deadline, holding the statement's connection
+  and its place at `max_per_target`. To tell, the exporter reads each answer
+  to a statement whole before the driver does, the result's first chunk
+  with it, which is held twice for a moment.
 - **gosnowflake's own behaviour.** Its platform detection, which would ask
   the cloud metadata services and AWS STS which platform it runs on, is
   turned off (`SNOWFLAKE_DISABLE_PLATFORM_DETECTION=true`, set by the
@@ -523,10 +530,10 @@ label name the drivers a build has; of a build without the `sql` type,
   exporter's log, lines with `sql_driver` `snowflake`, at their own level
   and with the passwords and tokens it masks masked, not to stderr; an
   `sf_client_config.json` it finds (above) sends them where it says instead.
-  The errors it logs for each try at a result's later chunk, which the
-  exporter refuses (above) — `failed to extract HTTP response body. URL:
-  ...` six times, with the chunk's presigned URL — are logged at debug: the
-  scrape's own failure says what happened.
+  The error it logs for a statement whose result came in more than one
+  chunk, which the exporter fails (above) — `error: 262000 (08006): the
+  statement's result came from Snowflake in more than one chunk, ...` — is
+  logged at debug: the scrape's own failure says what happened.
 - **A row is read before `max_response_bytes` sees it.** The limit counts
   the values as a driver hands them on, and a driver reads a row, at least,
   whole before it hands any of it on. Where a driver can be told, the
@@ -570,7 +577,7 @@ label name the drivers a build has; of a build without the `sql` type,
 | `... uses sql driver "...", which this build does not include` | Build with `SQL_DRIVERS` naming it (see [Building with more drivers](#building-with-more-drivers)). |
 | `connecting to postgres at ...: ... password authentication failed` | The account or its password; check `password_file`. |
 | `request.password_file ... is empty` | The file is there and empty: the Secret's key, or its mount. |
-| `reading the rows: the statement's result came from Snowflake in more than one chunk, ...` | Return fewer rows or columns (see [Limitations](#limitations)). |
+| `running the statement: the statement's result came from Snowflake in more than one chunk, ...` | Return fewer rows or columns (see [Limitations](#limitations)). |
 | `running the statement: ... read-only transaction`, `... READ ONLY transaction` | The statement writes; it ran read-only, as it always does where the database can. |
 | `running the statement: the scrape's deadline came first` | The statement takes longer than the probe may; make it cheaper, or raise the probe's `timeout`. |
 | `column 1 of the statement's result has no name` | Name the column with `AS`. |

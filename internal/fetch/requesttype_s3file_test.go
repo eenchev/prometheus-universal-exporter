@@ -685,35 +685,7 @@ func TestS3FileClientsFollowTheConfiguration(t *testing.T) {
 }
 
 // optInRequestKeys lists the keys s3file accepts that no type of a default
-// build does: each it lists is the type's and no other built type's, and,
-// in a build with every other type, each key of the type's that no other
-// type accepts is listed.
+// build does (checkOptInRequestKeys).
 func TestTheOptInRequestKeysAreTheTypesOwn(t *testing.T) {
-	own := RequestTypes[RequestTypeS3File]
-	listed := optInRequestKeys[RequestTypeS3File]
-	everyOther := true
-	for _, name := range knownRequestTypes {
-		if name != RequestTypeS3File && RequestTypes[name] == nil {
-			everyOther = false
-		}
-	}
-	for _, key := range own.Fields {
-		var others []string
-		for name, rt := range RequestTypes {
-			if name != RequestTypeS3File && slices.Contains(rt.Fields, key) {
-				others = append(others, name)
-			}
-		}
-		switch {
-		case slices.Contains(listed, key) && len(others) > 0:
-			t.Errorf("optInRequestKeys lists %s, which %v accept too", key, others)
-		case !slices.Contains(listed, key) && len(others) == 0 && everyOther:
-			t.Errorf("s3file accepts %s, which no other type does, and optInRequestKeys does not list it", key)
-		}
-	}
-	for _, key := range listed {
-		if !slices.Contains(own.Fields, key) {
-			t.Errorf("optInRequestKeys lists %s, which s3file does not accept", key)
-		}
-	}
+	checkOptInRequestKeys(t, RequestTypeS3File)
 }

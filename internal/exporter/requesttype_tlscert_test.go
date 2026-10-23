@@ -170,3 +170,16 @@ func TestAPythonTransformReadsATLSCertDocument(t *testing.T) {
 		t.Errorf("%d %v, want %v", recorder.Code, got, want)
 	}
 }
+
+// A tlscert target the policy refuses is answered 403 and counted in
+// http_exporter_targets_refused_total, which a tlscert collector has a
+// series in, as every type with targets to refuse does.
+func TestATLSCertCollectorCountsTheTargetsItRefuses(t *testing.T) {
+	server, _ := tlscertExporter(t)
+	if recorder := probeOnce(t, server, "/probe?collector=certs&target=169.254.169.254", nil); recorder.Code != http.StatusForbidden {
+		t.Fatalf("a refused target: %d %s", recorder.Code, recorder.Body)
+	}
+	if metrics := probeOnce(t, server, "/self-metrics", nil).Body.String(); !strings.Contains(metrics, `http_exporter_targets_refused_total{collector="certs"} 1`) {
+		t.Errorf("the refusal is not counted:\n%s", metrics)
+	}
+}

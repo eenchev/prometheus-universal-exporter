@@ -292,7 +292,17 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 			if err := checkRedirect(ctx, req.URL); err != nil {
 				return err
 			}
-			return hop.refusal(req)
+			if err := hop.refusal(req); err != nil {
+				return err
+			}
+			// A hop is a request sent like any other, so it waits for
+			// its turn under the rate limit of where it goes.
+			waited, err := waitRateLimit(ctx, req.URL)
+			if err != nil {
+				return err
+			}
+			traceRateLimitWait(ctx, req.URL, waited, true)
+			return nil
 		}
 	} else {
 		// The response of the redirect itself is returned, so a collector sees

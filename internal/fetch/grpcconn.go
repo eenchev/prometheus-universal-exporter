@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +53,7 @@ import (
 
 // grpcConnKey is what a connection depends on.
 type grpcConnKey struct {
+	// dial is the server's host:port.
 	dial     string
 	tls      bool
 	settings model.TLSConfig
@@ -143,9 +143,15 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	// the server's addresses instead.
 	refusal := &atomic.Pointer[TargetRefusedError]{}
 	if key.policy != nil && !key.proxied {
-		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, strings.TrimPrefix(key.dial, "dns:///"), refusal)))
+		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, key.dial, refusal)))
 	}
-	conn, err := grpc.NewClient(key.dial, options...)
+	// grpc-go is always handed the dns:/// form. A bare host:port is read
+	// as a URL first, so unix:8443, unix-abstract:8443 or passthrough:8443
+	// would pick grpc-go's resolver of that name: a unix socket, dialled by
+	// grpc-go itself whenever the exporter's dialer is not in use, behind
+	// a proxy or with no allowed_targets. Under dns:/// the host is only
+	// ever a name looked up over DNS, the name the policy checked.
+	conn, err := grpc.NewClient("dns:///"+key.dial, options...)
 	if err != nil {
 		return nil, err
 	}

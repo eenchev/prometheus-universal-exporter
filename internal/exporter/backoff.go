@@ -318,14 +318,3 @@ func (b *failureBackoffs) forgetLocked(collectors map[string]bool) {
 		delete(b.collectors, name)
 	}
 }
-
-// remembered is how many targets of the collector are remembered, for
-// tests.
-func (b *failureBackoffs) remembered(collector string) int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if targets := b.collectors[collector]; targets != nil {
-		return len(targets.targets)
-	}
-	return 0
-}

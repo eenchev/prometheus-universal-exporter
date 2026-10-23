@@ -682,7 +682,8 @@ given: `sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap`, from the thi
 default build's types, and `REQUEST_TYPES` may name it like any type. Shared
 code it uses names its tag beside the others' (`filereads.go`,
 `localfile_directory.go`). Each type built on its own includes it, in the
-loops of `make build-request-types` and `make test-request-types` and CI's;
+loops of `make build-request-types` and `make test-request-types` and CI's
+matrix over the request types;
 the build with every opt-in type beside the default build's is vetted,
 built, tested (`internal/fetch` and `test/repository`) and linted by `make
 build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,

@@ -531,3 +531,14 @@ func TestTheSkippedTripsAreCountedPerRequest(t *testing.T) {
 		t.Errorf("the per-request http_exporter_backoff_skipped_total is %q, want 1 in:\n%s", perRequest, metrics)
 	}
 }
+
+// remembered is how many targets of the collector are remembered. It is
+// here, beside the only tests that ask, so no build lacks a use of it.
+func (b *failureBackoffs) remembered(collector string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if targets := b.collectors[collector]; targets != nil {
+		return len(targets.targets)
+	}
+	return 0
+}

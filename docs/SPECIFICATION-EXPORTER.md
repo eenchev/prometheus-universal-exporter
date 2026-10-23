@@ -25278,6 +25278,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   value maps, as two labels of two metrics, where the check that joined the
   names with NUL refused them as one (TestLabelValueMapsOfOneNameMustAgree).
 
+## 34.174 A connection database/sql never closes behind the scrape
+
+- A postgres statement whose rows are read, and whose end is held past the
+  scrape's deadline (the "ending" event), finds its connection not closed by
+  database/sql behind the scrape: the scrape answers the row, rolls the
+  transaction back itself, then closes the connection, which the stand-in
+  driver cannot reset, and the next scrape makes a second one; it fails when
+  the transaction is begun with the scrape's context, database/sql's own
+  rollback closing the connection while the scrape holds it (§ 5.1).
+- Sixteen scrapes at once, each running forty postgres statements still
+  running at a 10ms deadline, each fail with the deadline's error and none
+  panics in Conn.Raw, a stress companion of the test above (§ 5.1).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

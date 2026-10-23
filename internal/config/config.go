@@ -1299,6 +1299,12 @@ type Manager struct {
 	// reload puts in force carries it (install). It changes with the files,
 	// under reloadMu (ReloadReplacing, SetGeneration).
 	generation string
+	// lastReload is what the last reload that put something in force
+	// changed (reloadchanges.go), nil until one has.
+	lastReload atomic.Pointer[ReloadSummary]
+	// fingerprint tells a collector's definitions apart for the summary
+	// (SetFingerprint), nil for their YAML encodings.
+	fingerprint func(*model.Config, int) string
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -1914,7 +1920,8 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 // its being in force. What follows from each is done once both are in
 // force, and then those who asked are told (OnInstall). reloadMu is held.
 func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTargetFile) {
-	pair := *m.current.Load()
+	before := *m.current.Load()
+	pair := before
 	if c != nil {
 		pair.config = c
 	}
@@ -1929,22 +1936,34 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	for _, prepare := range m.prepared {
 		prepare(pair.config, pair.targets)
 	}
+	// What each file changed is worked out against what was in force before
+	// it, and before it is in force, with the fingerprints just prepared
+	// (reloadchanges.go).
+	var collectorsChanged, targetsChanged string
+	if c != nil {
+		collectorsChanged = reloadChanges("collectors", collectorChanges(before.config, c, m.fingerprint))
+	}
+	if f != nil {
+		targetsChanged = reloadChanges("static targets", targetChanges(before.targets, f))
+	}
 	m.current.Store(&pair)
 	if c != nil {
 		m.awaiting.Store(false)
-		m.installedConfig(trigger, c)
+		m.installedConfig(trigger, c, collectorsChanged)
 	}
 	if f != nil {
-		m.installedTargets(trigger, f)
+		m.installedTargets(trigger, f, targetsChanged)
 	}
+	m.lastReload.Store(&ReloadSummary{At: time.Now(), Changes: joinReloadChanges(collectorsChanged, targetsChanged)})
 	for _, told := range m.installed {
 		told()
 	}
 }
 
-// installedConfig records and logs that c was put in force, and lets what is
-// kept for a configuration follow it. reloadMu is held.
-func (m *Manager) installedConfig(trigger string, c *model.Config) {
+// installedConfig records and logs that c was put in force, with changes,
+// the collectors it added, removed and changed, and lets what is kept for a
+// configuration follow it. reloadMu is held.
+func (m *Manager) installedConfig(trigger string, c *model.Config, changes string) {
 	m.configWaits, m.configUnread, m.configRefusal = false, false, ""
 	// In force, the configuration is not read again for a certificate or a
 	// credential file it names: what uses one reads it again itself. It is
@@ -1963,16 +1982,16 @@ func (m *Manager) installedConfig(trigger string, c *model.Config) {
 		m.watchCollectorFiles(c.CollectorFiles)
 	}
 	LogNotices(m.logger, m.path, c)
-	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
+	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles), "changes", changes)
 }
 
-// installedTargets records and logs that f was put in force. reloadMu is
-// held.
-func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
+// installedTargets records and logs that f was put in force, with changes,
+// the static targets it added, removed and changed. reloadMu is held.
+func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile, changes string) {
 	m.targetsWaits, m.targetsUnread, m.targetsRefusal = false, false, ""
 	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
 	m.Reloads.record(ReloadFileStaticTargets, true)
-	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
+	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets), "changes", changes)
 }
 
 // rejectConfig refuses a configuration, which stays as it was. waits says it

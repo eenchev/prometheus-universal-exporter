@@ -6733,7 +6733,10 @@ Recommended behavior:
 - `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
   build and linking the endpoints and `/collectors`; with the lifecycle API
   on it MUST list `/-/reload` with every method the endpoint takes, `POST`
-  and `PUT`, and no other. Only `/` itself MUST be
+  and `PUT`, and no other. It MUST show when the last reload that put
+  something in force did, and what it changed, as § 24.1a says it, and
+  before the first that the exporter has not been reloaded since it
+  started. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -7042,9 +7045,25 @@ The exporter MUST reload when asked, not only when the watch finds a change:
   which MUST default to off. Without the flag the endpoint MUST answer `403`
   saying how to enable it; any other method MUST answer `405` with
   `Allow: POST, PUT`. The endpoint MUST be protected by `web.basic_auth` like
-  `/probe` and the self-metrics path. It MUST answer `200` when every file was accepted,
+  `/probe` and the self-metrics path, and refuse a request of another
+  site's page as every endpoint does (§ 42.5). It MUST answer `200` when every file was accepted,
   and `500` with the reason when one was rejected, the previous configuration
   staying in force.
+
+Whatever its trigger — the watch, `SIGHUP`, `/-/reload` or a bundle of the
+allocator — a reload that puts the configuration in force MUST say on its
+`configuration reloaded` line, at `info`, under `changes`, the collectors
+it added, removed and changed, and one that puts the static target file in
+force on its `static targets reloaded` line the static targets: as
+`collectors added: a, b; collectors removed: c; collectors changed: d`, the
+lists that are not empty in that order, each sorted, or `no changes` when
+none is. A collector MUST be changed when its fingerprint (§ 42.13)
+differs, which the reload MUST read from those it works out to follow the
+configuration, encoding no definition for it, and a static target when
+anything in its entry differs. Each list MUST name at most 10 and count the
+rest (`and 3 more`). A refused reload MUST NOT change what the last said.
+The landing page (§ 23) MUST show the time of the last reload that put
+something in force, and what it changed, both files' changes together.
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before
@@ -26067,7 +26086,20 @@ When enabled, the exporter MUST require valid Basic Authentication for
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
 when enabled, `/debug` and `/debug/run`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
-liveness and readiness probes can operate without credentials. In allocator mode, until the first bundle,
+liveness and readiness probes can operate without credentials.
+
+A browser sends the exporter's credential, once typed in, with every request
+to the exporter, those a page of another site makes included, and a page of
+another site can reach an exporter on the visitor's own network without
+any. Every endpoint but `/health` and `/ready` MUST therefore answer `403`,
+with a body saying why, to a request whose `Sec-Fetch-Site` is `cross-site`
+or `same-site` (in any case), with Basic Authentication on or off, before
+the credential is checked, a target contacted or a reload made. A request
+whose `Sec-Fetch-Site` is `same-origin` or `none`, or that has none, as
+Prometheus's scrapes and other clients that are not browsers do, MUST NOT
+be refused for it. `/-/reload` MUST keep taking `POST` and `PUT` (§ 24.1a).
+The `Origin` header MUST NOT be compared with the request's `Host`, which a
+reverse proxy in front of the exporter may rewrite. In allocator mode, until the first bundle,
 which carries `web.basic_auth`, is in force, every one of them MUST answer
 `503` instead (§ 42.14e): what the credential protects MUST NOT
 be served before the exporter knows whether one is required.
@@ -28335,7 +28367,9 @@ runs relative to itself, so it works under a proxy's path prefix. It MUST
 run a collector on demand and a moment after an edit, a run cancelling the
 one before it, and MUST start from the collector, and at `full` the target
 or the static target, its URL names (`collector`, `target`,
-`static_target`), as the collectors page links it. It MUST offer the
+`static_target`), as the collectors page links it. It MUST NOT run anything
+when it opens, whatever its URL names, until the visitor asks for a run or
+edits a field: a link on any page can set the URL. It MUST offer the
 configured collectors at every level, and the fetch and the static target's
 scrape at `full` only.
 

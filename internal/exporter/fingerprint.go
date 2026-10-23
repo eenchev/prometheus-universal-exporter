@@ -203,3 +203,22 @@ func (g *fingerprintGeneration) at(index int) string {
 	g.once[index].Do(func() { g.values[index] = collectorFingerprint(&g.config.Collectors[index]) })
 	return g.values[index]
 }
+
+// keptFingerprint is the fingerprint of cfg's collector at index for the
+// configuration manager, which tells by it what a reload changed
+// (config.Manager's SetFingerprint), between the reload's preparing its
+// configuration (prepareReload) and its putting it in force: those prepared
+// for the configuration the reload read, and those kept with the one
+// followed, which the preparing worked out for every collector the new
+// configuration still names. So it encodes no definition, but for a
+// configuration that is neither, which only a manager reloading without the
+// server following it has.
+func (s *Server) keptFingerprint(cfg *model.Config, index int) string {
+	if prepared := s.fingerprints.prepared.Load(); prepared != nil && prepared.config == cfg {
+		return prepared.at(index)
+	}
+	if followed := s.followed.Load(); followed != nil && followed.config == cfg {
+		return followed.fingerprint(index)
+	}
+	return collectorFingerprint(&cfg.Collectors[index])
+}

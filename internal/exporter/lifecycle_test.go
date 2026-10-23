@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -230,4 +231,27 @@ func TestBeginShutdownMakesTheExporterUnready(t *testing.T) {
 	if r := get(server, http.MethodGet, "/health", ""); r.Code != http.StatusOK {
 		t.Errorf("/health: %d", r.Code)
 	}
+}
+
+// The landing page shows when the last reload put something in force and
+// what it changed, and says when there has been none.
+func TestTheLandingPageShowsTheLastReload(t *testing.T) {
+	targets := "interval: 1m\ntargets:\n  - name: one\n    collector: first\n    target: http://a.example\n"
+	r := newReloadable(t, testutil.CollectorsDocument("first", "second"), targets)
+	requireContains(t, getPage(t, r.server, "/"), "Not reloaded since the exporter started.")
+	r.write(r.path, testutil.CollectorsDocument("first", "third"))
+	r.write(r.targets, targets+"  - name: two\n    collector: third\n    target: http://b.example\n")
+	if err := r.manager.Reload(config.ReloadTriggerHTTP); err != nil {
+		t.Fatal(err)
+	}
+	last, _ := r.manager.LastReload()
+	page := getPage(t, r.server, "/")
+	requireContains(t, page, "Last reloaded at "+last.At.UTC().Format(time.RFC3339)+": collectors added: third; collectors removed: second; static targets added: two.")
+	if strings.Contains(page, "Not reloaded") {
+		t.Error("the page says there was no reload after one")
+	}
+	if err := r.manager.Reload(config.ReloadTriggerHTTP); err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, getPage(t, r.server, "/"), ": no changes.")
 }

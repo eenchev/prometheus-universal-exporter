@@ -59,6 +59,13 @@ another rule of that name has an expression.
 what bounds how stale a running configuration can be; with the watch off there
 is no interval to report.
 
+A reload that puts a file in force logs it at `info`, as `configuration
+reloaded` or `static targets reloaded`, with what triggered it and, under
+`changes`, the collectors or the static targets it added, removed and
+changed, or `no changes`. Each list names ten and counts the rest, so the
+line stays short however much the reload replaced; see
+[What a reload changed](CONFIGURATION.md#what-a-reload-changed).
+
 `--dry-run` follows the same rule: its log lines on stderr are JSON, and even a
 command line that cannot be parsed is reported as a JSON line rather than the
 flag package's plain-text complaint. Its report is a separate JSON document on

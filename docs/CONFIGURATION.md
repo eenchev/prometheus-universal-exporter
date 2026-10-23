@@ -4322,6 +4322,34 @@ what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counte
 in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
 from different triggers never interleave: one runs at a time.
 
+### What a reload changed
+
+Each file a reload puts in force is logged with what it changed, under
+`changes`: the `configuration reloaded` line names the collectors added,
+removed and changed, and the `static targets reloaded` line the static
+targets, each list sorted, or says `no changes`:
+
+```json
+{"level":"INFO","msg":"configuration reloaded","trigger":"sighup","collectors":12,"collector_files":3,"changes":"collectors added: queue_depth; collectors removed: legacy_status; collectors changed: weather"}
+{"level":"INFO","msg":"static targets reloaded","trigger":"sighup","targets":40,"changes":"no changes"}
+```
+
+A collector is changed when anything in its definition differs, in the
+configuration file or in a collector file, which is also what drops its
+cached results (see [Response caching](#response-caching)); a static target
+when anything in its entry differs, the file's defaults it takes included.
+Each list names ten and counts the rest — `collectors added: a01, …, a10
+and 30 more` — so a reload that replaces a whole file writes a line of
+bounded length. Whatever triggered it, the watch, `SIGHUP`, `/-/reload` or a
+bundle from the [target allocator](ALLOCATOR.md), a reload says the same, and
+a rejected reload puts nothing in force and changes nothing.
+
+The landing page at `/` shows when the last reload put something in force,
+and what it changed, both files' changes together; before the first it says
+the exporter has not been reloaded since it started. How long ago that was
+is `http_exporter_config_last_reload_success_timestamp_seconds`
+([Configuration reloads](SELF-METRICS.md#configuration-reloads)).
+
 Whatever the trigger, the exporter's state follows the new configuration: a
 removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
 those of its [Python workers](SELF-METRICS.md#python-workers) with them,
@@ -4411,7 +4439,9 @@ a visitor of the exporter's pages do.
 `/debug` runs one collector and shows the series a probe would answer, the
 stages, what was logged, the requests sent and the response read and,
 folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
-and, with *Run as you type* on, a moment after each edit. The landing page
+and, with *Run as you type* on, a moment after each edit, and never when it
+opens: the collector and the target its address names are filled in and
+wait for *Run*, since a link on any page can name them. The landing page
 links it, and `/collectors` links each collector into it, the collector
 chosen and, at `full`, with the target entered in the collector's form.
 

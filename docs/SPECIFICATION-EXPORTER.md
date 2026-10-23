@@ -26531,6 +26531,60 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheTCPExamplesReadTheirServices` (extended): examples/tcp's haproxy collector reads `haproxy_up` from the column its `pre_script` adds: 1 for servers whose status is `UP 1/3`, `NOLB`, `DRAIN` and `no check`, 0 for `DOWN 1/2`, `MAINT`, `MAINT (via app/app1)`, `DOWN (agent)` and an empty status, and 0 for a `STOP` frontend, with no rule failing.
 - `TestTCPDocumentationExamples` (extended): docs/TCP.md's HAProxy example reads `UP 1/3` and `no check` as 1 and `MAINT (via web/app1)`, `DOWN 1/2` and a `STOP` frontend as 0.
 
+## 34.190 Snowflake's answers held to the response limit
+
+- A Snowflake answer larger than the response limit, sent without a
+  Content-Length, and a gzipped one of a few kilobytes that decompresses past
+  it, each fail the statement at once with ErrLimitExceeded in the limit's
+  words ("the statement's answer from Snowflake was larger than the response
+  limit of ..."), not the driver's error nor the deadline, with nothing
+  logged at error; each scrape allocates at most 8 MiB, the limit being
+  1 MiB and the answers 32 MiB and 64 MiB decompressed (the exporter read the
+  whole answer and decompressed the whole gzip before, some 245 MB and
+  500 MB). A result within the limit is read as before and one in more than
+  one chunk still fails with errSnowflakeChunks
+  (TestASnowflakeAnswerLargerThanTheResponseLimitFailsWithTheLimit).
+- The snowflake transport refuses an answer whose Content-Length passes the
+  limit unread, one without a Content-Length once it has read a byte past
+  the limit, and a gzipped one (Content-Encoding left by Go's transport)
+  once it has decompressed a byte past it, each with the statement's
+  failure the driver neither retries nor reads a result from and the
+  limit's failure noted for the statement; a gzipped answer within the limit
+  is passed on decompressed without its Content-Encoding, one that is not
+  gzip after all as it came, an answer of exactly the limit is passed on, and
+  without a limit nothing is refused
+  (TestTheSnowflakeTransportHoldsAnAnswerToTheResponseLimit).
+- The driver's log line for an answer larger than the response limit is
+  logged at debug, as the one for a result in more than one chunk is
+  (TestTheSnowflakeDriversLogGoesToTheExportersLogger).
+
+## 34.191 Each type linted on its own, a lighter transform suite and Dependabot majors
+
+- Each job of ci.yml's matrix over the request types reads the tags
+  `tools/request-type-tags.sh` prints for its `${{ matrix.type }}` in a step
+  under the `go` output, and a later step lints with them through the lint
+  job's golangci-lint action pin at the Makefile's version, under the same
+  condition; `make lint-request-types` runs `golangci-lint run --build-tags`
+  over the same tags after `lint-version`, in a loop naming every request
+  type of the tree, and `make ci` includes it; the test fails without the
+  step, without the target, and with another version in the step
+  (`TestCIAndMakeLintEveryRequestTypeOnItsOwn`, § 34.33).
+- Every golangci-lint action step of ci.yml names its version first and at
+  the Makefile's `GOLANGCI_LINT_VERSION`, the request types' matrix's
+  included (`TestTheLinterVersionIsPinnedConsistently`).
+- `.github/dependabot.yml`'s `gomod` and `pip` updates ignore
+  `version-update:semver-major` for every dependency, and its
+  `github-actions` updates of `/` ignore nothing and group every action's
+  minor and patch updates in one group and their majors in another; the
+  test fails on a single group of every update, and on `pip` without the
+  ignore (`TestDependabotUpdatesTheWorkflowActions`, § 42.16).
+- A script is handed CSV rows by header of a body of 5,000 columns over
+  5,000 one-field lines in a request no longer than four times the body,
+  decoded without making the list of dicts the rows stand for, so the test
+  takes tens of MiB under the race detector rather than over 4 GiB; it
+  fails when the rows are written as that list
+  (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -7,7 +7,10 @@ first parses the response when applicable, then the Python script receives
 `target`, `collector`, and decoded `data`. `response.status_code` is the HTTP
 status, a `grpc` call's status code — `0` for `OK`, or one of its
 `accept_codes` — or `None` for a local file, which has no status. Scripts emit metrics with
-`metric(...)` and may call `fail(...)`.
+`metric(...)` and may call `fail(...)`, and read sizes, durations, times and
+percentages written as text with the [value-parsing
+helpers](#value-parsing-helpers), `parse_bytes(...)`, `parse_duration(...)`,
+`parse_time(...)` and `parse_percent(...)`.
 
 `response.headers` is a dict of each header's values as a list, by the
 header's canonical name (`Content-Type`, `X-Mode`), as the response carried
@@ -87,6 +90,30 @@ first, with `",".join(tags)`.
 The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`, `tempfile` and `urllib.request`, and the C modules beneath them, such as `_socket` and `_posixsubprocess`; shell execution; opening files, through `open`, `io.FileIO` or `os`, but for reading time zone data; and package installation. A script may not import `posix`, `_io`, `_thread`, `select`, `selectors`, `fcntl`, `termios` or `importlib` itself, though the standard library it imports may, so `dataclasses` and the like still work. Time zone data is the one thing a script may read: the system's zone files (`zoneinfo.TZPATH`, `/usr/share/zoneinfo` and the like, and `/etc/localtime`), `python-dateutil`'s bundled copy and the `tzdata` package's, so `zoneinfo.ZoneInfo("Europe/Berlin")` and `dateutil.tz.gettz("Europe/Berlin")` work; the image ships the system's. (From Python 3.12, `zoneinfo` loads `sysconfig`, which imports `threading`; the worker loads `zoneinfo` before the sandbox is in place, so scripts can import it while `threading` stays blocked.) Any other file, or one reached from those directories by `..` or a symlink out of them, is still refused. A script that fails inside a library is shown the library's frames with their source lines, which the traceback reads through `linecache` and `tokenize.open`; those read a module's `.py` source, as the importer does, and time zone data, and refuse any other file. The worker never writes bytecode caches either (it runs Python with `-B`), so importing a module whose `.pyc` is missing or out of date works in a writable directory as in a read-only one. The sandbox keeps a script from doing by mistake what it should not; it is not a wall against a script written to get out, which Python cannot offer from inside the interpreter. Treat collector configuration as you treat the exporter's code, and rely on the container — the chart runs it as a non-root user with a read-only root file system — for isolation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
 The worker runs the interpreter `--python.path` names, `python3` by default, which in the image is Python 3.12 (the Dockerfile's `PYTHON_VERSION`). The sandbox depends on what the standard library imports, and when, which changes between releases, so 3.12 is the release it is built and tested on; the test suite also runs the sandbox, a library's traceback and how a script's error is cut on Python 3.13 where 3.13 is installed. Other releases may work, untested.
+
+### Value-parsing helpers
+
+A script and a pre-script have four functions besides `metric` and `fail`,
+the [value-parsing helpers](CONFIGURATION.md#value-parsing-helpers) jq and
+yq expressions call as filters: `parse_bytes("1.00M")` is `1048576.0`,
+`parse_duration("1h2m")` `3720.0`, `parse_time("2026-10-03T09:00:00Z")`
+`1791018000.0` and `parse_percent("55.12%")` `0.5512`. Each takes one value
+and gives a `float`, read and rounded exactly as the jq function of its name
+reads it, from the same forms: the two are tested against the same vectors.
+`parse_bytes` and `parse_duration` give an `int` or a `float` back as it is,
+as being bytes or seconds already. Text a helper cannot read raises a
+`ValueError`, and anything else that is not text a `TypeError`, which the
+script may catch, and which otherwise fails it as any exception does, its
+traceback showing the script's line and the helper's message:
+
+```python
+for row in data:
+    try:
+        size = parse_bytes(row["size"])
+    except ValueError:
+        continue          # a row the target wrote "n/a" in
+    metric(name="volume_size_bytes", value=size, labels={"volume": row["name"]})
+```
 
 ## What `data` is
 

@@ -1395,6 +1395,189 @@ if max_memory>0:
 # reference to threading is dropped below once the sandbox is in place.
 try: import zoneinfo
 except Exception: pass
+def value_helpers():
+    # The value-parsing helpers a script calls as parse_bytes(text) and the
+    # rest: the jq functions of the same names (internal/expr/values.go),
+    # which must give the same number, and the same error, for every input;
+    # both are tested against testdata/values/helpers.json. Each number is
+    # read exactly, as a fraction of whole numbers, and divided once at the
+    # end, which Python rounds to the nearest float as Go's big.Rat does.
+    # Patterns are matched whole (fullmatch), with ASCII classes alone, and
+    # only ASCII letters are lowered, so no other letter, such as the Kelvin
+    # sign, folds into a unit.
+    import re
+    num=r'([0-9]+(?:\.[0-9]*)?|\.[0-9]+)'
+    bytes_syntax=re.compile(num+r'[ \t]*([A-Za-z]*)')
+    units={'':1,'b':1}
+    for i,letter in enumerate('kmgtpe'):
+        units[letter+'ib']=1024**(i+1); units[letter+'b']=1000**(i+1); units[letter]=1024**(i+1)
+    go_units='(ns|us|\u00b5s|\u03bcs|ms|s|m|h|d)'
+    go_syntax=re.compile(r'[+-]?(?:'+num+go_units+r')+')
+    go_part=re.compile(num+go_units)
+    go_seconds={'ns':(1,10**9),'us':(1,10**6),'\u00b5s':(1,10**6),'\u03bcs':(1,10**6),'ms':(1,1000),'s':(1,1),'m':(60,1),'h':(3600,1),'d':(86400,1)}
+    clock_syntax=re.compile(r'((?:[0-9]+[-.])?[0-9]+(?::[0-9]+){1,2})(\.[0-9]+)?')
+    iso_syntax=re.compile(r'P(?:'+num+r'W)?(?:'+num+r'D)?(?:T(?:'+num+r'H)?(?:'+num+r'M)?(?:'+num+r'S)?)?')
+    iso_years_months=re.compile(r'P[^T]*[YM]')
+    rfc3339=re.compile(r'([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]+))?([Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)?')
+    http_date=re.compile(r'([A-Za-z]{3}), ([0-9]{1,2}) ([A-Za-z]{3}) ([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) ([A-Za-z]{3}|[+-][0-9]{4})')
+    percent_syntax=re.compile(r'([+-]?)'+num+r'[ \t]*%')
+    weekdays=['sun','mon','tue','wed','thu','fri','sat']
+    months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+    bytes_hint='write a number, then optionally blanks and a unit: B, KiB to EiB, kB to EB, or K to E'
+    duration_hint='write it as Go does (1h2m3.5s, 2d4h), as a clock (01:02:03, 1-02:03:04) or in ISO 8601 (PT1H2M3S)'
+    time_hint='write it in RFC 3339 (2026-10-03T09:00:00Z) or as an HTTP date (Sat, 03 Oct 2026 09:00:00 GMT)'
+    percent_hint='write a number followed by %, such as 55.12%'
+    digits_hint='a number in it has more than 100 digits'
+    lower=str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')
+    escapes={'"':'\\"','\\':'\\\\','\a':'\\a','\b':'\\b','\f':'\\f','\n':'\\n','\r':'\\r','\t':'\\t','\v':'\\v'}
+    def quoted(text):
+        # The text as Go's strconv.Quote writes it, as the jq helper's
+        # error quotes it (model.Quoted): past 64 bytes of UTF-8 cut to its
+        # first 64, at a character boundary, with its length after.
+        whole=text.encode('utf-8','surrogatepass')
+        head=text
+        if len(whole)>64:
+            cut=64
+            while cut>0 and (whole[cut]&0xC0)==0x80: cut-=1
+            head=whole[:cut].decode('utf-8','surrogatepass')
+        out=[]
+        for c in head:
+            if c in escapes: out.append(escapes[c])
+            elif c<' ' or c=='\x7f': out.append('\\x%02x'%ord(c))
+            elif not c.isprintable(): out.append('\\u%04x'%ord(c) if ord(c)<0x10000 else '\\U%08x'%ord(c))
+            else: out.append(c)
+        q='"'+''.join(out)+'"'
+        return q if len(whole)<=64 else q+'... (%d bytes)'%len(whole)
+    def unreadable(helper,text,what,why):
+        return ValueError('%s cannot read %s as %s: %s'%(helper,quoted(text),what,why))
+    def kind(v):
+        if v is None: return 'None'
+        if isinstance(v,bool): return 'a bool'
+        if isinstance(v,(int,float)): return 'a number'
+        return 'a '+type(v).__name__
+    def text_of(helper,v,numbers):
+        # A str, or, where numbers is set, a number as already being bytes
+        # or seconds, given back as it is; anything else is a TypeError
+        # saying what the helper reads.
+        if isinstance(v,str): return str(v)
+        if numbers and isinstance(v,(int,float)) and not isinstance(v,bool): return None
+        raise TypeError('%s reads text%s, not %s'%(helper,' or a number' if numbers else '',kind(v)))
+    def decimal(digits):
+        # A number num matched, as a fraction (n, d); None past 100 digits.
+        whole,_,fraction=digits.partition('.')
+        if len(whole)+len(fraction)>100: return None
+        return int('0'+whole+fraction),10**len(fraction)
+    def trim(text): return text.strip(' \t\r\n')
+    def parse_bytes(value):
+        text=text_of('parse_bytes',value,True)
+        if text is None: return value
+        m=bytes_syntax.fullmatch(trim(text))
+        unit=m and units.get(m.group(2).translate(lower))
+        if unit is None: raise unreadable('parse_bytes',text,'a size',bytes_hint)
+        n=decimal(m.group(1))
+        if n is None: raise unreadable('parse_bytes',text,'a size',digits_hint)
+        return n[0]*unit/n[1]
+    def parse_duration(value):
+        text=text_of('parse_duration',value,True)
+        if text is None: return value
+        s=trim(text)
+        total=[0,1]
+        def add(digits,un,ud):
+            n=decimal(digits)
+            if n is None: raise unreadable('parse_duration',text,'a duration',digits_hint)
+            total[0]=total[0]*n[1]*ud+n[0]*un*total[1]; total[1]*=n[1]*ud
+        bad=lambda: unreadable('parse_duration',text,'a duration',duration_hint)
+        if s in ('0','+0','-0'): return 0.0
+        if go_syntax.fullmatch(s):
+            for m in go_part.finditer(s): add(m.group(1),*go_seconds[m.group(2)])
+            if s[0]=='-': total[0]=-total[0]
+            return total[0]/total[1]
+        m=clock_syntax.fullmatch(s)
+        if m:
+            fields,fraction=m.group(1).split(':'),m.group(2) or ''
+            first=fields[0]
+            if '-' in first or '.' in first:
+                days,_,hours=first.partition('-' if '-' in first else '.')
+                if len(fields)!=3 or len(hours)!=2 or hours>'23': raise bad()
+                fields=[days,hours]+fields[1:]
+            seconds=[86400,3600,60,1][4-len(fields):]
+            for i,field in enumerate(fields):
+                if i>0 and (len(field)!=2 or (seconds[i]<3600 and field>'59')): raise bad()
+                if i==len(fields)-1: field+=fraction
+                add(field,seconds[i],1)
+            return total[0]/total[1]
+        if iso_years_months.match(s): raise unreadable('parse_duration',text,'a duration','years and months have no fixed length in seconds')
+        m=iso_syntax.fullmatch(s)
+        if m and s!='P' and not s.endswith('T'):
+            parts=list(zip(m.groups(),[7*86400,86400,3600,60,1]))
+            last=max(i for i,(n,_) in enumerate(parts) if n is not None)
+            for i,(n,unit) in enumerate(parts):
+                if n is None: continue
+                # Only the last part may have a fraction, as ISO 8601 has it.
+                if i!=last and '.' in n: raise bad()
+                add(n,unit,1)
+            return total[0]/total[1]
+        raise bad()
+    def civil_seconds(year,month,day,hour,minute,second):
+        # Unix seconds of a date and a time in UTC, None for one that does
+        # not exist; the days counted as in Howard Hinnant's days_from_civil,
+        # as the jq helper counts them.
+        if not 1<=month<=12 or day<1 or hour>23 or minute>59 or second>59: return None
+        month_days=[31,28,31,30,31,30,31,31,30,31,30,31][month-1]
+        if month==2 and year%4==0 and (year%100!=0 or year%400==0): month_days=29
+        if day>month_days: return None
+        y=year-1 if month<=2 else year
+        era=y//400; yoe=y-era*400; mp=(month+9)%12
+        doy=(153*mp+2)//5+day-1
+        doe=yoe*365+yoe//4-yoe//100+doy
+        return (era*146097+doe-719468)*86400+hour*3600+minute*60+second
+    def zone_offset(zone):
+        if zone in ('Z','z'): return 0
+        digits=zone[1:].replace(':','')
+        hours=int(digits[:2]); minutes=int(digits[2:]) if len(digits)==4 else 0
+        if hours>23 or minutes>59: return None
+        return -(hours*3600+minutes*60) if zone[0]=='-' else hours*3600+minutes*60
+    def parse_time(value):
+        text=text_of('parse_time',value,False)
+        s=trim(text)
+        bad=lambda why=time_hint: unreadable('parse_time',text,'a time',why)
+        m=rfc3339.fullmatch(s)
+        if m:
+            g=m.groups()
+            if g[7] is None: raise bad('it names no zone or offset, so it is no single moment; add Z or an offset')
+            offset=zone_offset(g[7])
+            seconds=civil_seconds(*[int(x) for x in g[:6]])
+            if offset is None or seconds is None: raise bad()
+            if g[6] is None: return float(seconds-offset)
+            n=decimal('.'+g[6])
+            if n is None: raise bad(digits_hint)
+            return ((seconds-offset)*n[1]+n[0])/n[1]
+        m=http_date.fullmatch(s)
+        if m:
+            g=m.groups()
+            month=months.index(g[2].translate(lower)) if g[2].translate(lower) in months else -1
+            zone=g[7].translate(lower)
+            if zone in ('gmt','utc'): offset=0
+            elif zone[0] in '+-': offset=zone_offset(zone)
+            else: offset=None
+            if offset is None: raise bad()
+            seconds=civil_seconds(int(g[3]),month+1,int(g[1]),int(g[4]),int(g[5]),int(g[6]))
+            weekday=weekdays.index(g[0].translate(lower)) if g[0].translate(lower) in weekdays else -1
+            if month<0 or weekday<0 or seconds is None: raise bad()
+            if weekday!=(seconds//86400+4)%7: raise bad('the weekday is not that of the date')
+            return float(seconds-offset)
+        raise bad()
+    def parse_percent(value):
+        # A ratio, 55.12% is 0.5512: Prometheus's base unit for a ratio.
+        text=text_of('parse_percent',value,False)
+        m=percent_syntax.fullmatch(trim(text))
+        if not m: raise unreadable('parse_percent',text,'a percentage',percent_hint)
+        n=decimal(m.group(2))
+        if n is None: raise unreadable('parse_percent',text,'a percentage',digits_hint)
+        return (-n[0] if m.group(1)=='-' else n[0])/(n[1]*100)
+    return parse_bytes,parse_duration,parse_time,parse_percent
+parse_bytes,parse_duration,parse_time,parse_percent=value_helpers()
+del value_helpers
 blocked={'socket','_socket','ssl','_ssl','subprocess','_posixsubprocess','ctypes','_ctypes','multiprocessing','_multiprocessing','threading','mmap','pty','pathlib','shutil','tempfile'}
 script_blocked={'importlib','posix','nt','_io','_thread','select','selectors','fcntl','termios'}
 import _io
@@ -2331,7 +2514,7 @@ while True:
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
-               'metric':metric,'fail':fail,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'data':p['data'],'metrics':metrics}
+               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'data':p['data'],'metrics':metrics}
         sink=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')

@@ -4238,6 +4238,18 @@ label text, `None` leaving the label off.
 What a script prints MUST be kept to its first 4 KiB, logged at debug level,
 and counted against `limits.max_output_bytes` only as far as that.
 
+A script and a pre-script MUST have the value-parsing helpers of § 17,
+`parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`, as
+functions of one argument among the names they are given, as `metric` and
+`fail` are. Each MUST give the same number as the jq function of its name for
+every input, a `float`, or an `int` or a `float` given to `parse_bytes` or
+`parse_duration` back unchanged (a `bool` being no number), and MUST raise a
+`ValueError` with exactly the jq function's message where that fails on
+text, and a `TypeError` saying what the helper reads where it fails on
+anything else. The exception MUST fail the script as any other does (§
+16.7), the helper's own frames, which are the worker's, left out of the
+traceback.
+
 ### 16.3 Python library model
 
 Only a small curated set of third-party libraries should be bundled with the exporter.
@@ -4892,6 +4904,54 @@ interpolation — MAY be evaluated by looking the fields up directly, but MUST
 give exactly what gojq gives: a field of an object its value, or `null`, and a
 field of `null` `null`. Where a step is anything else, the program MUST run, so
 the error is gojq's.
+
+Every jq program MUST have the value-parsing helpers `parse_bytes`,
+`parse_duration`, `parse_time` and `parse_percent`, each a function of no
+arguments reading its input, added as gojq custom functions (none MUST be
+the name of a gojq builtin, which it would hide or be hidden by), and the
+Python transform MUST have the same helpers (§ 16.2). The two MUST give the
+same results, which MUST be tested against one file of vectors,
+`testdata/values/helpers.json`, by the tests of both. Each helper MUST drop
+spaces, tabs, carriage returns and line feeds around its text and nothing
+else, and read a number as ASCII digits with an optional fraction after a
+dot and at least one digit, no exponent, no separators, and at most 100
+digits; it MUST read the number exactly and round the value it gives to the
+nearest float once, so `1.1GB` is 1100000000 and `0.1s0.2s` 0.3.
+
+- `parse_bytes` MUST read a number, blanks or none, and a unit or none, the
+  unit's ASCII letters in any case: none and `B` bytes; `KiB` to `EiB`
+  powers of 1024; `kB` to `EB` powers of 1000; and `K`, `M`, `G`, `T`, `P`
+  and `E` alone powers of 1024. It MUST refuse a sign, any other unit and
+  anything after the unit.
+- `parse_duration` MUST give seconds of Go's duration syntax with `d` for 24
+  hours (units `ns`, `us`, `µs`, `μs`, `ms`, `s`, `m`, `h`, `d`, case as
+  written, no blanks, `0` alone), which alone MAY have a leading `+` or `-`;
+  of a clock, `MM:SS`, `HH:MM:SS`, `D-HH:MM:SS` and `D.HH:MM:SS` with an
+  optional fraction after the seconds, the first field of any length and
+  each after it two digits, hours after days under 24 and minutes and
+  seconds under 60; and of an ISO 8601 duration `PnWnDTnHnMnS` in upper
+  case, each part optional but one there, a fraction on the last part only.
+  It MUST refuse ISO 8601 years and months, saying they have no fixed length
+  in seconds.
+- `parse_time` MUST give Unix seconds, with the text's fraction of a second,
+  of RFC 3339 (`T`, `t` or a blank between date and time, `Z`, `z`, `+HH:MM`,
+  `+HHMM` or `+HH`) and of the RFC 1123 HTTP date with `GMT`, `UTC` or
+  `+HHMM`, its names in any case and its weekday checked against the date.
+  It MUST refuse a date and time without a zone, saying it names no single
+  moment, a second of 60 and a date that does not exist, and MUST NOT read
+  any other layout: `time_format` and jq's `strptime` read those.
+- `parse_percent` MUST read an optional sign, a number, blanks or none, and
+  a `%` that MUST be there, and give the ratio, a hundredth of it, which is
+  Prometheus's base unit.
+
+Each helper MUST read text; `parse_bytes` and `parse_duration` MUST give a
+number back unchanged, as being bytes or seconds already, and anything else
+(`null`, a boolean, an object, an array, a number for `parse_time` and
+`parse_percent`) MUST fail saying what the helper reads and what it was
+given by its kind. Text a helper cannot read MUST fail with
+`<helper> cannot read <text> as <what>: <what to write>`, the text quoted
+and cut as a value of the response is (§ 18.1), as a jq error that fails the
+rule under its `error_mode` as any jq error does and that `try` catches.
 
 Every jq program MUST have `$root` bound to the whole decoded document, so an
 expression evaluated against one item (§ 18.2) can reach the rest of it,

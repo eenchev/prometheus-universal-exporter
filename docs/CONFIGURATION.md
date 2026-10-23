@@ -1700,9 +1700,13 @@ words exports write in place of a value: `N/A`, `-`, `null`, and `true`,
 `false`, `yes`, `no`, `on` and `off` written as text (a JSON or YAML boolean
 is `1` or `0`). An empty cell is not a
 failure of this kind but a [missing value](#when-a-metric-cannot-be-extracted).
-The remedies are `value_map`, for the texts that stand for a value (`"N/A": 0`,
+A size, a duration, a time or a percentage written for people (`12.5 MB`,
+`1h2m`, `85%`) is read in a jq or yq expression, or a Python script, by the
+[value-parsing helpers](#value-parsing-helpers). The other remedies are
+`value_map`, for the texts that stand for a value (`"N/A": 0`,
 `"yes": 1`, `"1_000": 1000`), and a `pre_script`, which can rewrite a column
-before the rules read it — take the `%` off, turn `1.234,56` into `1234.56`.
+before the rules read it — read `85%` with `parse_percent`, turn `1.234,56`
+into `1234.56`.
 `value_map` reads only the texts it lists, so it suits a handful of words and
 not a column of decimal commas, which is two lines of a pre-script:
 
@@ -1974,6 +1978,132 @@ rule with `time_format: ""` reads its value as a number, and may have a
 without one; and `time_format: ""` beside a `time_zone` that names a zone is
 refused as `time_zone` without `time_format`. The
 [schema](#editor-support) says the same of each.
+
+### Value-parsing helpers
+
+Targets often write a value for people rather than as a number: Redis's
+`used_memory_human` is `1.00M`, an API reports an uptime as `1h2m` and a
+load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`. Four
+helpers read those forms, so a rule need not take them apart with a regular
+expression of its own. In every jq and yq expression they are functions of
+their input:
+
+```yaml
+- name: redis_memory_used_bytes
+  expression: .info.memory.used_memory_human | parse_bytes   # "1.00M" -> 1048576
+- name: app_uptime_seconds
+  expression: .uptime | parse_duration                      # "1h2m3.5s" -> 3723.5
+- name: app_last_backup_timestamp_seconds
+  expression: .backup.finished_at | parse_time              # "2026-10-03T09:00:00Z" -> 1791018000
+- name: app_cpu_ratio
+  expression: .cpu | parse_percent                          # "55.12%" -> 0.5512
+```
+
+and a [Python](PYTHON.md) script or pre-script has them as functions of the
+same names, `parse_bytes(row["size"])`. The two give the same number, and fail
+with the same message, for every input: both are tested against one file of
+test vectors, `testdata/values/helpers.json`.
+
+| Helper | Reads | Gives | Examples |
+| --- | --- | --- | --- |
+| `parse_bytes` | A size: a number, then blanks or none, then a unit or none | Bytes | `512` and `512B` → 512; `1.00M`, `1M` and `1 MiB` → 1048576; `1.5K` → 1536; `2.5 GB` → 2500000000; `1kB` → 1000 |
+| `parse_duration` | A duration as Go writes one, as a clock, or in ISO 8601 | Seconds | `1h2m3.5s` → 3723.5; `500ms` → 0.5; `2d4h` → 187200; `01:02:03` → 3723; `1-02:03:04` → 93784; `PT1H2M3S` → 3723; `P1DT2H` → 93600 |
+| `parse_time` | A date and time with its zone: RFC 3339, or an HTTP date | Unix seconds | `2026-10-03T09:00:00Z`, `2026-10-03T12:00:00.25+03:00` → 1791018000, 1791018000.25; `Sat, 03 Oct 2026 09:00:00 GMT` → 1791018000 |
+| `parse_percent` | A number followed by `%` | A ratio | `55.12%` and `55.12 %` → 0.5512; `100%` → 1; `-3.5%` → -0.035 |
+
+What each reads, exactly:
+
+- **A number** is digits, with or without a fraction after a dot (`3`, `3.5`,
+  `.5`, `5.`), and at most 100 digits. It has no sign, except
+  where `parse_duration` and `parse_percent` take one below, no exponent
+  (`1e3`), no thousands separator and no decimal comma. Blanks around the whole text — spaces,
+  tabs and line ends — are dropped, as a rule drops them around a value.
+- **`parse_bytes`**: no unit and `B` are bytes; `KiB`, `MiB`, `GiB`, `TiB`,
+  `PiB` and `EiB` are powers of 1024 (IEC); `kB`, `MB`, `GB`, `TB`, `PB` and
+  `EB` are powers of 1000 (SI); and a bare letter, `K`, `M`, `G`, `T`, `P` or
+  `E`, is a power of 1024, as Redis, `ls -h`, `df -h` and Java's `-Xmx` write
+  sizes. The unit is read in any case, so `KB`, `kb` and `mib` are units too,
+  and a lower-case `b` is bytes, not bits. Blanks between the number and the
+  unit are allowed. A sign, an unknown unit (`1 Ki`, `1 KB/s`, `1 bytes`) or
+  anything after the unit fails.
+- **`parse_duration`**, in one of three forms:
+  - as Go's `time.ParseDuration` reads it, with `d` for a day of 24 hours:
+    numbers each followed by its unit, `ns`, `us` (or `µs`), `ms`, `s`, `m`,
+    `h` or `d`, written together (`1h2m3.5s`, `1.5h`, `2d4h`), or `0` alone.
+    Only this form takes a leading `-` or `+`, as Go's does: `-1.5s` is
+    -1.5. The units are in lower case, and there are no blanks between the
+    parts.
+  - as a clock: `MM:SS`, `HH:MM:SS`, and with days `D-HH:MM:SS` or
+    `D.HH:MM:SS`, as `ps -o etime`, Slurm and .NET write elapsed time, with a
+    fraction of a second after the seconds (`01:02:03.250`). The first field
+    is as long as it needs to be (`100:00:00` is 100 hours, `75:00` 75
+    minutes); each after it is two digits, under 24 for the hours after days
+    and under 60 for minutes and seconds. Two fields are minutes and
+    seconds, not hours and minutes.
+  - in ISO 8601: `P`, then weeks (`W`) and days (`D`), then `T` and hours
+    (`H`), minutes (`M`) and seconds (`S`), each part optional but one there,
+    in that order, in upper case, a fraction on the last part only:
+    `PT1H2M3S`, `P1DT2H`, `PT0.5S`, `P2W`. Years and months (`P1Y`, `P1M`)
+    are refused: they have no fixed length in seconds.
+- **`parse_time`** reads
+  - RFC 3339 and the ISO 8601 date and time it is a form of:
+    `2026-10-03T09:00:00Z`, with `T`, `t` or a blank between the date and
+    the time, a fraction of a second or none, and `Z` (or `z`) or an offset,
+    `+03:00`, `+0300` or `+03`;
+  - the HTTP date of RFC 1123, `Sat, 03 Oct 2026 09:00:00 GMT`, with `GMT`,
+    `UTC` or an offset such as `+0300`, the day in one digit or two, and
+    the names of the day and the month in any case. The day of the week
+    must be the date's.
+
+  A date and time without a zone or an offset, `2026-10-03 09:00:00`, is
+  refused rather than read as UTC: it names no single moment. Seconds must
+  be written and be under 60, and the date must exist (`2026-02-30` fails).
+  A time in any other layout is read with a rule's
+  [`time_format`](#reading-a-date-or-a-time-as-the-value), which takes a
+  layout and a `time_zone`, or in jq with `strptime` and `mktime`; the
+  helper reads only the two forms whose zone is in the text.
+- **`parse_percent`**: a number with a sign or none, blanks or none, and
+  `%`, which must be there. It gives the ratio, a hundredth of the
+  percentage, since Prometheus keeps ratios in its base unit, 0 to 1:
+  `55.12%` is `0.5512`, beside the other ratios of a target, and a query
+  needs no division by 100. Multiply by 100 with the rule's `scale` to keep
+  the percentage.
+
+Each number is read exactly and rounded to a float once: `1.1GB` is
+1100000000 and `0.1s0.2s` 0.3, not 1100000000.0000002 and
+0.30000000000000004, as multiplying and adding floats on the way would give.
+
+Each reads text. `parse_bytes` and `parse_duration` also take a number, a
+JSON or YAML number in jq and an `int` or a `float` in Python, as being
+bytes or seconds already, and give it back unchanged, since an API that
+writes `"1.5K"` for one value may write `1536` for another. Anything else —
+`null` (`None`), a boolean, an object, an array, and a number given to
+`parse_time` or `parse_percent` — fails, saying what the helper reads:
+`parse_time reads text, not a number`. A field a response may leave out is
+passed on only when it is there, `.uptime | values | parse_duration`, so it
+is a [missing value](#when-a-metric-cannot-be-extracted) rather than a
+failure.
+
+Text a helper cannot read fails as any other failing expression of its
+transform does: a jq or yq rule with the helper's error, under the rule's
+[`error_mode`](#when-a-metric-cannot-be-extracted) (`try ... catch` and `?`
+catch it, as they catch any jq error), and a Python script or pre-script
+with a `ValueError` (a `TypeError` for what is not text), which the script
+may catch and otherwise fails it as any exception does. The message names
+the helper and quotes the text, cut to its first 64 bytes with its length
+when it is longer, and says what to write:
+
+```text
+parse_bytes cannot read "12 KB/s" as a size: write a number, then optionally blanks and a unit: B, KiB to EiB, kB to EB, or K to E
+parse_duration cannot read "P1M" as a duration: years and months have no fixed length in seconds
+parse_time cannot read "2026-10-03 09:00:00" as a time: it names no zone or offset, so it is no single moment; add Z or an offset
+parse_percent cannot read "55.12" as a percentage: write a number followed by %, such as 55.12%
+```
+
+The helpers are gojq functions the exporter adds, named so that none hides
+a builtin of jq or gojq. They are there in every jq expression the exporter
+evaluates, those of [pagination](REQUESTS.md#pagination) and
+[logins](AUTHENTICATION.md#logging-in-to-a-target) included.
 
 ### Histograms from a list of values
 

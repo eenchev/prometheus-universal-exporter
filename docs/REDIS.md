@@ -174,7 +174,12 @@ The answer is a JSON document:
   each an object of its `name:value` lines. It is there when `INFO` was sent.
 - A value that is a number is a JSON number, written exactly as the server
   wrote it, so a 64-bit counter keeps every digit; `1.00M`, `55.12%`,
-  `7.2.4` and `00000000` stay text. A value made of `name=value` pairs joined
+  `7.2.4` and `00000000` stay text. A value `INFO` writes for people, such
+  as `used_memory_human`, has the number beside it, `used_memory`, which is
+  the one to read; where a reply has only such text, the
+  [value-parsing helpers](CONFIGURATION.md#value-parsing-helpers) read it:
+  `parse_bytes` reads `1.00M` as 1048576 and `parse_percent` `55.12%` as
+  0.5512. A value made of `name=value` pairs joined
   by commas — a keyspace line, a replica's `slave0` line, every
   `cmdstat_<command>` line of `commandstats` — is an object of them, each
   value read the same way.

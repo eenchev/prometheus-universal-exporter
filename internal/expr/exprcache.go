@@ -117,6 +117,9 @@ func (c *exprCache[T]) len() int {
 	return n
 }
 
+// Every jq program also has the value-parsing helpers, parse_bytes,
+// parse_duration, parse_time and parse_percent (values.go).
+
 // JQVariables are bound in every jq program, in this order: $root, the whole
 // decoded document, so an expression evaluated against one item of a
 // metric's items can still look things up elsewhere in the response;
@@ -130,7 +133,7 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, err := gojq.Compile(query, gojq.WithVariables(JQVariables))
+	code, err := gojq.Compile(query, append([]gojq.CompilerOption{gojq.WithVariables(JQVariables)}, valueFunctions...)...)
 	if err != nil {
 		return nil, err
 	}

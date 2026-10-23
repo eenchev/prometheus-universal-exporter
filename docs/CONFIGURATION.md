@@ -2068,6 +2068,10 @@ What each reads, exactly:
     the names of the day and the month in any case. The day of the week
     must be the date's.
 
+  Any year from `0000` to `9999` is read, in the Gregorian calendar
+  extended back before its adoption; a moment before 1970 is negative,
+  `1969-12-31T23:59:59Z` → -1.
+
   A date and time without a zone or an offset, `2026-10-03 09:00:00`, is
   refused rather than read as UTC: it names no single moment. Seconds must
   be written and be under 60, and the date must exist (`2026-02-30` fails).
@@ -4177,6 +4181,7 @@ collectors:
       after: 3      # consecutive failed scrapes before backing off; at least 1, 3 when omitted
       initial: 30s  # the first wait; 30s when omitted
       max: 10m      # the longest wait; 10m, or initial when that is longer, when omitted
+      min_budget: 1s # the least budget a timed-out scrape must have had to count; 1s when omitted
 ```
 
 After `after` consecutive failed scrapes of a target, its probes and
@@ -4188,8 +4193,8 @@ that one scrape goes: while it is in progress, a probe identical to it
 [shares it](#identical-probes-share-one-request), and any other scrape of the
 target, such as a probe of a collector with `coalesce: false`, fails at once
 as during the wait. Without `failure_backoff` every scrape contacts the
-target. `after` below 1, an `initial` that is not a positive duration and a
-`max` shorter than `initial` are refused at load.
+target. `after` below 1, an `initial` or `min_budget` that is not a positive
+duration and a `max` shorter than `initial` are refused at load.
 
 A failed scrape is one whose fetch failed: the connection was refused or
 reset, it timed out, TLS failed, the target answered a status the collector
@@ -4201,6 +4206,22 @@ and counts as a success. Neither counts the scrape that
 refused, one `max_concurrent_probes` or `--probe.max-concurrent` turned away
 before it started, or one cancelled because every probe waiting for it went
 away: nothing is known of the target from them.
+
+Nor does a scrape that timed out — ran out of its budget — when that budget
+was below `min_budget`. A probe's budget comes from its caller: Prometheus's
+scrape timeout, less `--probe.timeout-offset`
+([Probe deadlines](#probe-deadlines)), which is not part of what a target is
+told apart by. Without the floor, anyone who can reach `/probe` could send a
+few probes asking for less time than the target needs to answer and back it
+off for every probe and static target scrape that shares its state. The
+budgets Prometheus gives are above the floor, so a target that does not
+answer at all still backs off; raise `min_budget` towards the scrape timeout
+to be stricter about what counts. Such a scrape neither counts as a failure
+nor forgets the failures before it. A static target's scrape has its interval
+for a budget, and the floor applies to it the same way. A failure that is not
+the deadline's — a refused connection, TLS, a status the collector does not
+accept, the target's own error — counts whatever the budget, and so does a
+timeout of the probe's `timeout` parameter, which is part of the key.
 
 A scrape kept from the target fails as its fetch would have, in the fetch
 stage, with:

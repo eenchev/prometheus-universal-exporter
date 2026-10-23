@@ -229,6 +229,7 @@ func httpSchemaKeys() []schemaKey {
 		// 30s initial defaults to.
 		{key: "collectors[].failure_backoff.initial", document: jqCollector, at: collector, setting: "    failure_backoff:\n      initial: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true, zero: "failure_backoff.initial must be a positive duration"},
 		{key: "collectors[].failure_backoff.max", document: jqCollector, at: collector, setting: "    failure_backoff:\n      max: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true, zero: "must not be shorter than failure_backoff.initial 30s"},
+		{key: "collectors[].failure_backoff.min_budget", document: jqCollector, at: collector, setting: "    failure_backoff:\n      min_budget: %s\n", valid: "2s", invalid: "soon", absent: true, duration: true, zero: "failure_backoff.min_budget must be a positive duration"},
 		{key: "collectors[].limits.script_timeout", document: jqCollector, at: collector, setting: "    limits:\n      script_timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "collectors[].request.retry.backoff", document: jqCollector, at: request, setting: "      retry:\n        backoff: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.timeout", document: switchedOnOTLP, at: "  # otlp\n", setting: "  timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},

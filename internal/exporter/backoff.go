@@ -27,6 +27,15 @@ import (
 // away before it started, or one cancelled because every probe waiting for
 // it went away or the exporter shut down: such a trip changes nothing here.
 //
+// Nor from a trip that ran out of a budget below min_budget. A probe's
+// budget comes from its caller, from Prometheus's scrape timeout header,
+// which is no part of the key a target is told apart by: without the floor,
+// a caller asking for less time than the target needs to answer would back
+// the target off for every probe and static target scrape sharing its key.
+// A target that does not answer at all still backs off, since the budgets
+// Prometheus gives are above the floor. Failures that are not the deadline's
+// — a refused connection, TLS, a status — count whatever the budget.
+//
 // A skipped trip fails in the fetch stage, under error_handling
 // on_fetch_error and with cache.stale_if_error answering for it, exactly as
 // the fetch it stands for would have; it takes no trip slot, and is counted
@@ -168,10 +177,15 @@ const (
 	backoffSucceeded
 )
 
-// outcomeOf is what the trip that ended as r says of its target.
-func outcomeOf(r collected) backoffOutcome {
+// outcomeOf is what the trip that ended as r says of its target, for a
+// collector whose min_budget is floor: a trip that ran out of a budget
+// below it says nothing (a budget of 0 is no bound the caller set, and its
+// timeout counts).
+func outcomeOf(r collected, floor time.Duration) backoffOutcome {
 	switch {
 	case r.aborted, r.refused, r.skipped:
+		return backoffUnknown
+	case r.fetchFailed && r.outOfBudget && r.budget > 0 && r.budget < floor:
 		return backoffUnknown
 	case r.fetchFailed:
 		return backoffFailed

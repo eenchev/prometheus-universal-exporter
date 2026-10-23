@@ -737,7 +737,14 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 // settleBackoff records what the trip that ended as result says of its
 // target (backoff.go), and logs a target that starts to back off with it.
 func (s *Server) settleBackoff(turn *backoffTurn, read configRead, result collected, attrs []any) {
-	started, failures, until := turn.settle(read, outcomeOf(result))
+	if turn == nil {
+		return
+	}
+	floor := model.DefaultFailureBackoffMinBudget
+	if turn.config.MinBudget != nil {
+		floor = time.Duration(*turn.config.MinBudget)
+	}
+	started, failures, until := turn.settle(read, outcomeOf(result, floor))
 	if started {
 		s.logger.Warn("target is backing off after consecutive failed scrapes; its probes and scrapes fail without contacting it until the wait has passed (failure_backoff)",
 			append(append([]any{}, attrs...), "failures", failures, "next_try", until.UTC().Format(time.RFC3339))...)

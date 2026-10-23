@@ -481,6 +481,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].failure_backoff.after":                   {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
 		"collectors[].failure_backoff.initial":                 {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
 		"collectors[].failure_backoff.max":                     {"description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer."},
+		"collectors[].failure_backoff.min_budget":              {"description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
 		"collectors[].request":                                 requestSchemaRule(),
 		"collectors[].request.type":                            {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
 		"collectors[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},

@@ -889,16 +889,18 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 // FailureBackoffConfig is a collector's failure_backoff: after After
 // consecutive failed trips to a target, its trips are answered as failed
 // without contacting it for Initial, the wait doubling with each further
-// failure up to Max. Each is nil until the load fills in its default
-// (config.validateFailureBackoff), so a value written 0 is told from one
-// left out.
+// failure up to Max. A trip that failed by running out of its budget counts
+// only when that budget was at least MinBudget. Each is nil until the load
+// fills in its default (config.validateFailureBackoff), so a value written
+// 0 is told from one left out.
 type FailureBackoffConfig struct {
-	After   *int      `yaml:"after"`
-	Initial *Duration `yaml:"initial"`
-	Max     *Duration `yaml:"max"`
+	After     *int      `yaml:"after"`
+	Initial   *Duration `yaml:"initial"`
+	Max       *Duration `yaml:"max"`
+	MinBudget *Duration `yaml:"min_budget"`
 }
 
-var failureBackoffKeys = []string{"after", "initial", "max"}
+var failureBackoffKeys = []string{"after", "initial", "max", "min_budget"}
 
 // UnmarshalYAML refuses the keys it does not know in the words the cache's
 // do, naming the block rather than the type, and explains the one-value
@@ -909,11 +911,11 @@ func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Line, n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: failure_backoff must be a mapping with after, initial and max", n.Line)
+		return fmt.Errorf("line %d: failure_backoff must be a mapping with after, initial, max and min_budget", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(failureBackoffKeys, key) {
-			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes after, initial and max", entry.Key.Line, key)
+			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes after, initial, max and min_budget", entry.Key.Line, key)
 		}
 	}
 	type plain FailureBackoffConfig
@@ -925,6 +927,10 @@ const (
 	DefaultFailureBackoffAfter   = 3
 	DefaultFailureBackoffInitial = 30 * time.Second
 	DefaultFailureBackoffMax     = 10 * time.Minute
+	// DefaultFailureBackoffMinBudget is below the budget Prometheus gives a
+	// scrape with its default timeout, and above what a caller asking for
+	// too little time would give one.
+	DefaultFailureBackoffMinBudget = time.Second
 )
 
 // CacheTTL is how long a collector's result answers repeats of its probe.

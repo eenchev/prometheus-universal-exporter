@@ -151,6 +151,11 @@ type collected struct {
 	// what failure_backoff counts as the target's failure (backoff.go). A
 	// trip the target policy refused is not one.
 	fetchFailed bool
+	// outOfBudget is set when the fetch failed because the trip ran out of
+	// its budget, which budget was: failure_backoff counts such a failure
+	// only when the budget was at least its min_budget (backoff.go).
+	outOfBudget bool
+	budget      time.Duration
 	// skipped is set when failure_backoff kept the trip from the target
 	// (collectJob.backingOff).
 	skipped bool
@@ -164,6 +169,20 @@ func cutShort(ctx context.Context) bool {
 }
 
 func (r collected) failed() bool { return r.err != nil }
+
+// ranOutOfBudget reports whether the fetch that failed with err did so
+// because the trip's deadline, ctx's, came: ctx says so, or err is a
+// deadline's and the deadline has passed, as when a request type set it on
+// a socket, whose timeout can come before the context's timer fires. A
+// timeout of the request's own, such as its timeout parameter, is not the
+// trip's budget running out.
+func ranOutOfBudget(ctx context.Context, err error) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && errors.Is(err, context.DeadlineExceeded) && !time.Now().Before(deadline)
+}
 
 // collect makes one trip to the target. It counts every stage in the
 // collector's self-metrics, logs failures and recovery, and caches a result
@@ -286,6 +305,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		failure := stageFailed(fetch.FetchErrorStage(requester, err), err, c.ErrorHandling.OnFetchError, extra...)
 		failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
 		failure.fetchFailed = true
+		failure.outOfBudget, failure.budget = ranOutOfBudget(ctx, err), j.budget
 		return failure
 	}
 	if response.GRPCCode != nil {

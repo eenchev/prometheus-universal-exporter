@@ -333,7 +333,7 @@ func ParseTime(text string) (float64, error) {
 		if month < 0 || weekday < 0 || !ok {
 			return bad(timeHint)
 		}
-		if int64(weekday) != ((seconds/86400+4)%7+7)%7 {
+		if int64(weekday) != floorMod(floorDiv(seconds, 86400)+4, 7) {
 			return bad("the weekday is not that of the date")
 		}
 		return float(new(big.Rat).SetInt64(seconds - offset)), nil
@@ -381,7 +381,8 @@ func civilSeconds(year, month, day, hour, minute, second int) (int64, bool) {
 	if month <= 2 {
 		y--
 	}
-	era := y / 400 // y is never negative: the year has four digits
+	// January and February of year 0000 count from year -1.
+	era := floorDiv(y, 400)
 	yoe := y - era*400
 	mp := int64((month + 9) % 12)
 	doy := (153*mp+2)/5 + int64(day) - 1
@@ -389,6 +390,20 @@ func civilSeconds(year, month, day, hour, minute, second int) (int64, bool) {
 	days := era*146097 + doe - 719468
 	return days*86400 + int64(hour*3600+minute*60+second), true
 }
+
+// floorDiv is a divided by b, b positive, rounded down as the Python
+// helper's // rounds, where Go's / rounds towards zero: the Unix time of a
+// moment before 1970 is negative, and its day is the one before.
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b < 0 {
+		q--
+	}
+	return q
+}
+
+// floorMod is what is left of a after floorDiv(a, b), never negative.
+func floorMod(a, b int64) int64 { return a - floorDiv(a, b)*b }
 
 // atoi reads the digits a pattern matched, which are a few at most.
 func atoi(digits string) int {

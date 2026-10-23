@@ -5111,6 +5111,9 @@ nearest float once, so `1.1GB` is 1100000000 and `0.1s0.2s` 0.3.
   of RFC 3339 (`T`, `t` or a blank between date and time, `Z`, `z`, `+HH:MM`,
   `+HHMM` or `+HH`) and of the RFC 1123 HTTP date with `GMT`, `UTC` or
   `+HHMM`, its names in any case and its weekday checked against the date.
+  Every year from `0000` to `9999` MUST be read in the proleptic Gregorian
+  calendar, a moment before 1970 as negative seconds and its weekday as
+  that of its own date, alike in jq and in Python.
   It MUST refuse a date and time without a zone, saying it names no single
   moment, a second of 60 and a date that does not exist, and MUST NOT read
   any other layout: `time_format` and jq's `strptime` read those.
@@ -28281,15 +28284,16 @@ many targets of one backend would reach it with no bound.
 
 ## 42.13c Backing off from failing targets
 
-A collector MAY set `failure_backoff`, with `after`, `initial` and `max`, to
-stop contacting a target that keeps failing. A target that does not answer
+A collector MAY set `failure_backoff`, with `after`, `initial`, `max` and
+`min_budget`, to stop contacting a target that keeps failing. A target that does not answer
 holds a trip slot (§ 42.13b) until its timeout on every scrape, so without
 it a few dead endpoints can keep the slots full.
 
 - `after` MUST default to 3 and be at least 1, `initial` MUST default to
   `30s` and be a positive duration, and `max` MUST default to `10m`, or
   `initial` when that is longer, and MUST NOT be shorter than `initial`;
-  anything else MUST be refused at load, naming the collector and the key.
+  `min_budget` MUST default to `1s` and be a positive duration; anything
+  else MUST be refused at load, naming the collector and the key.
   Without `failure_backoff` every probe and scrape MUST contact the target.
 - A trip MUST count as failed for backoff when its fetch failed — the
   connection, a timeout, TLS, a status the collector does not accept, or the
@@ -28299,6 +28303,19 @@ it a few dead endpoints can keep the slots full.
   one a trip limit turned away before it started (§ 42.13b) and one
   cancelled because every probe waiting for it went away or the exporter
   shut down MUST change nothing. Any success MUST forget the target.
+- A trip whose fetch failed because the trip ran out of its budget — its
+  context's deadline came, or the fetch error is that deadline's — MUST
+  count as failed only when that budget was at least `min_budget`; below it
+  the trip MUST change nothing, neither counting as a failure nor forgetting
+  the failures before it. A probe's budget comes from its caller's
+  `X-Prometheus-Scrape-Timeout-Seconds` (§ 3), which is no part of the key a target is told apart
+  by, so a caller asking for less time than the target needs MUST NOT be
+  able to back the target off for every probe and scrape sharing its state.
+  A static target's scrape has its interval for a budget, and the floor MUST
+  apply to it the same way. A failure that is not the deadline's — a
+  refused connection, TLS, a status the collector does not accept, the
+  target's own error, or the expiry of a timeout of the request's own such
+  as the `timeout` parameter — MUST count whatever the budget.
 - After `after` consecutive failed trips, the target's probes and static
   target scrapes MUST NOT contact it for `initial`. Each MUST fail at once in
   the fetch stage with an error naming the target, the consecutive failures

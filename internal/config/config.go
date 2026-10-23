@@ -2176,9 +2176,9 @@ func normalizeErrorPolicy(collector, key string, value *string) error {
 
 // validateCache checks a collector's cache when the configuration loads.
 // validateFailureBackoff checks failure_backoff and fills in its defaults:
-// after 3, initial 30s, and max 10m or initial when that is longer, so a
-// block that sets only initial past 10m is not refused for a max it did not
-// write.
+// after 3, initial 30s, max 10m or initial when that is longer, so a block
+// that sets only initial past 10m is not refused for a max it did not
+// write, and min_budget 1s.
 func validateFailureBackoff(c *model.Collector) error {
 	b := c.FailureBackoff
 	if b == nil {
@@ -2201,6 +2201,12 @@ func validateFailureBackoff(c *model.Collector) error {
 		b.Max = &longest
 	} else if *b.Max < *b.Initial {
 		return fmt.Errorf("collector %q failure_backoff.max %s must not be shorter than failure_backoff.initial %s", c.Name, time.Duration(*b.Max), time.Duration(*b.Initial))
+	}
+	if b.MinBudget == nil {
+		floor := model.Duration(model.DefaultFailureBackoffMinBudget)
+		b.MinBudget = &floor
+	} else if *b.MinBudget <= 0 {
+		return fmt.Errorf("collector %q failure_backoff.min_budget must be a positive duration, the least budget a trip that timed out must have had to count as the target's failure, such as 1s; got %s", c.Name, time.Duration(*b.MinBudget))
 	}
 	return nil
 }

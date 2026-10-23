@@ -3,11 +3,15 @@
 package fetch
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -47,15 +51,14 @@ func init() {
 	driverLog.SetOutput(snowflakeLog{})
 	_ = driverLog.SetLogLevel("error")
 	registerSQLDriver(&sqlDriver{
-		name:      SQLDriverSnowflake,
-		port:      func(map[string]string) string { return "443" },
-		options:   map[string][]string{"warehouse": nil, "role": nil, "schema": nil},
-		keyPair:   true,
-		account:   true,
-		host:      func(account string) string { return account + ".snowflakecomputing.com" },
-		connect:   connectSnowflake,
-		run:       snowflakeRun,
-		rowsError: snowflakeRowsError,
+		name:    SQLDriverSnowflake,
+		port:    func(map[string]string) string { return "443" },
+		options: map[string][]string{"warehouse": nil, "role": nil, "schema": nil},
+		keyPair: true,
+		account: true,
+		host:    func(account string) string { return account + ".snowflakecomputing.com" },
+		connect: connectSnowflake,
+		run:     snowflakeRun,
 	})
 }
 
@@ -92,9 +95,9 @@ func snowflakeConfig(spec *sqlConnectSpec) gosnowflake.Config {
 // when the exporter's dialer refused the connection to the account
 // (snowflakeTransport).
 func connectSnowflake(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, error) {
-	ctx, refusal := withSnowflakeRefusal(ctx)
+	ctx, notes := withSnowflakeNotes(ctx)
 	conn, err := gosnowflake.NewConnector(gosnowflake.SnowflakeDriver{}, snowflakeConfig(spec)).Connect(ctx)
-	if refused := refusal.Load(); err != nil && refused != nil {
+	if refused := notes.refused.Load(); err != nil && refused != nil {
 		return nil, refused
 	}
 	return conn, err
@@ -102,63 +105,124 @@ func connectSnowflake(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, e
 
 // snowflakeRun runs a statement as sqlPlain does, failing with the policy's
 // refusal when the exporter's dialer refused a new connection to the account
-// on the way (snowflakeTransport).
+// on the way, and with errSnowflakeChunks when the statement's result came
+// in more than one chunk (snowflakeTransport).
 func snowflakeRun(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
-	ctx, refusal := withSnowflakeRefusal(ctx)
+	ctx, notes := withSnowflakeNotes(ctx)
 	rows, done, err := sqlPlain(ctx, conn, statement, args, timeout)
-	if refused := refusal.Load(); err != nil && refused != nil {
+	if refused := notes.refused.Load(); err != nil && refused != nil {
 		return nil, nil, refused
+	}
+	if err != nil && notes.chunked.Load() {
+		return nil, nil, errSnowflakeChunks
 	}
 	return rows, done, err
 }
 
-// snowflakeRefusalKey is the context key of where snowflakeTransport puts
-// the policy's refusal of a connection made for a request with the context.
-type snowflakeRefusalKey struct{}
+// snowflakeNotesKey is the context key of snowflakeNotes.
+type snowflakeNotesKey struct{}
 
-// withSnowflakeRefusal is ctx with a place for the policy's refusal of a
-// connection made for a request with it, and that place.
-func withSnowflakeRefusal(ctx context.Context) (context.Context, *atomic.Pointer[TargetRefusedError]) {
-	refusal := &atomic.Pointer[TargetRefusedError]{}
-	return context.WithValue(ctx, snowflakeRefusalKey{}, refusal), refusal
+// snowflakeNotes is where snowflakeTransport notes what it refused of a
+// request made with a context: the policy's refusal of a connection made for
+// it, and a result in more than one chunk.
+type snowflakeNotes struct {
+	refused atomic.Pointer[TargetRefusedError]
+	chunked atomic.Bool
+}
+
+// withSnowflakeNotes is ctx with a place for snowflakeNotes of the requests
+// made with it, and that place.
+func withSnowflakeNotes(ctx context.Context) (context.Context, *snowflakeNotes) {
+	notes := &snowflakeNotes{}
+	return context.WithValue(ctx, snowflakeNotesKey{}, notes), notes
 }
 
 // snowflakeTransport is the transport of a snowflake connection: a request
 // to a host other than the account's, and one whose connection to the
-// account the exporter's dialer refused, is answered with 403 Forbidden. The
-// driver retries every request that fails without a response, until the
-// scrape's deadline, and then reports only the deadline, while a 403 it does
-// not retry (gosnowflake retry.go, isRetryableError and isRetryableStatus),
-// beyond a few immediate re-asks of its chunk downloader.
-// The driver requests a host other than the account's for each chunk of a
-// result after the first, which the server leaves at a presigned cloud
-// storage URL: that request is answered without a connection, and the scrape
-// fails at once with what snowflakeRowsError says. A refusal of the
-// connection to the account is put where the request's context says
-// (withSnowflakeRefusal), for the connection or statement that made it to
-// fail with it at once; another failure to connect to the account the driver
+// account the exporter's dialer refused, are answered with 403 Forbidden,
+// and one the account answered with a result in more than one chunk with
+// the statement's failure (snowflakeChunkedAnswer). The driver retries every
+// request that fails without a response, until the scrape's deadline, and
+// then reports only the deadline, while a 403 it does not retry (gosnowflake
+// retry.go, isRetryableError and isRetryableStatus). A refusal of the
+// connection to the account is noted where the request's context says
+// (withSnowflakeNotes), for the connection or statement that made it to fail
+// with it at once; another failure to connect to the account the driver
 // retries as before.
+//
+// The server leaves each chunk of a result after the first at a presigned
+// cloud storage URL, a host other than the account's, which the exporter
+// does not connect to. The driver would start reading those chunks as soon
+// as the first came, and its reader can wait for a chunk forever, past the
+// scrape's deadline: a download that fails signals the reader without the
+// lock the reader holds from its look for a failure to its wait, so the
+// signal is lost when it comes in between (gosnowflake chunk_downloader.go,
+// downloadChunk and snowflakeChunkDownloader.next), and the statement keeps
+// its connection and its place at max_per_target, the scrape abandoned at
+// its deadline. So the driver is never given a result with chunks: the
+// account's answer to a statement, or to the driver's ask for a statement's
+// result (a path under /queries/), is read whole, the result's first chunk
+// with it (held twice for the moment, that copy and the driver's), and when
+// it names more chunks it is replaced by the statement's failure, noted for
+// snowflakeRun to fail the statement with errSnowflakeChunks.
 type snowflakeTransport struct {
 	host string
 	base *http.Transport
 }
 
 func (t *snowflakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if strings.EqualFold(req.URL.Hostname(), t.host) {
-		resp, err := t.base.RoundTrip(req)
-		var refused *TargetRefusedError
-		if err == nil || !errors.As(err, &refused) {
-			return resp, err
-		}
-		if refusal, ok := req.Context().Value(snowflakeRefusalKey{}).(*atomic.Pointer[TargetRefusedError]); ok {
-			refusal.Store(refused)
+	if !strings.EqualFold(req.URL.Hostname(), t.host) {
+		if req.Body != nil {
+			_ = req.Body.Close()
 		}
 		return snowflakeForbidden(req), nil
 	}
-	if req.Body != nil {
-		_ = req.Body.Close()
+	notes, _ := req.Context().Value(snowflakeNotesKey{}).(*snowflakeNotes)
+	resp, err := t.base.RoundTrip(req)
+	var refused *TargetRefusedError
+	if err != nil && errors.As(err, &refused) {
+		if notes != nil {
+			notes.refused.Store(refused)
+		}
+		return snowflakeForbidden(req), nil
 	}
-	return snowflakeForbidden(req), nil
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.HasPrefix(req.URL.Path, "/queries/") {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if snowflakeChunked(resp.Header, body) {
+		if notes != nil {
+			notes.chunked.Store(true)
+		}
+		return snowflakeChunkedAnswer(req), nil
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
+}
+
+// snowflakeChunked says body, an answer of the account with header, is a
+// result that names chunks after the first. An answer that is not JSON, or
+// not a result, is not: the driver fails on it, or reads it, as before.
+func snowflakeChunked(header http.Header, body []byte) bool {
+	if strings.EqualFold(header.Get("Content-Encoding"), "gzip") {
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return false
+		}
+		if body, err = io.ReadAll(reader); err != nil {
+			return false
+		}
+	}
+	var answer struct {
+		Data struct {
+			Chunks []json.RawMessage `json:"chunks"`
+		} `json:"data"`
+	}
+	return json.Unmarshal(body, &answer) == nil && len(answer.Data.Chunks) > 0
 }
 
 // snowflakeForbidden is a 403 Forbidden answer to req.
@@ -170,25 +234,46 @@ func snowflakeForbidden(req *http.Request) *http.Response {
 	}
 }
 
+// snowflakeChunkedError is the failure snowflakeChunkedAnswer gives the
+// driver, which the driver returns and logs as it is, "error: " before it
+// (snowflakeChunkedLine).
+var snowflakeChunkedError = &gosnowflake.SnowflakeError{Number: gosnowflake.ErrFailedToGetChunk, SQLState: gosnowflake.SQLStateConnectionFailure, Message: errSnowflakeChunks.Error()}
+
+// snowflakeChunkedLine is the message of the driver's log line for
+// snowflakeChunkedError, which the driver logs at error for every statement
+// that fails (connection.go queryContextInternal), and which snowflakeLog
+// logs at debug: the scrape's own failure says what happened.
+var snowflakeChunkedLine = "error: " + snowflakeChunkedError.Error()
+
+// snowflakeChunkedAnswer is the account's answer to req failing the
+// statement with snowflakeChunkedError, in place of its result in more than
+// one chunk. It is an answer the driver neither retries nor reads a result
+// from; a 403 would serve as well but for the driver's line about it, the
+// same as for a refused connection.
+func snowflakeChunkedAnswer(req *http.Request) *http.Response {
+	body, _ := json.Marshal(map[string]any{
+		"success": false,
+		"code":    fmt.Sprintf("%06d", snowflakeChunkedError.Number),
+		"message": snowflakeChunkedError.Message,
+		"data":    map[string]any{"sqlState": snowflakeChunkedError.SQLState},
+	})
+	return &http.Response{
+		Status: "200 OK", StatusCode: http.StatusOK,
+		Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       req,
+	}
+}
+
 // CloseIdleConnections closes the base transport's idle connections, as the
 // driver's http.Client asks of its transport.
 func (t *snowflakeTransport) CloseIdleConnections() { t.base.CloseIdleConnections() }
 
 // errSnowflakeChunks is the failure of a statement whose result came in more
-// than one chunk.
+// than one chunk (snowflakeTransport).
 var errSnowflakeChunks = errors.New("the statement's result came from Snowflake in more than one chunk, and the exporter does not fetch the chunks after the first, which the driver would read from a cloud storage URL, a host other than the account's; return fewer rows or columns, with WHERE, GROUP BY or LIMIT, so that the whole result comes in one chunk")
-
-// snowflakeRowsError puts the driver's failure to fetch a later chunk of a
-// result, which snowflakeTransport refuses, in the operator's words. Every
-// chunk after the first is at a cloud storage URL, so every such failure is
-// that refusal.
-func snowflakeRowsError(err error) error {
-	var sfErr *gosnowflake.SnowflakeError
-	if errors.As(err, &sfErr) && sfErr.Number == gosnowflake.ErrFailedToGetChunk {
-		return errSnowflakeChunks
-	}
-	return err
-}
 
 // snowflakeLog hands the driver's log to the exporter's logger, slog's
 // default, which main makes the JSON lines every other line is: the driver
@@ -196,10 +281,8 @@ func snowflakeRowsError(err error) error {
 // lines its formatter makes after taking passwords and tokens out of them,
 // which this reads back. A warning is a warning, an error, fatal or panic
 // message an error, an info message info, and the rest debug; a line that is
-// not the formatter's is logged whole, at info. The driver's error for each
-// try at a later chunk of a result, which snowflakeTransport refuses, is
-// debug (snowflakeChunkLine): the scrape's own failure says what happened.
-// A client configuration file the driver finds on its first connection
+// not the formatter's is logged whole, at info. The driver's error for a
+// result in more than one chunk is debug (snowflakeChunkedLine). A client configuration file the driver finds on its first connection
 // (SF_CLIENT_CONFIG_FILE, or sf_client_config.json beside the executable or
 // in the home directory) replaces this with a log of the driver's own,
 // where the file says.
@@ -250,7 +333,7 @@ func snowflakeLogLine(line string) (slog.Level, string) {
 	case "warning":
 		return slog.LevelWarn, fields["msg"]
 	case "error":
-		if snowflakeChunkLine(fields["msg"]) {
+		if fields["msg"] == snowflakeChunkedLine {
 			return slog.LevelDebug, fields["msg"]
 		}
 		return slog.LevelError, fields["msg"]
@@ -260,24 +343,6 @@ func snowflakeLogLine(line string) (slog.Level, string) {
 		return slog.LevelInfo, fields["msg"]
 	}
 	return slog.LevelDebug, fields["msg"]
-}
-
-// snowflakeChunkFailure is what the driver's error for a try at a later
-// chunk ends with: the error it makes of the answer that is not 200 OK
-// (chunk_downloader.go downloadChunkHelper, ErrFailedToGetChunk, as
-// SnowflakeError.Error writes it).
-var snowflakeChunkFailure = fmt.Sprintf(", err: %06d (", gosnowflake.ErrFailedToGetChunk)
-
-// snowflakeChunkLine says msg is the driver's error for a try at a later
-// chunk of a result that was not answered 200 OK, which it logs once for
-// each try, the first and its five more (chunk_downloader.go downloadChunk,
-// checkErrorRetry; rows.go maxChunkDownloaderErrorCounter), with the chunk's
-// presigned URL. snowflakeTransport answers every such try, the chunks being
-// on another host, so these are its refusals, which the scrape's failure
-// says in the operator's words (snowflakeRowsError).
-func snowflakeChunkLine(msg string) bool {
-	rest, ok := strings.CutPrefix(msg, "failed to extract HTTP response body. URL: ")
-	return ok && strings.Contains(rest, snowflakeChunkFailure)
 }
 
 // httpTransport is the transport a driver that speaks HTTP is given: every

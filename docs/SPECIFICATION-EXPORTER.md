@@ -1625,7 +1625,12 @@ of objects, one a row, of its columns by name. Its keys:
   detection (cloud metadata services, AWS STS) MUST be off, and a result's
   chunks after the first, at cloud storage URLs, MUST NOT be fetched; such a
   result MUST fail the scrape at once, not at the deadline, saying it came in
-  more than one chunk and to return fewer rows or columns. A connection to
+  more than one chunk and to return fewer rows or columns. The exporter MUST
+  fail it from the account's answer naming the chunks, before gosnowflake
+  sees the answer, so that the driver's chunk downloader never starts: it
+  can miss the signal of a failed download and wait forever, past the
+  scrape's deadline, keeping the connection and its place at
+  `max_per_target`. A connection to
   the account that the policy refuses MUST fail the connection, or the
   statement it was made for, at once with the policy's refusal, though the
   driver would retry it until the deadline. A build with
@@ -1850,9 +1855,9 @@ of objects, one a row, of its columns by name. Its keys:
   exporter's log at its level, with `sql_driver` naming the driver, never to
   stdout, stderr or a file of the driver's own unless gosnowflake's client
   configuration file (`sf_client_config.json`) names one. gosnowflake's
-  error for each try at a result's later chunk, which the exporter refuses,
-  MUST be logged at debug, the scrape's failure saying what happened; its
-  other errors MUST stay errors. A server's answer
+  error for a statement the exporter fails for a result in more than one
+  chunk MUST be logged at debug, the scrape's failure saying what happened;
+  its other errors MUST stay errors. A server's answer
   routing a `sqlserver` connection to another host MUST be refused by the
   exporter's dialer, and the documentation MUST say so.
 - A failed statement MUST be reported in the `sql` stage, naming the server.
@@ -23175,10 +23180,11 @@ The drivers' TLS and encryption, one statement, keepalives and cancel requests; 
   (case, precision, Nullable, LowCardinality, UNSIGNED), and every other type
   name, generated over every driver's names, numeric or not as before.
 - A Snowflake result with a chunk at a cloud storage URL fails at once,
-  before the scrape's deadline, with "reading the rows: the statement's
-  result came from Snowflake in more than one chunk, ...; return fewer rows
-  or columns ..."; the storage host is never dialed; a result in one chunk
-  is read; another failure reading the rows is left as it is.
+  before the scrape's deadline, with "running the statement: the
+  statement's result came from Snowflake in more than one chunk, ...;
+  return fewer rows or columns ..." (first "reading the rows: ...", until
+  the exporter failed the statement before the driver saw the chunks); the
+  storage host is never dialed; a result in one chunk is read.
 - tools/request-type-tags.sh gives minicore_disabled after
   sql_driver_snowflake, once, with or without request types; ci.yml's lint
   of the opt-in drivers' build names the tags the script gives; a build of
@@ -23512,6 +23518,9 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
   (TestTheSnowflakeDriversChunkErrorsAreLoggedAtDebug); every other line of
   the driver's log, at each level and in each form, is read as before, the
   old function the oracle (TestOnlyTheSnowflakeChunkErrorChangedLevel).
+  Both tests were removed once the exporter stopped the driver from trying
+  the chunks at all: the line it logs at debug is now the statement's
+  failure (TestTheSnowflakeDriversLogGoesToTheExportersLogger).
 - A connection the pool's connector hands to database/sql calls the driver
   exactly as the driver's own connection would be called, in the same order
   with the same arguments, giving the same results and errors, for fakes

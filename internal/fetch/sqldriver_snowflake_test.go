@@ -4,6 +4,7 @@ package fetch
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -14,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -21,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,9 +106,12 @@ func TestTheSnowflakeDriver(t *testing.T) {
 // response. dialed is every address the connections' dialer was asked for.
 // Once refuse is set, the dialer refuses every connection, as a policy
 // refusing the account's address would; the stand-in closes each connection
-// after its answer, so that every request dials.
+// after its answer, so that every request dials. chunk, when set, answers a
+// request for a path under /chunks/, a chunk of a result the stand-in serves
+// itself.
 type snowflakeStandIn struct {
 	results  map[string]map[string]any
+	chunk    http.HandlerFunc
 	logins   chan map[string]any
 	mu       sync.Mutex
 	dialed   []string
@@ -124,6 +130,10 @@ func newSnowflakeStandIn(t *testing.T) *snowflakeStandIn {
 			} `json:"data"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.HasPrefix(r.URL.Path, "/chunks/") && s.chunk != nil {
+			s.chunk(w, r)
+			return
+		}
 		answer := map[string]any{"success": true, "data": map[string]any{}}
 		w.Header().Set("Connection", "close")
 		switch r.URL.Path {
@@ -289,12 +299,13 @@ func TestSnowflakeNumbersAreNumbers(t *testing.T) {
 	}
 }
 
-// A result that came in more than one chunk fails at once, without the
-// scrape's deadline coming and with nothing dialed but the account: the
-// chunks after the first are at a cloud storage URL, which the exporter
-// does not connect to, and the failure says to return fewer rows or columns.
-// A result in one chunk is read as before.
+// A result that came in more than one chunk fails the statement at once,
+// without the scrape's deadline coming, with nothing dialed but the account
+// and nothing logged at error: the chunks after the first are at a cloud
+// storage URL, which the exporter does not connect to, and the failure says
+// to return fewer rows or columns. A result in one chunk is read as before.
 func TestASnowflakeResultInMoreThanOneChunkFailsAtOnce(t *testing.T) {
+	out := testutil.CaptureLogs(t)
 	f := newSQLFixture(t)
 	s := newSnowflakeStandIn(t)
 	columns := []map[string]any{{"name": "N", "type": "fixed", "precision": 9, "scale": 0}}
@@ -306,7 +317,7 @@ func TestASnowflakeResultInMoreThanOneChunkFailsAtOnce(t *testing.T) {
 	defer cancel()
 	c := f.collector(t, "db", SQLDriverSnowflake, "SELECT many")
 	_, err := FetchCollector(ctx, "myorg-myaccount", c, RequestOverrides{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "reading the rows: "+errSnowflakeChunks.Error()) || ctx.Err() != nil {
+	if err == nil || !strings.Contains(err.Error(), "running the statement: "+errSnowflakeChunks.Error()) || ctx.Err() != nil {
 		t.Errorf("%v (deadline: %v), want %q", err, ctx.Err(), errSnowflakeChunks)
 	}
 	if !strings.Contains(errSnowflakeChunks.Error(), "more than one chunk") || !strings.Contains(errSnowflakeChunks.Error(), "return fewer rows or columns") {
@@ -321,136 +332,170 @@ func TestASnowflakeResultInMoreThanOneChunkFailsAtOnce(t *testing.T) {
 			t.Errorf("the driver dialed %s", address)
 		}
 	}
-	other := errors.New("other")
-	if got := snowflakeRowsError(other); !errors.Is(got, other) || got.Error() != "other" {
-		t.Error("another failure reading the rows was changed")
+	if strings.Contains(out.String(), `"level":"ERROR"`) {
+		t.Errorf("logged at error:\n%s", out)
 	}
 }
 
-// The driver's errors for its tries at a later chunk of a result, which the
-// exporter refuses, are logged at debug, the scrape's failure saying what
-// happened: the result in two chunks logs no error, and the six tries, the
-// first and its five more, at debug. Every other error of the driver stays
-// an error: the same words with another failure, and its other lines.
-func TestTheSnowflakeDriversChunkErrorsAreLoggedAtDebug(t *testing.T) {
-	// CaptureLogs puts the default logger back when the test ends; this one
-	// keeps debug lines too.
+// The driver's reader of a result's later chunks can miss the signal of a
+// chunk download that failed and then wait for it forever, past the
+// scrape's deadline: the download signals without the lock the reader holds
+// from its look for a failure to its wait (gosnowflake chunk_downloader.go,
+// downloadChunk and snowflakeChunkDownloader.next). The exporter never lets
+// the driver start that reader: a result in more than one chunk fails when
+// its first chunk comes. Here the chunk is the stand-in's own, and its
+// failure comes inside the reader's window: the stand-in holds the request
+// for the chunk until the driver logs, from inside the window, that it found
+// no failure, and the driver's log is then silenced, so that the download
+// sends its failure and its signal before the reader waits. A driver that
+// started the reader would hang there; the scrape fails at once instead,
+// without asking for the chunk, and gives its connection and its place at
+// max_per_target back: the next scrape, at max_per_target 1, runs at once.
+func TestASnowflakeResultInMoreThanOneChunkCannotHangTheScrape(t *testing.T) {
 	testutil.CaptureLogs(t)
-	var out bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	f := newSQLFixture(t)
 	s := newSnowflakeStandIn(t)
+	requested := make(chan struct{}, 8)
+	answer := make(chan struct{})
+	var chunkRequests atomic.Int32
+	s.chunk = func(w http.ResponseWriter, r *http.Request) {
+		chunkRequests.Add(1)
+		requested <- struct{}{}
+		select {
+		case <-answer:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}
+	failed := make(chan struct{}, 8)
+	var mu sync.Mutex
+	var logged []string
+	slog.SetDefault(slog.New(snowflakeLogHook{Handler: slog.Default().Handler(), hook: func(r slog.Record) {
+		if strings.HasPrefix(r.Message, "failed to extract HTTP response body. URL: https://myorg-myaccount.snowflakecomputing.com/chunks/0") {
+			failed <- struct{}{}
+			return
+		}
+		if r.Level >= slog.LevelError {
+			mu.Lock()
+			logged = append(logged, r.Message)
+			mu.Unlock()
+		}
+	}}))
+	var window sync.Once
+	inWindow := func(context.Context) {
+		if !snowflakeCalledFrom("(*snowflakeChunkDownloader).checkErrorRetry") {
+			return
+		}
+		window.Do(func() {
+			select {
+			case <-requested:
+			case <-time.After(10 * time.Second):
+				return
+			}
+			close(answer)
+			select {
+			case <-failed:
+				// The download sends its failure and signals right after
+				// logging it.
+				time.Sleep(200 * time.Millisecond)
+			case <-time.After(10 * time.Second):
+			}
+		})
+	}
+	snowflakeLogContext.Store(&inWindow)
+	t.Cleanup(func() { snowflakeLogContext.Store(nil) })
+	one := 1
+	limit := func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} }
 	columns := []map[string]any{{"name": "N", "type": "fixed", "precision": 9, "scale": 0}}
 	s.results["SELECT many"] = snowflakeRows(columns, [][]string{{"1"}}, map[string]any{
-		"url": "https://sfc-results.s3.eu-west-1.amazonaws.com/chunk0?X-Amz-Signature=x", "rowCount": 1, "uncompressedSize": 8, "compressedSize": 8,
+		"url": "https://myorg-myaccount.snowflakecomputing.com/chunks/0", "rowCount": 1, "uncompressedSize": 8, "compressedSize": 8,
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if _, err := FetchCollector(ctx, "myorg-myaccount", f.collector(t, "db", SQLDriverSnowflake, "SELECT many"), RequestOverrides{}, nil); !errors.Is(err, errSnowflakeChunks) {
-		t.Errorf("%v, want %q", err, errSnowflakeChunks)
-	}
-	tries := 0
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-		if strings.Contains(line, `"level":"ERROR"`) {
-			t.Errorf("logged at error: %s", line)
+	s.results["SELECT few"] = snowflakeRows(columns, [][]string{{"1"}, {"2"}})
+	scrape := func(statement string, timeout time.Duration) (*HTTPResponse, time.Duration, error) {
+		t.Helper()
+		c := f.collector(t, "db", SQLDriverSnowflake, statement, limit)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		type result struct {
+			resp *HTTPResponse
+			err  error
 		}
-		if strings.Contains(line, `"level":"DEBUG","msg":"failed to extract HTTP response body. URL: https://sfc-results.s3.eu-west-1.amazonaws.com/chunk0`) {
-			tries++
+		done := make(chan result, 1)
+		start := time.Now()
+		go func() {
+			resp, err := FetchCollector(ctx, "myorg-myaccount", c, RequestOverrides{}, nil)
+			done <- result{resp, err}
+		}()
+		select {
+		case r := <-done:
+			return r.resp, time.Since(start), r.err
+		case <-time.After(timeout + 10*time.Second):
+			t.Fatalf("the scrape of %q had not returned 10s after its deadline", statement)
+			return nil, 0, nil
 		}
 	}
-	if tries != 6 {
-		t.Errorf("%d tries at the chunk logged at debug, want 6:\n%s", tries, out.String())
+	_, took, err := scrape("SELECT many", 5*time.Second)
+	if !errors.Is(err, errSnowflakeChunks) || took > 4*time.Second {
+		t.Errorf("%v after %v, want %q at once", err, took, errSnowflakeChunks)
 	}
-	for line, want := range map[string]slog.Level{
-		`level=error msg="failed to extract HTTP response body. URL: https://x/chunk0?X-Amz-Signature=****, err: 262000 (08006): failed to get a chunk of result sets. idx: 3"`: slog.LevelDebug,
-		`level=error msg="failed to extract HTTP response body. URL: https://x/chunk0, err: getting chunk: connection reset"`:                                                   slog.LevelError,
-		`level=error msg="failed to extract HTTP response body. URL: https://x/chunk0, err: 260000 (08006): other"`:                                                             slog.LevelError,
-		`level=error msg="reading response body: unexpected EOF"`:                                                                                                               slog.LevelError,
-		`level=error msg="262000 (08006): failed to get a chunk of result sets. idx: 3"`:                                                                                        slog.LevelError,
-		`level=fatal msg="failed to extract HTTP response body. URL: https://x/chunk0, err: 262000 (08006): failed to get a chunk of result sets. idx: 3"`:                      slog.LevelError,
-	} {
-		if level, _ := snowflakeLogLine(line); level != want {
-			t.Errorf("%s: %v, want %v", line, level, want)
-		}
+	if n := chunkRequests.Load(); n != 0 {
+		t.Errorf("the chunk was asked for %d times", n)
+	}
+	if resp, took, err := scrape("SELECT few", 2*time.Second); err != nil || len(resp.Rows) != 2 || took > time.Second {
+		t.Errorf("the next scrape at max_per_target 1: %v %v after %v", resp, err, took)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) > 0 {
+		t.Errorf("logged at error: %q", logged)
 	}
 }
 
-// snowflakeLogLineBefore is snowflakeLogLine as it was, the oracle of the
-// test below.
-func snowflakeLogLineBefore(line string) (slog.Level, string) {
-	fields := map[string]string{}
-	for rest := strings.TrimSpace(line); rest != ""; rest = strings.TrimLeft(rest, " ") {
-		key, after, found := strings.Cut(rest, "=")
-		if !found || key == "" || strings.ContainsAny(key, " \"") {
-			return slog.LevelInfo, line
-		}
-		var value string
-		if strings.HasPrefix(after, `"`) {
-			quoted, err := strconv.QuotedPrefix(after)
-			if err != nil {
-				return slog.LevelInfo, line
-			}
-			if value, err = strconv.Unquote(quoted); err != nil {
-				return slog.LevelInfo, line
-			}
-			after = after[len(quoted):]
-		} else {
-			value, after, _ = strings.Cut(after, " ")
-		}
-		fields[key] = value
-		rest = after
-	}
-	level, ok := fields["level"]
-	if !ok {
-		return slog.LevelInfo, line
-	}
-	switch level {
-	case "warning":
-		return slog.LevelWarn, fields["msg"]
-	case "error", "fatal", "panic":
-		return slog.LevelError, fields["msg"]
-	case "info":
-		return slog.LevelInfo, fields["msg"]
-	}
-	return slog.LevelDebug, fields["msg"]
+// snowflakeLogHook hands every record of the exporter's logger to hook,
+// before its handler.
+type snowflakeLogHook struct {
+	slog.Handler
+	hook func(slog.Record)
 }
 
-// Every line of the driver's log but its error for a try at a later chunk
-// is read as it was: each level with messages that hold the chunk error's
-// words in part, or around something else, and lines that are not the
-// formatter's.
-func TestOnlyTheSnowflakeChunkErrorChangedLevel(t *testing.T) {
-	messages := []string{
-		"closed", "", "failed to extract HTTP response body. URL: https://x/c, err: getting chunk: EOF",
-		"failed to extract HTTP response body. URL: https://x/c", "x failed to extract HTTP response body. URL: https://x/c, err: 262000 (08006): y",
-		"err: 262000 (08006): failed to get a chunk of result sets. idx: 0", "failed to extract HTTP response body. URL: https://x/c, err: 262000: y",
-		"failed to extract HTTP response body. URL: https://x/c, err: 262001 (08006): y",
-		"failed to extract HTTP response body. URL: https://x/c, err: 262000 (08006): failed to get a chunk of result sets. idx: 0",
+func (h snowflakeLogHook) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h snowflakeLogHook) Handle(ctx context.Context, r slog.Record) error {
+	h.hook(r)
+	if !h.Handler.Enabled(ctx, r.Level) {
+		return nil
 	}
-	compared, changed := 0, 0
-	for _, level := range []string{"error", "fatal", "panic", "warning", "info", "debug", "trace", "ERROR", ""} {
-		for _, msg := range messages {
-			for _, line := range []string{
-				"level=" + level + " msg=" + strconv.Quote(msg), `time="2026-10-14T10:00:00Z" level=` + level + " msg=" + strconv.Quote(msg) + ` func=gosnowflake.x`,
-				"msg=" + strconv.Quote(msg), "level=" + level + " " + msg,
-			} {
-				gotLevel, gotMsg := snowflakeLogLine(line)
-				wantLevel, wantMsg := snowflakeLogLineBefore(line)
-				chunk := strings.HasPrefix(line, "level=error msg=") || strings.HasPrefix(line, `time="2026-10-14T10:00:00Z" level=error msg=`)
-				chunk = chunk && msg == messages[len(messages)-1]
-				if chunk {
-					changed++
-					wantLevel = slog.LevelDebug
-				}
-				if gotLevel != wantLevel || gotMsg != wantMsg {
-					t.Errorf("%s: %v %q, before %v %q", line, gotLevel, gotMsg, wantLevel, wantMsg)
-				}
-				compared++
-			}
+	return h.Handler.Handle(ctx, r)
+}
+
+// snowflakeLogContext, when set, is called each time the driver takes the
+// fields of a line of its log from a context, before it decides whether to
+// log the line, whatever its level, and outside its logger's lock. The hook
+// is registered once, at startup, as the driver asks.
+var snowflakeLogContext atomic.Pointer[func(context.Context)]
+
+func init() {
+	gosnowflake.RegisterLogContextHook("exporter_test", func(ctx context.Context) string {
+		if hook := snowflakeLogContext.Load(); hook != nil {
+			(*hook)(ctx)
 		}
-	}
-	if changed != 2 || compared < 300 {
-		t.Errorf("compared %d lines, %d of them the chunk error", compared, changed)
+		return ""
+	})
+}
+
+// snowflakeCalledFrom says the caller's goroutine is in the driver's
+// function of the given name, receiver included.
+func snowflakeCalledFrom(name string) bool {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, "gosnowflake."+name) {
+			return true
+		}
+		if !more {
+			return false
+		}
 	}
 }
 
@@ -494,14 +539,49 @@ func TestASnowflakeConnectionThePolicyRefusesFailsAtOnceWithTheRefusal(t *testin
 }
 
 // The transport of a snowflake connection answers as before everything but
-// a refused connection to the account: the account's answer as it came,
-// another failure to connect to it as an error, which the driver retries as
-// it did, and a request to another host with 403 Forbidden without a
-// connection. Only the policy's refusal becomes a 403, which the driver does
-// not retry, kept where the request's context says.
-func TestTheSnowflakeTransportChangesOnlyARefusedConnection(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+// a refused connection to the account and a result in more than one chunk:
+// the account's answer as it came, its body whole, another failure to
+// connect to it as an error, which the driver retries as it did, and a
+// request to another host with 403 Forbidden without a connection. The
+// policy's refusal becomes a 403, which the driver does not retry, kept where
+// the request's context says. The account's answer to a statement, or to an
+// ask for its result, that names chunks, plain or gzipped, becomes the
+// statement's failure, which the driver neither retries nor reads a result
+// from, noted there. The same answer at another path, or with another
+// status, and a result without chunks, are passed on.
+func TestTheSnowflakeTransportChangesOnlyARefusedConnectionOrAChunkedResult(t *testing.T) {
+	chunked := `{"success":true,"data":{"rowset":[["1"]],"chunks":[{"url":"https://sfc-results.example/0","rowCount":1}]}}`
+	single := `{"success":true,"data":{"rowset":[["1"]],"chunks":[]}}`
+	var gzipped bytes.Buffer
+	zw := gzip.NewWriter(&gzipped)
+	_, _ = zw.Write([]byte(chunked))
+	_ = zw.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("answer") {
+		case "chunked":
+			_, _ = w.Write([]byte(chunked))
+		case "chunked-error":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(chunked))
+		case "gzipped":
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(gzipped.Bytes())
+		case "single":
+			_, _ = w.Write([]byte(single))
+		default:
+			w.WriteHeader(http.StatusTeapot)
+		}
+	}))
 	t.Cleanup(server.Close)
+	failure, _ := io.ReadAll(snowflakeChunkedAnswer(nil).Body)
+	var answer struct {
+		Success bool
+		Code    string
+		Message string
+	}
+	if err := json.Unmarshal(failure, &answer); err != nil || answer.Success || answer.Code != "262000" || answer.Message != errSnowflakeChunks.Error() {
+		t.Errorf("%s: %v", failure, err)
+	}
 	network := errors.New("connection reset by the network")
 	refusal := snowflakeRefusal("127.0.0.1")
 	for _, tc := range []struct {
@@ -509,34 +589,44 @@ func TestTheSnowflakeTransportChangesOnlyARefusedConnection(t *testing.T) {
 		url     string
 		dialErr error
 		status  int
+		body    string
 		err     error
 		refused bool
+		chunked bool
 	}{
-		{"the account's answer", server.URL, nil, http.StatusTeapot, nil, false},
-		{"another failure", server.URL, network, 0, network, false},
-		{"the policy's refusal", server.URL, refusal, http.StatusForbidden, nil, true},
-		{"another host", "http://sfc-results.example/chunk", refusal, http.StatusForbidden, nil, false},
+		{"the account's answer", server.URL, nil, http.StatusTeapot, "", nil, false, false},
+		{"another failure", server.URL, network, 0, "", network, false, false},
+		{"the policy's refusal", server.URL, refusal, http.StatusForbidden, "", nil, true, false},
+		{"another host", "http://sfc-results.example/chunk", refusal, http.StatusForbidden, "", nil, false, false},
+		{"a result in chunks", server.URL + "/queries/v1/query-request?answer=chunked", nil, http.StatusOK, string(failure), nil, false, true},
+		{"a result in chunks asked for", server.URL + "/queries/q1/result?answer=chunked", nil, http.StatusOK, string(failure), nil, false, true},
+		{"a gzipped result in chunks", server.URL + "/queries/v1/query-request?answer=gzipped", nil, http.StatusOK, string(failure), nil, false, true},
+		{"a result in one chunk", server.URL + "/queries/v1/query-request?answer=single", nil, http.StatusOK, single, nil, false, false},
+		{"chunks at another path", server.URL + "/session/v1/login-request?answer=chunked", nil, http.StatusOK, chunked, nil, false, false},
+		{"chunks with another status", server.URL + "/queries/v1/query-request?answer=chunked-error", nil, http.StatusInternalServerError, chunked, nil, false, false},
 	} {
 		dialErr := tc.dialErr
-		transport := &snowflakeTransport{host: "127.0.0.1", base: &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		transport := &snowflakeTransport{host: "127.0.0.1", base: &http.Transport{DisableCompression: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			if dialErr != nil {
 				return nil, dialErr
 			}
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}}}
-		ctx, kept := withSnowflakeRefusal(context.Background())
+		ctx, notes := withSnowflakeNotes(context.Background())
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tc.url, strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp, err := transport.RoundTrip(req)
-		status := 0
+		status, body := 0, ""
 		if resp != nil {
 			status = resp.StatusCode
+			read, _ := io.ReadAll(resp.Body)
+			body = string(read)
 			_ = resp.Body.Close()
 		}
-		if status != tc.status || !errors.Is(err, tc.err) || (kept.Load() != nil) != tc.refused {
-			t.Errorf("%s: %d %v (kept %v), want %d %v", tc.name, status, err, kept.Load(), tc.status, tc.err)
+		if status != tc.status || !errors.Is(err, tc.err) || (notes.refused.Load() != nil) != tc.refused || notes.chunked.Load() != tc.chunked || (tc.body != "" && body != tc.body) {
+			t.Errorf("%s: %d %v %q (refused %v, chunked %v), want %d %v", tc.name, status, err, body, notes.refused.Load(), notes.chunked.Load(), tc.status, tc.err)
 		}
 		transport.CloseIdleConnections()
 	}
@@ -559,15 +649,18 @@ func TestTheSnowflakeDriversLogGoesToTheExportersLogger(t *testing.T) {
 		msg   string
 	}{
 		`time="2026-10-14T10:00:00Z" level=warning msg="failed http connection. err: refused. retrying...\n" func=gosnowflake.x file="retry.go:1"`: {slog.LevelWarn, "failed http connection. err: refused. retrying...\n"},
-		`time="2026-10-14T10:00:00Z" level=error msg=closed`: {slog.LevelError, "closed"},
-		`level=fatal msg="a \"quoted\" word"`:                {slog.LevelError, `a "quoted" word`},
-		`level=panic msg=x`:                                  {slog.LevelError, "x"},
-		`level=info msg=y`:                                   {slog.LevelInfo, "y"},
-		`level=debug msg=z`:                                  {slog.LevelDebug, "z"},
-		`level=trace msg=z`:                                  {slog.LevelDebug, "z"},
-		`not the formatter's`:                                {slog.LevelInfo, `not the formatter's`},
-		`level="unclosed`:                                    {slog.LevelInfo, `level="unclosed`},
-		`msg=no-level`:                                       {slog.LevelInfo, `msg=no-level`},
+		`time="2026-10-14T10:00:00Z" level=error msg=closed`:     {slog.LevelError, "closed"},
+		`level=fatal msg="a \"quoted\" word"`:                    {slog.LevelError, `a "quoted" word`},
+		`level=panic msg=x`:                                      {slog.LevelError, "x"},
+		"level=error msg=" + strconv.Quote(snowflakeChunkedLine): {slog.LevelDebug, snowflakeChunkedLine},
+		`level=error msg="error: 262000 (08006): other"`:         {slog.LevelError, "error: 262000 (08006): other"},
+		"level=fatal msg=" + strconv.Quote(snowflakeChunkedLine): {slog.LevelError, snowflakeChunkedLine},
+		`level=info msg=y`:                                       {slog.LevelInfo, "y"},
+		`level=debug msg=z`:                                      {slog.LevelDebug, "z"},
+		`level=trace msg=z`:                                      {slog.LevelDebug, "z"},
+		`not the formatter's`:                                    {slog.LevelInfo, `not the formatter's`},
+		`level="unclosed`:                                        {slog.LevelInfo, `level="unclosed`},
+		`msg=no-level`:                                           {slog.LevelInfo, `msg=no-level`},
 	} {
 		if level, msg := snowflakeLogLine(line); level != want.level || msg != want.msg {
 			t.Errorf("%s: %v %q, want %v %q", line, level, msg, want.level, want.msg)

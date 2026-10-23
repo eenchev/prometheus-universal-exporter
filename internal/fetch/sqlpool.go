@@ -834,9 +834,6 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	if err != nil {
 		// Ended before done closes the rows.
 		stop()
-		if p.driver.rowsError != nil {
-			err = p.driver.rowsError(err)
-		}
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "reading the rows", err)
 		traceOutcome(ctx, "error: "+err.Error())

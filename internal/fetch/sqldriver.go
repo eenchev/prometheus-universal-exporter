@@ -88,9 +88,6 @@ type sqlDriver struct {
 	// message from the server larger than the connection allows, which
 	// connect sets from the response limit (sqlConnectSpec.limit).
 	messageTooLarge func(err error) bool
-	// rowsError, when set, puts a failure reading the rows that only the
-	// driver can recognise in the operator's words (Snowflake).
-	rowsError func(err error) error
 	// timedOut, when set, recognises the server's own report that it ended
 	// the statement at the time limit the driver gave it (postgres's
 	// statement_timeout, set to the scrape's time left), which may come a

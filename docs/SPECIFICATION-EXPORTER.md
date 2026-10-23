@@ -25867,7 +25867,12 @@ export MUST stop, and the data points of that request and of every request of
 the export not yet sent MUST be kept for the next export, except where a
 newer value of the same series has been queued since; those of the requests
 the endpoint accepted before it MUST NOT be kept, and the self-metric
-snapshot MUST NOT be kept, since the next export takes a new one. Any other
+snapshot MUST NOT be kept, since the next export takes a new one. A 3xx
+response MUST NOT be followed (§ 42.15 rule 9): it is a misconfigured
+endpoint, refused as below, and its warning MUST say that the redirect was
+not followed, name `otlp.endpoint` as what to change, and carry the status
+and, as `location_host`, the host its `Location` leads to (`no host` when it
+names none), never a header's value. Any other
 non-2xx response MUST NOT be retried, and the data points of that request,
 and only those, MUST be dropped rather than kept, since the endpoint would
 refuse them again; the export MUST go on with its next request. Each refused
@@ -27956,9 +27961,12 @@ probe or a static target.
    with its scheme and the port it writes, and not the host alone. A request that follows no redirect MUST NOT be made
    to do any of this work.
 9. These rules MUST NOT change what a request that follows no redirect, or
-   only redirects on its own origin, sends, but for the `Referer` of rule 4;
-   nor the redirects of the OTLP exporter's own requests (§ 42.1), which
-   follow the HTTP client's defaults. A retry MUST start again at the first
+   only redirects on its own origin, sends, but for the `Referer` of rule 4.
+   The OTLP exporter's own requests (§ 42.1) MUST NOT follow redirects at
+   all: Go would send `otlp.headers`, which carry the endpoint's API keys
+   and tenant, and the body to wherever a redirect points, another host and
+   plain `http://` included. A 3xx answer to an export MUST be handled as
+   § 42.1 says. A retry MUST start again at the first
    URL with everything the first request carried.
 
 

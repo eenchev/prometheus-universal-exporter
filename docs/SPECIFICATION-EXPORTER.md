@@ -10200,7 +10200,12 @@ otherwise, and a test MUST run the step that sets them.
 
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
-than after it. Every job that runs Go checks MUST start with the same setup
+than after it. The linters (gofmt, golangci-lint and gopls) MUST run in a job
+of their own, the builds (vet, the default build, darwin's, the image's and
+those with the opt-in drivers and request types) in another, and each
+single-type selection's vet and build in that selection's job of the
+single-type matrix, not in a loop in one job: the job that runs the
+repository's checks and the exporter's tests MUST NOT also run them. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment, and MUST gate its steps on that filter's outputs rather than with
@@ -25517,7 +25522,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - The release archives' binaries are linked with the Dockerfile's
   `-ldflags`, the revision among them, from the values the image's build is
   given (§ 42.12).
-- CI's job test builds the code for darwin on amd64 and arm64, linking both
+- CI's job build builds the code for darwin on amd64 and arm64, linking both
   commands, and builds the image from the Dockerfile with `docker build`,
   pushing nothing, both under the go filter, which matches every file the
   image's build reads (§ 42.12).

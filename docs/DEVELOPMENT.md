@@ -2281,23 +2281,26 @@ fails for a file a side needs that its list leaves out, for an entry that
 matches none of them, for a file a side's list matches that the `go` output
 does not (the setup steps run under `go`), and for a package tested by no
 side or by both. When it fails for a new package or a new file a test reads,
-add its directory or the file to the side's list in all four jobs.
+add its directory or the file to the side's list in every job.
 
-The slowest parts of CI run in jobs of their own, beside the `test` job and
-at the same time as it: `race` runs the exporter's race suite, and
+CI runs in jobs side by side, so it takes about as long as its longest job:
+`lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
+and the opt-in request types') and gopls; `build` runs `go vet`, the default
+build, darwin's, the image's, and the builds with the opt-in sql drivers and
+request types with their tests; `race` runs the exporter's race suite;
 `request-types`, a matrix over the request types (its checks are named
-`test (<type>)`), runs the exporter's tests with each type built on its own,
-both when the `exporter` output names a change; `allocator` runs the
+`test (<type>)`), vets and builds each type on its own under the `go` output
+and runs the exporter's tests with it under `exporter`; `allocator` runs the
 allocator's tests, once and then under the race detector, when the
-`allocator` output does. The allocator's tests are not run with each type on
-its own: those that need a type are built with it, so such a build runs a
-part of them alone, and `test`'s loop already vets and builds the allocator
-with each type. `test` keeps everything else: the repository tests, the
-exporter's tests (under `exporter`), the single-type vet and build and the
-chart steps. Each of the other jobs starts with `test`'s setup steps but
-helm's, written out again, and `TestTheGoJobsOfCIStartWithTheSetupOfTest`
-fails when a copy differs from `test`'s, so change them in all four jobs at
-once. They gate their steps on the changed-path filter's outputs rather than
+`allocator` output names a change. The allocator's tests are not run with
+each type on its own: those that need a type are built with it, so such a
+build runs a part of them alone, and each type's job already vets and builds
+the allocator with it. `test` keeps the repository tests, the exporter's
+tests (under `exporter`) and the chart steps; a test fails when it runs a
+linter or a build again. Each of the other jobs starts with `test`'s setup
+steps but helm's, written out again, and
+`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
+`test`'s, so change them in every job at once. They gate their steps on the changed-path filter's outputs rather than
 with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over

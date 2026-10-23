@@ -141,9 +141,10 @@ func TestTheReleaseArchivesAreLinkedAsTheImageIs(t *testing.T) {
 // CI builds what the release builds, so a change that breaks it fails on
 // its pull request: the code for darwin, whose archives the release
 // cross-compiles, and the image from the Dockerfile, pushed nowhere. Both
-// run under the go filter, which matches every file they read.
+// run under the go filter, which matches every file they read, in the job
+// build, which runs the builds beside test.
 func TestCIBuildsForMacOSAndBuildsTheImage(t *testing.T) {
-	steps := workflowSteps(t, ".github/workflows/ci.yml")["test"]
+	steps := workflowSteps(t, ".github/workflows/ci.yml")["build"]
 	for _, c := range []struct {
 		what      string
 		fragments []string
@@ -153,7 +154,7 @@ func TestCIBuildsForMacOSAndBuildsTheImage(t *testing.T) {
 	} {
 		index := stepIndex(steps, c.fragments...)
 		if index < 0 {
-			t.Errorf("no step of ci.yml's job test %s (%q)", c.what, c.fragments)
+			t.Errorf("no step of ci.yml's job build %s (%q)", c.what, c.fragments)
 			continue
 		}
 		if steps[index]["if"] != sideCondition("go") {

@@ -1780,10 +1780,22 @@ of objects, one a row, of its columns by name. Its keys:
   connection, when it is made and before each use, to twice the limit and two
   bytes, so that the server cuts a longer `varchar(max)`, `nvarchar(max)`,
   `varbinary(max)`, `text`, `ntext` or `image` value, a cut value being over
-  the limit as read and so never handed on. What no driver can be told — a
-  `mysql` row, up to the server's `max_allowed_packet`; a SQL Server `xml` or
-  CLR-type value; the opt-in drivers' rows and blocks of rows — is read
-  before the limit applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
+  the limit as read and so never handed on; `snowflake`'s answer to a
+  statement, or to the driver's ask for a statement's result, which the
+  exporter reads before the driver (below), MUST be read to the limit and no
+  further: one whose `Content-Length` passes the limit refused unread, one
+  without once a byte past the limit is read, and a gzipped one once a byte
+  past the limit is decompressed, without decompressing further. Such an
+  answer MUST fail the statement at once as a limit, in the limit's words
+  (`the statement's answer from Snowflake was larger than the response
+  limit of N bytes ...`), the driver given an answer it neither retries nor
+  reads a result from, and the exporter MUST keep no more than one copy of
+  at most the limit of an answer it has read, a gzipped one within the limit
+  handed to the driver decompressed and its gzipped copy let go of. What no driver can be told — a `mysql` row, up to
+  the server's `max_allowed_packet`; a SQL Server `xml` or CLR-type value;
+  `clickhouse`'s and `vertica`'s rows and blocks of rows; what gosnowflake
+  builds as it decodes the bounded answer — is read before the limit
+  applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
   at a time as a CSV file's with a header, and by `jq`, `yq` and `python` as
   the list; `decoder.type` other than its default, any other transform and
   any `response` setting MUST be refused at load, with no warning that the

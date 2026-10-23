@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/snowflakedb/gosnowflake"
 )
 
@@ -78,7 +79,7 @@ func snowflakeConfig(spec *sqlConnectSpec) gosnowflake.Config {
 		Application: spec.appName,
 		// Every request through the exporter's dialer and TLS settings,
 		// and none to another host (snowflakeTransport).
-		Transporter:      &snowflakeTransport{host: spec.host, base: spec.httpTransport()},
+		Transporter:      &snowflakeTransport{host: spec.host, base: spec.httpTransport(), limit: spec.limit},
 		DisableTelemetry: true, //nolint:staticcheck // SA1019: the session parameter said to replace it does not exist yet, and the driver's telemetry is not wanted
 		// Nothing is cached on the exporter's disk or in a keyring.
 		ClientStoreTemporaryCredential: gosnowflake.ConfigBoolFalse, //nolint:staticcheck // SA1019: still the driver's only switch for it
@@ -105,13 +106,17 @@ func connectSnowflake(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, e
 
 // snowflakeRun runs a statement as sqlPlain does, failing with the policy's
 // refusal when the exporter's dialer refused a new connection to the account
-// on the way, and with errSnowflakeChunks when the statement's result came
-// in more than one chunk (snowflakeTransport).
+// on the way, with the response limit's failure when the account's answer
+// was larger than the limit, and with errSnowflakeChunks when the
+// statement's result came in more than one chunk (snowflakeTransport).
 func snowflakeRun(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	ctx, notes := withSnowflakeNotes(ctx)
 	rows, done, err := sqlPlain(ctx, conn, statement, args, timeout)
 	if refused := notes.refused.Load(); err != nil && refused != nil {
 		return nil, nil, refused
+	}
+	if tooLarge := notes.tooLarge.Load(); err != nil && tooLarge != nil {
+		return nil, nil, *tooLarge
 	}
 	if err != nil && notes.chunked.Load() {
 		return nil, nil, errSnowflakeChunks
@@ -124,10 +129,12 @@ type snowflakeNotesKey struct{}
 
 // snowflakeNotes is where snowflakeTransport notes what it refused of a
 // request made with a context: the policy's refusal of a connection made for
-// it, and a result in more than one chunk.
+// it, an answer larger than the response limit (the limit's failure), and a
+// result in more than one chunk.
 type snowflakeNotes struct {
-	refused atomic.Pointer[TargetRefusedError]
-	chunked atomic.Bool
+	refused  atomic.Pointer[TargetRefusedError]
+	tooLarge atomic.Pointer[error]
+	chunked  atomic.Bool
 }
 
 // withSnowflakeNotes is ctx with a place for snowflakeNotes of the requests
@@ -140,8 +147,9 @@ func withSnowflakeNotes(ctx context.Context) (context.Context, *snowflakeNotes) 
 // snowflakeTransport is the transport of a snowflake connection: a request
 // to a host other than the account's, and one whose connection to the
 // account the exporter's dialer refused, are answered with 403 Forbidden,
-// and one the account answered with a result in more than one chunk with
-// the statement's failure (snowflakeChunkedAnswer). The driver retries every
+// and one the account answered with a result larger than the response limit
+// or in more than one chunk with the statement's failure
+// (snowflakeFailedAnswer). The driver retries every
 // request that fails without a response, until the scrape's deadline, and
 // then reports only the deadline, while a 403 it does not retry (gosnowflake
 // retry.go, isRetryableError and isRetryableStatus). A refusal of the
@@ -165,9 +173,17 @@ func withSnowflakeNotes(ctx context.Context) (context.Context, *snowflakeNotes) 
 // with it (held twice for the moment, that copy and the driver's), and when
 // it names more chunks it is replaced by the statement's failure, noted for
 // snowflakeRun to fail the statement with errSnowflakeChunks.
+//
+// That answer is read to limit, the collector's response limit (0 for
+// none), and no further (snowflakeRead): one larger, or gzipped and larger
+// once decompressed, is replaced by the statement's failure too, noted for
+// snowflakeRun to fail with the limit's failure, so that what is held of an
+// answer is at most the limit twice, the copy and the driver's, rather than
+// whatever the account sends or a gzip bomb decompresses to.
 type snowflakeTransport struct {
-	host string
-	base *http.Transport
+	host  string
+	base  *http.Transport
+	limit int64
 }
 
 func (t *snowflakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -189,34 +205,92 @@ func (t *snowflakeTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil || resp.StatusCode != http.StatusOK || !strings.HasPrefix(req.URL.Path, "/queries/") {
 		return resp, err
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := snowflakeRead(resp, t.limit)
 	_ = resp.Body.Close()
+	if errors.Is(err, errSnowflakeTooLarge) {
+		if notes != nil {
+			tooLarge := snowflakeLimitError(t.limit)
+			notes.tooLarge.Store(&tooLarge)
+		}
+		return snowflakeFailedAnswer(req, snowflakeTooLargeError), nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	if snowflakeChunked(resp.Header, body) {
+	if snowflakeChunked(body) {
 		if notes != nil {
 			notes.chunked.Store(true)
 		}
-		return snowflakeChunkedAnswer(req), nil
+		return snowflakeFailedAnswer(req, snowflakeChunkedError), nil
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
 	return resp, nil
 }
 
-// snowflakeChunked says body, an answer of the account with header, is a
-// result that names chunks after the first. An answer that is not JSON, or
-// not a result, is not: the driver fails on it, or reads it, as before.
-func snowflakeChunked(header http.Header, body []byte) bool {
-	if strings.EqualFold(header.Get("Content-Encoding"), "gzip") {
-		reader, err := gzip.NewReader(bytes.NewReader(body))
-		if err != nil {
-			return false
-		}
-		if body, err = io.ReadAll(reader); err != nil {
-			return false
-		}
+// errSnowflakeTooLarge is snowflakeRead's failure for an answer larger than
+// the limit.
+var errSnowflakeTooLarge = errors.New("the answer is larger than the response limit")
+
+// snowflakeRead reads resp's body, an answer of the account, holding it to
+// limit bytes (none at 0), and failing with errSnowflakeTooLarge, having
+// read no more than limit and a byte, when it is larger: at once when its
+// Content-Length says so. A gzipped body (Content-Encoding gzip, which the
+// account sends when the driver asks for it, while Go's transport takes off
+// the gzip it asked for itself before this) is decompressed, to limit and a
+// byte at most, and what it read is the decompressed answer, which replaces
+// the gzipped one: the gzipped copy is let go of as soon as it is
+// decompressed, and the driver, which would decompress it again on its own,
+// reads it as it reads a plain answer. A body that is not gzip after all is
+// given as it came, for the driver to fail on as before.
+func snowflakeRead(resp *http.Response, limit int64) ([]byte, error) {
+	if limit > 0 && resp.ContentLength > limit {
+		return nil, errSnowflakeTooLarge
 	}
+	body, err := snowflakeReadAll(resp.Body, limit)
+	if err != nil || !strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		return body, err
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return body, nil //nolint:nilerr // not gzip after all: the driver fails on it as it came
+	}
+	plain, err := snowflakeReadAll(reader, limit)
+	if errors.Is(err, errSnowflakeTooLarge) {
+		return nil, err
+	}
+	if err != nil {
+		return body, nil //nolint:nilerr // a broken gzip: the driver fails on it as it came
+	}
+	resp.Header.Del("Content-Encoding")
+	resp.Uncompressed = true
+	return plain, nil
+}
+
+// snowflakeReadAll is io.ReadAll of r held to limit bytes (none at 0): one
+// byte past it fails with errSnowflakeTooLarge, without reading further.
+func snowflakeReadAll(r io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(r)
+	}
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err == nil && int64(len(body)) > limit {
+		return nil, errSnowflakeTooLarge
+	}
+	return body, err
+}
+
+// snowflakeLimitError is the failure of a statement whose answer from the
+// account was larger than limit, the response limit, in the words of the
+// sql type's other limit failures.
+func snowflakeLimitError(limit int64) error {
+	return model.MarkError(model.Errorf("the statement's answer from Snowflake was larger than the response limit of %d bytes (decompressed, when it came gzipped), and was refused; return fewer rows or columns, with WHERE, GROUP BY or LIMIT, or raise request.max_response_bytes or limits.max_response_bytes", model.Size(limit)), model.ErrLimitExceeded)
+}
+
+// snowflakeChunked says body, an answer of the account, is a result that
+// names chunks after the first. An answer that is not JSON, or not a
+// result, is not: the driver fails on it, or reads it, as before.
+func snowflakeChunked(body []byte) bool {
 	var answer struct {
 		Data struct {
 			Chunks []json.RawMessage `json:"chunks"`
@@ -234,28 +308,38 @@ func snowflakeForbidden(req *http.Request) *http.Response {
 	}
 }
 
-// snowflakeChunkedError is the failure snowflakeChunkedAnswer gives the
-// driver, which the driver returns and logs as it is, "error: " before it
-// (snowflakeChunkedLine).
+// snowflakeChunkedError is the failure snowflakeFailedAnswer gives the
+// driver for a result in more than one chunk, which the driver returns and
+// logs as it is, "error: " before it (snowflakeQuietLines).
 var snowflakeChunkedError = &gosnowflake.SnowflakeError{Number: gosnowflake.ErrFailedToGetChunk, SQLState: gosnowflake.SQLStateConnectionFailure, Message: errSnowflakeChunks.Error()}
 
-// snowflakeChunkedLine is the message of the driver's log line for
-// snowflakeChunkedError, which the driver logs at error for every statement
-// that fails (connection.go queryContextInternal), and which snowflakeLog
-// logs at debug: the scrape's own failure says what happened.
-var snowflakeChunkedLine = "error: " + snowflakeChunkedError.Error()
+// snowflakeTooLargeError is the failure snowflakeFailedAnswer gives the
+// driver for an answer larger than the response limit. Its message is the
+// same whatever the limit: snowflakeRun fails the statement with the limit's
+// own failure, which names it.
+var snowflakeTooLargeError = &gosnowflake.SnowflakeError{Number: gosnowflake.ErrFailedToGetChunk, SQLState: gosnowflake.SQLStateConnectionFailure, Message: "the statement's result came from Snowflake larger than the exporter's response limit"}
 
-// snowflakeChunkedAnswer is the account's answer to req failing the
-// statement with snowflakeChunkedError, in place of its result in more than
-// one chunk. It is an answer the driver neither retries nor reads a result
-// from; a 403 would serve as well but for the driver's line about it, the
-// same as for a refused connection.
-func snowflakeChunkedAnswer(req *http.Request) *http.Response {
+// snowflakeQuietLines are the messages of the driver's log lines for
+// snowflakeChunkedError and snowflakeTooLargeError, which the driver logs at
+// error for every statement that fails (connection.go
+// queryContextInternal), and which snowflakeLog logs at debug: the scrape's
+// own failure says what happened.
+var snowflakeQuietLines = map[string]bool{
+	"error: " + snowflakeChunkedError.Error():  true,
+	"error: " + snowflakeTooLargeError.Error(): true,
+}
+
+// snowflakeFailedAnswer is the account's answer to req failing the
+// statement with failure, in place of a result in more than one chunk or
+// larger than the response limit. It is an answer the driver neither
+// retries nor reads a result from; a 403 would serve as well but for the
+// driver's line about it, the same as for a refused connection.
+func snowflakeFailedAnswer(req *http.Request, failure *gosnowflake.SnowflakeError) *http.Response {
 	body, _ := json.Marshal(map[string]any{
 		"success": false,
-		"code":    fmt.Sprintf("%06d", snowflakeChunkedError.Number),
-		"message": snowflakeChunkedError.Message,
-		"data":    map[string]any{"sqlState": snowflakeChunkedError.SQLState},
+		"code":    fmt.Sprintf("%06d", failure.Number),
+		"message": failure.Message,
+		"data":    map[string]any{"sqlState": failure.SQLState},
 	})
 	return &http.Response{
 		Status: "200 OK", StatusCode: http.StatusOK,
@@ -282,10 +366,11 @@ var errSnowflakeChunks = errors.New("the statement's result came from Snowflake 
 // which this reads back. A warning is a warning, an error, fatal or panic
 // message an error, an info message info, and the rest debug; a line that is
 // not the formatter's is logged whole, at info. The driver's error for a
-// result in more than one chunk is debug (snowflakeChunkedLine). A client configuration file the driver finds on its first connection
-// (SF_CLIENT_CONFIG_FILE, or sf_client_config.json beside the executable or
-// in the home directory) replaces this with a log of the driver's own,
-// where the file says.
+// result in more than one chunk, or larger than the response limit, is debug
+// (snowflakeQuietLines). A client configuration file the driver finds on
+// its first connection (SF_CLIENT_CONFIG_FILE, or sf_client_config.json
+// beside the executable or in the home directory) replaces this with a log
+// of the driver's own, where the file says.
 type snowflakeLog struct{}
 
 func (snowflakeLog) Write(p []byte) (int, error) {
@@ -333,7 +418,7 @@ func snowflakeLogLine(line string) (slog.Level, string) {
 	case "warning":
 		return slog.LevelWarn, fields["msg"]
 	case "error":
-		if fields["msg"] == snowflakeChunkedLine {
+		if snowflakeQuietLines[fields["msg"]] {
 			return slog.LevelDebug, fields["msg"]
 		}
 		return slog.LevelError, fields["msg"]

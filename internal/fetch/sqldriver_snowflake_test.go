@@ -34,6 +34,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"github.com/snowflakedb/gosnowflake"
 )
 
@@ -108,9 +109,11 @@ func TestTheSnowflakeDriver(t *testing.T) {
 // refusing the account's address would; the stand-in closes each connection
 // after its answer, so that every request dials. chunk, when set, answers a
 // request for a path under /chunks/, a chunk of a result the stand-in serves
-// itself.
+// itself. answers[statement], when set, answers the statement in place of
+// results, with whatever bytes it writes.
 type snowflakeStandIn struct {
 	results  map[string]map[string]any
+	answers  map[string]http.HandlerFunc
 	chunk    http.HandlerFunc
 	logins   chan map[string]any
 	mu       sync.Mutex
@@ -121,7 +124,7 @@ type snowflakeStandIn struct {
 
 func newSnowflakeStandIn(t *testing.T) *snowflakeStandIn {
 	t.Helper()
-	s := &snowflakeStandIn{results: map[string]map[string]any{}, logins: make(chan map[string]any, 16)}
+	s := &snowflakeStandIn{results: map[string]map[string]any{}, answers: map[string]http.HandlerFunc{}, logins: make(chan map[string]any, 16)}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			SQLText string `json:"sqlText"`
@@ -141,6 +144,10 @@ func newSnowflakeStandIn(t *testing.T) *snowflakeStandIn {
 			s.logins <- body.Data.ClientEnvironment
 			answer["data"] = map[string]any{"token": "t", "masterToken": "m", "sessionId": 1}
 		case "/queries/v1/query-request":
+			if answer := s.answers[body.SQLText]; answer != nil {
+				answer(w, r)
+				return
+			}
 			data, ok := s.results[body.SQLText]
 			if !ok {
 				answer = map[string]any{"success": false, "code": "002003", "message": "no such statement", "data": map[string]any{"sqlState": "42S02"}}
@@ -573,7 +580,7 @@ func TestTheSnowflakeTransportChangesOnlyARefusedConnectionOrAChunkedResult(t *t
 		}
 	}))
 	t.Cleanup(server.Close)
-	failure, _ := io.ReadAll(snowflakeChunkedAnswer(nil).Body)
+	failure, _ := io.ReadAll(snowflakeFailedAnswer(nil, snowflakeChunkedError).Body)
 	var answer struct {
 		Success bool
 		Code    string
@@ -638,6 +645,8 @@ func TestTheSnowflakeTransportChangesOnlyARefusedConnectionOrAChunkedResult(t *t
 // of the driver's levels is the logger's nearest, and a line that is not
 // the formatter's is logged whole.
 func TestTheSnowflakeDriversLogGoesToTheExportersLogger(t *testing.T) {
+	snowflakeChunkedLine := "error: " + snowflakeChunkedError.Error()
+	snowflakeTooLargeLine := "error: " + snowflakeTooLargeError.Error()
 	out := testutil.CaptureLogs(t)
 	gosnowflake.GetLogger().Errorf("the login failed with password=hunter2hunter2 for %s", "metrics") //nolint:staticcheck // SA1019: the driver's logger, as the driver logs
 	records := testutil.AssertJSONLines(t, out, 1)
@@ -649,18 +658,19 @@ func TestTheSnowflakeDriversLogGoesToTheExportersLogger(t *testing.T) {
 		msg   string
 	}{
 		`time="2026-10-14T10:00:00Z" level=warning msg="failed http connection. err: refused. retrying...\n" func=gosnowflake.x file="retry.go:1"`: {slog.LevelWarn, "failed http connection. err: refused. retrying...\n"},
-		`time="2026-10-14T10:00:00Z" level=error msg=closed`:     {slog.LevelError, "closed"},
-		`level=fatal msg="a \"quoted\" word"`:                    {slog.LevelError, `a "quoted" word`},
-		`level=panic msg=x`:                                      {slog.LevelError, "x"},
-		"level=error msg=" + strconv.Quote(snowflakeChunkedLine): {slog.LevelDebug, snowflakeChunkedLine},
-		`level=error msg="error: 262000 (08006): other"`:         {slog.LevelError, "error: 262000 (08006): other"},
-		"level=fatal msg=" + strconv.Quote(snowflakeChunkedLine): {slog.LevelError, snowflakeChunkedLine},
-		`level=info msg=y`:                                       {slog.LevelInfo, "y"},
-		`level=debug msg=z`:                                      {slog.LevelDebug, "z"},
-		`level=trace msg=z`:                                      {slog.LevelDebug, "z"},
-		`not the formatter's`:                                    {slog.LevelInfo, `not the formatter's`},
-		`level="unclosed`:                                        {slog.LevelInfo, `level="unclosed`},
-		`msg=no-level`:                                           {slog.LevelInfo, `msg=no-level`},
+		`time="2026-10-14T10:00:00Z" level=error msg=closed`:      {slog.LevelError, "closed"},
+		`level=fatal msg="a \"quoted\" word"`:                     {slog.LevelError, `a "quoted" word`},
+		`level=panic msg=x`:                                       {slog.LevelError, "x"},
+		"level=error msg=" + strconv.Quote(snowflakeChunkedLine):  {slog.LevelDebug, snowflakeChunkedLine},
+		"level=error msg=" + strconv.Quote(snowflakeTooLargeLine): {slog.LevelDebug, snowflakeTooLargeLine},
+		`level=error msg="error: 262000 (08006): other"`:          {slog.LevelError, "error: 262000 (08006): other"},
+		"level=fatal msg=" + strconv.Quote(snowflakeChunkedLine):  {slog.LevelError, snowflakeChunkedLine},
+		`level=info msg=y`:                                        {slog.LevelInfo, "y"},
+		`level=debug msg=z`:                                       {slog.LevelDebug, "z"},
+		`level=trace msg=z`:                                       {slog.LevelDebug, "z"},
+		`not the formatter's`:                                     {slog.LevelInfo, `not the formatter's`},
+		`level="unclosed`:                                         {slog.LevelInfo, `level="unclosed`},
+		`msg=no-level`:                                            {slog.LevelInfo, `msg=no-level`},
 	} {
 		if level, msg := snowflakeLogLine(line); level != want.level || msg != want.msg {
 			t.Errorf("%s: %v %q, want %v %q", line, level, msg, want.level, want.msg)
@@ -682,5 +692,171 @@ func TestTheSnowflakeDriversLogGoesToTheExportersLogger(t *testing.T) {
 func TestTheSnowflakeDriverLogsItsErrorsWhereverItRuns(t *testing.T) {
 	if level := gosnowflake.GetLogger().GetLogLevel(); level != "error" { //nolint:staticcheck // SA1019: the driver's logger
 		t.Errorf("the driver logs at %q, want error (GITHUB_ACTIONS=%q)", level, os.Getenv("GITHUB_ACTIONS"))
+	}
+}
+
+// snowflakeLargeAnswer is the account's answer to a statement whose one
+// row, of one text column, is a value of size bytes, in JSON.
+func snowflakeLargeAnswer(size int) []byte {
+	return []byte(`{"success":true,"data":{"rowtype":[{"name":"S","type":"text"}],"rowset":[["` + strings.Repeat("x", size) +
+		`"]],"total":1,"returned":1,"queryResultFormat":"json","queryId":"q1"}}`)
+}
+
+// snowflakeGzip is body gzipped.
+func snowflakeGzip(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var gzipped bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&gzipped, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = zw.Write(body)
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return gzipped.Bytes()
+}
+
+// The account's answer to a statement is read to the collector's response
+// limit and no further: an answer larger than the limit, and a gzipped one
+// that is small but decompresses past it, fail the statement at once with
+// the limit's failure, ErrLimitExceeded, not the driver's error and not the
+// scrape's deadline, with nothing logged at error, and the exporter reads
+// and holds little more than the limit of either, where it read the whole
+// answer, and decompressed the whole gzip, and held it twice. A result
+// within the limit is read as before, and one in more than one chunk still
+// fails with errSnowflakeChunks.
+func TestASnowflakeAnswerLargerThanTheResponseLimitFailsWithTheLimit(t *testing.T) {
+	out := testutil.CaptureLogs(t)
+	f := newSQLFixture(t)
+	s := newSnowflakeStandIn(t)
+	const limit = 1 << 20
+	large := snowflakeLargeAnswer(32 << 20)
+	bomb := snowflakeGzip(t, snowflakeLargeAnswer(64<<20))
+	if len(bomb) > limit/4 {
+		t.Fatalf("the gzipped answer is %d bytes", len(bomb))
+	}
+	s.answers["SELECT large"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Connection", "close")
+		// No Content-Length: the answer is read until it is too large.
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(large)
+	}
+	s.answers["SELECT bomb"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Connection", "close")
+		_, _ = w.Write(bomb)
+	}
+	columns := []map[string]any{{"name": "N", "type": "fixed", "precision": 9, "scale": 0}}
+	s.results["SELECT few"] = snowflakeRows(columns, [][]string{{"1"}, {"2"}})
+	s.results["SELECT many"] = snowflakeRows(columns, [][]string{{"1"}}, map[string]any{
+		"url": "https://sfc-results.s3.eu-west-1.amazonaws.com/chunk0?X-Amz-Signature=x", "rowCount": 1, "uncompressedSize": 8, "compressedSize": 8,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	collector := func(statement string) *model.Collector {
+		return f.collector(t, "db", SQLDriverSnowflake, statement, func(r *model.RequestConfig) { r.MaxResponseBytes = limit })
+	}
+	for _, statement := range []string{"SELECT large", "SELECT bomb"} {
+		c := collector(statement)
+		var err error
+		run := func() { _, err = FetchCollector(ctx, "myorg-myaccount", c, RequestOverrides{}, nil) }
+		bytes := alloctest.BytesAtMost(1, 8<<20, run)
+		if err == nil || !errors.Is(err, model.ErrLimitExceeded) || ctx.Err() != nil ||
+			!strings.Contains(err.Error(), "running the statement: the statement's answer from Snowflake was larger than the response limit of") {
+			t.Errorf("%s: %v (deadline: %v), want the response limit's failure", statement, err, ctx.Err())
+		}
+		if !alloctest.RaceDetector && bytes > 8<<20 {
+			t.Errorf("%s: the scrape allocated %d bytes, the response limit being %d", statement, bytes, limit)
+		}
+	}
+	if resp, err := FetchCollector(ctx, "myorg-myaccount", collector("SELECT few"), RequestOverrides{}, nil); err != nil || len(resp.Rows) != 2 {
+		t.Errorf("%v %v", resp, err)
+	}
+	if _, err := FetchCollector(ctx, "myorg-myaccount", collector("SELECT many"), RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), errSnowflakeChunks.Error()) {
+		t.Errorf("%v, want %q", err, errSnowflakeChunks)
+	}
+	if strings.Contains(out.String(), `"level":"ERROR"`) {
+		t.Errorf("logged at error:\n%s", out)
+	}
+}
+
+// The transport reads the account's answer to a statement to its limit: an
+// answer whose Content-Length passes the limit is refused unread, one
+// without a Content-Length once it has read a byte past the limit, and a
+// gzipped one (Content-Encoding gzip, which Go's transport leaves when it
+// did not ask for gzip itself) once it has decompressed a byte past it,
+// each with the statement's failure, which the driver neither retries nor
+// reads a result from, and the limit's failure noted where the request's
+// context says. A gzipped answer within the limit is passed on
+// decompressed, and one that is not gzip after all as it came; an answer of
+// exactly the limit is passed on, and with no limit nothing is refused.
+func TestTheSnowflakeTransportHoldsAnAnswerToTheResponseLimit(t *testing.T) {
+	const limit = 4096
+	single := `{"success":true,"data":{"rowset":[["1"]],"chunks":[]}}`
+	exact := `{"success":true,"data":{"rowset":[["` + strings.Repeat("x", limit-len(single)) + `"]],"chunks":[]}}`
+	large := string(snowflakeLargeAnswer(limit))
+	gzipped := snowflakeGzip(t, []byte(single))
+	bomb := snowflakeGzip(t, snowflakeLargeAnswer(16<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("answer") {
+		case "declared":
+			w.Header().Set("Content-Length", strconv.Itoa(len(large)))
+			_, _ = w.Write([]byte(large))
+		case "undeclared":
+			w.(http.Flusher).Flush()
+			_, _ = w.Write([]byte(large))
+		case "exact":
+			_, _ = w.Write([]byte(exact))
+		case "bomb":
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(bomb)
+		case "gzipped":
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(gzipped)
+		case "not-gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write([]byte(single))
+		}
+	}))
+	t.Cleanup(server.Close)
+	failure, _ := io.ReadAll(snowflakeFailedAnswer(nil, snowflakeTooLargeError).Body)
+	for _, tc := range []struct {
+		answer   string
+		limit    int64
+		body     string
+		encoding string
+		tooLarge bool
+	}{
+		{"declared", limit, string(failure), "", true},
+		{"undeclared", limit, string(failure), "", true},
+		{"bomb", limit, string(failure), "", true},
+		{"exact", limit, exact, "", false},
+		{"gzipped", limit, single, "", false},
+		{"not-gzip", limit, single, "gzip", false},
+		{"undeclared", 0, large, "", false},
+	} {
+		transport := &snowflakeTransport{host: "127.0.0.1", base: &http.Transport{DisableCompression: true}, limit: tc.limit}
+		ctx, notes := withSnowflakeNotes(context.Background())
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/queries/v1/query-request?answer="+tc.answer, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.answer, err)
+		}
+		read, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		tooLarge := notes.tooLarge.Load()
+		if resp.StatusCode != http.StatusOK || string(read) != tc.body || resp.Header.Get("Content-Encoding") != tc.encoding || (tooLarge != nil) != tc.tooLarge {
+			t.Errorf("%s (limit %d): %d %.80q %q (too large %v)", tc.answer, tc.limit, resp.StatusCode, read, resp.Header.Get("Content-Encoding"), tooLarge)
+		}
+		if tooLarge != nil && (!errors.Is(*tooLarge, model.ErrLimitExceeded) || !strings.Contains((*tooLarge).Error(), "larger than the response limit of 4096 bytes")) {
+			t.Errorf("%s: %v", tc.answer, *tooLarge)
+		}
+		transport.CloseIdleConnections()
 	}
 }

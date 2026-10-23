@@ -25866,6 +25866,180 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   build of a single other type does not fail on it
   (TestTheTestsThatLoadTheExampleConfigNeedItsRequestTypes).
 
+## 34.179 Value-parsing helpers for jq, yq and Python
+
+- Each of `parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`,
+  compiled into a jq program by `CompileJQ`, gives every number of
+  `testdata/values/helpers.json` to the bit, fails with exactly each error
+  it lists, and says what it reads of each input that is not text (§ 17).
+- None of the helpers is the name of a gojq builtin, and each is known to a
+  program `CompileJQ` makes in the middle of an expression (§ 17).
+- A helper's error quotes a long input by its first 64 bytes, cut at a
+  character boundary, and its length (§ 17).
+- The Python helpers, run by a script in the worker over the same file of
+  vectors, give each number to the bit, raise a `ValueError` with exactly
+  each error and a `TypeError` for each input that is not text (§ 16.2).
+- A jq and a yq rule over text a helper cannot read fail with its error
+  under `error_mode: log` and `fail`, while a rule beside them reads its
+  value; a Python script fails with the `ValueError` at its own line and no
+  frame of the worker; and a pre-script reads a clock duration with
+  `parse_duration` (§ 16.2, § 17).
+
+## 34.180 Revalidating expired cached responses
+
+- An expired cached response that carried an ETag and a Last-Modified is
+  asked for again with If-None-Match and If-Modified-Since, each exactly as
+  received, a weak ETag included; the target's 304 is answered with the kept
+  body, which jq reads again with `$status` 200 and the X-Mode header the 304
+  updated, the entry is fresh again for `ttl` (the next probe is a cache hit
+  and the target is asked twice in all), and the self-metrics show
+  `http_exporter_cache_revalidations_total{result="not_modified"} 1`, status
+  `304` and `0` bytes (§ 42.13.2).
+- A response changed since it was kept replaces it: the new answer to the
+  conditional request is served and counted as `modified`, and the next
+  revalidation sends the new ETag (§ 42.13.2).
+- A response without a validator, a collector with `cache.revalidate: false`
+  and a `POST` collector are neither kept past expiry nor asked for
+  conditionally (§ 42.13.2).
+- A paginated collector whose pages carry an ETag sends no conditional
+  request after its entry expires (§ 42.13.2).
+- With `stale_if_error`, a conditional request answered 500 is answered with
+  the stale result, the next one's 304 answers fresh, and an entry past both
+  windows is still kept, counted in `http_exporter_cache_entries`, answers no
+  failure and is revalidated by the next trip (§ 42.13.2, § 42.13.1).
+- A 401 to a conditional request whose login token the target revoked logs
+  in again, and the request sent with the new token carries If-None-Match as
+  the first did (§ 42.13.2, § 42.6a).
+- A debug probe sends the conditional request, its report shows
+  If-None-Match, `304 Not Modified; the cached body of 12 bytes was reused,
+  with status 200` and the fetch stage's note, and the entry is still out of
+  date after it (§ 42.13.2, § 42.17).
+- A 304 to a request that was not conditional fails the probe saying it was
+  not conditional on a cached response (§ 42.13.2).
+- A graphite collector's GET render request is revalidated, and one too long
+  for a URL, sent as a form with POST, is not (§ 42.13.2).
+- A 304 updates the stored ETag, Last-Modified, Cache-Control, Expires and
+  Date and keeps Content-Length, Content-Type, Content-Encoding and
+  Transfer-Encoding as stored, drops the hop-by-hop fields and those its
+  Connection names, and leaves the kept response unchanged (§ 42.13.2).
+- Every attempt of a revalidating request, a retry after 503 too, carries
+  If-None-Match and the 304 that ends it is answered with the kept response;
+  a request the collector makes conditional in `request.headers` gets its
+  304 as its own answer (§ 42.13.2).
+- A cache entry kept with a response outlives its expiry while the collector
+  is within `max_cache_entries`, answering no lookup but handing its
+  response to a revalidation once not fresh, and is the first to go over the
+  budget (§ 42.13.2).
+- `cache.revalidate` is true when left out and false when set so (§ 42.13.2).
+
+## 34.181 The allocator's dns_sd discovery source
+
+- A dns_sd source of type SRV makes a target of each record's target host,
+  lower-cased and without its trailing dot, and port, with `__meta_dns_name`,
+  `__meta_dns_srv_record_target` and `__meta_dns_srv_record_port` and the
+  labels mapping's; a target given twice, under one name or two, is taken
+  once with the first listed name's labels; a record whose target is `.`
+  gives none; a name not found and a name without SRV records give no
+  targets and fail nothing; the targets are sorted by address; and every
+  question is an absolute name of type SRV
+  (TestDNSSDFindsTheTargetsOfSRVRecords).
+- A dns_sd source of type A or AAAA makes a target of each address at its
+  port, an IPv6 address in brackets, with `__meta_dns_name` and no SRV
+  labels; a name not found gives none
+  (TestDNSSDFindsTheTargetsOfAddressRecords).
+- The same records served in the reverse order give the same answer, which
+  is no change, five times over; an added record is a change
+  (TestDNSSDAnswersAlikeWhateverTheRecordsOrder).
+- A server failure, a server that does not answer within the 1s timeout and
+  a refusal each fail the whole answer, keep the last good targets and count
+  one failure each, the text naming the record type, the name and the
+  server; the server answering again is a success and no change
+  (TestDNSSDKeepsItsLastGoodAnswerWhenALookupFails).
+- A dns_sd source whose first lookup fails has never answered and adds no
+  targets
+  (TestADNSSDSourceThatNeverAnsweredHasNoTargets).
+- Three targets pass a `max_targets` of 3, and the same three fail a bound
+  of 2
+  (TestDNSSDHoldsToMaxTargets).
+- A dns_sd source is checked at load: no names, an empty name, a name with a
+  port, a URL, an IP address, a name with a blank, a label of 64 characters
+  or none, a name listed twice in two spellings, an unknown or lower-case
+  type, a port for SRV, none for A, one out of range, a server with a
+  scheme or port 0, a timeout longer than the refresh interval, a refresh
+  interval under 1s, and dns_sd beside http_sd are refused; a good source
+  is named `dns_sd_<n>`, takes type SRV, refresh 30s and timeout 10s, and
+  has its names lower-cased without the trailing dot and its server written
+  `host:53`
+  (TestDNSSDIsCheckedAtLoad).
+- A probe job's dns_sd source written in the probe targets file serves its
+  targets through the job's target_template with the meta and mapped labels,
+  and the metrics name it `dns_sd_0`
+  (TestADNSSDSourceServesItsTargets).
+
+## 34.182 Backing off from failing targets
+
+- failure_backoff fills in after 3, initial 30s and max 10m, or initial when
+  that is longer, and refuses an after below 1, an initial that is not a
+  positive duration, a max shorter than initial, a key it does not know and
+  the one-value form, naming the collector and the key
+  (TestFailureBackoffIsCheckedAndFilledIn).
+- A target that fails `after` probes in a row is not contacted for
+  `initial`: its probe is answered 502 at once with `<target> is backing off
+  after 2 consecutive failed scrapes; next try after <RFC 3339 time>`, also
+  while the collector's one trip slot is taken, and is counted in
+  `http_exporter_backoff_skipped_total` while
+  `http_exporter_targets_backing_off` is 1 and the status-code series keeps
+  the last response's; when the wait has passed the next probe goes, its
+  failure doubles the wait, and a success forgets the target; a collector
+  without failure_backoff has both series at 0, on a fake clock
+  (TestAFailingTargetIsBackedOffFrom).
+- A transform failure under error_mode fail and a target denied_targets
+  refuses are not counted towards backing off, and each probe goes on; a
+  fetch that failed under on_fetch_error log is counted, and the probe kept
+  from the target carries on with 200 and is counted as skipped
+  (TestOnlyAFailedFetchCountsTowardsBackingOff).
+- A probe kept from the target is answered with the last good result under
+  cache.stale_if_error, counted in `http_exporter_cache_stale_served_total`
+  (TestABackedOffProbeIsAnsweredWithTheLastGoodResult).
+- Probes differing in a param_ value back off apart: the failing tenant is
+  sent one request, the answering one every probe's
+  (TestProbesWithOtherParametersBackOffApart).
+- When the wait has passed only one trip goes: a probe of a collector with
+  coalesce: false arriving while the try is held at the target fails at once
+  saying the next try is in progress, the gauge counts the target, and the
+  try's failure doubles the wait (TestOneTripAtATimeTriesTheTargetAgain).
+- A reload that changes or removes the collector forgets its targets, and a
+  trip that read the collector before the reload records nothing after it
+  (TestAReloadForgetsTheTargetsBackedOffFrom).
+- A collector remembers at most its bound of targets, forgetting the one that
+  failed longest ago first (TestTheTargetsBackedOffFromAreBounded).
+- A debug probe of a target backed off from contacts it, says in its report
+  that the target is backing off and until when, and its success leaves the
+  target backed off and counts nothing as skipped
+  (TestADebugProbeContactsATargetBackedOffFrom).
+- A static target's scrape backs off without waiting for the slot a probe
+  holds, publishes `http_exporter_target_up` 0, and the identical probe
+  shares its state (TestAStaticTargetBacksOffAndSharesTheProbesState).
+- In verbose mode the skipped trips are counted per request, and
+  `http_exporter_targets_backing_off` has no per-request series
+  (TestTheSkippedTripsAreCountedPerRequest).
+- The wait doubles from initial with each further failure and stops at max,
+  however many failures there were (TestTheBackoffWaitDoublesUpToMax).
+- `collectors[].failure_backoff.initial` and `.max` are in the schema-key
+  table: a zero passes the schema and the exporter refuses it, initial as no
+  positive duration and max as shorter than initial
+  (TestEveryConstrainedKeyOfTheSchemasIsInATable).
+
+## 34.183 CI's linters and builds beside test
+
+- ci.yml has no loop over the request types: each type is vetted and built
+  under the go output in its job of the request types' matrix, with type
+  `${{ matrix.type }}`, and `make build-request-types` runs the same commands
+  in a loop naming every type (TestCIBuildsEveryRequestTypeOnItsOwn).
+- CI's job test runs no linter and no build: gofmt, golangci-lint and gopls
+  run in the job lint, and vet, the default, darwin's, the image's and the
+  opt-in builds in the job build (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

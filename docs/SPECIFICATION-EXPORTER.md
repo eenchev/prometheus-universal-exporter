@@ -29439,17 +29439,26 @@ Dependency updates MUST be proposed automatically and MUST never be applied
 automatically: every update arrives as a pull request a maintainer merges.
 
 The Go modules and the GitHub Actions used by the workflows MUST be updated by
-Dependabot, configured in `.github/dependabot.yml`. Each ecosystem MUST be
-grouped into a single pull request, because these move together and reviewing
-one green build is better than triaging one pull request per module. Major
-version updates MUST be excluded: a Go major version lives at a different import
-path and needs code changes, so it is deliberate work rather than an automated
-proposal.
+Dependabot, configured in `.github/dependabot.yml`. The minor and patch updates
+of each MUST be grouped into a single pull request, because these move together
+and reviewing one green build is better than triaging one pull request per
+module. The Go modules' major version updates MUST be excluded, by an `ignore`
+of `version-update:semver-major` for every module: a Go major version lives at
+a different import path and needs code changes, so it is deliberate work rather
+than an automated proposal. The GitHub Actions' major version updates MUST be
+proposed, in a group of their own apart from the minor and patch one: every
+action is pinned to a commit SHA, so a new major runs only once its pull
+request is merged, and in a pull request of its own it is reviewed by itself
+and holds up no minor or patch update. Tests MUST keep the Go modules' ignore
+and the Actions' two groups by reading the configuration.
 
 The Python modules that only the tests use — `prometheus-client`, for its
 strict OpenMetrics parser — are no part of the image and MUST be pinned, each
 to one version, in `test/python/requirements.txt`, and updated by Dependabot's
-`pip` updates of that directory. Every workflow that runs the test suite MUST
+`pip` updates of that directory, which MUST stay within each module's major
+version by the same `ignore` as the Go modules': a new major of the parser can
+read the exposition formats differently, which the suite's verdicts rest on.
+Every workflow that runs the test suite MUST
 install that file before the suite and MUST run the suite with
 `STRICT_OPENMETRICS_PARSER` set, and the tests that give answers to that
 parser MUST then fail, with the message they are otherwise skipped with, where

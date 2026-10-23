@@ -12,13 +12,17 @@ Dependabot handles the Go modules and the GitHub Actions, configured in
 `.github/dependabot.yml`. The Go modules' minor and patch updates are grouped
 into one pull request, and their major bumps are excluded — a Go major version
 lives at a different import path and needs real work. The GitHub Actions'
-updates are grouped into one pull request, major versions included. The
-workflows pin every action to a full commit SHA with its release as a comment
-(`actions/checkout@<sha> # v7.0.1`), and Dependabot updates the SHA and the
-comment together. Dependabot also handles the Python modules only the tests
-use, pinned in `test/python/requirements.txt`, neither grouped nor excluding
-major bumps — `prometheus-client`, whose strict OpenMetrics parser the suite runs the
-exporter's answers through; CI runs the suite on a change to that file, with
+minor and patch updates are grouped into one pull request too, and their major
+bumps are proposed in a group of their own, so each major bump is a pull
+request reviewed by itself. The workflows pin every action to a full commit
+SHA with its release as a comment (`actions/checkout@<sha> # v7.0.1`), and
+Dependabot updates the SHA and the comment together; a new major runs only
+once its pull request is merged. Dependabot also handles the Python modules
+only the tests use, pinned in `test/python/requirements.txt`, ungrouped and,
+like the Go modules, with their major bumps excluded —
+`prometheus-client`, whose strict OpenMetrics parser the suite runs the
+exporter's answers through, and a new major of which can read the formats
+differently; CI runs the suite on a change to that file, with
 the module required (see [Repeatable tests](DEVELOPMENT.md#repeatable-tests)).
 
 The Dockerfile is updated by `.github/workflows/update-docker-deps.yml` instead.

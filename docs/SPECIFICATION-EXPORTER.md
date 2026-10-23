@@ -26694,16 +26694,33 @@ MUST:
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
   is built for: macOS has no `sha256sum`, so beside the Linux command it MUST
-  give `shasum -a 256 -c`, which reads the same file; and
+  give `shasum -a 256 -c`, which reads the same file;
+- push the image with an SBOM and the full provenance of its build
+  (buildx's `sbom: true` and `provenance: mode=max`) attached as
+  attestations;
+- sign the image with cosign, keyless with the workflow's OIDC identity, by
+  the digest its push reported, never by a tag, which could be moved to other
+  content between the push and the signature, and verify that signature
+  against the workflow's identity; `latest` and `MAJOR.MINOR`, moved to the
+  same digest, are covered by it;
+- sign the checksums file, the same way, into a Sigstore bundle,
+  `prometheus-universal-exporter-<version>-sha256sums.txt.sigstore.json`,
+  verify it, and publish the bundle with the archives. The release
+  documentation MUST give the commands that verify the bundle
+  (`cosign verify-blob --bundle`) and the image (`cosign verify`), each
+  naming the issuer `https://token.actions.githubusercontent.com` and an
+  identity that matches only `release.yml` run for an exporter release tag;
+  and
 - publish nothing before every archive, the checksums and the image are
   built, the image without being pushed, and then publish in this order: the
-  image under its version tag alone; the GitHub Release, created as a draft
-  with its assets and then published; and last `latest` and `MAJOR.MINOR`,
-  moved to the digest the version tag was pushed with. A failure at any step
-  MUST leave `latest` and `MAJOR.MINOR` unmoved unless the Release is
-  published, and no Release published without its image. A rerun MUST
-  succeed where the Release already exists, draft or published, by replacing
-  its assets rather than creating it again.
+  image under its version tag alone, then its signature and the checksums'
+  signature; the GitHub Release, created as a draft with its assets, the
+  checksums' bundle among them, and then published; and last `latest` and
+  `MAJOR.MINOR`, moved to the digest the version tag was pushed with. A
+  failure at any step MUST leave `latest` and `MAJOR.MINOR` unmoved unless
+  the Release is published, and no Release published without its image. A
+  rerun MUST succeed where the Release already exists, draft or published,
+  by replacing its assets rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins
@@ -26719,12 +26736,14 @@ Every workflow MUST set `permissions` at its top, granting no write there, so
 no job runs with the repository's default token, which may write to
 everything; a job that has to write MUST grant itself only the scopes it
 needs. CI and the vulnerability check MUST NOT write at all. The exporter
-release's publishing job MAY write `contents` (the GitHub Release) and
-`packages` (the image); the chart release's MAY write `contents`, `packages`
+release's publishing job MAY write `contents` (the GitHub Release),
+`packages` (the image) and `id-token` (cosign's keyless signatures of the
+image and the checksums); the chart release's MAY write `contents`, `packages`
 (the chart and its Artifact Hub metadata) and `id-token` (cosign's keyless
 signature); the Dockerfile update job MAY write `contents` and
-`pull-requests` (the branch and the pull request it opens). A test MUST hold
-the write grants to that list, failing for a workflow without top-level
+`pull-requests` (the branch and the pull request it opens). `id-token` MUST
+be granted to exactly the job of each release workflow that signs. A test
+MUST hold the write grants to that list, failing for a workflow without top-level
 permissions, for a write granted at the top, and for a job's write grant that
 is not on the list.
 
@@ -26775,7 +26794,10 @@ Python and libraries, or runs `make ci` without installing golangci-lint and
 gopls; when the exporter release publishes its archives without the checksums
 file, publishes anything before every archive and the image are built,
 publishes out of the order above, pushes the image with tags other than its
-version, or links an archive's binaries with other `-ldflags` than the
+version or without its SBOM and full provenance, signs the image other than
+by the digest it pushed, after `latest` moves or before the push, does not
+sign the checksums file before the Release or leaves its bundle out of the
+Release's assets, grants `id-token` to a job that does not sign, or links an archive's binaries with other `-ldflags` than the
 image's; when CI builds no darwin binaries or no image; and when the chart release pushes before checking its default image, or
 signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.md
 § 42.12).

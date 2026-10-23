@@ -19,8 +19,9 @@ var workflowWriteGrants = map[string]map[string][]string{
 	"ci.yml":          {},
 	"govulncheck.yml": {},
 	"release.yml": {
-		// The GitHub Release, and the image on GHCR.
-		"release": {"contents", "packages"},
+		// The GitHub Release, the image on GHCR, and cosign's keyless
+		// signatures of the image and the checksums.
+		"release": {"contents", "id-token", "packages"},
 	},
 	"release-chart.yml": {
 		// The GitHub Release, the chart on GHCR, and cosign's keyless

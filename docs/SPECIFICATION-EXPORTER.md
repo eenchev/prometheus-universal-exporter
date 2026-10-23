@@ -25513,6 +25513,36 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `requests_per_second` above 0 and hold `burst` to at least 1
   (TestTheSchemasHaveTheRateLimit).
 
+## 34.176 A Snowflake result in more than one chunk never reaches the driver's downloader
+
+- With the snowflake tag, a result whose chunk the stand-in account serves
+  itself, with the chunk's failure lined up inside the driver's reader's
+  window (the request for the chunk held until the driver, from inside its
+  look for a failure, takes the fields of its log line, through a log context
+  hook registered at startup, and the reader's wait coming only after the
+  download has logged and signalled its failure), fails the scrape at once
+  with the statement's failure for a result in more than one chunk, without
+  the chunk asked for and without an ERROR line, and the next scrape at
+  max_per_target 1 returns its rows within a second; before the fix the
+  driver's reader waited forever, past the deadline, the scrape and its
+  connection never returned
+  (TestASnowflakeResultInMoreThanOneChunkCannotHangTheScrape).
+- With the snowflake tag, the transport answers the account's answer to a
+  statement, or to an ask for its result (a path under /queries/), that names
+  chunks, plain or gzipped, with the statement's failure (success false, code
+  262000, the exporter's sentence), noting it in the request's context; the
+  same answer at another path or with another status, and a result with an
+  empty chunk list, pass on with their body whole; a refused connection and
+  another host stay a 403 and another failure stays an error
+  (TestTheSnowflakeTransportChangesOnlyARefusedConnectionOrAChunkedResult).
+- With the snowflake tag, a result in more than one chunk fails with
+  "running the statement: the statement's result came from Snowflake in more
+  than one chunk, ..." before the deadline and logs no ERROR line; the
+  driver's line for that failure is DEBUG, the same words at fatal, or
+  another message with the same code, stay ERROR
+  (TestASnowflakeResultInMoreThanOneChunkFailsAtOnce,
+  TestTheSnowflakeDriversLogGoesToTheExportersLogger).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

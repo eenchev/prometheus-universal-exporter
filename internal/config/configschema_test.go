@@ -296,3 +296,34 @@ func TestTheSchemasHaveRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+// request.rate_limit is an object of a collector's request and of a static
+// target's, described as http and graphite's alone, whose
+// requests_per_second is required and above 0 and whose burst is at least 1.
+func TestTheSchemasHaveTheRateLimit(t *testing.T) {
+	at := func(schema map[string]any, path ...string) map[string]any {
+		for _, key := range path {
+			if items, ok := schema["items"].(map[string]any); ok {
+				schema = items
+			}
+			schema, _ = schema["properties"].(map[string]any)[key].(map[string]any)
+			if schema == nil {
+				t.Fatalf("no %s in %v", key, path)
+			}
+		}
+		return schema
+	}
+	for name, limit := range map[string]map[string]any{
+		"collectors": at(configSchema(), "collectors", "request", "rate_limit"),
+		"targets":    at(staticTargetsSchema(), "targets", "request", "rate_limit"),
+	} {
+		perSecond := at(limit, "requests_per_second")
+		burst := at(limit, "burst")
+		if !strings.HasPrefix(limit["description"].(string), "http and graphite: ") || !reflect.DeepEqual(limit["required"], []string{"requests_per_second"}) {
+			t.Errorf("%s: %v", name, limit)
+		}
+		if perSecond["type"] != "number" || perSecond["exclusiveMinimum"] != 0 || burst["type"] != "integer" || burst["minimum"] != 1 {
+			t.Errorf("%s: requests_per_second %v, burst %v", name, perSecond, burst)
+		}
+	}
+}

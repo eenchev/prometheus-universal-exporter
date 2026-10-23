@@ -811,14 +811,15 @@ opt-in types.
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
+| `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
 `retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
-the basic and bearer credential keys, `accept_status` and `login`. No probe
-parameter MAY set or change `login`.
+the basic and bearer credential keys, `accept_status`, `login` and
+`rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 
 ##### Pagination
 
@@ -902,6 +903,49 @@ the page. An answer of one page MUST be the page byte for byte; the merged
 document of several MUST be written again as JSON, each number as it was
 written, the first page's status and headers, without its
 `Content-Length`.
+
+##### Rate limiting
+
+`request.rate_limit` MUST bound how fast the collector asks one origin of its
+targets. It is the `http` and `graphite` types' alone; a collector of any
+other type that sets it MUST be refused at load as setting a key that does
+not apply to its type. Its keys:
+
+- `requests_per_second`, **required**: a number greater than 0; 0, a
+  negative number, NaN and an infinity MUST be refused at load, naming the
+  collector and the key.
+- `burst`: how many requests MAY be sent at once after a pause, at least 1;
+  0 or less MUST be refused at load. Left out, it MUST be 1, filled in when
+  the configuration loads.
+
+- The limit MUST be kept for each pair of collector and origin — the scheme,
+  the host in lower case, and the port, the scheme's own when the URL leaves
+  it out — so that two collectors asking one host are limited apart and one
+  collector's requests never wait on another's. A static target's own
+  `rate_limit` MUST replace the collector's for its requests, both keys
+  together, `burst` 1 when it leaves it out, and MUST have a limit of its
+  own for each origin, apart from the one the collector's other targets
+  share there.
+- Every request sent MUST take a turn, against the origin it is sent to:
+  each attempt of `retry`, each page of `pagination`, each hop of a followed
+  redirect, once the redirect's checks have passed, and each request of a
+  `login`. A turn MUST come at once while the bucket, which holds `burst`
+  turns and fills again at `requests_per_second`, has one, and otherwise
+  when it fills enough for one.
+- A request whose turn would come at or past its deadline — the probe's or
+  the scrape's, with the probe's `timeout`, or a login's own — MUST fail at
+  once, without waiting, with an error naming the limit, the origin, the
+  wait and the time left, and MUST NOT be retried:
+  `rate limit of 2 requests per second for http://legacy.example:80 would
+  delay the request past its deadline: it would wait 1.5s for its turn, and
+  800ms is left; ...`. A wait cut short MUST give its turn back.
+- A debug run's requests (§ 42.17) MUST take their turns as any other's, and
+  MUST NOT be counted in the collector's self-metrics (§ 22).
+- The buckets MUST be bounded: one that has filled again MAY be forgotten,
+  holding nothing a new one would not, and no more than 10,000 MUST be kept,
+  the least recently used forgotten first beyond that. A reload MUST forget
+  the buckets of the collectors it removed, and the exporter's shutdown
+  every bucket.
 
 #### `localfile`
 
@@ -1076,7 +1120,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1114,7 +1158,7 @@ lines: it only pulls. Its keys:
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
   `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
-  `login`, and `targets`, `from` and `until`, which replace the collector's. A static target's
+  `login`, `rate_limit`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
   the probe parameters of the same name, so it shares cached results with a
@@ -6170,6 +6214,9 @@ http_exporter_series_limit_exceeded_total
 http_exporter_logins_total
 http_exporter_login_failures_total
 
+http_exporter_rate_limit_waits_total
+http_exporter_rate_limit_refused_total
+
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
@@ -6270,7 +6317,14 @@ and `graphite` collectors, `0` for one without `request.login`, per
 collector and with no per-request series: the logins the collector's login,
 or a static target's own, made, and those of them that failed (§ 42.6a). The
 counts MUST start at 0 at the exporter's shutdown and be forgotten with a
-collector a reload removes.
+collector a reload removes. `http_exporter_rate_limit_waits_total` and
+`http_exporter_rate_limit_refused_total`, counters, MUST exist only for
+`http` and `graphite` collectors, `0` for one without `request.rate_limit`,
+per collector and with no per-request series, never labelled by target or
+origin: the requests the collector's rate limit, or a static target's own,
+made wait for their turn, and those it refused for a turn past their
+deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
+shutdown and be forgotten with a collector a reload removes.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -8673,10 +8727,11 @@ The steps MUST be:
   names; the collector files read are listed under `details.collector_files`;
   each collector that sets `allowed_targets`, `denied_targets`,
   `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
-  `pagination` or `login` is listed under `details.request_policies` with
+  `pagination`, `login` or `rate_limit` is listed under `details.request_policies` with
   those settings as normalised for use, `retry.statuses` as
   `retry_statuses`, an empty list as `[]`, `retry.retry_after` as
-  `retry_after: true`, a `pagination` with its defaults filled in, a `login` with the header
+  `retry_after: true`, a `pagination` with its defaults filled in, a
+  `rate_limit` with its `burst` filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);
@@ -28246,7 +28301,9 @@ and MUST answer `200` with a `text/plain` report of it, with
 - every request sent, with retries and redirects, its method, URL, headers
   and outcome, a redirect with the headers it was sent and the names of the
   ones withheld from it (§ 42.15c); a request of `request.pagination` with
-  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a `grpc`
+  the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a request
+  that waited for its turn under `request.rate_limit` with how long and why,
+  its duration counted from when it was sent (§ 5.1, `http`); a `grpc`
   call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
   the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the

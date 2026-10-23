@@ -95,6 +95,12 @@ sends its token in makes no login. A target's `login` is part of the key
 its answers are cached under, so targets that log in differently share no
 answer.
 An `http` or `graphite` target may set its own
+[`rate_limit`](REQUESTS.md#rate-limiting), checked as a collector's is, which
+replaces the collector's for that target's requests, both keys together:
+they have a limit of their own for each origin they go to, apart from the
+one the collector's other targets share there. It changes no answer, so it
+is no part of the cache key.
+An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the
 collector's for that target, which no probe parameter can: a health endpoint

@@ -1285,6 +1285,26 @@
                   "boolean"
                 ]
               },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
+              },
               "retry": {
                 "additionalProperties": false,
                 "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
@@ -2352,6 +2372,26 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
               },
               "retry": {
                 "additionalProperties": false,

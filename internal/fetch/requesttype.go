@@ -203,6 +203,7 @@ func FileWarnings(c *model.Collector, t *model.StaticTarget) []string {
 // scrapes which collectors and static targets are in force now
 // (RequestType.Follow).
 func FollowConfiguration(collectors []model.Collector, targets []model.StaticTarget) {
+	rateLimits.follow(collectors)
 	for _, name := range BuiltRequestTypes() {
 		if rt := RequestTypes[name]; rt.Follow != nil {
 			rt.Follow(collectors, targets)
@@ -211,8 +212,10 @@ func FollowConfiguration(collectors []model.Collector, targets []model.StaticTar
 }
 
 // CloseConnections closes every connection a built type keeps across
-// scrapes, for the exporter's shutdown.
+// scrapes, for the exporter's shutdown, and forgets the rate limits' buckets
+// and counts with them.
 func CloseConnections() {
+	rateLimits.reset()
 	for _, name := range BuiltRequestTypes() {
 		if rt := RequestTypes[name]; rt.CloseConnections != nil {
 			rt.CloseConnections()
@@ -364,6 +367,9 @@ func ValidateRequest(c *model.Collector) error {
 	if err := validateRetryStatuses(c); err != nil {
 		return err
 	}
+	if err := validateRateLimit(c); err != nil {
+		return err
+	}
 	return rt.Validate(c)
 }
 
@@ -479,6 +485,11 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	}
 	if err := checkTargetRetryStatuses(t, c); err != nil {
 		return fmt.Errorf("target %q %w", t.Name, err)
+	}
+	if t.Request.RateLimit != nil {
+		if err := checkRateLimit(t.Request.RateLimit); err != nil {
+			return fmt.Errorf("target %q request.rate_limit%w", t.Name, err)
+		}
 	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {

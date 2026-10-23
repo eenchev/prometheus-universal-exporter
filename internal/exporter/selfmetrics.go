@@ -160,6 +160,12 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	// requests, so its logins have no per-request value either.
 	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401; 0 without request.login.", nil},
 	{"http_exporter_login_failures_total", model.CounterMetricType, "Logins of this http or graphite collector that failed: the scrapes that needed their token failed in the login stage, unless the token kept was still valid and was used instead.", nil},
+	// The buckets of request.rate_limit are the collector's, shared by its
+	// requests to an origin, so their waits have no per-request value
+	// either; they are counted by collector, never by target or origin,
+	// which a probe names.
+	{"http_exporter_rate_limit_waits_total", model.CounterMetricType, "Requests of this http or graphite collector, each attempt, page, redirect and login request counted, that waited for their turn under its request.rate_limit, or a static target's, before they were sent; 0 without request.rate_limit.", nil},
+	{"http_exporter_rate_limit_refused_total", model.CounterMetricType, "Requests of this http or graphite collector that its request.rate_limit, or a static target's, refused before they were sent, because their turn would have come at or past their deadline; the scrape failed with them.", nil},
 }
 
 // requestTypeFamilies are the families only the collectors of some request
@@ -186,6 +192,8 @@ var requestTypeFamilies = map[string][]string{
 	"http_exporter_sql_rows":                           {"sql"},
 	"http_exporter_logins_total":                       {"http", "graphite"},
 	"http_exporter_login_failures_total":               {"http", "graphite"},
+	"http_exporter_rate_limit_waits_total":             {"http", "graphite"},
+	"http_exporter_rate_limit_refused_total":           {"http", "graphite"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -396,6 +404,14 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		"http_exporter_login_failures_total": func(name string) float64 {
 			_, failed := fetch.CollectorLogins(requestTypes[name], name)
 			return float64(failed)
+		},
+		"http_exporter_rate_limit_waits_total": func(name string) float64 {
+			waited, _ := fetch.CollectorRateLimit(name)
+			return float64(waited)
+		},
+		"http_exporter_rate_limit_refused_total": func(name string) float64 {
+			_, refused := fetch.CollectorRateLimit(name)
+			return float64(refused)
 		},
 		"http_exporter_sql_rows": func(name string) float64 {
 			if rows := fetch.CollectorPools(requestTypes[name], name).Rows; rows != nil {

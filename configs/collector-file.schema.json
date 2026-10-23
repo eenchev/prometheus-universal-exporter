@@ -2489,6 +2489,26 @@
                 },
                 "type": "object"
               },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: the most requests a second the collector sends to one origin (scheme, host and port) of its targets, every attempt, page, followed redirect and login request counted where it is sent. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once. Each collector has its own limit for an origin. No probe parameter sets or changes it. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
+              },
               "record_type": {
                 "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md.",
                 "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",

@@ -105,6 +105,9 @@ type TargetRequestConfig struct {
 	// Login replaces an http or graphite collector's request.login for
 	// this target.
 	Login *LoginConfig `yaml:"login,omitempty"`
+	// RateLimit replaces an http or graphite collector's
+	// request.rate_limit for this target's requests.
+	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets

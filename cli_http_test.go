@@ -548,6 +548,24 @@ func TestDryRunReportsRetryAfter(t *testing.T) {
 	}
 }
 
+// --dry-run lists a collector's request.rate_limit as it will be applied,
+// its burst filled in, and refuses one startup refuses, as startup words it.
+func TestDryRunReportsTheRateLimit(t *testing.T) {
+	limited := func(limit string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: legacy\n    request:\n      type: http\n      rate_limit: "+limit+"\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+limited("{requests_per_second: 0.5}"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["legacy"].(map[string]any)
+	if want := map[string]any{"requests_per_second": 0.5, "burst": float64(1)}; check.code != 0 || !reflect.DeepEqual(policy["rate_limit"], want) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	out := runCheckCLI(t, "--config.file="+limited("{requests_per_second: 2, burst: 0}"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "legacy" request.rate_limit.burst is 0`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run lists a collector's request.pagination as it will be applied,
 // its defaults filled in, max_pages among them, and refuses one startup
 // refuses, as startup words it.

@@ -1317,6 +1317,68 @@ collector pages through its own target and path the same way.
 `request.pagination` is the collector's: a static target cannot set it, nor a
 probe parameter change it.
 
+## Rate limiting
+
+A target that answers badly when it is asked too often — an old appliance, a
+legacy application server — can be asked no faster than a set rate, however
+many probes, static targets, retries and pages ask it at once:
+
+```yaml
+request:
+  rate_limit:
+    requests_per_second: 2   # on average; 0.5 is one request every 2 seconds
+    burst: 1                 # requests sent at once after a pause; 1 when left out
+```
+
+`request.rate_limit` belongs to `http` and `graphite` collectors; a collector
+of any other type that sets it is refused when the configuration loads, as
+any key its type does not take. `requests_per_second` is required, a number
+greater than 0; `burst`, when set, is at least 1.
+
+The limit is kept for each origin — scheme, host and port — the collector's
+requests go to, a port left out being the scheme's own, so
+`http://legacy.example` and `http://legacy.example:80` share it. Each
+collector has its own: two collectors asking the same host are limited
+apart, and one collector's requests never wait on another's. Every request
+sent counts, where it is sent: each attempt of a [retry](#retries), each
+[page](#pagination), each hop of a [followed redirect](#redirects-and-http2),
+and each request of a [login](AUTHENTICATION.md#logging-in-to-a-target), the
+last two against the origin they go to, which is the target's own when they
+stay on it.
+
+A request takes its turn from a bucket that holds `burst` turns and fills
+again at `requests_per_second`: with a turn to spare it is sent at once, and
+otherwise it waits for the next. A request whose turn would come at or past
+its deadline — the probe's or the scrape's time, or a login's own — is not
+made to wait: it fails at once, since the wait could only end in the same
+failure later, and is not retried, since a retry would only meet the same
+limit closer to the deadline:
+
+```
+rate limit of 2 requests per second for http://legacy.example:80 would delay the request past its deadline: it would wait 1.5s for its turn, and 800ms is left; ask the target less often, raise request.rate_limit, or the timeout
+```
+
+A wait cut short — the probe's client gone, the exporter shutting down —
+gives its turn back. The requests that waited are counted in
+`http_exporter_rate_limit_waits_total`, and those refused in
+`http_exporter_rate_limit_refused_total`, by collector alone
+([Self-metrics](SELF-METRICS.md)). A [debug probe](CONFIGURATION.md#debug-probes)
+shows, under each request that waited, how long and why: `sent after waiting
+500ms for its turn under the rate limit of 2 requests per second for
+http://legacy.example:80`; its own requests take their turns as any other's,
+and are not counted.
+
+A [static target](STATIC-TARGETS.md) of the collector may set a
+`rate_limit` of its own, which replaces the collector's for its requests,
+both keys together, `burst` 1 when it leaves it out. Its requests then have
+their own limit for each origin, apart from the one the collector's other
+targets share there, so a target given a lower rate is not slowed further by
+them. No probe parameter sets or changes the limit. The buckets of origins
+not asked for a while are forgotten once they have filled again, when they
+hold nothing a new one would not, and at most 10,000 are kept, the least
+recently used forgotten first beyond that; a change of the limit starts it
+from a full bucket.
+
 ## TLS
 
 The collector can configure target TLS verification and trust material:

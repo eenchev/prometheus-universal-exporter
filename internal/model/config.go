@@ -304,6 +304,21 @@ type RequestConfig struct {
 	// request (fetch/login.go). Left out of a collector written as YAML
 	// when unset, as the sql keys are.
 	Login *LoginConfig `yaml:"login,omitempty"`
+	// RateLimit belongs to the http and graphite types: how many requests
+	// a second the collector sends to one origin of a target, so a target
+	// that many probes, static targets, retries or pages ask at once is
+	// not asked faster than it can answer (fetch/ratelimit.go). Left out
+	// of a collector written as YAML when unset, as the sql keys are.
+	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+}
+
+// RateLimitConfig is request.rate_limit: the requests a second a collector
+// sends to one origin, and how many it may send at once after a pause. Its
+// JSON names are its keys', for --dry-run, which shows it.
+type RateLimitConfig struct {
+	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
+	// Burst is nil until the load fills in its default, 1.
+	Burst *int `yaml:"burst" json:"burst,omitempty"`
 }
 
 // LoginConfig is request.login: how the exporter logs in to get the token

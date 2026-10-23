@@ -205,6 +205,9 @@ type requestPolicy struct {
 	// hold; a field or endpoint parameter whose name reads as a
 	// credential's is shown without its value.
 	Login *model.LoginConfig `json:"login,omitempty"`
+	// RateLimit is request.rate_limit as it will be applied, its burst
+	// filled in: how fast the collector asks each origin of its targets.
+	RateLimit *model.RateLimitConfig `json:"rate_limit,omitempty"`
 }
 
 // shownLogin is l as --dry-run shows it (requestPolicy.Login).
@@ -240,12 +243,12 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	out := map[string]requestPolicy{}
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
-		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination, Login: shownLogin(c.Request.Login)}
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes, Pagination: c.Request.Pagination, Login: shownLogin(c.Request.Login), RateLimit: c.Request.RateLimit}
 		if retried := c.Request.Retry.Statuses; retried != nil {
 			p.RetryStatuses = &retried
 		}
 		p.RetryAfter = c.Request.Retry.RetryAfter
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil {
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil || p.RateLimit != nil {
 			out[c.Name] = p
 		}
 	}

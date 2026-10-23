@@ -46,7 +46,9 @@ type TracedRequest struct {
 	Outcome string
 	// Wait is, under request.retry.retry_after, how long the trip waited
 	// before retrying the request and why, or why it was not retried when
-	// a Retry-After asked for longer than its time left; "" otherwise.
+	// a Retry-After asked for longer than its time left; and, under
+	// request.rate_limit, how long the request waited for its turn before
+	// it was sent; "" otherwise.
 	Wait     string
 	Duration time.Duration
 	started  time.Time
@@ -136,7 +138,7 @@ func traceWait(ctx context.Context, wait string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if n := len(t.requests); n > 0 {
-		t.requests[n-1].Wait = wait
+		t.requests[n-1].Wait = joinWaits(t.requests[n-1].Wait, wait)
 	}
 }
 

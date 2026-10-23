@@ -2250,6 +2250,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
+| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin. See [Rate limiting](REQUESTS.md#rate-limiting). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -2261,8 +2262,8 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`allowed_schemes`, `accept_status`, `allowed_targets` and `denied_targets` —
-and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+`allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` and
+`rate_limit` — and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
 For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
 so is `descriptors`, where its message types come from — `reflection`,
@@ -4585,6 +4586,10 @@ The report lists:
   request retried has a line of the wait taken and why, `then waited 3s, as
   Retry-After asked`, or of why it was not retried: `not retried: its
   Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time`.
+  A request that waited for its turn under
+  [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line of how long
+  and why: `sent after waiting 500ms for its turn under the rate limit of 2
+  requests per second for http://legacy.example:80`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4861,13 +4866,13 @@ A deprecated spelling does not fail the check; it is listed under
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination` or
-`login` is listed under `details.request_policies`, by name, with those
+`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination`,
+`login` or `rate_limit` is listed under `details.request_policies`, by name, with those
 settings as they will be applied — `2XX` as `2xx`, `not_found` as
 `NOT_FOUND`, `retry.statuses` as `retry_statuses`, `[]` included,
 `retry.retry_after` as `retry_after: true`, a `pagination` with its defaults,
 `max_pages: 10` among them, a `login` with the `header` and `prefix` its
-token is sent with — so a list that lets through more or less than meant, a
+token is sent with, a `rate_limit` with its `burst` — so a list that lets through more or less than meant, a
 pagination that asks the target for more pages than meant, or a token sent
 where it was not meant to go, shows before it is deployed. A login is shown
 with the files its secrets are read from, never what they hold, and a field
@@ -5058,7 +5063,7 @@ nothing there.
 ## Related pages
 
 - [PYTHON.md](PYTHON.md) — the Python transform and pre-script API.
-- [REQUESTS.md](REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, restricting targets, TLS and per-scrape overrides.
+- [REQUESTS.md](REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, rate limiting, restricting targets, TLS and per-scrape overrides.
 - [LOCALFILE.md](LOCALFILE.md) — the `localfile` request type.
 - [GRAPHITE.md](GRAPHITE.md) — the `graphite` request type and decoder.
 - [GRPC.md](GRPC.md) — the `grpc` request type.

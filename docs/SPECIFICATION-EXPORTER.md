@@ -25374,6 +25374,136 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   running at a 10ms deadline, each fail with the deadline's error and none
   panics in Conn.Raw, a stress companion of the test above (§ 5.1).
 
+## 34.175 Other sites' requests, reload changes, OTLP redirects, gRPC scheme hosts, signed releases and rate limits
+
+- Every endpoint behind the cross-site guard — `/`, `/collectors`, `/probe`,
+  the self-metrics path, the static targets path, `/debug`, `/debug/run`
+  and `/-/reload` — answers `403` saying the request comes from another
+  site to a request marked `Sec-Fetch-Site: cross-site`, `same-site` or
+  `Cross-Site`, with the exporter's Basic Auth credential attached and with
+  Basic Auth off; the refused probes never contact their target and the
+  refused reloads leave the configuration in force as it was, though its
+  file changed; the same requests marked `same-origin` or `none`, or with
+  no `Sec-Fetch-Site`, are not refused, and the probes among them contact
+  the target; `/health` and `/ready` answer `200` to cross-site and
+  same-site requests (§ 42.5).
+- The debug page opened at `full` with a collector and a target in its URL
+  fills in the target, and its script, its strings and comments taken out,
+  names `run` only where it defines it, in the click handler of *Run* and in
+  the run-as-you-type timer, so nothing runs when the page opens; a call of
+  `run()` on opening fails the test (§ 42.17).
+- A reload of an unchanged configuration and static target file logs
+  `configuration reloaded` and `static targets reloaded` at `INFO` with
+  `changes` `no changes`, and makes that the manager's last reload, with its
+  time; a reload that removes a collector, adds two, changes one, removes a
+  static target, adds one and changes one logs `collectors added: d, e;
+  collectors removed: b; collectors changed: c` and `static targets added:
+  t3; static targets removed: t2; static targets changed: t1`, and the last
+  reload is both together; a refused reload logs neither line and leaves the
+  last reload as it was (§ 24.1a).
+- A reload that adds 13 collectors names the first 10, sorted, and `and 3
+  more` (§ 24.1a).
+- The landing page says the exporter has not been reloaded since it
+  started, and after a reload that adds a collector, removes one and adds a
+  static target, the reload's time in RFC 3339 and `collectors added: third;
+  collectors removed: second; static targets added: two`; after an
+  unchanged reload, `no changes` (§ 23).
+- A reload through an exporter that changes one collector and adds one
+  says so, the configuration manager encoding no definition of its own for
+  it, and the reload encodes 5 definitions in all: the 3 of the new
+  configuration and the 2 of the former one it still names, whose
+  fingerprints no probe had made (§ 24.1a).
+- An OTLP endpoint that answers 302, 307 or 308 to another host is not
+  followed: the other host receives nothing, `otlp.headers` and the body
+  included, the endpoint is asked once, the export counts as a failure, its
+  data points are dropped and counted, and the warning says the redirect was
+  not followed, names `otlp.endpoint` and carries the status and the
+  `location_host`, never a header's value
+  (TestOTLPExportsDoNotFollowRedirects). A redirected attempt's error names
+  the status, the host its `Location` leads to, or `no host` without one, and
+  says it was not followed (TestARedirectedOTLPAttemptSaysWhereItLed). Both
+  fail when the OTLP client follows redirects.
+- A `grpc` target `unix:<port>`, `unix-abstract:<port>` or
+  `passthrough:<port>`, probed by a process of its own with and without
+  `HTTPS_PROXY` naming a local stub proxy and with and without
+  `allowed_targets` naming its host, never reaches the unix socket or the
+  abstract socket that name would select: `unix` is refused naming the host
+  before the proxy is asked anything, and behind the proxy the others are the
+  `CONNECT` of the target as written
+  (TestGRPCATargetNamedLikeAResolverIsAHostName); `unix:8443`, `UNIX:8443`,
+  `dns:///unix:8443` and `grpcs://unix:8443` are refused at the target check,
+  and `unix-abstract:9090` and `passthrough:9090` are ordinary targets
+  (TestGRPCTargets). Both fail when the target is handed to grpc-go as
+  written.
+- The exporter release pushes its image with an SBOM (`sbom: true`) and the
+  full provenance (`provenance: mode=max`), and signs it with
+  `cosign sign --yes` by the digest its push step reported, after the push
+  and before the Release and the move of `latest` and `MAJOR.MINOR`, keyless
+  and never by a tag, verifying the signature against `release.yml`'s
+  identity; the test fails without the SBOM, the provenance or the signing
+  step, for a signature by tag or with a key, and for a signature out of
+  that order (§ 42.12).
+- The exporter release signs the checksums file into
+  `prometheus-universal-exporter-<version>-sha256sums.txt.sigstore.json`
+  with `cosign sign-blob --bundle`, after the checksums are built and before
+  the Release, verifies it, and publishes the bundle both where it creates
+  the Release and where a rerun replaces its assets; the test fails when
+  either command leaves the bundle out (§ 42.12).
+- Each release workflow grants `id-token: write` to exactly the one job that
+  runs cosign and never at its top, and the write grants list the exporter
+  release's job with `id-token` beside `contents` and `packages` (§ 42.12).
+- The Snowflake stand-in's cleanup closes every pool and waits for their
+  connections to be closed, so the driver's request ending a session,
+  refused by a stand-in told to refuse, no longer fails after its test and
+  logs "failed to close session" into the next test's captured log, as it
+  did into TestTheSnowflakeDriversLogGoesToTheExportersLogger.
+- `request.rate_limit` sends `burst` requests to an origin at once and the
+  rest `1/requests_per_second` apart: with 2 a second and a burst of 3, six
+  requests wait 0, 0, 0, then 500ms each, on a test clock; the waits are
+  counted in the collector's count but a debug run's, which waits as well,
+  and the debug trace says how long a request waited and why
+  (TestRateLimitSpacesRequestsAfterTheBurst).
+- The limit is kept by collector and origin: two collectors asking one
+  origin, and one collector asking two, each send their first request at
+  once, and only a second request of the same collector to the same origin
+  is refused (TestRateLimitIsPerCollectorAndOrigin).
+- A request whose turn would come past its deadline fails at once, with the
+  limit, the origin and the wait in the error, is not retried though
+  `retry.attempts` is 3, and is counted as refused
+  (TestRateLimitRefusesAWaitPastTheDeadline); a followed redirect refused
+  so is not retried either, one refusal counted and nothing more sent
+  (TestARedirectRefusedByTheRateLimitIsNotRetried).
+- Every request sent takes a turn: each attempt of a retry, each page of
+  `request.pagination`, a followed redirect's hop, shown with its wait in
+  the trace, and a login's request (TestRateLimitCountsEveryRequestSent);
+  a `graphite` collector's requests wait as an `http` collector's do
+  (TestAGraphiteCollectorsRateLimitSpacesItsRequests).
+- A static target's `rate_limit` replaces the collector's and has a bucket
+  of its own at the origin, so the collector's used-up turn holds none of
+  the target's, and a target's `requests_per_second` of 0 is refused at
+  load (TestAStaticTargetsRateLimitReplacesTheCollectors).
+- At most `rateLimitMaxBuckets` buckets are kept, the least recently used
+  dropped first, and every bucket that has filled again is dropped when a
+  new one is asked for (TestRateLimitBucketsAreBounded); a reload drops the
+  buckets and counts of the collectors it removed
+  (TestRateLimitsFollowTheConfiguration), and the shutdown all of them; a wait cut short gives its turn
+  back (TestACutShortRateLimitWaitGivesItsTurnBack); two spellings of an
+  origin share one bucket (TestRequestOrigin).
+- Every built type but `http` and `graphite` refuses `request.rate_limit` at
+  load as a key that does not apply to it; a `requests_per_second` of 0,
+  below 0, NaN or infinite, and a `burst` of 0 are refused, and `burst` left
+  out is filled in as 1 (TestRateLimitIsCheckedWhenItLoads).
+- A probe the rate limit refuses fails saying why and is counted in
+  `http_exporter_rate_limit_refused_total{collector}`; a collector without a
+  limit has the families at 0, and they are `http` and `graphite`'s alone
+  (TestAProbeRefusedByTheRateLimitIsCounted).
+- `--dry-run` lists `rate_limit` under `request_policies` with `burst`
+  filled in, and refuses a `burst` of 0 as startup words it
+  (TestDryRunReportsTheRateLimit); the configuration and static target
+  schemas describe `rate_limit` as `http` and `graphite`'s, require
+  `requests_per_second` above 0 and hold `burst` to at least 1
+  (TestTheSchemasHaveTheRateLimit).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

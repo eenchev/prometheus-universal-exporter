@@ -97,6 +97,7 @@ jobs:
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
               - 'internal/model/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
@@ -206,50 +207,6 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:" >&2
-            echo "$unformatted" >&2
-            exit 1
-          fi
-        if: steps.changes.outputs.go == 'true'
-      # golangci-lint type-checks with the golang.org/x/tools it was released
-      # with, which reads only the export data formats known when it was made:
-      # v2.13.2 cannot read Go 1.27.2's ("export data version 5 is greater than
-      # maximum supported version 4"). So this version has to be one that
-      # supports the Go the build uses, which is the current stable release,
-      # and moves when a Go release changes the format. The Makefile pins the
-      # same version and a test keeps the two in step.
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-        if: steps.changes.outputs.go == 'true'
-      # The sql request type's four opt-in drivers are compiled by no lint run
-      # above, and a build with more packages can give the linters' analyses
-      # more to see: lint the build with all of them too, as make
-      # lint-sql-drivers does. The tags are what tools/request-type-tags.sh
-      # prints for them; a test keeps the two in step.
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          args: --build-tags sql_driver_oracle,sql_driver_clickhouse,sql_driver_snowflake,minicore_disabled,sql_driver_vertica
-        if: steps.changes.outputs.go == 'true'
-      # Nor are the opt-in request types beside the default build's: lint
-      # the build with all of them, as make lint-opt-in-types does. The tags
-      # are what tools/request-type-tags.sh prints for them; a test keeps the
-      # two in step.
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          args: --build-tags request_type_redis,request_type_s3file
-        if: steps.changes.outputs.go == 'true'
-      # What an editor shows comes from gopls, some of whose analyzers
-      # golangci-lint does not have. The Makefile pins its version.
-      - name: gopls check
-        run: make gopls-install gopls-check
-        if: steps.changes.outputs.go == 'true'
       # The repository's own checks read the whole tree, so they run on
       # every change the go filter names. The exporter's packages run when
       # the exporter filter names a change, the allocator's in a job of their
@@ -264,63 +221,6 @@ jobs:
           packages="$(sh tools/ci-packages.sh exporter)"
           go test $packages
         if: steps.changes.outputs.exporter == 'true'
-      - run: go vet ./...
-        if: steps.changes.outputs.go == 'true'
-      - run: go build ./...
-        if: steps.changes.outputs.go == 'true'
-      # The release builds archives for darwin too, from the same code: a
-      # file that compiles on Linux alone would otherwise first fail there,
-      # at release time. The two commands are linked as the release links
-      # them, which go build ./... does not do.
-      - name: Build for macOS
-        run: |
-          set -eu
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build ./...
-            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null .
-            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/pue-allocator
-          done
-        if: steps.changes.outputs.go == 'true'
-      # The image the release publishes, built from the Dockerfile and
-      # pushed nowhere, so a change that breaks its build fails here rather
-      # than in the release. Its --version shows the build stage stamped the
-      # revision in.
-      - name: Build the image
-        env:
-          REVISION: ${{ github.sha }}
-        run: |
-          set -eu
-          docker build --build-arg VERSION=0.0.0-ci --build-arg "REVISION=${REVISION}" --tag prometheus-universal-exporter:ci .
-          docker run --rm prometheus-universal-exporter:ci --version | grep -F "$REVISION"
-        if: steps.changes.outputs.go == 'true'
-      # A build can carry only some request types. Vet and build each type on
-      # its own too, so code one type needs cannot quietly depend on another.
-      - name: Build with each request type on its own
-        run: |
-          for type in dns graphite grpc http kubernetes localfile redis s3file sql sshfile tlscert; do
-            tags="$(sh tools/request-type-tags.sh "$type")"
-            go vet -tags "$tags" ./...
-            go build -tags "$tags" ./...
-          done
-        if: steps.changes.outputs.go == 'true'
-      # The sql request type's four opt-in drivers are compiled by no build
-      # above: vet, build and test a build with all of them, whose tests of
-      # each driver's connection settings are in files built only with it.
-      - name: Build and test with every opt-in sql driver
-        run: |
-          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
-          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$tags" ./internal/fetch/
-        if: steps.changes.outputs.go == 'true'
-      # The opt-in request types are compiled beside the default build's by
-      # no build above, as a build with OPT_IN_REQUEST_TYPES has them: vet,
-      # build and test that build too, the repository's checks among the
-      # tests, whose rows of an opt-in type's schema keys and examples of
-      # its documentation run in a build with it.
-      - name: Build and test with every opt-in request type
-        run: |
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
-        if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter
@@ -670,6 +570,469 @@ jobs:
             fi
           done
         if: steps.changes.outputs.chart == 'true'
+  # Formatting, the linters and gopls, in a job of their own beside test:
+  # none of them needs the others' results, and together they take minutes.
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
+            chart:
+              - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
+              - 'internal/model/**'
+              - 'internal/redistest/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.changes.outputs.go == 'true'
+        with:
+          go-version: 'stable'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
+      - run: go mod download
+        if: steps.changes.outputs.go == 'true'
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.go == 'true'
+      # golangci-lint type-checks with the golang.org/x/tools it was released
+      # with, which reads only the export data formats known when it was made:
+      # v2.13.2 cannot read Go 1.27.2's ("export data version 5 is greater than
+      # maximum supported version 4"). So this version has to be one that
+      # supports the Go the build uses, which is the current stable release,
+      # and moves when a Go release changes the format. The Makefile pins the
+      # same version and a test keeps the two in step.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+        if: steps.changes.outputs.go == 'true'
+      # The sql request type's four opt-in drivers are compiled by no lint run
+      # above, and a build with more packages can give the linters' analyses
+      # more to see: lint the build with all of them too, as make
+      # lint-sql-drivers does. The tags are what tools/request-type-tags.sh
+      # prints for them; a test keeps the two in step.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          args: --build-tags sql_driver_oracle,sql_driver_clickhouse,sql_driver_snowflake,minicore_disabled,sql_driver_vertica
+        if: steps.changes.outputs.go == 'true'
+      # Nor are the opt-in request types beside the default build's: lint
+      # the build with all of them, as make lint-opt-in-types does. The tags
+      # are what tools/request-type-tags.sh prints for them; a test keeps the
+      # two in step.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          args: --build-tags request_type_ldap,request_type_redis,request_type_s3file,request_type_tcp
+        if: steps.changes.outputs.go == 'true'
+      # What an editor shows comes from gopls, some of whose analyzers
+      # golangci-lint does not have. The Makefile pins its version.
+      - name: gopls check
+        run: make gopls-install gopls-check
+        if: steps.changes.outputs.go == 'true'
+  # The builds: vet, the default build, macOS, the image, and the builds with
+  # the opt-in sql drivers and request types (whose tests run here too), in a
+  # job of their own beside test. Each request type's own vet and build run
+  # in its job of the request-types matrix.
+  build:
+    runs-on: ubuntu-latest
+    env:
+      STRICT_OPENMETRICS_PARSER: required
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
+              # And the other files test/repository reads: the update
+              # rules, the ignore files, the pre-commit hook, the licence
+              # the README's badge names and Artifact Hub's repository file.
+              # test/repository/cisides_test.go fails for a file those tests
+              # name that this list leaves out.
+              - '.github/dependabot.yml'
+              - '.gitignore'
+              - '.githooks/**'
+              - 'LICENSE'
+              - '.artifacthub-repo.yml'
+            chart:
+              - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
+              # And are defined here: a change to them alone must run them.
+              - '.github/workflows/ci.yml'
+            # Each side's tests run when a file they need changed: the
+            # directories of the module's packages tools/ci-packages.sh lists
+            # for that side and of every package of the module their tests
+            # import, the files outside those directories the tests open, and
+            # what CI runs them with. test/repository/cisides_test.go fails
+            # for a file a side needs that its list leaves out, and for an
+            # entry that covers none of them.
+            exporter:
+              - '*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'tools/request-type-tags.sh'
+              - 'internal/allocapi/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/grpctest/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
+              - 'internal/model/**'
+              - 'internal/redistest/**'
+              - 'internal/sqltest/**'
+              - 'internal/sshtest/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+              - 'tools/depupdate/**'
+              # The tests load the examples and configs, read the test data,
+              # the chart, the docs and the README, and run the Python of the
+              # Dockerfile with the modules test/python pins.
+              - 'charts/**'
+              - 'configs/**'
+              - 'docs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'README.md'
+              - 'Dockerfile'
+              - 'test/python/**'
+            allocator:
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - 'tools/ci-packages.sh'
+              - 'cmd/pue-allocator/**'
+              - 'internal/allocapi/**'
+              - 'internal/allocator/**'
+              - 'internal/allocclient/**'
+              - 'internal/config/**'
+              - 'internal/decode/**'
+              - 'internal/exporter/**'
+              - 'internal/expr/**'
+              - 'internal/fetch/**'
+              - 'internal/kubeapi/**'
+              - 'internal/kubetest/**'
+              - 'internal/model/**'
+              - 'internal/testutil/**'
+              - 'internal/transform/**'
+      # paths-filter compares a tag push with the tag's merge base on main,
+      # which for a tag on main's newest commit is that commit: no file has
+      # changed, every step is skipped and the run passes, and the release
+      # workflows would take it for CI passing on the commit
+      # (tools/ci-passed.py). So the steps run under these outputs, which on
+      # a tag push are all true and otherwise the filter's own; OUTPUTS names
+      # every output of the filter, which a test keeps so.
+      - name: Run every step on a tag push
+        id: changes
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          OUTPUTS: go chart exporter allocator
+        run: |
+          set -eu
+          for output in $OUTPUTS; do
+            value=false
+            if [ "$REF_TYPE" = tag ] || printf '%s' "$CHANGED" | grep -q "\"$output\""; then
+              value=true
+            fi
+            echo "$output=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.changes.outputs.go == 'true'
+        with:
+          go-version: 'stable'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
+      - run: go mod download
+        if: steps.changes.outputs.go == 'true'
+      - run: go vet ./...
+        if: steps.changes.outputs.go == 'true'
+      - run: go build ./...
+        if: steps.changes.outputs.go == 'true'
+      # The release builds archives for darwin too, from the same code: a
+      # file that compiles on Linux alone would otherwise first fail there,
+      # at release time. The two commands are linked as the release links
+      # them, which go build ./... does not do.
+      - name: Build for macOS
+        run: |
+          set -eu
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build ./...
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null .
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/pue-allocator
+          done
+        if: steps.changes.outputs.go == 'true'
+      # The image the release publishes, built from the Dockerfile and
+      # pushed nowhere, so a change that breaks its build fails here rather
+      # than in the release. Its --version shows the build stage stamped the
+      # revision in.
+      - name: Build the image
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -eu
+          docker build --build-arg VERSION=0.0.0-ci --build-arg "REVISION=${REVISION}" --tag prometheus-universal-exporter:ci .
+          docker run --rm prometheus-universal-exporter:ci --version | grep -F "$REVISION"
+        if: steps.changes.outputs.go == 'true'
+      # The sql request type's four opt-in drivers are compiled by no build
+      # above: vet, build and test a build with all of them, whose tests of
+      # each driver's connection settings are in files built only with it.
+      - name: Build and test with every opt-in sql driver
+        run: |
+          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' oracle,clickhouse,snowflake,vertica)" && go test -count=1 -tags "$tags" ./internal/fetch/
+        if: steps.changes.outputs.go == 'true'
+      # The opt-in request types are compiled beside the default build's by
+      # no build above, as a build with OPT_IN_REQUEST_TYPES has them: vet,
+      # build and test that build too, the repository's checks among the
+      # tests, whose rows of an opt-in type's schema keys and examples of
+      # its documentation run in a build with it.
+      - name: Build and test with every opt-in request type
+        run: |
+          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
+        if: steps.changes.outputs.go == 'true'
   # The race run, the tests of each request type built on its own and the
   # allocator's tests are most of CI's time, so they run in jobs of their
   # own, beside test, and CI takes about as long as its longest job. Each
@@ -755,6 +1118,7 @@ jobs:
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
               - 'internal/model/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
@@ -888,11 +1252,13 @@ jobs:
           - grpc
           - http
           - kubernetes
+          - ldap
           - localfile
           - redis
           - s3file
           - sql
           - sshfile
+          - tcp
           - tlscert
     env:
       STRICT_OPENMETRICS_PARSER: required
@@ -970,6 +1336,7 @@ jobs:
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
               - 'internal/model/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
@@ -1074,6 +1441,17 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
+      # A build can carry only some request types. Vet and build the type on
+      # its own too, so code one type needs cannot quietly depend on another;
+      # make build-request-types runs the same commands over every type.
+      - name: Build with the request type on its own
+        env:
+          type: ${{ matrix.type }}
+        run: |
+          tags="$(sh tools/request-type-tags.sh "$type")"
+          go vet -tags "$tags" ./...
+          go build -tags "$tags" ./...
+        if: steps.changes.outputs.go == 'true'
       - name: Test with the request type on its own
         env:
           type: ${{ matrix.type }}
@@ -1086,7 +1464,8 @@ jobs:
   # once, then twice and shuffled under the race detector, as the exporter's
   # run in test and race. Not with each request type on its own: those of its
   # tests that need a type are built with it, so such a build runs a part of
-  # them alone, and test's loop vets and builds the allocator with each type.
+  # them alone, and the request-types matrix vets and builds the allocator
+  # with each type.
   allocator:
     runs-on: ubuntu-latest
     env:
@@ -1165,6 +1544,7 @@ jobs:
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
+              - 'internal/ldaptest/**'
               - 'internal/model/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'

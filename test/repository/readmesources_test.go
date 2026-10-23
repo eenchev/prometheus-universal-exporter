@@ -8,7 +8,7 @@ import (
 
 // The README's opening is where a reader decides whether this reads their
 // source at all. It started as an HTTP exporter and kept saying so after it
-// learned gRPC, Graphite, files, SSH, SQL, S3, Kubernetes and Redis; this keeps the tagline and the
+// learned gRPC, Graphite, files, SSH, SQL, S3, Kubernetes, Redis, TCP and LDAP; this keeps the tagline and the
 // paragraph after it naming every request type in the tree, and makes a new
 // request type say how the README should name it.
 
@@ -26,6 +26,8 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"s3file":     {"S3 bucket", "objects in Amazon S3"},
 	"kubernetes": {"Kubernetes object", "Kubernetes objects"},
 	"redis":      {"Redis server", "Redis and Valkey servers"},
+	"tcp":        {"text protocol over TCP", "services that answer a line sent over TCP"},
+	"ldap":       {"LDAP directory", "LDAP directories"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

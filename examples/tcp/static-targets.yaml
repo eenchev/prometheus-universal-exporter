@@ -1,0 +1,45 @@
+# The exporter scrapes these itself, every 30 seconds, and serves them
+# together on /static-targets: a memcached pair, a three-server ZooKeeper
+# ensemble and an HAProxy, each named by host:port. A target's labels add
+# the cluster to its series, and its name, as static_target, tells the
+# servers of one cluster apart. ZooKeeper's servers are given 5 seconds, so
+# that one that does not answer is not waited for as long as the others.
+#
+#   ./prometheus-universal-exporter --config.file=examples/tcp/config.yaml --static-targets-file=examples/tcp/static-targets.yaml
+#   curl http://localhost:8080/static-targets
+#
+# x-memcached and x-zookeeper are this file's own keys, which the exporter
+# ignores: they hold what the targets of each service share, merged into
+# each with <<.
+x-memcached: &memcached
+  collector: memcached
+  labels:
+    cluster: sessions
+x-zookeeper: &zookeeper
+  collector: zookeeper
+  labels:
+    cluster: kafka
+  request:
+    timeout: 5s
+interval: 30s
+targets:
+  - <<: *memcached
+    name: memcached_0
+    target: memcached-0.memcached.cache:11211
+  - <<: *memcached
+    name: memcached_1
+    target: memcached-1.memcached.cache:11211
+  - <<: *zookeeper
+    name: zookeeper_0
+    target: zk-0.zookeeper.kafka:2181
+  - <<: *zookeeper
+    name: zookeeper_1
+    target: zk-1.zookeeper.kafka:2181
+  - <<: *zookeeper
+    name: zookeeper_2
+    target: zk-2.zookeeper.kafka:2181
+  - name: haproxy
+    collector: haproxy
+    target: haproxy.edge:9999
+    labels:
+      cluster: edge

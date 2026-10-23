@@ -50,7 +50,7 @@
             "description": "Discovery sources, whose targets are allocated as written ones are. See docs/ALLOCATOR.md#sources.",
             "items": {
               "additionalProperties": false,
-              "description": "One source: exactly one of file_sd, http_sd and kubernetes.",
+              "description": "One source: exactly one of file_sd, http_sd, kubernetes and dns_sd.",
               "oneOf": [
                 {
                   "required": [
@@ -66,9 +66,104 @@
                   "required": [
                     "kubernetes"
                   ]
+                },
+                {
+                  "required": [
+                    "dns_sd"
+                  ]
                 }
               ],
               "properties": {
+                "dns_sd": {
+                  "additionalProperties": false,
+                  "description": "Names looked up in the DNS as Prometheus's dns_sd_configs looks them up: each SRV record a target at its target and port, or each A or AAAA record a target at its address and port.",
+                  "else": {
+                    "not": {
+                      "required": [
+                        "port"
+                      ]
+                    }
+                  },
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "A",
+                          "AAAA"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  "properties": {
+                    "names": {
+                      "description": "The names looked up, each once, as absolute names, such as _metrics._tcp.example.com.",
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_.-]+$",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "port": {
+                      "description": "The port of the targets of an A or AAAA source, required for those and refused for SRV, whose records carry their own.",
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "refresh_interval": {
+                      "description": "How often the names are looked up, at least 1s. Defaults to 30s.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "server": {
+                      "description": "A DNS server, host or host:port (port 53 by default), asked instead of the system's nameservers.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "timeout": {
+                      "description": "How long the lookups of all the names may take together, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "type": {
+                      "description": "The record type asked for: SRV, the default, A or AAAA.",
+                      "enum": [
+                        "SRV",
+                        "A",
+                        "AAAA",
+                        ""
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "names"
+                  ],
+                  "then": {
+                    "required": [
+                      "port"
+                    ]
+                  },
+                  "type": "object"
+                },
                 "file_sd": {
                   "additionalProperties": false,
                   "description": "Prometheus file_sd files: JSON or YAML lists of target groups.",

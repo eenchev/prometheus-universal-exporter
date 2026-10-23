@@ -9,7 +9,7 @@ make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
-make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis adds s3file and redis
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
@@ -43,18 +43,19 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file` and `redis`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file`, `redis`, `tcp` and `ldap`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/allocclient` | The exporter's side of the target allocator in allocator mode (`--allocator.url`): the heartbeats to every copy of the allocator, the long poll for its bundle, and the cache directory a bundle is written into, checked in and put in force by swapping one symbolic link, for the configuration manager to reload ([Target allocator](ALLOCATOR.md)). |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/allocator` | The target allocator, whose command line is `cmd/pue-allocator`: its input files and the probe targets file, the member list from heartbeats, allocation and handover, bundles, service discovery and its HTTP API. Its time goes through a `Clock`, so its tests move a clock of their own by hand ([Target allocator](ALLOCATOR.md)). |
-| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
+| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. Among them `TCPStub`, the stand-in server of the `tcp` type's tests in `internal/fetch` and `internal/exporter`: a TCP or TLS server, its certificate written to a file, handing each connection to the test, which plays memcached, ZooKeeper or a server that never ends its answer. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 | `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |
 | `internal/kubetest` | A stand-in Kubernetes API server for the tests of `internal/kubeapi` and of the `kubernetes` type: an HTTPS server answering a listing of the objects a test gave it a page at a time, as the limit asks, with continue tokens, refusing a request without the token of its service account directory with `401`, answering `403` and `404` as the API server does, slow to answer when told to, and recording the requests; it writes the service account directory and sets the environment of a pod. It imports nothing but the standard library. |
 | `internal/redistest` | A stand-in Redis server for the `redis` type's tests: a TCP or TLS server, its self-signed certificate written to a file, answering RESP2 commands as Redis and Valkey do — AUTH with or without a username against the password it was given, NOAUTH before it, SELECT of the databases 0 to 15, INFO of the sections a test gave it, all or one by name, and any other command with the raw reply the test set — with a hook that answers a command with any bytes, to play a broken, hostile or silent server, and the commands it was sent recorded. It imports the standard library alone; imported only by tests. |
+| `internal/ldaptest` | A stand-in LDAP server for the `ldap` type's tests: a TCP server, or a TLS one for `ldaps://`, its self-signed certificate written to a file, answering LDAPv3 messages in BER as a directory server does — a simple bind, anonymous or as an account it was given, `invalidCredentials` to a wrong password, StartTLS unless told to refuse it, and a search of the entries a test gave it by base, scope and filter, with the attributes asked for, a page at a time with the Simple Paged Results control unless told to ignore it, and continuation references — with a hook that answers a request with any bytes, to play a broken, hostile or silent server, and the requests it was sent recorded, each filter written back as RFC 4515 text. It imports the standard library alone; imported only by tests. |
 | `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the type's build tag, so a build without the type compiles no SSH code even for its tests. |
 
 A package's tests live beside it, unless they need more than it can import: a
@@ -668,27 +669,28 @@ when it is run with that build's tags
 
 ### Opt-in request types
 
-A type the default build leaves out, `s3file` or `redis`, lives in its
+A type the default build leaves out, `s3file`, `redis`, `tcp` or `ldap`, lives in its
 `internal/fetch/requesttype_<name>.go` under its own tag alone,
 
 ```go
 //go:build request_type_s3file
 ```
 
-as do the files only it needs (`s3source.go`, `redisresp.go`) and its tests,
-so a build carries it only when its tag is given: `sh tools/request-type-tags.sh '' ''
-s3file,redis`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
+as do the files only it needs (`s3source.go`, `redisresp.go`, `ldapber.go`,
+`ldapfilter.go`) and its tests, so a build carries it only when its tag is
+given: `sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
 default build's types, and `REQUEST_TYPES` may name it like any type. Shared
 code it uses names its tag beside the others' (`filereads.go`,
 `localfile_directory.go`). Each type built on its own includes it, in the
-loops of `make build-request-types` and `make test-request-types` and CI's;
+loops of `make build-request-types` and `make test-request-types` and CI's
+matrix over the request types;
 the build with every opt-in type beside the default build's is vetted,
 built, tested (`internal/fetch` and `test/repository`) and linted by `make
 build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,
 as CI does, and a test keeps their lists naming every opt-in type of the
 tree. The default build's tests know an opt-in type's request keys without
 the type (`optInRequestKeys`, `internal/fetch`), and its schema rows
-(`s3fileSchemaKeys`, `redisSchemaKeys`) are compiled in the default build, which checks that
+(`s3fileSchemaKeys`, `redisSchemaKeys`, `tcpSchemaKeys`, `ldapSchemaKeys`) are compiled in the default build, which checks that
 every constrained key of the schemas has a row, and compared with the
 exporter's verdicts against the schema the binary generates, in a build
 with the type (`built: true`), since the committed schemas, the default
@@ -816,7 +818,7 @@ make schemas
 ```
 
 The committed files are the schemas of a build with every request type but
-the opt-in ones — no `s3file` or `redis` in the `request.type` enum — and the sql type's
+the opt-in ones — no `s3file`, `redis`, `tcp` or `ldap` in the `request.type` enum — and the sql type's
 default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and
@@ -847,7 +849,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes`, `s3file` and `redis`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes`, `s3file`, `redis`, `tcp` and `ldap`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
@@ -2281,23 +2283,26 @@ fails for a file a side needs that its list leaves out, for an entry that
 matches none of them, for a file a side's list matches that the `go` output
 does not (the setup steps run under `go`), and for a package tested by no
 side or by both. When it fails for a new package or a new file a test reads,
-add its directory or the file to the side's list in all four jobs.
+add its directory or the file to the side's list in every job.
 
-The slowest parts of CI run in jobs of their own, beside the `test` job and
-at the same time as it: `race` runs the exporter's race suite, and
+CI runs in jobs side by side, so it takes about as long as its longest job:
+`lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
+and the opt-in request types') and gopls; `build` runs `go vet`, the default
+build, darwin's, the image's, and the builds with the opt-in sql drivers and
+request types with their tests; `race` runs the exporter's race suite;
 `request-types`, a matrix over the request types (its checks are named
-`test (<type>)`), runs the exporter's tests with each type built on its own,
-both when the `exporter` output names a change; `allocator` runs the
+`test (<type>)`), vets and builds each type on its own under the `go` output
+and runs the exporter's tests with it under `exporter`; `allocator` runs the
 allocator's tests, once and then under the race detector, when the
-`allocator` output does. The allocator's tests are not run with each type on
-its own: those that need a type are built with it, so such a build runs a
-part of them alone, and `test`'s loop already vets and builds the allocator
-with each type. `test` keeps everything else: the repository tests, the
-exporter's tests (under `exporter`), the single-type vet and build and the
-chart steps. Each of the other jobs starts with `test`'s setup steps but
-helm's, written out again, and `TestTheGoJobsOfCIStartWithTheSetupOfTest`
-fails when a copy differs from `test`'s, so change them in all four jobs at
-once. They gate their steps on the changed-path filter's outputs rather than
+`allocator` output names a change. The allocator's tests are not run with
+each type on its own: those that need a type are built with it, so such a
+build runs a part of them alone, and each type's job already vets and builds
+the allocator with it. `test` keeps the repository tests, the exporter's
+tests (under `exporter`) and the chart steps; a test fails when it runs a
+linter or a build again. Each of the other jobs starts with `test`'s setup
+steps but helm's, written out again, and
+`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
+`test`'s, so change them in every job at once. They gate their steps on the changed-path filter's outputs rather than
 with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over

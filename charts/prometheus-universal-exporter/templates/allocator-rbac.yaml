@@ -1,13 +1,18 @@
 {{- /* What a kubernetes discovery source needs: a ServiceAccount of the
-       allocator's own, so the exporter's keeps no token and no permission,
-       and, with allocator.rbac.create, the right to list EndpointSlices
-       where the sources list them, and no more: the allocator polls with
-       list requests, never getting one slice nor watching. A source
-       without namespaces lists the allocator's own; one with all_namespaces
-       lists the cluster's, which takes a ClusterRole. */ -}}
+       allocator's own, unless allocator.serviceAccount.name names one, so
+       the exporter's keeps no token and no permission, and, with
+       allocator.rbac.create, the right to list EndpointSlices where the
+       sources list them, and no more: the allocator polls with list
+       requests, never getting one slice nor watching. A source without
+       namespaces lists the allocator's own; one with all_namespaces lists
+       the cluster's, which takes a ClusterRole. */ -}}
 {{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
 {{- $name := include "prometheus-universal-exporter.allocatorFullname" . }}
+{{- $account := include "prometheus-universal-exporter.allocatorServiceAccountName" . }}
 {{- $namespace := include "prometheus-universal-exporter.namespace" . }}
+{{- /* An account named in allocator.serviceAccount.name is the operator's,
+       so the chart creates none and binds its Roles to that one. */}}
+{{- if not ((.Values.allocator.serviceAccount | default dict).name) }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -19,6 +24,7 @@ metadata:
   annotations:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 automountServiceAccountToken: true
+{{- end }}
 {{- if (.Values.allocator.rbac | default dict).create }}
 {{- $cluster := false }}
 {{- $namespaces := list }}
@@ -59,7 +65,7 @@ roleRef:
   name: {{ printf "%s-%s" $namespace $name | trunc 253 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ $name }}
+    name: {{ $account }}
     namespace: {{ $namespace }}
 {{- end }}
 {{- range $ns := $namespaces | uniq | sortAlpha }}
@@ -91,7 +97,7 @@ roleRef:
   name: {{ $name }}
 subjects:
   - kind: ServiceAccount
-    name: {{ $name }}
+    name: {{ $account }}
     namespace: {{ $namespace }}
 {{- end }}
 {{- end }}

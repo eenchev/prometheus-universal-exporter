@@ -349,6 +349,10 @@ type debugProbe struct {
 	// response, a target or a static target's scrape. Empty for a debug
 	// probe or scrape.
 	source string
+	// backingOff says, when it is set, that failure_backoff is backing off
+	// from the target the probe or scrape run would make (backoff.go),
+	// which the run itself contacts all the same.
+	backingOff string
 }
 
 // whose is what a report is of, in its first line.
@@ -406,6 +410,10 @@ func (r *debugReport) text() []byte {
 // waits for a slot within its budget, as the scrape itself would.
 func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	start := time.Now()
+	// A run always contacts the target, and what it finds changes nothing
+	// of failure_backoff's; its report only says whether the probes and
+	// scrapes it stands for would have.
+	p.backingOff = s.backoffs.describe(p.collector.Name, p.backoffKey)
 	ctx, trace := newProbeTrace(ctx)
 	if p.budget > 0 {
 		var cancel context.CancelFunc
@@ -501,6 +509,9 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
 		scrape: p.static != nil, log: debugLog(p),
 		pasted: p.pasted, requester: p.requester,
+		// A debug probe revalidates the response the same probe would,
+		// and shows the conditional request; it keeps nothing.
+		revalidateKey: p.staleKey,
 	}
 	// An edited collector runs no Python, and is no collector of the
 	// configuration whose workers would count it.
@@ -654,8 +665,14 @@ func (s *Server) staticDebugProbe(name string) (debugProbe, int, error) {
 	if label, err := fetch.RequestLabelFor(target.Target, c, overrides); err == nil {
 		p.requestURL = label
 	}
-	if model.UsesCache(c) {
-		p.staleKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(target), headers, targetOwnRequest(target)...)
+	if model.UsesCache(c) || c.FailureBackoff != nil {
+		key := s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(target), headers, targetOwnRequest(target)...)
+		if model.UsesCache(c) {
+			p.staleKey = key
+		}
+		if c.FailureBackoff != nil {
+			p.backoffKey = key
+		}
 	}
 	return p, 0, nil
 }
@@ -705,6 +722,10 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	default:
 		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
 		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.\n")
+	}
+	if p.backingOff != "" {
+		b.WriteString(p.backingOff)
+		b.WriteString(" This run contacted it all the same, and changes nothing of that.\n")
 	}
 
 	b.WriteString("\nRequests\n")

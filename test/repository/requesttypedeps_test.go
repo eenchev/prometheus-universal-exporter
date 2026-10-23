@@ -114,15 +114,16 @@ func optInRequestTypes(t *testing.T) []string {
 // it, links the gRPC and protobuf modules only when the type is grpc, the
 // SSH and SFTP modules only when it is sshfile, and the AWS SDK only when
 // it is s3file; a build of graphite, http and localfile together links none
-// of them, nor does one of dns, tlscert and kubernetes, or of redis alone,
-// which need nothing outside the standard library; and the default build, of
-// every type but the opt-in s3file and redis, links gRPC's and SSH's and no
-// AWS SDK, which only a build asking for s3file (OPT_IN_REQUEST_TYPES) links,
-// and a build asking for redis alone does not. go list is asked of the main package, the exporter as it ships;
+// of them, nor does one of dns, tlscert and kubernetes, or of redis, tcp or
+// ldap alone, which need nothing outside the standard library; and the default
+// build, of every type but the opt-in s3file, redis, tcp and ldap, links gRPC's
+// and SSH's and no AWS SDK, which only a build asking for s3file
+// (OPT_IN_REQUEST_TYPES) links, and a build asking for redis, tcp or ldap alone
+// does not. go list is asked of the main package, the exporter as it ships;
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "localfile", "redis", "s3file", "sql", "sshfile", "tlscert", "graphite,http,localfile", "dns,kubernetes,redis,tlscert"} {
+	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "ldap", "localfile", "redis", "s3file", "sql", "sshfile", "tcp", "tlscert", "graphite,http,localfile", "dns,kubernetes,ldap,redis,tcp,tlscert"} {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestType string
@@ -146,10 +147,12 @@ func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
 	if found := linksAny(all, s3fileModules); len(found) > 0 {
 		t.Errorf("the default build links %s, which only a build with the opt-in s3file type may", strings.Join(found, ", "))
 	}
-	if found := linksAny(linkedPackagesOf(t, "", "", "redis"), s3fileModules); len(found) > 0 {
-		t.Errorf("OPT_IN_REQUEST_TYPES=redis links %s, which only a build with the opt-in s3file type may", strings.Join(found, ", "))
+	for _, optIn := range []string{"redis", "tcp", "ldap"} {
+		if found := linksAny(linkedPackagesOf(t, "", "", optIn), s3fileModules); len(found) > 0 {
+			t.Errorf("OPT_IN_REQUEST_TYPES=%s links %s, which only a build with the opt-in s3file type may", optIn, strings.Join(found, ", "))
+		}
 	}
-	for _, build := range []struct{ types, optIn string }{{"", "s3file"}, {"http", "s3file"}, {"", "s3file,redis"}} {
+	for _, build := range []struct{ types, optIn string }{{"", "s3file"}, {"http", "s3file"}, {"", "s3file,redis,tcp,ldap"}} {
 		packages := linkedPackagesOf(t, build.types, "", build.optIn)
 		for _, module := range []string{"github.com/aws/aws-sdk-go-v2/service/s3", "github.com/aws/aws-sdk-go-v2/config"} {
 			if len(linksAny(packages, []string{module})) == 0 {
@@ -200,4 +203,36 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 			t.Errorf("make ci does not run %s", target)
 		}
 	}
+}
+
+// The opt-in tcp request type links nothing outside the standard library:
+// every package a build of it alone links beyond those of a build of no
+// type at all is the standard library's or the module's own, its client
+// being net and crypto/tls, as is the stand-in server of its tests in
+// internal/testutil, which tests alone import.
+func TestTheTCPTypeLinksNothingOutsideTheStandardLibrary(t *testing.T) {
+	none := linkedPackagesTagged(t, "select_request_types")
+	for _, pkg := range linkedPackages(t, "tcp") {
+		first, _, _ := strings.Cut(pkg, "/")
+		if !slices.Contains(none, pkg) && strings.Contains(first, ".") && !strings.HasPrefix(pkg, "github.com/eenchev/prometheus-universal-exporter/") {
+			t.Errorf("REQUEST_TYPES=tcp links %s, which a build of no request type does not and which is not the standard library's", pkg)
+		}
+	}
+}
+
+// linkedPackagesTagged lists every package the exporter binary is built
+// from with the given tags as they are.
+func linkedPackagesTagged(t *testing.T, tags string) []string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go command")
+	}
+	cmd := exec.Command("go", "list", "-deps", "-tags", tags, ".")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, stderr.String())
+	}
+	return strings.Fields(string(out))
 }

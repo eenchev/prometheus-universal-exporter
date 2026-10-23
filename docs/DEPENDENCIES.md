@@ -101,8 +101,10 @@ default, which builds every request type but the opt-in ones, or a
 comma-separated list such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
 `OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
-leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)) and
-`redis` ([Redis and Valkey](REDIS.md#building-with-redis)).
+leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)),
+`redis` ([Redis and Valkey](REDIS.md#building-with-redis)), `tcp`
+([Text protocols over TCP](TCP.md#building-with-tcp)) and `ldap`
+([LDAP directories](LDAP.md#building-with-ldap)).
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
@@ -201,6 +203,25 @@ no use for, and whose readers allocate what a reply's length declares. The
 same test finds none of the other types' modules in a build of it, and the
 stand-in server of its tests (`internal/redistest`) is standard library
 alone too.
+
+Nor has the opt-in [`tcp`](TCP.md) request type: it writes a line and reads
+the answer with `net` and `crypto/tls`, the protocol being whatever the
+service's text is, which the decoders and transforms read as they read a
+body. A test finds that a build of it alone links no package that a build
+of no request type does not, but the standard library's, and the stand-in
+server of its tests (`internal/testutil`'s `TCPStub`) is standard library
+alone too.
+
+Nor has the opt-in [`ldap`](LDAP.md) request type, which a build carries
+only when `OPT_IN_REQUEST_TYPES` names it: it speaks LDAPv3 over `net` and
+`crypto/tls` with a client of its own, the BER of the few operations a
+scrape sends and reads (`internal/fetch/ldapber.go`) and a parser of
+RFC 4515 filters (`internal/fetch/ldapfilter.go`), and no LDAP client
+library (`github.com/go-ldap/ldap`), which would bring `go-asn1-ber` and an
+NTLM and GSSAPI stack a simple bind has no use for, and whose BER reader
+allocates what a message's length declares. The same test finds none of the
+other types' modules in a build of it, and the stand-in server of its tests
+(`internal/ldaptest`) is standard library alone too.
 
 The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
 has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token

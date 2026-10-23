@@ -8,6 +8,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // A kubernetes collector's answer is a JSON document the exporter makes: its
@@ -70,5 +71,22 @@ func TestAKubernetesCollectorOfSecretsIsRefusedAtLoad(t *testing.T) {
 	}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err == nil || !strings.Contains(err.Error(), `collector "secrets" lists secrets, which a kubernetes collector may not`) {
 		t.Errorf("err=%v", err)
+	}
+}
+
+// A tls block written empty, tls: {}, is a tls block: without api_server it
+// is refused as one with keys is, where it used to load unnoticed.
+func TestAnEmptyTLSBlockWithoutAPIServerIsRefused(t *testing.T) {
+	_, err := Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: kube
+    request:
+      type: kubernetes
+      resource: pods
+      tls: {}
+    transform: {type: jq}
+    metrics: [{name: v, expression: .count}]
+`))
+	if err == nil || !strings.Contains(err.Error(), "sets request.tls or request.bearer_token_file without request.api_server") {
+		t.Errorf("tls: {} without api_server: %v", err)
 	}
 }

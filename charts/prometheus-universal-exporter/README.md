@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, or the searches of an LDAP directory, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file` and `redis` collectors in an image built with them
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis`, `tcp` and `ldap` collectors in an image built with them
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
@@ -381,6 +381,24 @@ With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secr
 
 The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while it shuts down and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; a rejected reload of its configuration leaves it ready, serving the configuration in force; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
+## Service account
+
+By default the chart creates a ServiceAccount `<fullname>`, or `serviceAccount.name` when it is set, and the exporter's pods run as it. To run them as an account that already exists, one your cluster's policies or another team manage, set `serviceAccount.create: false` and name it:
+
+```yaml
+serviceAccount:
+  create: false
+  name: metrics-exporter
+```
+
+The chart then renders no ServiceAccount, and the pods run as `metrics-exporter`. The name is required: an empty `serviceAccount.name` with `create: false` fails rendering, refused by the values schema and, with the schema skipped, by the templates, rather than running the pods as the namespace's `default` account, which every workload without an account of its own shares and which `kubernetesAccess` would then grant `list` to. Write `name: default` to choose that account on purpose.
+
+Whichever account the pods run as, they mount no service account token unless `serviceAccount.automount` is true or `kubernetesAccess` is enabled. With `kubernetesAccess`, the pods mount the token and the chart binds its Roles, or its ClusterRole, to the account the pods run as, the named one included; see [Kubernetes collectors](#kubernetes-collectors). The chart sets `automountServiceAccountToken` on the pods, and on the ServiceAccount only when it creates it.
+
+`serviceAccount.annotations` are put on the ServiceAccount the chart creates, such as the IAM role an EKS pod takes (IRSA), shown under [S3 object collectors](#s3-object-collectors), or the Google service account of GKE's Workload Identity, `iam.gke.io/gcp-service-account`. The chart never changes an account it did not create, so annotations beside `create: false` fail rendering, saying so: put them on the existing account itself.
+
+The allocator runs as an account of its own with a `kubernetes` discovery source, `<fullname>-allocator`, and as the exporter's without one; `allocator.serviceAccount.name` runs it as an existing account instead, whatever its sources; see [Target allocator](#target-allocator).
+
 ## SSH file collectors
 
 An `sshfile` collector reads a file over SSH (SFTP), with a private key or a password from files it names — `private_key_file`, `passphrase_file`, `password_file` — and the server's host key checked against `known_hosts_file`. `sshAuth` mounts all of them from Kubernetes objects into one read-only directory, `sshAuth.mountPath`, `/var/run/prometheus-universal-exporter/ssh` by default, under fixed names:
@@ -564,7 +582,7 @@ config:
             type: prometheus
 ```
 
-and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. The annotation is on the ServiceAccount the chart creates; with an existing account, `serviceAccount.create: false`, annotate that account instead (see [Service account](#service-account)). Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
 
 ## Redis collectors
 
@@ -584,7 +602,68 @@ extraVolumeMounts:
     readOnly: true
 ```
 
-and name `password_file: /var/run/prometheus-universal-exporter/redis/password`, with `username` for an ACL user, in the collector. Probe it with the server as the target, `/probe?collector=redis&target=redis-master.cache:6379`, or `rediss://` for TLS. With `networkPolicy.egress` rules, add one for the servers' port, 6379 by default. The request's keys are in [Redis and Valkey](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/REDIS.md).
+and name `password_file: /var/run/prometheus-universal-exporter/redis/password`, with `username` for an ACL user, in the collector. Probe it with the server as the target, `/probe?collector=redis&target=redis-master.cache:6379`, or `rediss://` for TLS, with the CA and a client certificate mounted as [TLS files](#tls-files) shows. With `networkPolicy.egress` rules, add one for the servers' port, 6379 by default. The request's keys are in [Redis and Valkey](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/REDIS.md).
+
+## TCP collectors
+
+A `tcp` collector sends a line, such as memcached's `stats`, over a TCP connection and reads the answer, for services whose statistics come that way: memcached, ZooKeeper's four-letter words, HAProxy's runtime API on a TCP socket. The type is opt-in, as `s3file` and `redis` are: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=tcp` (or `redis,tcp` for more than one), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+Probe it with the service as the target, its port always named, `/probe?collector=memcached&target=memcached.cache:11211`. With `networkPolicy.egress` rules, add one for each service's port. Over TLS, the collector names its CA and client certificate files in `tls`, mounted as [TLS files](#tls-files) shows. The request's keys are in [Text protocols over TCP](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/TCP.md).
+
+### TLS files
+
+A `tcp`, `redis` or `ldap` collector that speaks TLS verifies the server against the system's roots and the CA in `tls.ca_file`, and presents a client certificate from `tls.cert_file` and `tls.key_file`, both or neither, when the server asks for one. The files are read from the exporter's pod, so put them in a Secret, `ca.crt` and, for a client certificate, `tls.crt` and `tls.key` (the keys cert-manager writes), and mount it through `extraVolumes` and `extraVolumeMounts`. HAProxy's runtime API over TLS, with a client certificate:
+
+```yaml
+extraVolumes:
+  - name: haproxy-tls
+    secret:
+      secretName: haproxy-tls   # keys: ca.crt, tls.crt, tls.key
+      defaultMode: 0400
+extraVolumeMounts:
+  - name: haproxy-tls
+    mountPath: /var/run/prometheus-universal-exporter/haproxy-tls
+    readOnly: true
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: haproxy
+          request:
+            type: tcp
+            send: "show info\n"
+            tls:
+              ca_file: /var/run/prometheus-universal-exporter/haproxy-tls/ca.crt
+              cert_file: /var/run/prometheus-universal-exporter/haproxy-tls/tls.crt
+              key_file: /var/run/prometheus-universal-exporter/haproxy-tls/tls.key
+          transform:
+            type: regex
+          metrics:
+            - name: haproxy_current_connections
+              expression: '(?m)^CurrConns: (\d+)$'
+```
+
+and probe it with the runtime API's address, `/probe?collector=haproxy&target=haproxy.edge:9999`. A `redis` or `ldap` collector takes the same `tls` block, beside `password_file` from its own Secret or the same one; a CA alone, a Secret with only `ca.crt`, verifies the server without a client certificate. The files are read at the first scrape and again when they change, so a renewed Secret takes effect once the kubelet updates the mount, without a restart. As for any extra mount, the `mountPath` must be a path of its own, not at or inside the configuration directory or a credential's.
+
+## LDAP collectors
+
+An `ldap` collector searches an LDAP directory, OpenLDAP, Active Directory or any other LDAPv3 server, and reads the entries each search finds, or only their count. The type is opt-in, as `s3file` and `redis` are: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=ldap` (or `s3file,redis,tcp,ldap` for all four), push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+The password of the account the collector binds as, its `bind_dn`, is a file it names with `password_file`, read at every scrape; mount it from a Secret through `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+extraVolumes:
+  - name: ldap-exporter
+    secret:
+      secretName: ldap-exporter
+      defaultMode: 0400
+extraVolumeMounts:
+  - name: ldap-exporter
+    mountPath: /var/run/prometheus-universal-exporter/ldap
+    readOnly: true
+```
+
+and name `password_file: /var/run/prometheus-universal-exporter/ldap/password` beside `bind_dn` in the collector. Probe it with the server as the target, `/probe?collector=directory&target=ldap.example.org`, or `ldaps://` for TLS from the start; the CA and a client certificate are mounted as [TLS files](#tls-files) shows. With `networkPolicy.egress` rules, add one for the servers' port, 389, or 636 for LDAPS. The request's keys are in [LDAP directories](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/LDAP.md).
 
 ## Kubernetes collectors
 
@@ -620,7 +699,7 @@ config:
                   expression: .metadata.name
 ```
 
-and probe it with no target, `/probe?collector=deployments`. With `enabled`, the pods and the ServiceAccount mount the token, whatever `serviceAccount.automount` says, and the chart renders a Role and a RoleBinding `<fullname>` in each namespace of `namespaces`, the release's when it lists none, allowing `list` on each rule's `apiGroups` (`""` for the core group) and `resources`. A collector with `all_namespaces`, or of a cluster-scoped resource such as `nodes`, needs `clusterWide: true`, which renders a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` instead; `clusterWide` and `namespaces` together fail rendering. So do no rules, a rule with `*`, and a rule granting `secrets` of the core group, which no `kubernetes` collector may list. With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name`. While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
+and probe it with no target, `/probe?collector=deployments`. With `enabled`, the pods and the ServiceAccount mount the token, whatever `serviceAccount.automount` says, and the chart renders a Role and a RoleBinding `<fullname>` in each namespace of `namespaces`, the release's when it lists none, allowing `list` on each rule's `apiGroups` (`""` for the core group) and `resources`. A collector with `all_namespaces`, or of a cluster-scoped resource such as `nodes`, needs `clusterWide: true`, which renders a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` instead; `clusterWide` and `namespaces` together fail rendering. So do no rules, a rule with `*`, and a rule granting `secrets` of the core group, which no `kubernetes` collector may list. With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name` ([Service account](#service-account)). While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
 
 ## Common configuration
 
@@ -1238,8 +1317,8 @@ rendering rather than stop the allocator at start.
 
 A large fleet need not be listed: a probe job's `discovery`, and the
 `discovered_targets` of `allocator.staticTargets.data`, name `file_sd`,
-`http_sd` or `kubernetes` sources whose targets the allocator allocates as
-written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
+`http_sd`, `kubernetes` or `dns_sd` sources whose targets the allocator
+allocates as written ones ([Discovering targets](../../docs/ALLOCATOR.md#discovering-targets)).
 
 ```yaml
 allocator:
@@ -1263,7 +1342,27 @@ default, the chart lets it `list` EndpointSlices, all the allocator does
 with them: a Role and a RoleBinding in each namespace a source lists, the
 release's for a source that lists none, and a ClusterRole and a ClusterRoleBinding
 `<namespace>-<fullname>-allocator` for a source with `all_namespaces`.
-Without a `kubernetes` source none of this is rendered.
+Without a `kubernetes` source none of this is rendered, and the allocator
+runs as the exporter's account, `serviceAccount.automount` deciding its
+token.
+
+`allocator.serviceAccount.name` runs the allocator as an existing account
+instead, with or without a `kubernetes` source, and the chart creates no
+`<fullname>-allocator`:
+
+```yaml
+allocator:
+  enabled: true
+  serviceAccount:
+    name: pue-discovery
+```
+
+With a `kubernetes` source its pods mount the account's token, and
+`allocator.rbac.create` binds the Roles and ClusterRole above to it; with
+`allocator.rbac.create: false` the chart renders none of them, and letting
+the account list EndpointSlices is yours. Without a `kubernetes` source the
+allocator calls no API, so `serviceAccount.automount` decides its token as
+before.
 
 With any discovery source, in a probe job or in the `discovered_targets` of
 `allocator.staticTargets.data`, the allocator runs as one pod. Each copy
@@ -1346,6 +1445,7 @@ allocator refuses.
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
 | `allocator.probeJobs` | `[]` | The probe jobs: `name`, a DNS-1123 label that also names the job's ScrapeConfig `<fullname>-<name>`, `collector`, one the configuration defines, `targets`, at least one unless `discovery` finds them, and optionally `params`, `labels`, `shard_key` (`target` or `address`), `discovery` and `target_template`; no other key. |
 | `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount list EndpointSlices where the sources list them. |
+| `allocator.serviceAccount.name` | `""` | An existing ServiceAccount the allocator's pods run as, with or without a `kubernetes` source; the chart then creates none. Empty, `<fullname>-allocator` with a `kubernetes` source, the exporter's account without one. |
 | `allocator.extraVolumes` / `extraVolumeMounts` | `[]` | Volumes and mounts of the allocator's pods only, as `extraVolumes` and `extraVolumeMounts` are the exporter's: a `file_sd` source's files, an `http_sd` source's token and TLS files. |
 | `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
@@ -1413,7 +1513,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `imagePullSecrets` | array | `[]` | Secrets for a private registry. |
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
-| `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
+| `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`; `name` is required, and `annotations` refused, with `create: false`. See [Service account](#service-account). |
 | `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`; see [Kubernetes collectors](#kubernetes-collectors). |
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
@@ -1425,7 +1525,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |

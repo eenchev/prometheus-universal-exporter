@@ -11,7 +11,8 @@ import (
 
 // The exporter keeps state per collector: its self-metric counters, the
 // verbose per-request series and scrape-time histogram, cached results and
-// what the failure log remembers, and the worker pool the statistics of its
+// what the failure log remembers, the targets failure_backoff is backing off
+// from, and the worker pool the statistics of its
 // Python workers (pythonstats.go). A reload can remove a collector, or change
 // its definition, and that state has to follow:
 //
@@ -25,7 +26,8 @@ import (
 //     memory and count in http_exporter_cache_entries until they expired.
 //     What the failure log remembers of it is forgotten too: a failure of the
 //     old definition is none of the new one's, whose first failure is logged
-//     as a first. A probe's failures are told apart by the definition already
+//     as a first. So are the targets it was backing off from: the new
+//     definition may well reach them. A probe's failures are told apart by the definition already
 //     (probeCacheKey); a static target's are not.
 //
 // The state follows a reload when the reload is made: the configuration
@@ -619,12 +621,19 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 	}
 	s.failures.mu.Lock()
 	s.cache.mu.Lock()
+	s.backoffs.mu.Lock()
 	// The failures of a changed collector are forgotten with those of a
-	// removed one: they are the old definition's.
+	// removed one: they are the old definition's. So are the targets it was
+	// backing off from (backoff.go), under the same lock a trip records its
+	// outcome under once it has asked whether its collector stands: what a
+	// trip of the old definition records is in before they are forgotten,
+	// or not at all.
 	s.failures.forgetCollectorsLocked(stale)
 	s.failures.forgetStaticTargetsLocked(moved)
 	dropped := s.cache.dropCollectorsLocked(stale)
+	s.backoffs.forgetLocked(stale)
 	s.storeFollowed(next)
+	s.backoffs.mu.Unlock()
 	s.cache.mu.Unlock()
 	s.failures.mu.Unlock()
 	if report != nil {

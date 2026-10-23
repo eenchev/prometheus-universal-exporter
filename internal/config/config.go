@@ -145,6 +145,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if x.MaxConcurrentProbes < 0 {
 		return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 	}
+	if err := validateFailureBackoff(x); err != nil {
+		return err
+	}
 	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
 		return err
@@ -261,7 +264,16 @@ func applyLimitDefaults(l *model.Limits) {
 // jsonAnswerTypes are the request types whose answer is a JSON document the
 // exporter makes, so their decoder is json and their transform one that
 // reads JSON.
-var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes, fetch.RequestTypeRedis}
+var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes, fetch.RequestTypeRedis, fetch.RequestTypeLDAP}
+
+// typeArticle is the article a request type's name is read with: an
+// before a vowel, and before ldap, said letter by letter.
+func typeArticle(name string) string {
+	if name == fetch.RequestTypeLDAP || strings.ContainsAny(name[:min(len(name), 1)], "aeiou") {
+		return "an"
+	}
+	return "a"
+}
 
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
 // unknown transform and an unknown decoder, and infers the decoder a transform
@@ -292,18 +304,18 @@ func normalizeFormats(x *model.Collector) error {
 	}
 	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
 		// A grpc call, a dns lookup, a tlscert handshake, a kubernetes
-		// listing and a redis scrape are answered as JSON, whatever else
-		// their decoder could be.
+		// listing, a redis scrape and an ldap search are answered as JSON,
+		// whatever else their decoder could be.
 		switch x.Decoder.Type {
 		case "auto", "json":
 			x.Decoder.Type = "json"
 		default:
-			return fmt.Errorf("collector %q decodes with %s, but a %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, x.Request.Type)
+			return fmt.Errorf("collector %q decodes with %s, but %s %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, typeArticle(x.Request.Type), x.Request.Type)
 		}
 		switch x.Transform.Type {
 		case "jq", "yq", "python":
 		default:
-			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON a %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, x.Request.Type)
+			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, typeArticle(x.Request.Type), x.Request.Type)
 		}
 	}
 	if x.Request.Pagination != nil {
@@ -2163,6 +2175,42 @@ func normalizeErrorPolicy(collector, key string, value *string) error {
 }
 
 // validateCache checks a collector's cache when the configuration loads.
+// validateFailureBackoff checks failure_backoff and fills in its defaults:
+// after 3, initial 30s, max 10m or initial when that is longer, so a block
+// that sets only initial past 10m is not refused for a max it did not
+// write, and min_budget 1s.
+func validateFailureBackoff(c *model.Collector) error {
+	b := c.FailureBackoff
+	if b == nil {
+		return nil
+	}
+	if b.After == nil {
+		after := model.DefaultFailureBackoffAfter
+		b.After = &after
+	} else if *b.After < 1 {
+		return fmt.Errorf("collector %q failure_backoff.after must be at least 1, the consecutive failed scrapes of a target before its scrapes stop contacting it; got %d", c.Name, *b.After)
+	}
+	if b.Initial == nil {
+		initial := model.Duration(model.DefaultFailureBackoffInitial)
+		b.Initial = &initial
+	} else if *b.Initial <= 0 {
+		return fmt.Errorf("collector %q failure_backoff.initial must be a positive duration, such as 30s; got %s", c.Name, time.Duration(*b.Initial))
+	}
+	if b.Max == nil {
+		longest := max(model.Duration(model.DefaultFailureBackoffMax), *b.Initial)
+		b.Max = &longest
+	} else if *b.Max < *b.Initial {
+		return fmt.Errorf("collector %q failure_backoff.max %s must not be shorter than failure_backoff.initial %s", c.Name, time.Duration(*b.Max), time.Duration(*b.Initial))
+	}
+	if b.MinBudget == nil {
+		floor := model.Duration(model.DefaultFailureBackoffMinBudget)
+		b.MinBudget = &floor
+	} else if *b.MinBudget <= 0 {
+		return fmt.Errorf("collector %q failure_backoff.min_budget must be a positive duration, the least budget a trip that timed out must have had to count as the target's failure, such as 1s; got %s", c.Name, time.Duration(*b.MinBudget))
+	}
+	return nil
+}
+
 func validateCache(c *model.Collector) error {
 	if c.Cache.TTL < 0 {
 		return fmt.Errorf("collector %q cache.ttl must not be negative", c.Name)

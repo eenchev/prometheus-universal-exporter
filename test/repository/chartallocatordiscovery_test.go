@@ -132,6 +132,10 @@ func TestChartSchemaChecksProbeJobDiscovery(t *testing.T) {
 		`allocator.probeJobs=[{"name":"w","collector":"example","target_template":"https://{{address}}/","discovery":[{"name":"cmdb","http_sd":{"url":"https://cmdb.example/sd","refresh_interval":"30s","tls":{"ca_file":"/ca.crt"}},"max_targets":100}]}]`); !ok {
 		t.Fatalf("a probe job of discovery alone was refused:\n%s", out)
 	}
+	if out, ok := helmTemplate(t, helm, chartDir, "--set", "allocator.enabled=true", "--set-json",
+		`allocator.probeJobs=[{"name":"w","collector":"example","discovery":[{"dns_sd":{"names":["_metrics._tcp.example.com"],"server":"10.0.0.53"}},{"dns_sd":{"names":["a.example"],"type":"A","port":9100}}]}]`); !ok {
+		t.Fatalf("a probe job of dns_sd sources was refused:\n%s", out)
+	}
 	for what, c := range map[string]struct{ jobs, want string }{
 		"two kinds":           {`[{"name":"w","collector":"example","discovery":[{"http_sd":{"url":"https://a/"},"file_sd":{"files":["a.json"]}}]}]`, "allocator.probeJobs.0.discovery.0"},
 		"an unknown key":      {`[{"name":"w","collector":"example","discovery":[{"http_sd":{"url":"https://a/","bogus":1}}]}]`, "bogus"},
@@ -139,6 +143,8 @@ func TestChartSchemaChecksProbeJobDiscovery(t *testing.T) {
 		"no port":             {`[{"name":"w","collector":"example","discovery":[{"kubernetes":{}}]}]`, "port"},
 		"a bad template":      {`[{"name":"w","collector":"example","target_template":"https://x/","discovery":[{"kubernetes":{"port":"m"}}]}]`, "allocator.probeJobs.0.target_template"},
 		"empty discovery":     {`[{"name":"w","collector":"example","discovery":[]}]`, "allocator.probeJobs.0"},
+		"a port for SRV":      {`[{"name":"w","collector":"example","discovery":[{"dns_sd":{"names":["a.example"],"port":9100}}]}]`, "allocator.probeJobs.0.discovery.0.dns_sd"},
+		"an A without a port": {`[{"name":"w","collector":"example","discovery":[{"dns_sd":{"names":["a.example"],"type":"A"}}]}]`, "allocator.probeJobs.0.discovery.0.dns_sd"},
 	} {
 		if out, ok := helmTemplate(t, helm, chartDir, "--set", "allocator.enabled=true", "--set-json", "allocator.probeJobs="+c.jobs); ok || !namesInHelmError(out, c.want) {
 			t.Errorf("%s: ok=%v, want an error naming %q:\n%s", what, ok, c.want, out)

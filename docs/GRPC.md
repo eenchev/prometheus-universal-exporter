@@ -56,7 +56,7 @@ The probe's `target` is the server, `host:port`:
 | `protoset_file` | — | With `descriptors: protoset`: a `FileDescriptorSet`. |
 | `proto_files` | — | With `descriptors: proto`: the `.proto` files that define the service. |
 | `proto_import_paths` | the directory of each file | With `descriptors: proto`: the directories `import` statements are resolved in. |
-| `tls` | none | `ca_file`, `cert_file`, `key_file`, `insecure_skip_verify`, `server_name`, as for `http`. Any of them makes the call use TLS. See [TLS](#tls). |
+| `tls` | none | `ca_file`, `cert_file`, `key_file`, `insecure_skip_verify`, `server_name`, as for `http`. The block written, even empty, makes the call use TLS. See [TLS](#tls). |
 | `bearer_token`, `bearer_token_file`, `basic_auth`, `basic_auth_file` | — | Sent as the `authorization` metadata. See [Authentication](#authentication). |
 | `forward_authorization`, `forward_headers` | off | The probe's `Authorization` and listed headers, forwarded as metadata. |
 | `retry` | none | `attempts`, `backoff`, and `codes`, the status codes retried: `[UNAVAILABLE]` when left out. See [Errors and retries](#errors-and-retries). |
@@ -78,8 +78,8 @@ read JSON.
 
 A target is `host:port`, `dns:///host:port`, `grpc://host:port` or
 `grpcs://host:port`, with the port always given. A bare target is
-plaintext, as a bare `http` target is `http://`. `grpcs://`, or any key of
-`request.tls`, makes the call use TLS; `grpc://` with a `tls` block
+plaintext, as a bare `http` target is `http://`. `grpcs://`, or a
+`request.tls` block, even an empty one, makes the call use TLS; `grpc://` with a `tls` block
 contradicts it and is refused. A target with a path, a query or a user in it
 is refused: the method is `rpc`. Its host is written as an `http` target's
 is, an address or a name in ASCII, an internationalised name in its `xn--`
@@ -496,7 +496,9 @@ between the pods.
 
 ## TLS
 
-With `grpcs://` or any `tls` key, the call uses TLS: `ca_file` to verify the
+With `grpcs://` or a `tls` block, the call uses TLS, and a `tls` block, even
+an empty one, counts: `tls: {}` asks for TLS verified against the system's
+roots, and the label is `grpcs://`. The keys say how: `ca_file` to verify the
 server, `server_name` when the server's certificate is for another name than
 the target's host, `cert_file` and `key_file` for a client certificate, which
 together are mutual TLS, and `insecure_skip_verify`, which a probe may

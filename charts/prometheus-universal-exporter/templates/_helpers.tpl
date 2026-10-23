@@ -875,8 +875,41 @@ true
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The account the exporter's pods run as, and the kubernetesAccess
+       bindings name. An existing account is named, never assumed: an empty
+       name would run the pods as the namespace's default account, which
+       other workloads share and kubernetesAccess would grant to all of
+       them, so it fails; "default" written out is the operator's choice.
+       Annotations are metadata of an object the chart renders, so beside an
+       existing account, which the chart never touches, they would be
+       silently dropped, an IRSA role among them. */ -}}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- if not .Values.serviceAccount.name -}}
+{{- fail "serviceAccount.create is false but serviceAccount.name is empty; name the existing ServiceAccount the pods run as, or write name: default to run them as the namespace's default account" -}}
+{{- end -}}
+{{- if .Values.serviceAccount.annotations -}}
+{{- fail (printf "serviceAccount.annotations is set but serviceAccount.create is false; annotations apply only to a ServiceAccount the chart creates, so put them, an IRSA role or a Workload Identity binding among them, on the existing ServiceAccount %s itself" (toString .Values.serviceAccount.name)) -}}
+{{- end -}}
+{{- .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end }}
+{{- /* The account the allocator's pods run as: allocator.serviceAccount.name
+       when set, which the chart then never creates, so an operator can run
+       it as an account of theirs whatever its sources; otherwise its own
+       <fullname>-allocator with a kubernetes discovery source, and the
+       exporter's without, since it then calls no API. */ -}}
+{{- define "prometheus-universal-exporter.allocatorServiceAccountName" -}}
+{{- $named := ((.Values.allocator | default dict).serviceAccount | default dict).name -}}
+{{- if $named -}}
+{{- $named -}}
+{{- else if include "prometheus-universal-exporter.allocatorUsesKubernetes" . -}}
+{{- include "prometheus-universal-exporter.allocatorFullname" . -}}
+{{- else -}}
+{{- include "prometheus-universal-exporter.serviceAccountName" . -}}
+{{- end -}}
 {{- end }}
 
 {{- define "prometheus-universal-exporter.rollingUpdateCheck" -}}

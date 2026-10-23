@@ -26,15 +26,15 @@ carries, comma-separated:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=redis            # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=s3file,redis     # both opt-in types
+make build OPT_IN_REQUEST_TYPES=s3file,redis     # two opt-in types
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
 go build -tags "$(sh tools/request-type-tags.sh '' '' redis)" .
 ```
 
 The tag is `request_type_redis`, which is all `go build -tags
 request_type_redis .` needs by hand: every type of the default build, and
-`redis`; `-tags request_type_s3file,request_type_redis` adds both opt-in
-types. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
+`redis`; `-tags request_type_s3file,request_type_redis` adds those two
+opt-in types. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
 request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
 `REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=redis` builds the two, and
 `REQUEST_TYPES` may name `redis` itself, `REQUEST_TYPES=redis` building it
@@ -130,8 +130,10 @@ name `tls.server_name` or else the target's host. The block is
 [the one `http` takes](REQUESTS.md#tls): `cert_file` and `key_file` present a
 client certificate, to a server started with `tls-auth-clients yes`, and
 `insecure_skip_verify` skips the verification. A bare `host:port` with a
-`tls` block speaks TLS; `redis://` with one is refused, the two saying
-opposite things.
+`tls` block speaks TLS, and a `tls` block, even an empty one, counts:
+`tls: {}` asks for TLS verified against the system's roots, and the label
+is `rediss://`. `redis://` with a `tls` block, empty or not, is refused, the
+two saying opposite things.
 
 ```yaml
 request:
@@ -174,7 +176,12 @@ The answer is a JSON document:
   each an object of its `name:value` lines. It is there when `INFO` was sent.
 - A value that is a number is a JSON number, written exactly as the server
   wrote it, so a 64-bit counter keeps every digit; `1.00M`, `55.12%`,
-  `7.2.4` and `00000000` stay text. A value made of `name=value` pairs joined
+  `7.2.4` and `00000000` stay text. A value `INFO` writes for people, such
+  as `used_memory_human`, has the number beside it, `used_memory`, which is
+  the one to read; where a reply has only such text, the
+  [value-parsing helpers](CONFIGURATION.md#value-parsing-helpers) read it:
+  `parse_bytes` reads `1.00M` as 1048576 and `parse_percent` `55.12%` as
+  0.5512. A value made of `name=value` pairs joined
   by commas — a keyspace line, a replica's `slave0` line, every
   `cmdstat_<command>` line of `commandstats` — is an object of them, each
   value read the same way.

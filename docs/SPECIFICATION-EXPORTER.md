@@ -18,7 +18,7 @@ the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
-Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
+Build a production-grade Prometheus exporter written in Go that converts what a source that was never meant for Prometheus answers — an HTTP API, a gRPC service, a Graphite server, a file on the exporter's host, on another host over SSH or in an S3 bucket, a SQL database, a Redis or Valkey server, a service that answers a line sent over TCP, an LDAP directory, a DNS name, a TLS certificate, a Kubernetes object — into Prometheus metrics.
 
 The exporter is intended for systems that expose useful operational/status data — over HTTP, gRPC or SQL, in files, in DNS, in their certificates or in the Kubernetes API — but do not provide suitable Prometheus metrics.
 
@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`) and the INFO and read-only commands of Redis and Valkey servers (`redis`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -619,7 +619,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file`, `kubernetes` and `redis` are implemented;
+`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp` and `ldap` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -667,9 +667,9 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments want in the
-binary: `s3file`, for the AWS SDK it links, and `redis`, which links nothing
-outside the standard library but reaches a server most deployments of the
-exporter do not have. No build MAY carry one unless asked for it by its tag,
+binary: `s3file`, for the AWS SDK it links, and `redis`, `tcp` and `ldap`, which
+link nothing outside the standard library but reach servers most
+deployments of the exporter do not have. No build MAY carry one unless asked for it by its tag,
 and the source MUST list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
@@ -698,11 +698,13 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `kubernetes` and `redis` MUST import
-  nothing outside the standard library and the module's own packages — no
-  Kubernetes client library, no Redis client library, the stand-in server
-  of `redis`'s tests (`internal/redistest`) included — and the test MUST
-  find none of the other types' modules in a build of any of them. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
+  that driver. `dns`, `tlscert`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
+  import nothing outside the standard library and the module's own packages
+  — no Kubernetes, Redis or LDAP client library, the stand-in servers of
+  `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
+  and of `tcp`'s (`internal/testutil`) included — and the test MUST find none of the other
+  types' modules in a build of any of them, and in a build of `tcp` alone no
+  package a build of no request type lacks but the standard library's. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
   configuration in a default build with it, and none of them in the default
@@ -1196,8 +1198,9 @@ keys:
   `grpcs://host:port`, with a port from 1 to 65535; any other scheme, a path,
   a query or a user MUST be refused, a probe's with `400` before anything is
   called and a static target's at load. A bare target MUST be plaintext;
-  `grpcs://` or any `tls` key MUST make the call TLS, and `grpc://` with a
-  `tls` key MUST be refused.
+  `grpcs://` or a written `tls` block MUST make the call TLS, an empty one
+  (`tls: {}`) as much as one with keys, verified with the system roots, and
+  `grpc://` with a written `tls` block MUST be refused.
 - A target's host MUST be handed to grpc-go as a DNS name or address
   (`dns:///host:port`) in every form of target, so that a host named like one
   of grpc-go's resolvers, such as `unix-abstract` or `passthrough`, is that
@@ -1665,18 +1668,20 @@ of objects, one a row, of its columns by name. Its keys:
   (`false`, `true`); `snowflake` `warehouse`, `role` and `schema`; `vertica`
   `tlsmode` (`none`, `server`, `server-strict`). `sslmode`, `tls`, `encrypt`,
   `ssl`, `secure` and `tlsmode` say whether TLS is used; left out, a
-  collector with a `tls` key MUST use TLS, verified against
-  `tls.server_name` or the target's host, and one without none
+  collector with a written `tls` block, an empty one (`tls: {}`) as much as
+  one with keys, MUST use TLS, verified against `tls.server_name` or the
+  target's host, and one without none
   (`snowflake` always uses TLS). A value of the option that does not verify
-  the certificate MUST skip the verification; a `tls` key beside a value that
-  uses no TLS, `tls.ca_file` or `tls.server_name` beside a value that does
+  the certificate MUST skip the verification; a written `tls` block, even an
+  empty one, beside a value that uses no TLS, `tls.ca_file` or `tls.server_name` beside a value that does
   not verify the certificate (`postgres` `require`, `mysql` `skip-verify`,
   `vertica` `server`), saying to use the verifying value or leave them out,
   and `tls.server_name` for `oracle`, which sets the name itself, MUST be
   refused at load; `cert_file` and `key_file` MAY be set beside a value that
   does not verify. `sqlserver` with `encrypt` `false` or left
-  out and no `tls` key MUST NOT verify the certificate of the login's TLS,
-  and with a `tls` key MUST verify it as the keys say; unless `encrypt` is
+  out and no `tls` block MUST NOT verify the certificate of the login's TLS,
+  and with a written `tls` block MUST verify it as the keys say, with the
+  system roots for an empty one; unless `encrypt` is
   `disable`, a server answering that it does not support encryption MUST
   fail the scrape, saying to enable encryption on the server or write
   `encrypt: disable`, before the login is sent; and, unless `encrypt` is
@@ -2091,7 +2096,7 @@ keys:
 | `max_objects` | 10000 | Zero or more, `0` the default; negative MUST be refused at load. |
 | `max_response_bytes` | 10 MiB | As every type's response limit (below). |
 | `api_server` | the exporter's own cluster's | An `https` URL with a host, a path or not, and no user, query or fragment; anything else MUST be refused at load. |
-| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it. With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
+| `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it, a written `tls` block even when empty (`tls: {}`). With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
 
 - The core group's `secrets` MUST be refused at load, by the exporter and
   by the schema (§ 24.3): their values would pass through the transforms.
@@ -2175,7 +2180,7 @@ carries it. Its keys:
 | `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
 | `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
 | `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
-| `tls` | none | As `http`'s; set, the scrape speaks TLS. |
+| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
 - The client MUST speak RESP2 and MUST NOT send `HELLO`; it MUST link no
@@ -2239,9 +2244,11 @@ carries it. Its keys:
   `rediss://` URL of one, port 6379 when it names none, with no user,
   path, query or other scheme, which MUST be answered `400` before
   anything is sent, as a static target's is refused at load. It is
-  required. `rediss://`, or a `tls` block, MUST make the scrape speak TLS,
-  verifying the certificate against `tls.server_name` or the target's
-  host; `redis://` with a `tls` block MUST be refused. The target lists
+  required. `rediss://`, or a written `tls` block, an empty one (`tls: {}`)
+  as much as one with keys, MUST make the scrape speak TLS, verifying the
+  certificate against `tls.server_name` or the target's host, with the
+  system roots and `ca_file`'s; `redis://` with a written `tls` block MUST
+  be refused. The target lists
   MUST be applied to the host before the connection and to the address
   connected to, as `http`'s are, a refused one answered `403`, counted in
   `http_exporter_targets_refused_total`, and never connected to.
@@ -2267,6 +2274,190 @@ carries it. Its keys:
 - The document MUST be held to the response limit as the replies are: one
   whose JSON is larger than the limit MUST fail the scrape as a limit
   exceeded, saying the document's size.
+- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
+  `param_<name>`.
+
+#### `tcp`
+
+A `tcp` collector reads a service that answers a line of text sent over a
+TCP connection, such as memcached's `stats`, a ZooKeeper four-letter word or
+HAProxy's runtime API: it writes the line and hands the answer, as the
+server wrote it, to the decoder and the transform as an `http` collector's
+body is handed to them. It is an opt-in type (§ 5.1, Selecting request
+types at build time): only a build asked for it carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `send` | none | The text written once the connection is made; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
+| `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
+| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- `send` and `terminator` written `""` MUST be the keys left out. Either
+  longer than 64 KiB, a placeholder in `terminator`, and a placeholder of
+  `send` that does not parse or names a filter MUST be refused at load, as
+  MUST a `tls` block with one of `cert_file` and `key_file` alone.
+- A placeholder of `send` MUST be filled from the probe's parameter, or its
+  default, written as it is. A value MUST hold only ASCII letters, digits
+  and `. _ - : / @ + = , %`; a value holding any other character, a blank,
+  `;`, `|`, `&`, a quote, `#`, a control character or a character outside
+  ASCII, MUST be refused with `400` before the connection is made, the
+  refusal naming the parameter and the character, so that a probe cannot
+  end the line, add a `;`-separated command (HAProxy's runtime API runs
+  every one on a line) or add an argument. A default holding such a
+  character MUST be refused at load. A probe
+  parameter that no placeholder of `send` or of a label value names MUST be
+  refused, the refusal naming `request.send`.
+- A scrape MUST make one connection, speak TLS over it when a `tls` block is
+  written, an empty one (`tls: {}`) as much as one with keys, verifying the
+  certificate with the system roots and `ca_file`'s,
+  write `send` when it is set, nothing added to it, read the answer and
+  close the connection; it MUST NOT close its writing half before the
+  answer is read. With `terminator`, reading MUST stop once the bytes read
+  end with it, the terminator staying in the body, and a server that closes
+  the connection before then MUST fail the scrape, saying how many bytes
+  came. Without `terminator`, reading MUST stop when the server closes the
+  connection.
+- The answer MUST be held to the response limit as it arrives: once its
+  bytes are past the limit the scrape MUST fail as a limit exceeded, without
+  reading on; an answer of exactly the limit MUST be taken.
+- The connection, the TLS handshake, the write and the read MUST end at the
+  scrape's deadline, 30 seconds without one, or when it is cancelled, and a
+  scrape ended so MUST fail with the deadline's error, saying, when reading
+  was what the deadline ended, the terminator waited for, or, without one,
+  that the server kept the connection open.
+- The answer MUST be the body, with no status, as a local file's has none,
+  and no `Content-Type`; the decoder MUST be `decoder.type`, or the one the
+  transform implies, or what the body reads as. A failed scrape MUST be
+  reported in the `tcp` stage.
+- The target MUST be `host:port` or `[v6]:port`, the port required, with no
+  scheme, user, path or query, which MUST be answered `400` before anything
+  is sent, as a static target's is refused at load. It is required. The
+  target lists MUST be applied to the host before the connection and to the
+  address connected to, as `http`'s are, a refused one answered `403`,
+  counted in `http_exporter_targets_refused_total`, and never connected to.
+- A debug probe's request section MUST show the scrape by its method and
+  `tcp://host:port` (`tls://` over TLS), the bytes sent quoted, with a
+  carriage return and a line feed written `\r` and `\n`, in a `Tcp-Send`
+  header, and as its outcome the bytes read and how reading stopped, or the
+  error. The verbose `url` label MUST be `tcp://host:port` or
+  `tls://host:port`, and `http_method` MUST be `SEND` for a collector with
+  `send` and `READ` without.
+- `--dry-run` MUST read the `tls` block's files when the block is set and
+  list what a scrape would fail on as warnings of the `config` check.
+
+#### `ldap`
+
+An `ldap` collector searches an LDAP directory, any server of LDAPv3, and
+hands the transforms what its searches find as one JSON document. It is an
+opt-in type (§ 5.1, Selecting request types at build time): only a build
+asked for it carries it. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `bind_dn` | none | The DN of a simple bind. A DN as RFC 4514 writes one, not blanks alone, no placeholder; only with `password_file`. Without it the bind is anonymous. |
+| `password_file` | none | The file of the bind's password. Not blanks alone; only with `bind_dn`. |
+| `start_tls` | `false` | Begin TLS with the StartTLS extended operation on a plaintext connection. |
+| `searches` | — | Required, one or more: entries of `name`, `base`, `scope`, `filter`, `attributes`, `count_only` and `max_entries`. |
+| `tls` | none | As `http`'s. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- The client MUST speak LDAPv3 in BER as RFC 4511 restricts it and MUST
+  link no LDAP client library.
+- `password_file` MUST be read at every scrape, not at load, its
+  surrounding whitespace taken off; a file that is missing, unreadable or
+  empty MUST fail the scrape naming the key and the file, never its
+  content, before anything is sent, since a simple bind with a DN and an
+  empty password is an unauthenticated bind. `--dry-run` MUST read it, and
+  the `tls` block's files when the block is set, and list what a scrape
+  would fail on as warnings of the `config` check.
+- A search's `name` MUST be letters, digits and `_`, not starting with a
+  digit, and unique among the collector's searches; its `base` a DN, `""`
+  the root DSE; its `scope` `base`, `one` or `sub`, `sub` when left out; its
+  `filter` an RFC 4515 filter in parentheses — and, or, not, equality,
+  substrings, `>=`, `<=`, presence, approximate and extensible match —
+  `(objectClass=*)` when left out, nesting `&`, `|` and `!` at most 32
+  deep, and a substring match with no substring between its wildcards,
+  `(cn=**)`, which RFC 4511 does not allow, MUST be refused, saying to
+  write `(cn=*)` for presence; each of its `attributes` an attribute's name
+  or OID with options, `*` or `+`, each named once in any case. `count_only` MUST NOT go with
+  `attributes` or `max_entries`, and `max_entries` MUST NOT be negative,
+  `0` being the default of 1000. Each MUST be refused at load otherwise.
+- A placeholder MAY stand in a search's `base` and `filter` alone, and
+  there only in a value: an attribute's value of the base, filled escaped
+  as RFC 4514 escapes one, and an assertion's value of the filter, filled
+  escaped as RFC 4515 escapes one, so no probe's value can change the
+  base's RDNs or the filter's structure; a placeholder in a DN's attribute
+  type, a filter's attribute or structure, or any other key MUST be refused
+  at load. A substring match that placeholders filled with empty values
+  leave with no substring, `(cn=*{{param_x:}}*)`, MUST be sent as the
+  presence filter `(cn=*)`, as `(cn={{param_x:}}*)` fills in to, and never
+  as a SubstringFilter of no substring.
+- A scrape MUST make one connection, begin TLS on it when `start_tls` is
+  set, send a simple bind, as `bind_dn` or anonymous, and then each search
+  in order, each answered before the next is sent, and end with an unbind.
+  A search MUST ask for its `attributes`, or for `1.1` when it has none, and
+  MUST carry the Simple Paged Results control (RFC 2696), not critical,
+  asking for pages of 500 entries and sending each page after the first
+  the cookie the last one ended with, until a page ends with none or with
+  no such control; it MUST send no size limit and, as its time limit, the
+  seconds left until the scrape's deadline. A continuation reference MUST
+  be counted and MUST NOT be followed. An operation answered with a result
+  other than `success` MUST fail the scrape with the operation, the
+  result's name and number and the server's diagnostic message, the bind's
+  password written `***`; a notice of disconnection MUST fail it with the
+  server's reason.
+- The answer MUST be a JSON document of `searches`, an object of each
+  search's result under its name: `count`, the entries it matched across
+  every page, `references`, the continuation references it answered, and,
+  unless it is `count_only`, `entries`, a list of each entry's `dn` and
+  `attributes`, an object of each attribute as the server named it, each a
+  list of its values as text. A `count_only` search MUST hold none of its
+  entries. A search that is not `count_only` matching more entries than its
+  `max_entries` MUST fail the scrape at the next one. A DN, an attribute's
+  name or a value that is not UTF-8 MUST fail the scrape naming the
+  attribute and the entry, and MUST NOT be put in the document with U+FFFD
+  in place of its bytes.
+- The messages of a scrape MUST be read against the response limit
+  together, counted in their bytes as they come off the connection, a
+  `count_only` search's among them. A message's declared length past what
+  the limit has left MUST fail the scrape before a byte of its content is
+  read, and no more MUST be held for one than the server has sent of it;
+  each failure past the limit MUST be a limit exceeded. A length of more
+  than four bytes, an indefinite length, an element longer than what
+  encloses it, a tag of more than one byte, a constructed string, and a
+  message of an ID the scrape is not waiting for MUST fail the scrape
+  saying it is no LDAP message. The document MUST be held to the response
+  limit as the messages are, one whose JSON is larger failing the scrape as
+  a limit exceeded, saying the document's size.
+- The target MUST be `host`, `host:port`, `[v6]:port`, or an `ldap://` or
+  `ldaps://` URL of one, port 389, or 636 for TLS from the start, when it
+  names none, with no user, path, query or other scheme, which MUST be
+  answered `400` before anything is sent, as a static target's is refused
+  at load. It is required. `ldaps://`, or a written `tls` block without
+  `start_tls`, an empty one (`tls: {}`) as much as one with keys, MUST
+  make the scrape speak TLS from the start, port 636 for a bare host, so
+  that the bind's password never goes out in plaintext, and
+  `start_tls` MUST make it send StartTLS before the bind, either verifying
+  the certificate against `tls.server_name` or the target's host; a
+  refused StartTLS MUST fail the scrape. `ldap://` with a written `tls`
+  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
+  target lists MUST be applied to the host before the connection and to the
+  address connected to, as `http`'s are, a refused one answered `403`,
+  counted in `http_exporter_targets_refused_total`, and never connected to.
+- The connection, the TLS handshake and every read and write MUST end at
+  the scrape's deadline, 30 seconds without one, or when it is cancelled,
+  and a scrape ended so MUST fail with the deadline's error.
+- A failed scrape MUST be reported in the `ldap` stage. The decoder MUST
+  be `json`, as for `grpc`; another decoder, and a transform other than
+  `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show each operation, `STARTTLS`,
+  `BIND` and each page of each `SEARCH`, by its name and `ldap://host:port`
+  (`ldaps://` for TLS from the start), with an `Ldap-Operation` header of
+  the bind's DN and its password as `***`, or `BIND anonymous`, and of the
+  search's name, base, scope, filter and attributes, and how each ended as
+  its outcome. The verbose `url` label MUST be `ldap://host:port` or
+  `ldaps://host:port`, and `http_method` MUST be `SEARCH`.
 - A static target MAY set `timeout` alone; a probe MAY set `timeout` and
   `param_<name>`.
 
@@ -2821,12 +3012,14 @@ nothing else of it there.
 servers of the `grpc` and `sshfile` tests, MUST NOT be imported outside tests
 and MUST carry their type's build constraint. `internal/sqltest`, the
 stand-in database of the `sql` tests, `internal/kubetest`, the stand-in
-Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests, and
-`internal/redistest`, the stand-in Redis server of the `redis` tests, MUST
+Kubernetes API server of the `kubernetes` and `internal/kubeapi` tests,
+`internal/redistest`, the stand-in Redis server of the `redis` tests, and
+`internal/ldaptest`, the stand-in LDAP server of the `ldap` tests, MUST
 NOT be imported outside tests and MUST import nothing but the standard
 library. `internal/testutil` MAY hold
-helpers shared by the tests of several packages and MUST NOT be imported
-outside tests; nor may the package within it,
+helpers shared by the tests of several packages, the stand-in server of the
+`tcp` tests among them, which MUST import nothing but the standard library,
+and MUST NOT be imported outside tests; nor may the package within it,
 `internal/testutil/alloctest`, the tests' measure of allocations (§ 34), which
 MUST NOT import a package of the module, so that the tests of every package,
 `model` included, can use it.
@@ -4238,6 +4431,18 @@ label text, `None` leaving the label off.
 What a script prints MUST be kept to its first 4 KiB, logged at debug level,
 and counted against `limits.max_output_bytes` only as far as that.
 
+A script and a pre-script MUST have the value-parsing helpers of § 17,
+`parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`, as
+functions of one argument among the names they are given, as `metric` and
+`fail` are. Each MUST give the same number as the jq function of its name for
+every input, a `float`, or an `int` or a `float` given to `parse_bytes` or
+`parse_duration` back unchanged (a `bool` being no number), and MUST raise a
+`ValueError` with exactly the jq function's message where that fails on
+text, and a `TypeError` saying what the helper reads where it fails on
+anything else. The exception MUST fail the script as any other does (§
+16.7), the helper's own frames, which are the worker's, left out of the
+traceback.
+
 ### 16.3 Python library model
 
 Only a small curated set of third-party libraries should be bundled with the exporter.
@@ -4892,6 +5097,57 @@ interpolation — MAY be evaluated by looking the fields up directly, but MUST
 give exactly what gojq gives: a field of an object its value, or `null`, and a
 field of `null` `null`. Where a step is anything else, the program MUST run, so
 the error is gojq's.
+
+Every jq program MUST have the value-parsing helpers `parse_bytes`,
+`parse_duration`, `parse_time` and `parse_percent`, each a function of no
+arguments reading its input, added as gojq custom functions (none MUST be
+the name of a gojq builtin, which it would hide or be hidden by), and the
+Python transform MUST have the same helpers (§ 16.2). The two MUST give the
+same results, which MUST be tested against one file of vectors,
+`testdata/values/helpers.json`, by the tests of both. Each helper MUST drop
+spaces, tabs, carriage returns and line feeds around its text and nothing
+else, and read a number as ASCII digits with an optional fraction after a
+dot and at least one digit, no exponent, no separators, and at most 100
+digits; it MUST read the number exactly and round the value it gives to the
+nearest float once, so `1.1GB` is 1100000000 and `0.1s0.2s` 0.3.
+
+- `parse_bytes` MUST read a number, blanks or none, and a unit or none, the
+  unit's ASCII letters in any case: none and `B` bytes; `KiB` to `EiB`
+  powers of 1024; `kB` to `EB` powers of 1000; and `K`, `M`, `G`, `T`, `P`
+  and `E` alone powers of 1024. It MUST refuse a sign, any other unit and
+  anything after the unit.
+- `parse_duration` MUST give seconds of Go's duration syntax with `d` for 24
+  hours (units `ns`, `us`, `µs`, `μs`, `ms`, `s`, `m`, `h`, `d`, case as
+  written, no blanks, `0` alone), which alone MAY have a leading `+` or `-`;
+  of a clock, `MM:SS`, `HH:MM:SS`, `D-HH:MM:SS` and `D.HH:MM:SS` with an
+  optional fraction after the seconds, the first field of any length and
+  each after it two digits, hours after days under 24 and minutes and
+  seconds under 60; and of an ISO 8601 duration `PnWnDTnHnMnS` in upper
+  case, each part optional but one there, a fraction on the last part only.
+  It MUST refuse ISO 8601 years and months, saying they have no fixed length
+  in seconds.
+- `parse_time` MUST give Unix seconds, with the text's fraction of a second,
+  of RFC 3339 (`T`, `t` or a blank between date and time, `Z`, `z`, `+HH:MM`,
+  `+HHMM` or `+HH`) and of the RFC 1123 HTTP date with `GMT`, `UTC` or
+  `+HHMM`, its names in any case and its weekday checked against the date.
+  Every year from `0000` to `9999` MUST be read in the proleptic Gregorian
+  calendar, a moment before 1970 as negative seconds and its weekday as
+  that of its own date, alike in jq and in Python.
+  It MUST refuse a date and time without a zone, saying it names no single
+  moment, a second of 60 and a date that does not exist, and MUST NOT read
+  any other layout: `time_format` and jq's `strptime` read those.
+- `parse_percent` MUST read an optional sign, a number, blanks or none, and
+  a `%` that MUST be there, and give the ratio, a hundredth of it, which is
+  Prometheus's base unit.
+
+Each helper MUST read text; `parse_bytes` and `parse_duration` MUST give a
+number back unchanged, as being bytes or seconds already, and anything else
+(`null`, a boolean, an object, an array, a number for `parse_time` and
+`parse_percent`) MUST fail saying what the helper reads and what it was
+given by its kind. Text a helper cannot read MUST fail with
+`<helper> cannot read <text> as <what>: <what to write>`, the text quoted
+and cut as a value of the response is (§ 18.1), as a jq error that fails the
+rule under its `error_mode` as any jq error does and that `try` catches.
 
 Every jq program MUST have `$root` bound to the whole decoded document, so an
 expression evaluated against one item (§ 18.2) can reach the rest of it,
@@ -6340,6 +6596,9 @@ http_exporter_cache_misses_total
 http_exporter_cache_entries
 http_exporter_cache_stale_served_total
 
+http_exporter_backoff_skipped_total
+http_exporter_targets_backing_off
+
 http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
@@ -6423,7 +6682,7 @@ self-metric, and the counts MUST start at 0 at the exporter's shutdown and be
 forgotten with a collector a reload removes. A `sql` collector's refused
 targets count in `http_exporter_targets_refused_total`, and so do an `s3file`
 collector's refused buckets, a `dns` collector's refused names, and a
-`tlscert` or `redis` collector's refused servers; each of these types MUST
+`tlscert`, `redis`, `tcp` or `ldap` collector's refused servers; each of these types MUST
 have its series there, `0` before a refusal.
 `http_exporter_pages_fetched_total` and
 `http_exporter_pagination_max_pages_reached_total`, counters, MUST exist only
@@ -6445,6 +6704,13 @@ origin: the requests the collector's rate limit, or a static target's own,
 made wait for their turn, and those it refused for a turn past their
 deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
 shutdown and be forgotten with a collector a reload removes.
+`http_exporter_backoff_skipped_total`, a counter, per collector and per
+request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
+per collector with no per-request series, MUST exist for every collector,
+`0` for one without `failure_backoff`: the probes and static target scrapes
+that failed without contacting their target because the collector was
+backing off from it, and the targets it keeps its trips from now (§ 42.13c).
+A debug run MUST NOT be counted in either.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -6602,10 +6868,12 @@ keeps working when verbose mode is switched on.
 Every self-metric family of section 22 MUST be republished with the labels
 `collector`, `http_method` and `url`, except the families that describe the
 collector rather than any request: `http_exporter_cache_entries`, which counts
-what a collector's response cache holds, and `http_exporter_probes_in_flight`,
-which counts its trips in progress. The two labels are the request
-type's (§ 5.1): for `http` the method and the URL described below, for
-`localfile` `READ` and the file's `file://` URL.
+what a collector's response cache holds, `http_exporter_probes_in_flight`,
+which counts its trips in progress, and `http_exporter_targets_backing_off`,
+which counts the targets its `failure_backoff` keeps its trips from
+(§ 42.13c). The two labels are the request type's (§ 5.1): for `http` the
+method and the URL described below, for `localfile` `READ` and the file's
+`file://` URL.
 
 In addition, verbose mode MUST expose
 
@@ -7271,7 +7539,9 @@ of its Python workers among them, MUST
 have its cached results dropped, since their keys carry the old definition,
 and MUST have its remembered failures forgotten (§ 25.1), as a removed
 collector's are, so that the first failure of the new definition is logged as
-a first failure and not as a repeat of the old one's; an unchanged collector
+a first failure and not as a repeat of the old one's, and MUST have the
+targets its `failure_backoff` was backing off from forgotten (§ 42.13c), as a
+removed collector's are; an unchanged collector
 MUST keep everything.
 
 What a reload changed — the collectors and static targets it removed,
@@ -8299,7 +8569,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
-`s3file` or `redis` collector MAY set `request.allowed_targets`
+`s3file`, `redis`, `tcp` or `ldap` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -10050,11 +10320,17 @@ MUST take their list from the directory tree rather than from a file name
 pattern or a written list, telling a configuration from a static target file
 by its content, and MUST fail on a YAML file there that is neither. An
 example's static target file MUST be valid against the configuration in its
-directory, as startup checks the two. An example SHOULD also be run in the
+directory, as startup checks the two. An example of an opt-in request type
+(`examples/tcp`) MUST be loaded, and checked against the schema the build
+generates, in a build with its type, as CI's build with every opt-in type
+runs the repository's tests, and MUST be skipped, for that reason alone, in
+a build without it; every other example is checked against the committed
+schemas. An example SHOULD also be run in the
 default suite against a local stand-in answering in the service's documented
 shape, asserting every series and the request the collector sent, as the
 Filebeat, Open-Meteo, ECB, METAR, mempool.space, Prometheus demo, Frankfurter,
-USGS and scrapethissite.com examples are.
+USGS and scrapethissite.com examples are, and the tcp example in a build
+with its type.
 
 ## 34.32 Regression tests
 
@@ -10140,7 +10416,12 @@ otherwise, and a test MUST run the step that sets them.
 
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
-than after it. Every job that runs Go checks MUST start with the same setup
+than after it. The linters (gofmt, golangci-lint and gopls) MUST run in a job
+of their own, the builds (vet, the default build, darwin's, the image's and
+those with the opt-in drivers and request types) in another, and each
+single-type selection's vet and build in that selection's job of the
+single-type matrix, not in a loop in one job: the job that runs the
+repository's checks and the exporter's tests MUST NOT also run them. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment, and MUST gate its steps on that filter's outputs rather than with
@@ -25457,7 +25738,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - The release archives' binaries are linked with the Dockerfile's
   `-ldflags`, the revision among them, from the values the image's build is
   given (§ 42.12).
-- CI's job test builds the code for darwin on amd64 and arm64, linking both
+- CI's job build builds the code for darwin on amd64 and arm64, linking both
   commands, and builds the image from the Dockerfile with `docker build`,
   pushing nothing, both under the go filter, which matches every file the
   image's build reads (§ 42.12).
@@ -25787,6 +26068,449 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   build of a single other type does not fail on it
   (TestTheTestsThatLoadTheExampleConfigNeedItsRequestTypes).
 
+## 34.179 Value-parsing helpers for jq, yq and Python
+
+- Each of `parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`,
+  compiled into a jq program by `CompileJQ`, gives every number of
+  `testdata/values/helpers.json` to the bit, fails with exactly each error
+  it lists, and says what it reads of each input that is not text (§ 17).
+- None of the helpers is the name of a gojq builtin, and each is known to a
+  program `CompileJQ` makes in the middle of an expression (§ 17).
+- A helper's error quotes a long input by its first 64 bytes, cut at a
+  character boundary, and its length (§ 17).
+- The Python helpers, run by a script in the worker over the same file of
+  vectors, give each number to the bit, raise a `ValueError` with exactly
+  each error and a `TypeError` for each input that is not text (§ 16.2).
+- A jq and a yq rule over text a helper cannot read fail with its error
+  under `error_mode: log` and `fail`, while a rule beside them reads its
+  value; a Python script fails with the `ValueError` at its own line and no
+  frame of the worker; and a pre-script reads a clock duration with
+  `parse_duration` (§ 16.2, § 17).
+
+## 34.180 Revalidating expired cached responses
+
+- An expired cached response that carried an ETag and a Last-Modified is
+  asked for again with If-None-Match and If-Modified-Since, each exactly as
+  received, a weak ETag included; the target's 304 is answered with the kept
+  body, which jq reads again with `$status` 200 and the X-Mode header the 304
+  updated, the entry is fresh again for `ttl` (the next probe is a cache hit
+  and the target is asked twice in all), and the self-metrics show
+  `http_exporter_cache_revalidations_total{result="not_modified"} 1`, status
+  `304` and `0` bytes (§ 42.13.2).
+- A response changed since it was kept replaces it: the new answer to the
+  conditional request is served and counted as `modified`, and the next
+  revalidation sends the new ETag (§ 42.13.2).
+- A response without a validator, a collector with `cache.revalidate: false`
+  and a `POST` collector are neither kept past expiry nor asked for
+  conditionally (§ 42.13.2).
+- A paginated collector whose pages carry an ETag sends no conditional
+  request after its entry expires (§ 42.13.2).
+- With `stale_if_error`, a conditional request answered 500 is answered with
+  the stale result, the next one's 304 answers fresh, and an entry past both
+  windows is still kept, counted in `http_exporter_cache_entries`, answers no
+  failure and is revalidated by the next trip (§ 42.13.2, § 42.13.1).
+- A 401 to a conditional request whose login token the target revoked logs
+  in again, and the request sent with the new token carries If-None-Match as
+  the first did (§ 42.13.2, § 42.6a).
+- A debug probe sends the conditional request, its report shows
+  If-None-Match, `304 Not Modified; the cached body of 12 bytes was reused,
+  with status 200` and the fetch stage's note, and the entry is still out of
+  date after it (§ 42.13.2, § 42.17).
+- A 304 to a request that was not conditional fails the probe saying it was
+  not conditional on a cached response (§ 42.13.2).
+- A graphite collector's GET render request is revalidated, and one too long
+  for a URL, sent as a form with POST, is not (§ 42.13.2).
+- A 304 updates the stored ETag, Last-Modified, Cache-Control, Expires and
+  Date and keeps Content-Length, Content-Type, Content-Encoding and
+  Transfer-Encoding as stored, drops the hop-by-hop fields and those its
+  Connection names, and leaves the kept response unchanged (§ 42.13.2).
+- Every attempt of a revalidating request, a retry after 503 too, carries
+  If-None-Match and the 304 that ends it is answered with the kept response;
+  a request the collector makes conditional in `request.headers` gets its
+  304 as its own answer (§ 42.13.2).
+- A cache entry kept with a response outlives its expiry while the collector
+  is within `max_cache_entries`, answering no lookup but handing its
+  response to a revalidation once not fresh, and is the first to go over the
+  budget (§ 42.13.2).
+- `cache.revalidate` is true when left out and false when set so (§ 42.13.2).
+
+## 34.181 The allocator's dns_sd discovery source
+
+- A dns_sd source of type SRV makes a target of each record's target host,
+  lower-cased and without its trailing dot, and port, with `__meta_dns_name`,
+  `__meta_dns_srv_record_target` and `__meta_dns_srv_record_port` and the
+  labels mapping's; a target given twice, under one name or two, is taken
+  once with the first listed name's labels; a record whose target is `.`
+  gives none; a name not found and a name without SRV records give no
+  targets and fail nothing; the targets are sorted by address; and every
+  question is an absolute name of type SRV
+  (TestDNSSDFindsTheTargetsOfSRVRecords).
+- A dns_sd source of type A or AAAA makes a target of each address at its
+  port, an IPv6 address in brackets, with `__meta_dns_name` and no SRV
+  labels; a name not found gives none
+  (TestDNSSDFindsTheTargetsOfAddressRecords).
+- The same records served in the reverse order give the same answer, which
+  is no change, five times over; an added record is a change
+  (TestDNSSDAnswersAlikeWhateverTheRecordsOrder).
+- A server failure, a server that does not answer within the 1s timeout and
+  a refusal each fail the whole answer, keep the last good targets and count
+  one failure each, the text naming the record type, the name and the
+  server; the server answering again is a success and no change
+  (TestDNSSDKeepsItsLastGoodAnswerWhenALookupFails).
+- A dns_sd source whose first lookup fails has never answered and adds no
+  targets
+  (TestADNSSDSourceThatNeverAnsweredHasNoTargets).
+- Three targets pass a `max_targets` of 3, and the same three fail a bound
+  of 2
+  (TestDNSSDHoldsToMaxTargets).
+- A dns_sd source is checked at load: no names, an empty name, a name with a
+  port, a URL, an IP address, a name with a blank, a label of 64 characters
+  or none, a name listed twice in two spellings, an unknown or lower-case
+  type, a port for SRV, none for A, one out of range, a server with a
+  scheme or port 0, a timeout longer than the refresh interval, a refresh
+  interval under 1s, and dns_sd beside http_sd are refused; a good source
+  is named `dns_sd_<n>`, takes type SRV, refresh 30s and timeout 10s, and
+  has its names lower-cased without the trailing dot and its server written
+  `host:53`
+  (TestDNSSDIsCheckedAtLoad).
+- A probe job's dns_sd source written in the probe targets file serves its
+  targets through the job's target_template with the meta and mapped labels,
+  and the metrics name it `dns_sd_0`
+  (TestADNSSDSourceServesItsTargets).
+
+## 34.182 Backing off from failing targets
+
+- failure_backoff fills in after 3, initial 30s and max 10m, or initial when
+  that is longer, and refuses an after below 1, an initial that is not a
+  positive duration, a max shorter than initial, a key it does not know and
+  the one-value form, naming the collector and the key
+  (TestFailureBackoffIsCheckedAndFilledIn).
+- A target that fails `after` probes in a row is not contacted for
+  `initial`: its probe is answered 502 at once with `<target> is backing off
+  after 2 consecutive failed scrapes; next try after <RFC 3339 time>`, also
+  while the collector's one trip slot is taken, and is counted in
+  `http_exporter_backoff_skipped_total` while
+  `http_exporter_targets_backing_off` is 1 and the status-code series keeps
+  the last response's; when the wait has passed the next probe goes, its
+  failure doubles the wait, and a success forgets the target; a collector
+  without failure_backoff has both series at 0, on a fake clock
+  (TestAFailingTargetIsBackedOffFrom).
+- A transform failure under error_mode fail and a target denied_targets
+  refuses are not counted towards backing off, and each probe goes on; a
+  fetch that failed under on_fetch_error log is counted, and the probe kept
+  from the target carries on with 200 and is counted as skipped
+  (TestOnlyAFailedFetchCountsTowardsBackingOff).
+- A probe kept from the target is answered with the last good result under
+  cache.stale_if_error, counted in `http_exporter_cache_stale_served_total`
+  (TestABackedOffProbeIsAnsweredWithTheLastGoodResult).
+- Probes differing in a param_ value back off apart: the failing tenant is
+  sent one request, the answering one every probe's
+  (TestProbesWithOtherParametersBackOffApart).
+- When the wait has passed only one trip goes: a probe of a collector with
+  coalesce: false arriving while the try is held at the target fails at once
+  saying the next try is in progress, the gauge counts the target, and the
+  try's failure doubles the wait (TestOneTripAtATimeTriesTheTargetAgain).
+- A reload that changes or removes the collector forgets its targets, and a
+  trip that read the collector before the reload records nothing after it
+  (TestAReloadForgetsTheTargetsBackedOffFrom).
+- A collector remembers at most its bound of targets, forgetting the one that
+  failed longest ago first (TestTheTargetsBackedOffFromAreBounded).
+- A debug probe of a target backed off from contacts it, says in its report
+  that the target is backing off and until when, and its success leaves the
+  target backed off and counts nothing as skipped
+  (TestADebugProbeContactsATargetBackedOffFrom).
+- A static target's scrape backs off without waiting for the slot a probe
+  holds, publishes `http_exporter_target_up` 0, and the identical probe
+  shares its state (TestAStaticTargetBacksOffAndSharesTheProbesState).
+- In verbose mode the skipped trips are counted per request, and
+  `http_exporter_targets_backing_off` has no per-request series
+  (TestTheSkippedTripsAreCountedPerRequest).
+- The wait doubles from initial with each further failure and stops at max,
+  however many failures there were (TestTheBackoffWaitDoublesUpToMax).
+- `collectors[].failure_backoff.initial` and `.max` are in the schema-key
+  table: a zero passes the schema and the exporter refuses it, initial as no
+  positive duration and max as shorter than initial
+  (TestEveryConstrainedKeyOfTheSchemasIsInATable).
+
+## 34.183 CI's linters and builds beside test
+
+- ci.yml has no loop over the request types: each type is vetted and built
+  under the go output in its job of the request types' matrix, with type
+  `${{ matrix.type }}`, and `make build-request-types` runs the same commands
+  in a loop naming every type (TestCIBuildsEveryRequestTypeOnItsOwn).
+- CI's job test runs no linter and no build: gofmt, golangci-lint and gopls
+  run in the job lint, and vet, the default, darwin's, the image's and the
+  opt-in builds in the job build (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
+
+## 34.184 The opt-in tcp request type
+
+- A tcp collector writes send and reads the answer until it ends with the
+  terminator, which stays in the body, though the server keeps the
+  connection open as memcached does; the body is the answer as written,
+  with no status and no Content-Type, the url label tcp://host:port and the
+  http_method SEND (TestATCPCollectorReadsUntilItsTerminator).
+- Without a terminator the answer ends when the server closes the
+  connection, as ZooKeeper's after mntr; without send nothing is written and
+  a banner is the answer, the http_method READ; a server that closes before
+  the terminator came fails the scrape saying how many bytes came
+  (TestATCPCollectorWithoutATerminatorReadsUntilTheServerCloses).
+- A server that keeps the connection open without the terminator, or
+  without closing when there is none, fails the scrape at the probe's
+  deadline with the deadline's error, naming the terminator waited for or
+  saying the server kept the connection open
+  (TestATCPServerThatNeverEndsItsAnswerFailsAtTheDeadline).
+- The answer is held to max_response_bytes and limits.max_response_bytes
+  as it arrives, with and without a terminator: one past the limit fails as
+  a limit exceeded without waiting for the rest, and one of exactly the
+  limit is taken (TestATCPAnswerIsHeldToTheResponseLimit).
+- A tls block speaks TLS verified against ca_file, labelled tls://host:port;
+  a certificate of an unknown authority fails the TLS handshake, and
+  plaintext to a TLS server is not taken (TestATCPCollectorSpeaksTLS).
+- allowed_targets and denied_targets are kept to and the metadata service
+  is refused without them, a refused target never connected to
+  (TestATCPCollectorKeepsToItsTargetLists).
+- A placeholder in send is filled from the probe; a value holding a carriage
+  return or a line feed is refused before a connection is made; an unused
+  probe parameter names request.send
+  (TestATCPCollectorFillsSendsPlaceholders).
+- A tcp collector's keys are refused at load: send or terminator past
+  64 KiB, a placeholder in terminator, a broken or filtered placeholder in
+  send, a key of another type, half a client certificate; a target is
+  host:port or [v6]:port with its port, and a missing port, a scheme, a
+  path, a user, a bad port or no host is refused
+  (TestATCPCollectorsKeysAndTargetsAreChecked).
+- A debug trace shows SEND or READ, tcp://host:port, the bytes sent quoted
+  in Tcp-Send with \r\n visible, and the bytes read and how reading
+  stopped, or the refused connection's error; --dry-run reads the tls
+  block's files (TestATCPScrapeIsTraced).
+- optInRequestKeys lists send and terminator, tcp's own keys
+  (TestTheOptInRequestKeysAreTCPsOwn), and the refusal of an unused probe
+  parameter names request.send for tcp
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+- A build without tcp, the default build among them, refuses a tcp
+  collector at load saying it is opt-in and naming OPT_IN_REQUEST_TYPES=tcp
+  and request_type_tcp (TestABuildWithoutTCPRefusesATCPCollector).
+- A tcp collector's decoder is the one its transform implies, text for
+  regex and csv for csv, or the one it sets, and send and terminator are
+  read with \r\n as YAML's double quotes write them
+  (TestATCPCollectorDecodesAsItsTransformReads).
+- Through the exporter, a tcp probe answers the series regex rules read
+  from memcached's stats and ZooKeeper's mntr, the verbose self-metrics
+  label it tcp://host:port and SEND, a denied target is answered 403 and
+  counted in http_exporter_targets_refused_total, a target without a port
+  and a parameter with a line feed are refused before anything is sent,
+  and the collectors page hints host:port (TestATCPCollectorProbe).
+- A debug probe of a tcp collector shows the bytes sent quoted, how reading
+  stopped and the answer (TestADebugProbeOfATCPCollector).
+- A python transform reads a tcp collector's answer as response.text, its
+  label values filled from the probe (TestATCPCollectorsAnswerInPython).
+- The examples of docs/TCP.md work as written against stand-in services:
+  memcached's stats through regex, ZooKeeper's mntr by name and its leader,
+  HAProxy's show stat CSV by proxy and server with its "# pxname" column;
+  the TLS block, the placeholder example and the static targets load
+  (TestTCPDocumentationExamples).
+- A tcp collector's allowed_targets[] and denied_targets[] entries get one
+  verdict from the schema and the exporter
+  (TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty).
+- A build of tcp alone links no package a build of no request type lacks
+  but the standard library's (TestTheTCPTypeLinksNothingOutsideTheStandardLibrary),
+  and none of the gRPC, SSH or AWS modules, nor does OPT_IN_REQUEST_TYPES=tcp
+  link the AWS SDK (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- tools/request-type-tags.sh takes tcp as an opt-in type, alone, with the
+  others and as a REQUEST_TYPES entry (TestRequestTypeTagsScript); ci.yml's
+  and the Makefile's opt-in build, test and lint name s3file, redis and tcp
+  (TestCIBuildsEveryOptInRequestType); the README's opening, the chart
+  README's and the request-type pages name tcp
+  (TestReadmeOpeningNamesEveryRequestType, TestTheChartDescribesEverySource,
+  TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet).
+
+## 34.185 The opt-in ldap request type
+
+- An ldap collector binds anonymously, searches page by page and answers
+  each search's count, references and entries, each with its DN and the
+  attributes asked for as lists of values, a search with no attributes
+  asking for 1.1, the scope sub by default, the paged results control not
+  critical, an unbind at the end, the method SEARCH and the label
+  ldap://host:port (TestAnLDAPCollectorAnswersItsSearchesAsADocument).
+- With bind_dn the scrape binds as the account with password_file's
+  password, read at every scrape; a wrong password fails with
+  invalidCredentials (49) and the server's words, never the password; an
+  anonymous search a server refuses fails with insufficientAccessRights;
+  an empty password file fails before anything is sent
+  (TestAnLDAPCollectorBindsWithItsDNAndPasswordFile).
+- start_tls sends StartTLS before the bind and verifies the server, a
+  refused StartTLS and an unknown authority fail; ldaps:// and a bare
+  target with a tls block speak TLS from the start, labelled ldaps://
+  (TestAnLDAPCollectorSpeaksTLS).
+- A search of 1200 entries is read in pages of 500, each after the first
+  sent the last page's cookie; a server that ignores the control answers
+  in one go with the same result (TestAnLDAPSearchIsReadPageByPage).
+- A count_only search counts 1500 entries across pages asking for 1.1 and
+  holds no entries; a search past max_entries, 1000 by default, fails
+  asking for a narrower filter or count_only
+  (TestAnLDAPSearchCountsOrBoundsItsEntries).
+- RFC 4515 filters — and, or, not, equality, substrings, >=, <=, presence,
+  approximate, extensible match with Active Directory's bitwise AND,
+  escapes — reach the server as written and match; malformed filters, an
+  empty &, a bad escape, * in >= or an extensible match's value, ( in a
+  value and nesting past 32 are refused at load (TestLDAPFiltersAreParsed).
+- A probe's value fills a filter's value escaped per RFC 4515, so *)(uid=*
+  matches nothing, and a base's value escaped per RFC 4514, so it adds no
+  RDN; a placeholder in an attribute's name, the filter's structure, a
+  whole DN or a DN's type, the scope, attributes or bind_dn is refused at
+  load; an unused parameter names the searches' base and filter
+  (TestLDAPPlaceholdersCannotChangeASearchsStructure).
+- The server's messages are held to the response limit, a count_only
+  search's included; a length past what is left fails before it is read; a
+  length of five bytes, an indefinite length, an element past its parent,
+  a two-byte tag, a constructed value, another message's answer and no LDAP
+  at all are refused; a declared gigabyte allocates only what came
+  (TestAnLDAPServersMessagesAreHeldToTheResponseLimit).
+- A value that is not UTF-8 fails the scrape naming the attribute and the
+  entry, and a document whose JSON escapes take it past the limit fails as
+  a limit exceeded (TestAnLDAPValueThatIsNotTextFailsTheScrape).
+- A result other than success fails with its name, number and diagnostic,
+  a referral and sizeLimitExceeded saying what to do, a missing base with
+  noSuchObject, and a notice of disconnection with the server's reason
+  (TestAnLDAPResultCodeFailsTheScrape).
+- The metadata service, denied and not allowed targets are refused and
+  never connected to (TestAnLDAPCollectorKeepsToItsTargetLists).
+- An ldap collector's keys are refused at load — no searches, a bad or
+  repeated name, a base that is no DN, a scope other than base, one or sub,
+  a bad or repeated attribute, count_only with attributes or max_entries, a
+  negative max_entries, bind_dn or password_file alone, a bind_dn that is
+  no DN — and its targets are checked: host, host:port, [v6]:port,
+  ldap://, ldaps://, port 389 or 636, a scheme, user, path or bad port
+  refused, ldap:// with a tls block and ldaps:// with start_tls refused
+  (TestAnLDAPCollectorsKeysAndTargetsAreChecked).
+- A debug trace shows STARTTLS, BIND with the DN and ***, and each page of
+  the SEARCH with base, scope, filter, attributes and its entries, never
+  the password; --dry-run reads the password file
+  (TestAnLDAPScrapeIsTracedWithoutItsPassword).
+- A server that never answers fails at the deadline naming the bind, and a
+  refused connection names the address
+  (TestAnLDAPServerThatNeverAnswersFailsAtTheDeadline).
+- optInRequestKeys lists bind_dn, start_tls and searches as ldap's own
+  (TestTheOptInRequestKeysAreLDAPsOwn).
+- A build without ldap refuses an ldap collector saying it is opt-in and
+  naming OPT_IN_REQUEST_TYPES=ldap and request_type_ldap
+  (TestABuildWithoutLDAPRefusesAnLDAPCollector).
+- An ldap collector's decoder is json, an extensible match filter loads,
+  the defaults stay unset, and a regex transform or a yaml decoder is
+  refused, the refusal reading "an ldap collector"
+  (TestAnLDAPCollectorDecodesJSON).
+- Through the exporter, an ldap probe answers a count_only count and a
+  group's members, a probe's *)(uid=* matches no one, the verbose label is
+  ldap://host:port with SEARCH, a denied target is answered 403 and
+  counted, a target with a path 400, and the collectors page hints an ldap
+  target (TestAnLDAPCollectorProbe).
+- A debug probe of an ldap collector shows the bind masked, the page of the
+  search with the probe's value escaped in its filter, and the document,
+  never the password (TestADebugProbeOfAnLDAPCollector).
+- A python transform reads an ldap collector's entries and attribute lists
+  as data, with label values from param_<name>
+  (TestAnLDAPCollectorsDocumentInPython).
+- The examples of docs/LDAP.md work against the stand-in: OpenLDAP's
+  cn=Monitor connections, statistics and operations, Active Directory's
+  disabled and locked accounts, a group's members per probe; the TLS block,
+  the placeholder search and the static targets load
+  (TestLDAPDocumentationExamples).
+- The schema and the exporter agree on searches[].name, searches[].scope,
+  searches[].attributes[], bind_dn and password_file beside bind_dn, left
+  out, written "", well and badly (TestSchemaAndExporterAgreeOnLDAPKeysWrittenEmpty),
+  and searches[].name, scope and attributes[] are held to text alone
+  (TestTheKeysHeldToTextAloneAreTheSchemas).
+- tools/request-type-tags.sh takes ldap as an opt-in type, alone and with
+  s3file and redis (TestRequestTypeTagsScript); a build of ldap alone links
+  no gRPC, SSH or AWS module (TestOnlyTheTypesThatNeedThemLinkTheirModules);
+  docs/LDAP.md names the static target's keys
+  (TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet); the README's
+  tagline and sources name LDAP directories (TestReadmeOpeningNamesEveryRequestType); the chart
+  README names an LDAP directory (TestTheChartDescribesEverySource);
+  internal/ldaptest is a package only tests import, left out of the
+  vulnerability scan, and ci.yml's filters match it
+  (TestEachSideOfCIRunsWhenAFileItsTestsNeedChanges).
+
+## 34.186 The tcp examples
+
+- examples/tcp, in a build with the type, reads stand-ins answering as
+  memcached, a ZooKeeper leader and HAProxy do: memcached's gauges, counters
+  and commands by name; ZooKeeper's numbers by name, its packets, that it
+  leads and its synced followers, never its version or state as a number;
+  HAProxy's sessions, limits, queues, bytes, errors and states by proxy,
+  name and type, an empty cell making no series; and no rule fails
+  (TestTheTCPExamplesReadTheirServices).
+- An example is skipped only for the request types a build lacks:
+  examples/tcp and its static target file without tcp and not with it, an
+  http example never in a build with http
+  (TestAnExampleIsSkippedOnlyForATypeTheBuildLacks).
+- The examples that load, match the schema and run their scripts are
+  checked against the schema the build generates and skipped without one
+  of their types (TestShippedConfigurationsMatchTheSchema,
+  TestTheShippedFilesMatchTheSchemasAsTheyDid,
+  TestShippedExampleScriptsSatisfyTheContract,
+  TestExampleStaticTargetFilesMatchTheSchemaAndTheirConfiguration).
+
+## 34.187 The chart's service accounts and TLS files
+
+- With `serviceAccount.create: false`, an empty `serviceAccount.name`, alone
+  and beside `kubernetesAccess`, and `serviceAccount.annotations` beside a
+  named account each fail rendering, refused by the values schema naming the
+  value and, with the schema skipped, by the templates with the message
+  that names the missing account or says annotations belong on the existing
+  account; `name: default` written out renders the pods as `default`, and
+  annotations on a created account render
+  (`TestChartRefusesAnExistingServiceAccountItCannotName`).
+- With `serviceAccount.create: false` and a name, the chart renders no
+  ServiceAccount, the exporter's pods run as the named account without a
+  token, and with its token under `kubernetesAccess`, whose RoleBinding and
+  ClusterRoleBinding name it, and the allocator without a `kubernetes`
+  source runs as it (`TestChartRunsTheExporterAsAnExistingServiceAccount`).
+- `allocator.serviceAccount.name` with `kubernetes` sources renders no
+  `<fullname>-allocator` ServiceAccount, runs the allocator's pods as the
+  named account with its token, and binds the Role and the ClusterRole to
+  it; with `allocator.rbac.create: false` nothing is rendered; without a
+  `kubernetes` source the pods still run as it, without a token; a
+  key it does not take is refused by the schema
+  (`TestChartRunsTheAllocatorAsANamedServiceAccount`).
+- The chart README's Service account section shows an existing account by
+  name, whose example renders no ServiceAccount, and names the token,
+  `kubernetesAccess`, annotations and the allocator's account; the TCP,
+  Redis and LDAP sections point to the TLS files subsection, whose one
+  example renders a mount of the Secret and names `ca.crt`, `tls.crt` and
+  `tls.key` under that mount in a `tcp` collector's `tls` block
+  (`TestChartReadmeShowsTheServiceAccountAndTheTLSFiles`).
+- The render of `serviceAccount.create: false` with `name: default` mounts
+  no token on the default account (`TestChartRendersItsOptions`, adjusted:
+  an unnamed existing account now fails rendering).
+
+## 34.188 Backing off only on a budget worth trusting, and parse_time before 1970
+
+- `TestFailureBackoffIsCheckedAndFilledIn` (extended): `failure_backoff.min_budget` defaults to `1s`, takes a value written, and `0s` or a negative duration is refused at load naming the collector and the key.
+- `TestATimeoutBelowTheMinimumBudgetDoesNotBackTheTargetOff`: with `failure_backoff {after: 3}`, three probes carrying `X-Prometheus-Scrape-Timeout-Seconds: 0.01` time out against a target answering in 100ms and none is counted; the next probe with Prometheus's budget reaches the target and succeeds, and no target is remembered.
+- `TestATimeoutBelowTheMinimumBudgetNeitherCountsNorResets`: two failed probes, then a timeout below `min_budget`, leave the target contacted; the next failure is the third, and the probe after it backs off.
+- `TestATimeoutOfTheMinimumBudgetCounts`: with `min_budget: 50ms`, a probe whose 100ms budget runs out against a hung target counts, and with `after: 1` the next probe backs off.
+- `TestARefusedConnectionCountsWithASmallBudget`: a refused connection within a 300ms budget, below the 1s floor, counts, and with `after: 1` the next probe backs off.
+- `TestValueHelpersInJQMatchTheSharedVectors` and `TestValueHelpersInPythonMatchTheSharedVectors` (extended vectors): `parse_time` reads moments before 1970 and in year `0000` alike in jq and Python — `Wed, 31 Dec 1969 23:59:59 GMT` is -1 and `Thu, …` of the same date is refused for its weekday, `Wed, 31 Dec 1969 23:00:00 -0100` is 0, `0000-02-01T00:00:00Z` is -62164540800, and the first and last moments of year `0000` and of its February are read in RFC 3339 and as HTTP dates.
+
+## 34.189 Empty tls blocks, tcp send values, empty LDAP substrings and HAProxy states
+
+- `TestAnEmptyTLSBlockMakesATCPScrapeSpeakTLS`: a tcp collector whose `tls` block is written empty, `tls: {}` — spelt out, as an alias of an anchored empty mapping, merged in with `<<:` from a request that holds it, and in a collector file — is labelled `tls://host:port` and makes a TLS handshake with a TLS stand-in, failing on its certificate, which the system roots do not hold; it used to be the zero block, and the scrape plaintext.
+- `TestAReloadSeesAnEmptyTLSBlockWritten`: a reload from a tcp collector without `tls` to the same collector with `tls: {}` reports the collector changed, as the YAML a reload and the cache key compare now writes the block as written.
+- `TestAnEmptyTLSBlockMakesAnLDAPScrapeSpeakTLS`: an ldap collector with `tls: {}`, a bind DN and a password file is labelled `ldaps://` for a bare `host:port` and makes a TLS handshake with a TLS stand-in; against a plaintext stand-in the scrape fails and the stand-in receives no bind; `ldap://` with the block is refused.
+- `TestAnEmptyTLSBlockMakesARedisScrapeSpeakTLS`: a redis collector with `tls: {}` is labelled `rediss://` for a bare `host:port` and makes a TLS handshake with a TLS stand-in; `redis://` with the block is refused.
+- `TestAnEmptyTLSBlockMakesAGRPCCallTLS`: a grpc collector with `tls: {}` is labelled `grpcs://` for a bare target and its call fails on the certificate of a TLS stand-in; `grpc://` with the block is refused.
+- `TestAnEmptyTLSBlockAsksASQLCollectorForTLS`: a postgres collector with `tls: {}` beside `sslmode: disable` is refused at load, and with no `sslmode` it loads; `TestTheTLSOfASQLConnection` (extended): a `tls: {}` read from YAML gives verified TLS for the target's host.
+- `TestAnEmptyTLSBlockWithoutAPIServerIsRefused`: a kubernetes collector with `tls: {}` and no `api_server` is refused at load.
+- `TestDiscoveryIsCheckedAtLoad` (extended): an `http_sd` source with an `http` URL and a `tls` block read from YAML as `{}` is refused, as one with a key is.
+- `TestATCPCollectorHoldsSendsValuesToOneArgument`: a placeholder of `send` given `-1;disable server app/app1` (docs/TCP.md's HAProxy example), a blank, a double or single quote, `|`, `&`, `#`, a tab, a NUL, `é` or a byte that is not UTF-8 is refused before any connection, by the scrape and by the probe's parameter check, naming the parameter and the character; a value of every allowed character, `Web-1.app_2:3/x@y+z=w,v%20`, is sent as it is; a default holding `;` is refused at load.
+- `TestATCPCollectorFillsSendsPlaceholders` (changed): a carriage return or a line feed in a value is refused as a line break, naming its code point.
+- `TestATCPCollectorProbe` (extended): a probe whose `param_word` holds a line feed or a `;` is answered `400` naming the parameter and the character, and the service is not connected to.
+- `TestLDAPFiltersAreParsed` (extended): `(cn=**)` and `(&(uid=a)(cn=***))`, substring matches with no substring, are refused by the parser and at load, saying RFC 4511 does not allow them and to write `(cn=*)`.
+- `TestAnLDAPSubstringFilterFilledEmptyIsPresence`: `(&(objectClass=person)(cn=*{{param_x:}}*))` probed without `param_x` sends `(&(objectClass=person)(cn=*))` and counts every person, to a stand-in that now answers a SubstringFilter of no substring `protocolError` as a server does; with `param_x=Turing` it sends `(cn=*Turing*)` and counts one.
+- `TestTheTCPExamplesReadTheirServices` (extended): examples/tcp's haproxy collector reads `haproxy_up` from the column its `pre_script` adds: 1 for servers whose status is `UP 1/3`, `NOLB`, `DRAIN` and `no check`, 0 for `DOWN 1/2`, `MAINT`, `MAINT (via app/app1)`, `DOWN (agent)` and an empty status, and 0 for a `STOP` frontend, with no rule failing.
+- `TestTCPDocumentationExamples` (extended): docs/TCP.md's HAProxy example reads `UP 1/3` and `no check` as 1 and `MAINT (via web/app1)`, `DOWN 1/2` and a `STOP` frontend as 0.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -25828,7 +26552,8 @@ The repository MUST include documentation covering:
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
-    `docs/S3FILE.md` and `redis` in `docs/REDIS.md`, with `localfile` and `grpc` above and `http` in
+    `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md` and `ldap` in
+    `docs/LDAP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -27272,7 +27997,8 @@ signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.
 
 ## 42.13 Collector response caching
 
-Each collector MUST support a `cache` mapping with two Go durations:
+Each collector MUST support a `cache` mapping with two Go durations, and
+`revalidate` (§ 42.13.2):
 
 ```yaml
 collectors:
@@ -27457,6 +28183,76 @@ for OTLP export. Target-request self-metrics such as
 `http_exporter_scrape_response_bytes` describe the last real target request and
 MUST NOT be altered by a cache hit.
 
+### 42.13.2 Revalidating expired responses
+
+An `http` or `graphite` collector that caches MUST keep, with each stored
+result, the response it was made from — status, headers and body as the
+target sent them, before the decode converted the body or rewrote a header —
+when that response carried an `ETag` or a `Last-Modified` header, the request
+was sent with `GET`, `HEAD` or no method of its own, the collector has no
+`request.pagination`, and `cache.revalidate` is not `false`. `revalidate` is
+a boolean key of the `cache` mapping and MUST default to `true`. A paginated
+collector's response is pages merged into one, which no page's validator
+speaks for, and MUST be neither kept nor revalidated. Another method MUST NOT
+be made conditional: a matching `If-None-Match` on it asks for `412
+Precondition Failed` (RFC 9110 § 13.1.2); a `graphite` request sent as a form
+with `POST`, because its expressions are too long for a URL, is such a
+request.
+
+When an entry with a kept response is no longer fresh, the next trip of its
+cache key MUST send `If-None-Match` with the kept `ETag` value exactly as
+received, a weak one included, and `If-Modified-Since` with the kept
+`Last-Modified` value exactly as received, each when the response had it.
+Every attempt of the request MUST carry them: a retry, and the request sent
+again after a `401` made `request.login` log in again (§ 42.6a). A request
+that `request.headers` or a forwarded header already makes conditional MUST
+be sent as configured and its answer MUST NOT be taken for a revalidation.
+
+A `304 Not Modified` answer to the conditional request MUST be answered with
+the kept response: its status and body, and its headers with every field the
+304 sent replacing that field's values, as RFC 9111 § 4.3.4 says, except
+`Content-Length`, `Content-Encoding`, `Transfer-Encoding`, `Content-Type`,
+`Content-Range`, the hop-by-hop fields and those the 304's `Connection`
+names, which MUST be kept as stored. The trip MUST then decode, transform and
+validate that response as one just downloaded, the rules reading the kept
+status (`$status`, `response.status_code`) and the updated headers, and on
+success MUST store the new result with the updated response, fresh for
+`ttl`. The 304 MUST NOT be checked against `accept_status`, and MUST NOT be
+treated as a failed status. The exporter MUST NOT cache the rendered answer
+in place of transforming again: only the download is saved. Any other answer
+MUST be handled as an unconditional trip's: an accepted one replaces the
+entry, a failing one fails the trip. A 304 to a request that was not made
+conditional on a kept response MUST fail the trip in the `http_status` stage
+with an error that says the request was not conditional on a cached
+response, unless the collector accepts `304`.
+
+An entry with a kept response MUST NOT be removed when its `ttl` and
+`stale_if_error` have run out: it MUST answer no probe, and MUST stay for the
+next trip to revalidate until a new result replaces it, a reload drops the
+collector's entries, or `limits.max_cache_entries` needs its place. Over the
+limit, expired entries MUST still go first, an expired entry kept for
+revalidation among them. `http_exporter_cache_entries` MUST count it. An
+entry without a kept response MUST expire as § 42.13 and § 42.13.1 say.
+
+Revalidation and `stale_if_error` MUST compose in this order: a fresh entry
+answers without a trip; past `ttl` the trip is conditional when the entry
+kept a response; a 304 or an accepted new response answers fresh; a trip that
+fails, the conditional request included, MUST be answered with the stale
+result while it is within `stale_if_error` (§ 42.13.1), and with the failure
+past it.
+
+Each trip that revalidated MUST be counted in
+`http_exporter_cache_revalidations_total{collector,result}`, a counter with a
+series from zero for each `result` of every `http` and `graphite` collector:
+`not_modified` for a 304 the kept response answered, `modified` for a new
+response the collector accepted. It has no per-request series in verbose
+mode, and is exported over OTLP with the other self-metrics. After a 304,
+`http_exporter_scrape_http_status_code` MUST be `304` and
+`http_exporter_scrape_response_bytes` `0`, which describe what the target
+sent. A debug probe's report (§ 42.17) MUST show the conditional headers
+among the request's headers, and the request's outcome MUST say `304 Not
+Modified` and that the cached body was reused, with its size and status.
+
 ## 42.13a Sharing identical probes in flight
 
 A probe that arrives while an identical probe is already in flight MUST NOT
@@ -27531,6 +28327,77 @@ many targets of one backend would reach it with no bound.
 - Static target scrapes waiting for a slot MUST wait in line, and a slot
   that frees MUST be handed to the first waiter it can serve under both its
   collector's limit and the exporter's, not broadcast to every waiter.
+
+## 42.13c Backing off from failing targets
+
+A collector MAY set `failure_backoff`, with `after`, `initial`, `max` and
+`min_budget`, to stop contacting a target that keeps failing. A target that does not answer
+holds a trip slot (§ 42.13b) until its timeout on every scrape, so without
+it a few dead endpoints can keep the slots full.
+
+- `after` MUST default to 3 and be at least 1, `initial` MUST default to
+  `30s` and be a positive duration, and `max` MUST default to `10m`, or
+  `initial` when that is longer, and MUST NOT be shorter than `initial`;
+  `min_budget` MUST default to `1s` and be a positive duration; anything
+  else MUST be refused at load, naming the collector and the key.
+  Without `failure_backoff` every probe and scrape MUST contact the target.
+- A trip MUST count as failed for backoff when its fetch failed — the
+  connection, a timeout, TLS, a status the collector does not accept, or the
+  request type's own fetch error — whatever `error_handling.on_fetch_error`
+  made of it. A decode, transform or validation failure MUST count as a
+  success: the target answered. A trip the target policy refused (§ 26.1),
+  one a trip limit turned away before it started (§ 42.13b) and one
+  cancelled because every probe waiting for it went away or the exporter
+  shut down MUST change nothing. Any success MUST forget the target.
+- A trip whose fetch failed because the trip ran out of its budget — its
+  context's deadline came, or the fetch error is that deadline's — MUST
+  count as failed only when that budget was at least `min_budget`; below it
+  the trip MUST change nothing, neither counting as a failure nor forgetting
+  the failures before it. A probe's budget comes from its caller's
+  `X-Prometheus-Scrape-Timeout-Seconds` (§ 3), which is no part of the key a target is told apart
+  by, so a caller asking for less time than the target needs MUST NOT be
+  able to back the target off for every probe and scrape sharing its state.
+  A static target's scrape has its interval for a budget, and the floor MUST
+  apply to it the same way. A failure that is not the deadline's — a
+  refused connection, TLS, a status the collector does not accept, the
+  target's own error, or the expiry of a timeout of the request's own such
+  as the `timeout` parameter — MUST count whatever the budget.
+- After `after` consecutive failed trips, the target's probes and static
+  target scrapes MUST NOT contact it for `initial`. Each MUST fail at once in
+  the fetch stage with an error naming the target, the consecutive failures
+  and the time of the next try, RFC 3339 in UTC (`<target> is backing off
+  after 3 consecutive failed scrapes; next try after
+  2026-10-23T09:14:05Z`), and everything that applies to a failed fetch MUST
+  apply to it: `error_handling.on_fetch_error`, `cache.stale_if_error`
+  (§ 42.13.1), the failure log (§ 25.1), which MUST take its repeats for one
+  failure, and a static target's `http_exporter_target_up` 0. It MUST take no
+  trip slot, and MUST NOT change `http_exporter_scrape_http_status_code`,
+  `http_exporter_scrape_response_bytes`, the scrape-time histogram or the
+  last-scrape timestamp, which describe trips to the target.
+- When the wait has passed, the next trip MUST go to the target, and only
+  that one while it is in progress: a probe identical to it MUST share it as
+  any probe shares a trip in flight (§ 42.13a), and any other trip of the
+  target MUST fail at once as during the wait. Its failure MUST double the
+  wait, up to `max`; its success MUST forget the target. A trip let through
+  that ends without an outcome — turned away, cancelled, or panicking — MUST
+  let the next trip go to the target.
+- A target MUST be told apart as the response cache tells probes apart
+  (§ 42.13): probes differing in a `param_<name>` or another parameter of
+  the key MUST back off apart, and a static target and the identical probe
+  MUST share one state.
+- The targets remembered MUST be bounded per collector, at 10,000, the one
+  that failed longest ago forgotten first, since probe targets come from the
+  query string. A target MUST be forgotten when a trip to it succeeds, and a
+  reload that removes or changes the collector MUST forget all of its
+  targets (§ 24.1a); a trip of the collector as it was before such a reload
+  MUST NOT record its outcome afterwards.
+- A debug probe, debug scrape or run of the debug page MUST NOT ask or
+  change the state, and MUST say in its report when the target is backing
+  off (§ 42.17).
+- `http_exporter_backoff_skipped_total` MUST count the trips that failed
+  without contacting their target, and `http_exporter_targets_backing_off`
+  the targets within their wait or with the trip after it in progress
+  (§ 22).
 
 ## 42.14 Static targets
 
@@ -27909,13 +28776,14 @@ again at the next check.
 
 **Discovery.** A probe job's `discovery`, and an entry of the static target
 file's `discovered_targets`, MUST be a list of sources each setting exactly
-one of `file_sd`, `http_sd` and `kubernetes`, decoded strictly, with an
+one of `file_sd`, `http_sd`, `kubernetes` and `dns_sd`, decoded strictly, with an
 optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `<kind>_<index>`), `labels` (a label name, not starting with `__` nor `job`,
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes`; a
+`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes` and
+`dns_sd`; a
 `timeout` written longer than it MUST be refused, and one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
@@ -27923,7 +28791,8 @@ from the directory of the file naming them, read again at every refresh.
 `http_sd.url` MUST be an absolute `http` or `https` URL without credentials,
 asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
 optional `bearer_token_file` read again at every refresh and a `tls` block
-(only for `https`), without following redirects. Both MUST read a list of
+(only for `https`: a written one, even empty, with an `http` URL MUST be
+refused at load), without following redirects. Both MUST read a list of
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
@@ -27944,7 +28813,29 @@ slice with `any`, any other value refused at load; its targets MUST be each addr
 endpoint whose `ready` condition is true or unknown (every endpoint with
 `include_not_ready`) at the slice's port named or numbered `port`, as
 `host:port`, each once, with the meta labels `docs/ALLOCATOR.md` lists,
-`__meta_kubernetes_endpointslice_address_type` among them. An
+`__meta_kubernetes_endpointslice_address_type` among them. `dns_sd` MUST
+take `names` (at least one, each a DNS name of at most 253 characters and
+labels of 1 to 63, not an IP address nor holding `/?#@:[]`, written once,
+compared and asked in lower case without a trailing dot), `type` (`SRV`, the
+default, `A` or `AAAA`, any other value refused at load), `port` (1 to
+65535, required for `A` and `AAAA`, refused for `SRV`) and an optional
+`server` (`host` or `host:port`, port `53` by default, read as the `dns`
+request type's `request.server`, § 5.1); it MUST look each name up, in list
+order, as an absolute name with Go's resolver, sending every question to
+`server` when it is set and to the system's nameservers otherwise, all the
+names within its `timeout`, and MUST be built in every selection of request
+types. Each SRV record MUST be a target at its target host, lower-cased and
+without its trailing dot, and port, a record whose target is `.` none; each
+A or AAAA record a target at its address (IPv4-mapped addresses written as
+IPv4, IPv6 in brackets) and `port`. A name that does not exist or has no
+records of the type MUST give no targets and MUST NOT be a failure; any
+other lookup failure of any name MUST fail the answer. A target given twice,
+under one name or several, MUST be taken once with the labels of the first
+name in the list that gives it, and the targets MUST be sorted by address,
+so that the same records give the same answer in any order. Each target
+MUST have `__meta_dns_name`, the name asked, and an SRV target
+`__meta_dns_srv_record_target` (the host of its address) and
+`__meta_dns_srv_record_port`. An
 answer larger than 16 MiB (for `kubernetes`, a page of one slice), with
 more targets than its bound or that cannot be read MUST be a failure; a failing source MUST keep the targets of its last
 good answer, one that never answered MUST add none, and a failure MUST be
@@ -28787,10 +29678,16 @@ The report's copy of the response MUST be made before the decode and MUST
 share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
-A debug probe MUST NOT read or fill the response cache, share a trip with a
-probe in flight (§ 42.13a), be counted in any self-metric but
+A debug probe MUST NOT be answered from or fill the response cache, share a trip with a
+probe in flight (§ 42.13a), ask or change the state of `failure_backoff`
+(§ 42.13c) — it MUST contact the target while the collector is backing off
+from it, and its report MUST then say so, with the failures and the time of
+the next try — be counted in any self-metric but
 `http_exporter_debug_runs_total` (below) and the Python worker series, or be
-queued for OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
+queued for OTLP. It reads the cache only for the stale result a probe would
+have answered with, and for the response a probe would revalidate, which it
+MUST revalidate with the same conditional request and MUST NOT refresh in the
+cache (§ 42.13.2). Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
@@ -28957,8 +29854,8 @@ logged; and `report`, the text report of a debug probe, whose first line names i
 debug run, the collector, whether it was written on the page, and what it
 read.
 
-The collector MUST NOT be put in force. A run MUST NOT read or fill the
-response cache, share a trip, reach the failure log or the exporter's log
+The collector MUST NOT be put in force. A run MUST NOT be answered from or
+fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log
 but for one `info` line per run, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be

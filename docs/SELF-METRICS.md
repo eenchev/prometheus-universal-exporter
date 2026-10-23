@@ -12,9 +12,9 @@ configured:
 | `http_exporter_scrapes_total` | counter | Probes served, cache hits included. |
 | `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. |
 | `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
-| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, or a gRPC call answered `OK` or with a code of its `accept_codes`. |
+| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, or a gRPC call answered `OK` or with a code of its `accept_codes`; `304` when the target answered a [revalidation](CONFIGURATION.md#revalidating-expired-responses) with Not Modified. |
 | `http_exporter_scrape_grpc_status_code` | gauge | [`grpc`](GRPC.md#self-metrics) collectors only: the gRPC status code of the most recent call, `0` for `OK`, `14` for `UNAVAILABLE`; `-1` before the first call, or when a scrape made none, as when the message did not fit. An exporter without `grpc` collectors has no such series. |
-| `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body. |
+| `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body; `0` after a `304`, whose kept body was not downloaded again. |
 | `http_exporter_decode_success_total` | counter | Responses decoded. |
 | `http_exporter_parse_errors_total` | counter | Responses the decoder could not parse. |
 | `http_exporter_transform_errors_total` | counter | Failed transforms. A transform cut off because every probe waiting for its trip went away, or by a shutdown, is not one. |
@@ -33,13 +33,16 @@ configured:
 | `http_exporter_rate_limit_refused_total` | counter | `http` and `graphite` collectors only: the requests its rate limit refused before they were sent, their turn coming at or past their deadline; each failed its scrape. |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups: a probe answered from the cache is a hit, including one that found it filled while it waited to start; a probe that went to the target is a miss. A probe that [shared](#shared-probes) another's trip is neither, and is counted in `http_exporter_probes_coalesced_total`; nor is one that [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) or `--probe.max-concurrent` turned away, which is counted only as rejected, in `http_exporter_probes_rejected_total` or `http_exporter_probes_rejected_exporter_limit_total`. |
-| `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
+| `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included, and expired ones kept to be [revalidated](CONFIGURATION.md#revalidating-expired-responses). |
 | `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
+| `http_exporter_cache_revalidations_total` | counter | `http` and `graphite` collectors only, labelled `collector` and `result`, each series from zero: the trips that [revalidated](CONFIGURATION.md#revalidating-expired-responses) an expired cached response with `If-None-Match` or `If-Modified-Since`, with `result="not_modified"` when the target answered `304` and the kept body was decoded and transformed again, and `result="modified"` when it sent a new response the collector accepted. A conditional request whose answer failed the trip counts in neither. By collector alone: verbose mode adds no per-request series. Divided by the cache misses, the share of trips a validator spared the download of. |
+| `http_exporter_backoff_skipped_total` | counter | `0` for a collector without [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets): the probes and static target scrapes that failed at once without contacting their target, because the collector was backing off from it after its consecutive failed scrapes. Each failed as its fetch would have, so it counts as a failure, and in `http_exporter_cache_stale_served_total` when the last good result answered it. Per request too in verbose mode; a debug run is never counted. |
+| `http_exporter_targets_backing_off` | gauge | `0` for a collector without `failure_backoff`: the targets the collector is keeping its probes and scrapes from now, within their wait or with the one scrape after it in progress. A target is told apart as the response cache tells probes apart, so probes of one address with different parameters are as many targets. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
 | `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
-| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `s3file` and `redis` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused, an `s3file` collector's being buckets; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
+| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `s3file`, `redis`, `tcp` and `ldap` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused, an `s3file` collector's being buckets; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
 | `http_exporter_sshfile_connections` | gauge | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes use that are open now. A connection collectors with the same host and settings share counts for each of them. |
 | `http_exporter_sshfile_connects_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes made — the first to each host, and each made again after one broke, was closed idle, by keepalives or at the collector's `max_open_connections`, or had a credential or known_hosts file change. A counter that keeps rising while scrapes succeed is a connection that does not last. |
 | `http_exporter_sshfile_limit_waits_total`, `http_exporter_sshfile_limit_failures_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only, `0` for one without `max_open_connections`: the scrapes that waited for room at the collector's `max_open_connections`, and those that failed there, every connection it may open held by a read or being made for a scrape waiting for it when their deadline came. Failures rising mean a limit too low for the hosts read, or reads too slow for the scrape's timeout. |
@@ -499,7 +502,8 @@ http_exporter_scrapes_total{http_method!=""}  # per request
 
 Everything in the self-metric set is republished except
 `http_exporter_cache_entries`, which counts what a collector's response cache
-holds and belongs to no single request. `http_exporter_request_last_scrape_timestamp_seconds`
+holds and belongs to no single request, and
+`http_exporter_targets_backing_off`, which counts the collector's targets. `http_exporter_request_last_scrape_timestamp_seconds`
 is the one series that exists only in verbose mode: the per-collector view has
 no timestamp of its own. Status codes carry `0` when the request failed before a
 response arrived, so a transport failure is distinguishable from an HTTP error.
@@ -573,6 +577,16 @@ A [`redis`](REDIS.md#errors-and-self-metrics) collector's scrapes carry
 the scrape sends INFO alone, `http_method="COMMANDS"` when it sends the
 collector's commands alone, and `http_method="INFO+COMMANDS"` when it sends
 `info_sections`' INFOs and the commands; the commands and their arguments are left out, as a
+query string is.
+
+A [`tcp`](TCP.md#errors-and-self-metrics) collector's scrapes carry
+`tcp://host:port`, `tls://` over TLS, and `http_method="SEND"` when the
+collector writes `send`, `http_method="READ"` when it only reads; what it
+sends is left out, as a query string is.
+
+An [`ldap`](LDAP.md#errors-and-self-metrics) collector's scrapes carry
+`ldap://host:port`, `ldaps://` for TLS from the start, and
+`http_method="SEARCH"`; the searches' bases and filters are left out, as a
 query string is.
 
 A request URL is an unbounded label value and each combination now carries a

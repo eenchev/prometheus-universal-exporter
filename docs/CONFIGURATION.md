@@ -1647,6 +1647,19 @@ No series carries the page's name: Prometheus labels every series with the
 target it probed (`instance`), which already tells two pages apart.
 `statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
 
+[`examples/tcp/`](../examples/tcp/config.yaml) reads three services that
+report their statistics as text over TCP, with the opt-in
+[`tcp`](TCP.md) request type, so in a build with it
+(`make build OPT_IN_REQUEST_TYPES=tcp`): memcached's `stats`, read up to its
+`END` line, ZooKeeper's `mntr` and HAProxy's `show stat`, the first two with
+regular expressions and HAProxy's CSV by its columns. Its
+[`static-targets.yaml`](../examples/tcp/static-targets.yaml) scrapes a
+memcached pair, a ZooKeeper ensemble and an HAProxy:
+
+```sh
+curl 'http://localhost:8080/probe?collector=memcached&target=localhost:11211'
+```
+
 ### Mapping text to values and scaling them
 
 When a status has an order — up, degraded, down — one number per status is
@@ -1700,9 +1713,13 @@ words exports write in place of a value: `N/A`, `-`, `null`, and `true`,
 `false`, `yes`, `no`, `on` and `off` written as text (a JSON or YAML boolean
 is `1` or `0`). An empty cell is not a
 failure of this kind but a [missing value](#when-a-metric-cannot-be-extracted).
-The remedies are `value_map`, for the texts that stand for a value (`"N/A": 0`,
+A size, a duration, a time or a percentage written for people (`12.5 MB`,
+`1h2m`, `85%`) is read in a jq or yq expression, or a Python script, by the
+[value-parsing helpers](#value-parsing-helpers). The other remedies are
+`value_map`, for the texts that stand for a value (`"N/A": 0`,
 `"yes": 1`, `"1_000": 1000`), and a `pre_script`, which can rewrite a column
-before the rules read it — take the `%` off, turn `1.234,56` into `1234.56`.
+before the rules read it — read `85%` with `parse_percent`, turn `1.234,56`
+into `1234.56`.
 `value_map` reads only the texts it lists, so it suits a handful of words and
 not a column of decimal commas, which is two lines of a pre-script:
 
@@ -1974,6 +1991,136 @@ rule with `time_format: ""` reads its value as a number, and may have a
 without one; and `time_format: ""` beside a `time_zone` that names a zone is
 refused as `time_zone` without `time_format`. The
 [schema](#editor-support) says the same of each.
+
+### Value-parsing helpers
+
+Targets often write a value for people rather than as a number: Redis's
+`used_memory_human` is `1.00M`, an API reports an uptime as `1h2m` and a
+load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`. Four
+helpers read those forms, so a rule need not take them apart with a regular
+expression of its own. In every jq and yq expression they are functions of
+their input:
+
+```yaml
+- name: redis_memory_used_bytes
+  expression: .info.memory.used_memory_human | parse_bytes   # "1.00M" -> 1048576
+- name: app_uptime_seconds
+  expression: .uptime | parse_duration                      # "1h2m3.5s" -> 3723.5
+- name: app_last_backup_timestamp_seconds
+  expression: .backup.finished_at | parse_time              # "2026-10-03T09:00:00Z" -> 1791018000
+- name: app_cpu_ratio
+  expression: .cpu | parse_percent                          # "55.12%" -> 0.5512
+```
+
+and a [Python](PYTHON.md) script or pre-script has them as functions of the
+same names, `parse_bytes(row["size"])`. The two give the same number, and fail
+with the same message, for every input: both are tested against one file of
+test vectors, `testdata/values/helpers.json`.
+
+| Helper | Reads | Gives | Examples |
+| --- | --- | --- | --- |
+| `parse_bytes` | A size: a number, then blanks or none, then a unit or none | Bytes | `512` and `512B` → 512; `1.00M`, `1M` and `1 MiB` → 1048576; `1.5K` → 1536; `2.5 GB` → 2500000000; `1kB` → 1000 |
+| `parse_duration` | A duration as Go writes one, as a clock, or in ISO 8601 | Seconds | `1h2m3.5s` → 3723.5; `500ms` → 0.5; `2d4h` → 187200; `01:02:03` → 3723; `1-02:03:04` → 93784; `PT1H2M3S` → 3723; `P1DT2H` → 93600 |
+| `parse_time` | A date and time with its zone: RFC 3339, or an HTTP date | Unix seconds | `2026-10-03T09:00:00Z`, `2026-10-03T12:00:00.25+03:00` → 1791018000, 1791018000.25; `Sat, 03 Oct 2026 09:00:00 GMT` → 1791018000 |
+| `parse_percent` | A number followed by `%` | A ratio | `55.12%` and `55.12 %` → 0.5512; `100%` → 1; `-3.5%` → -0.035 |
+
+What each reads, exactly:
+
+- **A number** is digits, with or without a fraction after a dot (`3`, `3.5`,
+  `.5`, `5.`), and at most 100 digits. It has no sign, except
+  where `parse_duration` and `parse_percent` take one below, no exponent
+  (`1e3`), no thousands separator and no decimal comma. Blanks around the whole text — spaces,
+  tabs and line ends — are dropped, as a rule drops them around a value.
+- **`parse_bytes`**: no unit and `B` are bytes; `KiB`, `MiB`, `GiB`, `TiB`,
+  `PiB` and `EiB` are powers of 1024 (IEC); `kB`, `MB`, `GB`, `TB`, `PB` and
+  `EB` are powers of 1000 (SI); and a bare letter, `K`, `M`, `G`, `T`, `P` or
+  `E`, is a power of 1024, as Redis, `ls -h`, `df -h` and Java's `-Xmx` write
+  sizes. The unit is read in any case, so `KB`, `kb` and `mib` are units too,
+  and a lower-case `b` is bytes, not bits. Blanks between the number and the
+  unit are allowed. A sign, an unknown unit (`1 Ki`, `1 KB/s`, `1 bytes`) or
+  anything after the unit fails.
+- **`parse_duration`**, in one of three forms:
+  - as Go's `time.ParseDuration` reads it, with `d` for a day of 24 hours:
+    numbers each followed by its unit, `ns`, `us` (or `µs`), `ms`, `s`, `m`,
+    `h` or `d`, written together (`1h2m3.5s`, `1.5h`, `2d4h`), or `0` alone.
+    Only this form takes a leading `-` or `+`, as Go's does: `-1.5s` is
+    -1.5. The units are in lower case, and there are no blanks between the
+    parts.
+  - as a clock: `MM:SS`, `HH:MM:SS`, and with days `D-HH:MM:SS` or
+    `D.HH:MM:SS`, as `ps -o etime`, Slurm and .NET write elapsed time, with a
+    fraction of a second after the seconds (`01:02:03.250`). The first field
+    is as long as it needs to be (`100:00:00` is 100 hours, `75:00` 75
+    minutes); each after it is two digits, under 24 for the hours after days
+    and under 60 for minutes and seconds. Two fields are minutes and
+    seconds, not hours and minutes.
+  - in ISO 8601: `P`, then weeks (`W`) and days (`D`), then `T` and hours
+    (`H`), minutes (`M`) and seconds (`S`), each part optional but one there,
+    in that order, in upper case, a fraction on the last part only:
+    `PT1H2M3S`, `P1DT2H`, `PT0.5S`, `P2W`. Years and months (`P1Y`, `P1M`)
+    are refused: they have no fixed length in seconds.
+- **`parse_time`** reads
+  - RFC 3339 and the ISO 8601 date and time it is a form of:
+    `2026-10-03T09:00:00Z`, with `T`, `t` or a blank between the date and
+    the time, a fraction of a second or none, and `Z` (or `z`) or an offset,
+    `+03:00`, `+0300` or `+03`;
+  - the HTTP date of RFC 1123, `Sat, 03 Oct 2026 09:00:00 GMT`, with `GMT`,
+    `UTC` or an offset such as `+0300`, the day in one digit or two, and
+    the names of the day and the month in any case. The day of the week
+    must be the date's.
+
+  Any year from `0000` to `9999` is read, in the Gregorian calendar
+  extended back before its adoption; a moment before 1970 is negative,
+  `1969-12-31T23:59:59Z` → -1.
+
+  A date and time without a zone or an offset, `2026-10-03 09:00:00`, is
+  refused rather than read as UTC: it names no single moment. Seconds must
+  be written and be under 60, and the date must exist (`2026-02-30` fails).
+  A time in any other layout is read with a rule's
+  [`time_format`](#reading-a-date-or-a-time-as-the-value), which takes a
+  layout and a `time_zone`, or in jq with `strptime` and `mktime`; the
+  helper reads only the two forms whose zone is in the text.
+- **`parse_percent`**: a number with a sign or none, blanks or none, and
+  `%`, which must be there. It gives the ratio, a hundredth of the
+  percentage, since Prometheus keeps ratios in its base unit, 0 to 1:
+  `55.12%` is `0.5512`, beside the other ratios of a target, and a query
+  needs no division by 100. Multiply by 100 with the rule's `scale` to keep
+  the percentage.
+
+Each number is read exactly and rounded to a float once: `1.1GB` is
+1100000000 and `0.1s0.2s` 0.3, not 1100000000.0000002 and
+0.30000000000000004, as multiplying and adding floats on the way would give.
+
+Each reads text. `parse_bytes` and `parse_duration` also take a number, a
+JSON or YAML number in jq and an `int` or a `float` in Python, as being
+bytes or seconds already, and give it back unchanged, since an API that
+writes `"1.5K"` for one value may write `1536` for another. Anything else —
+`null` (`None`), a boolean, an object, an array, and a number given to
+`parse_time` or `parse_percent` — fails, saying what the helper reads:
+`parse_time reads text, not a number`. A field a response may leave out is
+passed on only when it is there, `.uptime | values | parse_duration`, so it
+is a [missing value](#when-a-metric-cannot-be-extracted) rather than a
+failure.
+
+Text a helper cannot read fails as any other failing expression of its
+transform does: a jq or yq rule with the helper's error, under the rule's
+[`error_mode`](#when-a-metric-cannot-be-extracted) (`try ... catch` and `?`
+catch it, as they catch any jq error), and a Python script or pre-script
+with a `ValueError` (a `TypeError` for what is not text), which the script
+may catch and otherwise fails it as any exception does. The message names
+the helper and quotes the text, cut to its first 64 bytes with its length
+when it is longer, and says what to write:
+
+```text
+parse_bytes cannot read "12 KB/s" as a size: write a number, then optionally blanks and a unit: B, KiB to EiB, kB to EB, or K to E
+parse_duration cannot read "P1M" as a duration: years and months have no fixed length in seconds
+parse_time cannot read "2026-10-03 09:00:00" as a time: it names no zone or offset, so it is no single moment; add Z or an offset
+parse_percent cannot read "55.12" as a percentage: write a number followed by %, such as 55.12%
+```
+
+The helpers are gojq functions the exporter adds, named so that none hides
+a builtin of jq or gojq. They are there in every jq expression the exporter
+evaluates, those of [pagination](REQUESTS.md#pagination) and
+[logins](AUTHENTICATION.md#logging-in-to-a-target) included.
 
 ### Histograms from a list of values
 
@@ -2319,6 +2466,20 @@ default ones when left out, and `commands` the read-only commands whose
 replies are read besides; `username` and `password_file`, `db`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
+
+For `tcp`, in a build that [asks for it](TCP.md#building-with-tcp), no key
+is required: `send` is the text written once the connection is made, and
+`terminator` what the answer ends with, the answer ending when the server
+closes the connection without one; `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The answer is a body, read
+by any decoder; its table is in [Text protocols over TCP](TCP.md#a-collector).
+
+For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
+`searches` is required, each search with its `name`, `base`, `scope`,
+`filter`, `attributes`, `count_only` and `max_entries`; `bind_dn` and
+`password_file`, `start_tls`, `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
+its table is in [LDAP directories](LDAP.md#a-collector).
 <!-- /request-types -->
 
 <!-- request-types: all -->
@@ -2341,7 +2502,10 @@ name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
 since the collector lists what its configuration names. `redis` accepts
 `timeout` and `param_<name>`, and requires a `target`, the server,
-`host:port` or a `redis://` or `rediss://` URL of it.
+`host:port` or a `redis://` or `rediss://` URL of it, and so does `ldap`,
+its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
+accepts `timeout` and `param_<name>`, and requires a `target`, the service,
+`host:port` with its port.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -2400,7 +2564,7 @@ their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
-links the AWS SDK, below, and the opt-in `redis` nothing outside it either. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, and the opt-in `redis`, `tcp` and `ldap` nothing outside it either. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2408,25 +2572,28 @@ drivers](SQL.md#building-with-more-drivers)).
 
 An opt-in type is one no build carries unless asked, the default build and
 the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB, and `redis`, which needs nothing outside the standard library and is
-left out of the builds of deployments with no Redis to read.
+6.7 MB, and `redis`, `tcp` and `ldap`, which need nothing outside the
+standard library and are left out of the builds of deployments with no Redis
+or text-protocol service to read, or directory to search.
 `OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
 carries, whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like
 any type:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=s3file
-make build OPT_IN_REQUEST_TYPES=s3file,redis
+make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis)" .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" .
 ```
 
-Its tag alone, `request_type_s3file` or `request_type_redis`, adds a type to
-a default build, and the two tags together both. A collector of an opt-in
-type is refused by a build without it with a message that says the type is
-opt-in and how to build with it ([Building with
-s3file](S3FILE.md#building-with-s3file), [Building with
-redis](REDIS.md#building-with-redis)).
+Its tag alone, `request_type_s3file`, `request_type_redis`,
+`request_type_tcp` or `request_type_ldap`, adds a type to a default build, and the tags together
+each of them. A collector of an opt-in type is refused by a build without it
+with a message that says the type is opt-in and how to build with it
+([Building with s3file](S3FILE.md#building-with-s3file), [Building with
+redis](REDIS.md#building-with-redis), [Building with
+tcp](TCP.md#building-with-tcp), [Building with
+ldap](LDAP.md#building-with-ldap)).
 
 ### When a metric cannot be extracted
 
@@ -3735,7 +3902,8 @@ rotated credential file applies to a cached request once the entry expires; keep
 Only fully successful probes are cached; HTTP, decode, transform, and validation
 failures are not. `limits.max_cache_entries` bounds each collector's live
 entries and defaults to 1000, dropping expired entries first and then the ones
-closest to expiry.
+closest to expiry. An expired entry kept to be
+[revalidated](#revalidating-expired-responses) counts in it too.
 
 ### Serving the last good result when the target fails
 
@@ -3755,8 +3923,9 @@ of the error:
 Within 30 seconds of a successful probe, repeats are answered from memory as
 above. After that the target is asked again; if it answers, the new result is
 served and stored. If the trip fails — the target is down, times out, answers
-an error status, its response cannot be decoded or transformed, or the
-collector is at `max_concurrent_probes` — and the last good result of the same
+an error status, its response cannot be decoded or transformed, the
+collector is at `max_concurrent_probes`, or it is
+[backing off](#backing-off-from-failing-targets) from the target — and the last good result of the same
 probe is less than 5m30s old, that result is answered with `200`. Past that,
 the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
 the target, and the last good result is kept only as a fallback.
@@ -3815,6 +3984,89 @@ cached metrics are still queued for OTLP export, while
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` continue to describe the last real target
 request.
+
+### Revalidating expired responses
+
+An `http` or `graphite` collector's cache also keeps, with each result, the
+response it was made from, when that response carried an `ETag` or a
+`Last-Modified` header. Once the result is no longer fresh, the next trip of
+the same probe asks the target whether the response is still current, as
+RFC 9110 describes: it sends `If-None-Match` with the `ETag` exactly as it was
+received, weak (`W/"..."`) or strong, and `If-Modified-Since` with the
+`Last-Modified` exactly as it was received.
+
+- A `304 Not Modified` answer means the kept response is still current. Its
+  body is used again, and the kept headers are updated from the 304's as
+  RFC 9111 § 4.3.4 says: each header the 304 sends, such as `ETag`,
+  `Last-Modified`, `Cache-Control`, `Expires` or `Date`, replaces the kept one,
+  except `Content-Length`, `Content-Encoding`, `Transfer-Encoding`,
+  `Content-Type`, `Content-Range` and the headers of the connection, which
+  describe a body the 304 does not have. The trip then goes on as if the
+  response had just been downloaded: it is decoded and transformed again,
+  every rule seeing the original status (`$status` is `200`, not `304`) and
+  the updated headers, and the new result is stored, fresh for `ttl`.
+  Only the download is saved; the series are made anew on every trip.
+- Any other answer is handled as any trip's is: a new response that the
+  collector accepts replaces the kept one, and a failing status fails the
+  trip.
+
+A 304 is never a failed status: it stands for the kept response, whose
+status the collector accepted. A 304 to a request that was not conditional
+on a kept response has nothing to stand for, and fails the probe as
+`received HTTP status 304 Not Modified to a request that was not conditional
+on a cached response`, unless `request.accept_status` names `304`. A request
+the collector makes conditional itself, with `If-None-Match` or
+`If-Modified-Since` in `request.headers` or forwarded, is sent as configured,
+and its answer is not taken for a revalidation.
+
+An expired entry whose response has a validator is not dropped when its
+`ttl` and `stale_if_error` have run out: it answers no probe, but stays for
+the next trip to revalidate, until a new result replaces it, a reload
+changes or removes the collector, or `limits.max_cache_entries` needs its
+place, of which it is the first to go. It counts in
+`http_exporter_cache_entries`. An entry without a validator is dropped at its
+expiry, as before. The kept response holds the body as it was downloaded, up
+to the collector's response limit, so each kept entry costs about the size
+of its response besides its series.
+
+Revalidation and [`stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+work together, in this order: a fresh result answers without a trip; past
+`ttl`, the trip is conditional when the kept response has a validator; a 304
+or a new response answers fresh; a trip that fails — the conditional request
+answered `500`, or a timeout — is answered with the stale result while it is
+within `stale_if_error`, and with the failure after it, even though the
+entry is still kept for the next revalidation.
+
+Only a response that one validator speaks for is revalidated: one fetched
+with `GET` or `HEAD`, the method of every `graphite` request but one too long
+for a URL, which is sent as a form with `POST`. A matching `If-None-Match`
+on another method asks the target for `412 Precondition Failed` rather than
+a 304. A collector with [`request.pagination`](REQUESTS.md#pagination)
+stores its pages merged into one response, which no page's validator
+speaks for, so its responses are neither kept nor revalidated. Every attempt
+of a conditional request carries the validators: a retry, and the request
+sent again after a `401` made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
+in again.
+
+Revalidation is on by default. A collector whose target sends validators it
+does not honour can turn it off:
+
+```yaml
+    cache:
+      ttl: 30s
+      revalidate: false
+```
+
+`http_exporter_cache_revalidations_total{collector,result}` counts the trips
+that revalidated a kept response, with `result="not_modified"` for a 304 and
+`result="modified"` for a new response the collector accepted.
+`http_exporter_scrape_http_status_code` shows `304` and
+`http_exporter_scrape_response_bytes` `0` after a 304, since they describe
+what the target sent. A [debug probe](#debug-probes) sends the conditional
+request the same probe would, and its report shows `If-None-Match` and
+`If-Modified-Since` among the request's headers and the outcome as
+`304 Not Modified; the cached body of <n> bytes was reused, with status 200`;
+it refreshes nothing, so the entry stays as it was.
 
 ## Identical probes share one request
 
@@ -3877,8 +4129,9 @@ Prometheus records the rejected scrape as `up` 0 with that reason, rather than
 as a timeout.
 
 Probes that make no trip take no slot: one answered from the
-[response cache](#response-caching), and one that
-[shares a request](#identical-probes-share-one-request) already in flight. A
+[response cache](#response-caching), one that
+[shares a request](#identical-probes-share-one-request) already in flight,
+and one [kept from a failing target](#backing-off-from-failing-targets). A
 [static target](STATIC-TARGETS.md) shares its collector's limit, but
 waits for a free slot within its scrape budget instead of failing at once,
 since nothing is waiting on its answer; if none frees up in time, the scrape
@@ -3911,6 +4164,105 @@ collector never holds up another collector's. `0`, the default, leaves only the
 per-collector limits; a negative value is a command-line error. Size it to the
 memory the exporter has, together with `--python.max-workers` (see
 [Python](PYTHON.md#how-scripts-run)).
+
+## Backing off from failing targets
+
+A target that is down fails every scrape, and every scrape still goes to it.
+One that does not answer at all holds a trip slot — of
+`max_concurrent_probes` and of `--probe.max-concurrent` — until its timeout,
+on every scrape, so a few dead endpoints can keep the slots full and turn
+away the probes of targets that answer. `failure_backoff` stops contacting a
+target that keeps failing, for a while:
+
+```yaml
+collectors:
+  - name: inventory_api
+    failure_backoff:
+      after: 3      # consecutive failed scrapes before backing off; at least 1, 3 when omitted
+      initial: 30s  # the first wait; 30s when omitted
+      max: 10m      # the longest wait; 10m, or initial when that is longer, when omitted
+      min_budget: 1s # the least budget a timed-out scrape must have had to count; 1s when omitted
+```
+
+After `after` consecutive failed scrapes of a target, its probes and
+[static target](STATIC-TARGETS.md) scrapes fail at once, without contacting
+it, for `initial`. When the wait has passed, the next scrape goes to the
+target: if it fails, the next wait is twice the last, up to `max`; if it
+succeeds, the target is forgotten and every scrape goes to it again. Only
+that one scrape goes: while it is in progress, a probe identical to it
+[shares it](#identical-probes-share-one-request), and any other scrape of the
+target, such as a probe of a collector with `coalesce: false`, fails at once
+as during the wait. Without `failure_backoff` every scrape contacts the
+target. `after` below 1, an `initial` or `min_budget` that is not a positive
+duration and a `max` shorter than `initial` are refused at load.
+
+A failed scrape is one whose fetch failed: the connection was refused or
+reset, it timed out, TLS failed, the target answered a status the collector
+does not [accept](REQUESTS.md#accepting-other-statuses), or the request type's own
+fetch failed — a file that is not there, a query a database refused. A target
+that answered something the decoder or the transform could not read is up,
+and counts as a success. Neither counts the scrape that
+[`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
+refused, one `max_concurrent_probes` or `--probe.max-concurrent` turned away
+before it started, or one cancelled because every probe waiting for it went
+away: nothing is known of the target from them.
+
+Nor does a scrape that timed out — ran out of its budget — when that budget
+was below `min_budget`. A probe's budget comes from its caller: Prometheus's
+scrape timeout, less `--probe.timeout-offset`
+([Probe deadlines](#probe-deadlines)), which is not part of what a target is
+told apart by. Without the floor, anyone who can reach `/probe` could send a
+few probes asking for less time than the target needs to answer and back it
+off for every probe and static target scrape that shares its state. The
+budgets Prometheus gives are above the floor, so a target that does not
+answer at all still backs off; raise `min_budget` towards the scrape timeout
+to be stricter about what counts. Such a scrape neither counts as a failure
+nor forgets the failures before it. A static target's scrape has its interval
+for a budget, and the floor applies to it the same way. A failure that is not
+the deadline's — a refused connection, TLS, a status the collector does not
+accept, the target's own error — counts whatever the budget, and so does a
+timeout of the probe's `timeout` parameter, which is part of the key.
+
+A scrape kept from the target fails as its fetch would have, in the fetch
+stage, with:
+
+```text
+http://10.0.0.7:8080/stats is backing off after 3 consecutive failed scrapes; next try after 2026-10-23T09:14:05Z
+```
+
+so everything that applies to a failed fetch applies to it: a probe is
+answered `502` under `error_handling.on_fetch_error: fail`, or carries on
+under `log` and `ignore` ([When a stage of the probe
+fails](#when-a-stage-of-the-probe-fails)), and
+[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+answers it with the last good result. A static target's scrape is `up` 0, or
+serves its last good result marked stale. Such a scrape takes no trip slot,
+sends nothing, and leaves `http_exporter_scrape_http_status_code` and
+`http_exporter_scrape_response_bytes` describing the last real request. Its
+failure is logged as any failure is, and its repeats are one failure to the
+[log](LOGGING.md#repeated-failures), however its count and time move; a
+target that starts to back off is logged once at warning level, with its
+failures and the time of its next try.
+
+A target is told apart as the [response cache](#response-caching) tells
+probes apart: the collector's definition, the target, the probe parameters
+and the forwarded headers. Probes with different `param_<name>` values back
+off apart, and a static target and the identical probe share one state. A
+collector remembers at most 10,000 targets that have failed, the one that
+failed longest ago forgotten first, since probe targets come from the query
+string; a target is forgotten as soon as a scrape of it succeeds, and a
+reload that removes or changes the collector forgets all of them. The state
+is in memory, per exporter process.
+
+A [debug probe](#debug-probes) or run always contacts the target, and changes
+nothing of the backoff; its report says when the target is backing off, and
+until when.
+
+`http_exporter_backoff_skipped_total` counts the scrapes answered without
+contacting their target, and `http_exporter_targets_backing_off` the targets
+the collector is keeping its scrapes from now
+([self-metrics](SELF-METRICS.md#collector-metrics)); both are `0` without
+`failure_backoff`.
 
 ## Memory
 
@@ -4512,7 +4864,10 @@ it is given runs on the server:
 A run takes as long as a probe may — the timeout on the page, sent as
 Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
 target's interval — and at most 4 runs of the page are in progress at once;
-one more is answered `503`. A run reads and fills no cache, counts in no
+one more is answered `503`. A run fills no cache and is answered from none,
+reading only what a debug probe reads of it (a configured collector's stale
+result and the response it would
+[revalidate](#revalidating-expired-responses)), counts in no
 collector's self-metrics but the [Python worker
 series](SELF-METRICS.md#python-workers) of a configured collector's script,
 and logs one `debug run served` line at `info`. The page is behind
@@ -4627,6 +4982,14 @@ The report lists:
 - **Metrics:** the exposition a probe would have served, and before the
   report, the status a probe would have answered. Where `cache.stale_if_error`
   would have answered with the last good result, the report says so.
+- **Backoff:** where [`failure_backoff`](#backing-off-from-failing-targets)
+  is backing off from the target, a line under the first two says so, with
+  the failures and the time of the next try — `The target is backing off
+  after 3 consecutive failed scrapes (failure_backoff): probes and scrapes
+  fail without contacting it until 2026-10-23T09:14:05Z. This run contacted
+  it all the same, and changes nothing of that.` The debug probe contacts the
+  target whatever the backoff says, and its outcome neither starts, lengthens
+  nor ends one.
 
 A target can make most of that as long as it likes — the URL a redirect led
 to, a header's value, the message of a gRPC status, a metric's name — and a
@@ -4681,8 +5044,11 @@ have answered. It takes the same parameters as the probe. For debug, `true`,
 `1` or an empty value turn it on and `false` or `0` leave the probe as it is;
 any other value is answered `400`.
 
-A debug probe always goes to the target, and leaves nothing behind. It does
-not read or fill the response cache, it does not share an identical probe in
+A debug probe always goes to the target, and leaves nothing behind. It is
+not answered from the response cache and does not fill it — it only reads the
+stale result a probe would have answered with, and the response a probe
+would [revalidate](#revalidating-expired-responses), sending the same
+conditional request without refreshing the entry — it does not share an identical probe in
 flight, and it is not exported over OTLP or counted in the self-metrics but
 `http_exporter_debug_runs_total`, which is what the report's line "records
 no self-metric but http_exporter_debug_runs_total" says. One thing is
@@ -5088,6 +5454,8 @@ nothing there.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
 - [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
 - [REDIS.md](REDIS.md) — the opt-in `redis` request type.
+- [TCP.md](TCP.md) — the opt-in `tcp` request type.
+- [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

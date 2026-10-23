@@ -496,8 +496,8 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			}
 			static.collector, static.requester, static.generation = c, through, p.generation
 			// The stale result would be the target's collector's, not this
-			// one's.
-			static.staleKey = ""
+			// one's, and so would its backoff.
+			static.staleKey, static.backoffKey = "", ""
 		}
 		static.source = fmt.Sprintf("static target %q, scraped through collector %q", static.static.Name, through.Name)
 		return static, notes, 0, nil
@@ -583,10 +583,17 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 	}
 	if requester != c {
 		p.requester = requester
-	} else if model.UsesCache(c) {
+	} else if model.UsesCache(c) || c.FailureBackoff != nil {
 		// A configured collector fetching for itself is a debug probe of it,
-		// whose stale answer is the same probe's (probeHandler).
-		p.staleKey = s.probeCacheKey(followed.config, c, p.target, probeKeyQuery(c.Name, p.target, overrides), p.forwarded)
+		// whose stale answer and backoff are the same probe's
+		// (probeHandler).
+		key := s.probeCacheKey(followed.config, c, p.target, probeKeyQuery(c.Name, p.target, overrides), p.forwarded)
+		if model.UsesCache(c) {
+			p.staleKey = key
+		}
+		if c.FailureBackoff != nil {
+			p.backoffKey = key
+		}
 	}
 	return p, notes, 0, nil
 }

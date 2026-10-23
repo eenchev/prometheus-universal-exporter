@@ -65,14 +65,25 @@ const (
 
 // Every shipped configuration is valid against the schema, so an editor
 // pointed at it shows no false errors on the examples, those in a directory
-// of their own included.
+// of their own included. An example is checked against the schema this
+// build generates, which is the committed one in the default build and
+// names an opt-in type in a build with it, as `--config.schema` prints it
+// for an editor; one of a type the build lacks is skipped.
 func TestShippedConfigurationsMatchTheSchema(t *testing.T) {
-	schema := loadSchema(t)
+	schema, built := loadSchema(t), builtSchema(t, configSchemaFile)
 	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}
-	files = append(files, shippedExamples(t).configs...)
+	tree := shippedExamples(t)
+	files = append(files, tree.configs...)
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
-			if errs := validateAgainstSchema(schema, readYAMLDocument(t, file)); len(errs) > 0 {
+			against := schema
+			if strings.HasPrefix(file, "examples/") {
+				if missing := exampleTypesNotBuilt(t, tree, file); len(missing) > 0 {
+					t.Skipf("this build's schema lacks the request types %v", missing)
+				}
+				against = built
+			}
+			if errs := validateAgainstSchema(against, readYAMLDocument(t, file)); len(errs) > 0 {
 				t.Fatalf("%s does not match the schema:\n%s", file, strings.Join(errs, "\n"))
 			}
 		})
@@ -348,9 +359,13 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 				errs = append(errs, validateAgainstSchema(part.(map[string]any), value)...)
 			}
 		}
-		if condition, ok := schema["if"].(map[string]any); ok && len(validateAgainstSchema(condition, value)) == 0 {
-			if then, ok := schema["then"].(map[string]any); ok {
-				errs = append(errs, validateAgainstSchema(then, value)...)
+		if condition, ok := schema["if"].(map[string]any); ok {
+			branch := "then"
+			if len(validateAgainstSchema(condition, value)) > 0 {
+				branch = "else"
+			}
+			if rule, ok := schema[branch].(map[string]any); ok {
+				errs = append(errs, validateAgainstSchema(rule, value)...)
 			}
 		}
 		if anyOf, ok := schema["anyOf"].([]any); ok {
@@ -449,6 +464,16 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			}
 			if maxItems, ok := schema["maxItems"].(float64); ok && float64(len(x)) > maxItems {
 				errs = append(errs, fmt.Sprintf("%s: %d items, want at most %v", path, len(x), maxItems))
+			}
+			if unique, _ := schema["uniqueItems"].(bool); unique {
+				seen := map[string]bool{}
+				for _, item := range x {
+					text := fmt.Sprintf("%T %#v", item, item)
+					if seen[text] {
+						errs = append(errs, fmt.Sprintf("%s: %v is listed twice", path, item))
+					}
+					seen[text] = true
+				}
 			}
 			if items, ok := schema["items"].(map[string]any); ok {
 				for i, item := range x {

@@ -34,6 +34,11 @@ type collectJob struct {
 	// display is the target as logs and self-metrics show it.
 	display  string
 	cacheKey string
+	// revalidateKey is the key of the cache entry whose response the trip
+	// revalidates (revalidatesFor): cacheKey for a trip that fills the
+	// cache, and the key the same probe would have for a debug probe, which
+	// reads the entry but writes nothing.
+	revalidateKey string
 	// budget bounds the trip when the probe has a deadline (scrapetimeout.go);
 	// a failure that ran out of it says so, and where it came from.
 	budget       time.Duration
@@ -57,6 +62,11 @@ type collectJob struct {
 	// collector that fetches. For every other trip it is nil, and collector
 	// makes the request.
 	requester *model.Collector
+	// backingOff, when set, is why failure_backoff keeps the trip from the
+	// target (backoff.go): the trip contacts nothing and fails with it in
+	// the fetch stage, under on_fetch_error, as the fetch it stands for
+	// would have.
+	backingOff error
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
@@ -136,6 +146,19 @@ type collected struct {
 	// Such a failure is never answered with a stale result
 	// (unauthorizedFailure).
 	unauthorized bool
+	// fetchFailed is set when the fetch failed, or answered with a status
+	// the collector does not accept, whatever error_handling made of it:
+	// what failure_backoff counts as the target's failure (backoff.go). A
+	// trip the target policy refused is not one.
+	fetchFailed bool
+	// outOfBudget is set when the fetch failed because the trip ran out of
+	// its budget, which budget was: failure_backoff counts such a failure
+	// only when the budget was at least its min_budget (backoff.go).
+	outOfBudget bool
+	budget      time.Duration
+	// skipped is set when failure_backoff kept the trip from the target
+	// (collectJob.backingOff).
+	skipped bool
 }
 
 // cutShort reports whether ctx was cancelled rather than run out of time: by
@@ -146,6 +169,20 @@ func cutShort(ctx context.Context) bool {
 }
 
 func (r collected) failed() bool { return r.err != nil }
+
+// ranOutOfBudget reports whether the fetch that failed with err did so
+// because the trip's deadline, ctx's, came: ctx says so, or err is a
+// deadline's and the deadline has passed, as when a request type set it on
+// a socket, whose timeout can come before the context's timer fires. A
+// timeout of the request's own, such as its timeout parameter, is not the
+// trip's budget running out.
+func ranOutOfBudget(ctx context.Context, err error) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && errors.Is(err, context.DeadlineExceeded) && !time.Now().Before(deadline)
+}
 
 // collect makes one trip to the target. It counts every stage in the
 // collector's self-metrics, logs failures and recovery, and caches a result
@@ -168,8 +205,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	defer func() {
 		// The last-scrape timestamp and the duration histogram describe a trip
 		// to the target, not an answer from the cache. A debug probe's trip
-		// is in neither.
-		if trace == nil {
+		// is in neither, nor is one backoff kept from the target.
+		if trace == nil && j.backingOff == nil {
 			rec.scraped(time.Now())
 			s.observeTargetScrape(rec.collector, time.Since(start))
 		}
@@ -217,12 +254,26 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if j.requester != nil {
 		requester = j.requester
 	}
+	if j.backingOff != nil {
+		// Nothing is sent, so nothing of the last response's is replaced
+		// in the self-metrics; the failure is the fetch's as the fetch's
+		// own would be, logged, carried on past or answered stale alike.
+		rec.update(func(x *serverStats) { x.backoffSkipped++ })
+		failure := stageFailed(fetch.FetchStage(requester), j.backingOff, c.ErrorHandling.OnFetchError)
+		failure.skipped = true
+		return failure
+	}
 	var response *fetch.HTTPResponse
 	var err error
+	revalidates := revalidatesFor(j)
 	if j.pasted != nil {
 		response, err = pastedResponse(c, j.pasted)
 	} else {
-		response, err = fetch.FetchCollector(ctx, j.target, requester, j.overrides, j.headers)
+		fetchCtx := ctx
+		if revalidates {
+			fetchCtx = fetch.WithRevalidation(ctx, s.cache.Revalidation(j.revalidateKey, time.Now()))
+		}
+		response, err = fetch.FetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
@@ -253,6 +304,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		failure := stageFailed(fetch.FetchErrorStage(requester, err), err, c.ErrorHandling.OnFetchError, extra...)
 		failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
+		failure.fetchFailed = true
+		failure.outOfBudget, failure.budget = ranOutOfBudget(ctx, err), j.budget
 		return failure
 	}
 	if response.GRPCCode != nil {
@@ -260,13 +313,33 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 	trace.step(fetch.FetchStage(requester), "ok", time.Since(mark), fetchedNote(response, j.pasted != nil))
 	rec.update(func(x *serverStats) {
+		// A 304 is described as the target sent it, with no body; the
+		// response the trip goes on with is the cached one.
 		x.lastStatus = response.StatusCode
 		x.lastBytes = int64(len(response.Body))
+		if response.NotModified {
+			x.lastStatus, x.lastBytes = http.StatusNotModified, 0
+		}
 		if grpc {
 			x.grpcCode, x.grpcCalled = grpcCode, true
 		}
+		if response.NotModified {
+			x.revalidatedNotModified++
+		}
 	})
+	// The response as the target sent it, or as the cache kept it, is kept
+	// again with the result, before the decode converts the body or
+	// rewrites its headers.
+	var kept *fetch.CachedResponse
+	if revalidates && trace == nil {
+		kept = fetch.KeepResponse(response)
+	}
 	accepted := fetch.AcceptedStatus(requester, j.overrides, response.StatusCode)
+	if accepted && response.Conditional && !response.NotModified {
+		// A new response in place of the cached one; one whose status
+		// fails the trip revalidated nothing.
+		rec.update(func(x *serverStats) { x.revalidatedModified++ })
+	}
 	s.notePages(ctx, response, accepted, requester, rec, j.display, j.target)
 	if !accepted {
 		// The target's own explanation is usually in the body; the start of
@@ -277,6 +350,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		mark = time.Now()
 		statusErr := fmt.Errorf("received HTTP status %d", response.StatusCode)
+		if response.StatusCode == http.StatusNotModified && !response.Conditional {
+			// Only a request the exporter made conditional on a cached
+			// response is answered by that response.
+			statusErr = errors.New("received HTTP status 304 Not Modified to a request that was not conditional on a cached response, so there is no response to reuse")
+		}
 		if response.RedirectWithheld != "" {
 			// The status is the answer of a host a redirect led to, which
 			// was not sent what the collector identifies itself with
@@ -294,6 +372,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		failure := stageFailed("http_status", statusErr, c.ErrorHandling.OnFetchError, excerpt...)
 		failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
+		failure.fetchFailed = true
 		return failure
 	}
 	var set *model.MetricSet
@@ -400,9 +479,21 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// probe's result is not kept either, nor that of a collector a reload
 	// removed or changed since the trip read it (PutFor).
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
-		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, kept, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	}
 	return collected{set: set, answer: answer, fetched: now}
+}
+
+// revalidatesFor reports whether j's trip revalidates a cached response, and
+// keeps the response it gets for the next trip to revalidate: the
+// collector caches and revalidates (cache.revalidate), its request is one a
+// validator speaks for (fetch.Revalidable), and the collector that makes the
+// request is the one that decodes it, which is not so of a debug page's run
+// on what another collector fetched, nor of a pasted response.
+func revalidatesFor(j collectJob) bool {
+	c := j.collector
+	return j.revalidateKey != "" && j.pasted == nil && j.requester == nil &&
+		model.UsesCache(c) && model.Revalidates(c) && fetch.Revalidable(c, j.overrides)
 }
 
 // transformRecorded transforms a decoded response, and counts in the
@@ -608,6 +699,9 @@ func fetchedNote(r *fetch.HTTPResponse, pasted bool) string {
 		return fmt.Sprintf("gRPC status %d, %d bytes", *r.GRPCCode, len(r.Body))
 	case r.NoStatus:
 		return fmt.Sprintf("%d bytes", len(r.Body))
+	}
+	if r.NotModified {
+		return fmt.Sprintf("304 Not Modified; the cached response was reused: status %d, %d bytes", r.StatusCode, len(r.Body))
 	}
 	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
 		note := fmt.Sprintf("status %d, %d bytes, %d pages", r.StatusCode, len(r.Body), len(p.Pages))

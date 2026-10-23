@@ -1,4 +1,4 @@
-//go:build !select_request_types && !request_type_redis && !request_type_s3file && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
+//go:build !select_request_types && !request_type_ldap && !request_type_redis && !request_type_s3file && !request_type_tcp && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
 
 package repository
 

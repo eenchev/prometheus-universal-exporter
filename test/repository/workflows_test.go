@@ -352,19 +352,52 @@ func requestTypesInTheTree(t *testing.T) []string {
 // the Makefile write it.
 var requestTypeLoop = regexp.MustCompile(`(?m)\bfor type in ([a-z0-9 ]+); do\b`)
 
-// CI vets, builds and tests each request type on its own, so each of its
-// loops names every internal/fetch/requesttype_<name>.go.
+// CI vets and builds each request type on its own, in the job of the matrix
+// over every type that tests each (TestCIAndMakeTestEveryRequestTypeOnItsOwn
+// keeps the matrix whole), under the go filter, so no build of one type is
+// left to a loop in one job, which took most of test's time; and
+// `make build-request-types` runs the same commands in a loop that names
+// every internal/fetch/requesttype_<name>.go.
 func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
-	types := requestTypesInTheTree(t)
-	matches := requestTypeLoop.FindAllStringSubmatch(read(t, ".github/workflows/ci.yml"), -1)
-	if matches == nil {
-		t.Fatal("ci.yml has no loop over the request types")
+	const tags, vet, build = `tags="$(sh tools/request-type-tags.sh "$type")"`, `go vet -tags "$tags" ./...`, `go build -tags "$tags" ./...`
+	ci := read(t, ".github/workflows/ci.yml")
+	if requestTypeLoop.MatchString(ci) {
+		t.Error("ci.yml builds the request types one after another in a loop, not each in its job of the request types' matrix")
 	}
-	for _, match := range matches {
-		listed := strings.Fields(match[1])
-		sort.Strings(listed)
-		if !slices.Equal(listed, types) {
-			t.Fatalf("ci.yml builds the request types %v on their own, but the tree has %v", listed, types)
+	var buildJob string
+	for name, steps := range workflowSteps(t, ".github/workflows/ci.yml") {
+		index := stepIndex(steps, tags, vet, build)
+		if index < 0 {
+			continue
+		}
+		buildJob = name
+		step := steps[index]
+		if env, _ := step["env"].(map[string]any); env["type"] != "${{ matrix.type }}" {
+			t.Errorf("ci.yml's job %s vets and builds with type %v in its env, not ${{ matrix.type }}", name, env["type"])
+		}
+		if condition := step["if"]; condition != sideCondition("go") {
+			t.Errorf("ci.yml vets and builds each request type under the condition %q, not %q", condition, sideCondition("go"))
+		}
+		if testing := stepIndex(steps, `go test -count=1 -tags "$tags" $packages`); testing < 0 {
+			t.Errorf("ci.yml vets and builds each request type in the job %s, which does not test them; the request types' matrix was meant", name)
+		}
+	}
+	if buildJob == "" {
+		t.Fatalf("no job of ci.yml runs %s and %s after %s", vet, build, tags)
+	}
+	_, recipes := makefileRules(t)
+	loop := requestTypeLoop.FindStringSubmatch(recipes["build-request-types"])
+	if loop == nil {
+		t.Fatal("make build-request-types has no loop over the request types")
+	}
+	listed := strings.Fields(loop[1])
+	sort.Strings(listed)
+	if types := requestTypesInTheTree(t); !slices.Equal(listed, types) {
+		t.Errorf("make build-request-types builds the request types %v on their own, but the tree has %v", listed, types)
+	}
+	for _, want := range []string{tags, vet, build} {
+		if !strings.Contains(recipes["build-request-types"], want) {
+			t.Errorf("make build-request-types does not run %s, as ci.yml does", want)
 		}
 	}
 }
@@ -759,10 +792,50 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 			}
 		}
 	}
-	// The race job, the request types' matrix and the allocator's job.
-	if others < 3 {
-		t.Errorf("ci.yml has %d jobs beside test; the race run, the request types' tests and the allocator's tests were meant to have one each", others)
+	// The linters, the builds, the race job, the request types' matrix and
+	// the allocator's job.
+	if others < 5 {
+		t.Errorf("ci.yml has %d jobs beside test; the linters, the builds, the race run, the request types' tests and the allocator's tests were meant to have one each", others)
 	}
+}
+
+// test ran every check one after another and took a quarter of an hour, the
+// longest job by far: the linters and the builds need nothing test does, so
+// they run in the jobs lint and build beside it, and test keeps the
+// repository's checks, the exporter's tests and the chart steps. A linter or
+// a build added back to test would make it the longest job again.
+func TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn(t *testing.T) {
+	all := workflowSteps(t, ".github/workflows/ci.yml")
+	for _, c := range []struct{ job, what, fragment string }{
+		{"lint", "checks the formatting", "gofmt -l"},
+		{"lint", "runs golangci-lint", "golangci/golangci-lint-action"},
+		{"lint", "runs gopls", "gopls-check"},
+		{"build", "vets the code", "go vet ./..."},
+		{"build", "builds the code", "go build ./..."},
+		{"build", "builds for darwin", "GOOS=darwin"},
+		{"build", "builds the image", "docker build"},
+		{"build", "builds with the opt-in sql drivers", "request-type-tags.sh '' oracle"},
+		{"build", "builds with the opt-in request types", "request-type-tags.sh '' '' "},
+	} {
+		if workflowStepWith(all["test"], c.fragment) {
+			t.Errorf("ci.yml's job test %s (%q); that belongs to the job %s", c.what, c.fragment, c.job)
+		}
+		if !workflowStepWith(all[c.job], c.fragment) {
+			t.Errorf("ci.yml's job %s no longer %s (%q)", c.job, c.what, c.fragment)
+		}
+	}
+}
+
+// workflowStepWith reports whether a step runs, or uses, fragment.
+func workflowStepWith(steps []map[string]any, fragment string) bool {
+	for _, step := range steps {
+		run, _ := step["run"].(string)
+		uses, _ := step["uses"].(string)
+		if strings.Contains(run, fragment) || strings.Contains(uses, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // stepIndex returns the index of the first step whose run script contains

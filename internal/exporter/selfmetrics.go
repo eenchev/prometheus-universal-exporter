@@ -31,6 +31,13 @@ type statsValues struct {
 	// staleServed counts failed trips answered with the last good result
 	// (cache.stale_if_error).
 	staleServed uint64
+	// revalidatedNotModified and revalidatedModified count the trips that
+	// revalidated a cached response, by the target's answer: 304 Not
+	// Modified, or another (http_exporter_cache_revalidations_total).
+	revalidatedNotModified, revalidatedModified uint64
+	// backoffSkipped counts trips failure_backoff kept from their target
+	// (backoff.go).
+	backoffSkipped uint64
 	// invalidUTF8 counts label values and help texts whose invalid UTF-8
 	// was replaced.
 	invalidUTF8 uint64
@@ -133,11 +140,15 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and static target scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
-	{"http_exporter_cache_entries", model.GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error.", nil},
+	{"http_exporter_cache_entries", model.GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error and expired ones kept to be revalidated (cache.revalidate).", nil},
 	{"http_exporter_probes_in_flight", model.GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
 	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503, and static target scrapes that found no slot in time, because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
 	{"http_exporter_probes_rejected_exporter_limit_total", model.CounterMetricType, "Probes of this collector answered 503, and static target scrapes that found no slot in time, because the exporter already had --probe.max-concurrent trips to targets in progress.", func(v statsValues) float64 { return float64(v.rejectedByExporter) }},
 	{"http_exporter_targets_refused_total", model.CounterMetricType, "Probes and static target scrapes whose target, or a redirect's, this collector's request.allowed_targets or denied_targets refused; a probe is answered 403.", func(v statsValues) float64 { return float64(v.refused) }},
+	{"http_exporter_backoff_skipped_total", model.CounterMetricType, "Probes and static target scrapes of this collector that failed at once without contacting their target, because failure_backoff was backing off from it after its consecutive failed scrapes; 0 without failure_backoff.", func(v statsValues) float64 { return float64(v.backoffSkipped) }},
+	// Which targets are backing off is the collector's to know, not any
+	// one request's.
+	{"http_exporter_targets_backing_off", model.GaugeMetricType, "Targets of this collector whose probes and static target scrapes failure_backoff keeps from them now, within their wait or with the one trip after it in progress; 0 without failure_backoff.", nil},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 	// The connections an sshfile collector keeps belong to the collector,
 	// shared by its requests and those of other collectors with the same
@@ -175,7 +186,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 var requestTypeFamilies = map[string][]string{
 	"http_exporter_scrape_grpc_status_code": {"grpc"},
 	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql", "dns", "tlscert", "s3file", "redis"},
+	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql", "dns", "tlscert", "s3file", "redis", "tcp", "ldap"},
 	"http_exporter_pages_fetched_total":                {"http"},
 	"http_exporter_pagination_max_pages_reached_total": {"http"},
 	"http_exporter_sshfile_connections":                {"sshfile"},
@@ -225,6 +236,7 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version, built request types and built sql drivers as labels.",
 	"http_exporter_collector_config_valid":                     "1 for every collector of the configuration in force; a rejected reload shows in http_exporter_config_last_reload_successful, not here.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
+	"http_exporter_cache_revalidations_total":                  "Trips of this http or graphite collector that revalidated an expired cached response with If-None-Match or If-Modified-Since (cache.revalidate), by result: not_modified (the target answered 304 and the cached body was transformed again) or modified (it sent a new response the collector accepts).",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
@@ -354,8 +366,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		requestTypes[collectors[i].Name] = collectors[i].Request.Type
 	}
 	collectorOnly := map[string]func(string) float64{
-		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
-		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
+		"http_exporter_cache_entries":       func(name string) float64 { return float64(cacheEntries[name]) },
+		"http_exporter_probes_in_flight":    func(name string) float64 { return float64(s.trips.count(name)) },
+		"http_exporter_targets_backing_off": func(name string) float64 { return float64(s.backoffs.backingOff(name)) },
 		"http_exporter_sshfile_connections": func(name string) float64 {
 			open, _ := fetch.CollectorConnections(requestTypes[name], name)
 			return float64(open)
@@ -451,6 +464,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": collectors[i].Name}})
 	}
 	out = append(out, s.ruleFailureMetrics()...)
+	out = append(out, cacheRevalidationMetrics(names, values, requestTypes)...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
@@ -475,6 +489,40 @@ func recordScriptDuration(rec statsRecorder, timer *transform.ScriptTimer) {
 	if seconds, ran := timer.Seconds(); ran {
 		rec.update(func(x *serverStats) { x.lastScriptDuration = seconds })
 	}
+}
+
+// revalidationResults are the results http_exporter_cache_revalidations_total
+// counts, and how each is read from a collector's counters.
+var revalidationResults = []struct {
+	result string
+	value  func(statsValues) uint64
+}{
+	{"modified", func(v statsValues) uint64 { return v.revalidatedModified }},
+	{"not_modified", func(v statsValues) uint64 { return v.revalidatedNotModified }},
+}
+
+// cacheRevalidationMetrics is http_exporter_cache_revalidations_total: a
+// series for each result of every http and graphite collector, the types
+// whose responses are revalidated (fetch.Revalidable), from zero, so a rate
+// works from the start. It is by collector only, as
+// http_exporter_rule_failures_total is, with no per-request series in verbose
+// mode.
+func cacheRevalidationMetrics(names []string, values map[string]statsValues, requestTypes map[string]string) []model.Metric {
+	const name = "http_exporter_cache_revalidations_total"
+	var out []model.Metric
+	for _, collector := range names {
+		if t := requestTypes[collector]; t != fetch.RequestTypeHTTP && t != fetch.RequestTypeGraphite {
+			continue
+		}
+		v := values[collector]
+		for _, r := range revalidationResults {
+			out = append(out, model.Metric{
+				Name: name, Help: exporterMetricHelp[name], Type: model.CounterMetricType,
+				Value: float64(r.value(v)), Labels: map[string]string{"collector": collector, "result": r.result}, Created: createdMillis(v.created),
+			})
+		}
+	}
+	return out
 }
 
 // ruleFailureMetrics is http_exporter_rule_failures_total: a series for every

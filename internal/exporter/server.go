@@ -77,6 +77,9 @@ type Server struct {
 	flights    *probeFlights
 	// trips bounds each collector's trips to its targets (triplimit.go).
 	trips *tripLimiter
+	// backoffs keeps the targets failure_backoff keeps trips from
+	// (backoff.go).
+	backoffs *failureBackoffs
 	// load adds up the time spent on static target scrapes and probes
 	// (loadmetrics.go).
 	load loadCounters
@@ -115,7 +118,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
 	// The collectors the exporter starts with count from its start; one a
 	// reload adds, from when its statistics are made (selfcreated.go).
 	cfg, targets := m.InForce()
@@ -404,10 +407,16 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			requestURL: requestURL, method: method, generation: followed.generation, kind: debugKindProbe,
 		}
-		if model.UsesCache(c) {
+		if model.UsesCache(c) || c.FailureBackoff != nil {
 			// The key the same probe without debug has: debug is no
 			// parameter of the request (probeKeyQuery).
-			p.staleKey = s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
+			key := s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
+			if model.UsesCache(c) {
+				p.staleKey = key
+			}
+			if c.FailureBackoff != nil {
+				p.backoffKey = key
+			}
 		}
 		served = true
 		s.serveDebugProbe(w, r, p)
@@ -473,6 +482,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			// the request's line, which the failure log's entry, keeping
 			// it for an hour, would keep whole, target and all.
 			failure: probeFailureKey(c.Name, target, key), requestURL: requestURL,
+			// A probe backs off by the identity it shares a trip by.
+			backoffKey: key,
 		})
 	}
 	// No key, when the collector's definition could not be fingerprinted,
@@ -534,6 +545,10 @@ type upstreamProbe struct {
 	// set. requestURL is its url label, which logs show.
 	failure    subjectKey
 	requestURL string
+	// backoffKey is what failure_backoff tells the target apart by
+	// (backoff.go): the probe's cache key, which a static target's scrape
+	// of the same request has too. Empty, the trip neither asks nor tells.
+	backoffKey string
 }
 
 // failureKey is what the failure log tells p apart by.
@@ -632,33 +647,49 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		}
 		missed = true
 	}
-	// Answered at once when the collector's backend already has all it may
-	// get, rather than queued behind the probes in progress (triplimit.go).
-	limit := maxConcurrentProbes(c)
-	if full := s.trips.tryAcquire(name, limit); full != nil {
-		rec.update(func(x *serverStats) { countRejection(x, full) })
-		s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
-		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
-		return out.result(false)
-	}
-	defer s.trips.release(name)
-	if missed {
-		rec.update(func(x *serverStats) { x.cacheMisses++ })
-	}
-	if p.budget > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, p.budget)
-		defer cancel()
-	}
-	result := s.collect(ctx, collectJob{
+	job := collectJob{
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
-		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
+		rec: rec, display: logTarget, cacheKey: p.cacheKey, revalidateKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
 			key:    p.failureKey(),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
 			attrs: p.logAttrs(),
 		},
-	})
+	}
+	// A target failure_backoff is backing off from is not contacted: the
+	// trip fails at once, as its fetch would have, and takes no slot
+	// (backoff.go). A trip it lets through records its outcome, and one
+	// that ends without any — turned away below, or panicking — gives the
+	// target's next trip back.
+	turn := s.backoffs.admit(c, p.backoffKey, logTarget)
+	defer turn.settle(rec.read, backoffUnknown)
+	var result collected
+	if turn != nil && turn.refusal != nil {
+		job.backingOff = turn.refusal
+		result = s.collect(ctx, job)
+	} else {
+		// Answered at once when the collector's backend already has all it
+		// may get, rather than queued behind the probes in progress
+		// (triplimit.go).
+		limit := maxConcurrentProbes(c)
+		if full := s.trips.tryAcquire(name, limit); full != nil {
+			rec.update(func(x *serverStats) { countRejection(x, full) })
+			s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+			http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
+			return out.result(false)
+		}
+		defer s.trips.release(name)
+		if missed {
+			rec.update(func(x *serverStats) { x.cacheMisses++ })
+		}
+		if p.budget > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, p.budget)
+			defer cancel()
+		}
+		result = s.collect(ctx, job)
+		s.settleBackoff(turn, rec.read, result, p.logAttrs())
+	}
 	switch {
 	case result.aborted:
 		// Every probe waiting for it went away: no stale answer, no OTLP
@@ -701,6 +732,23 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	out.metrics = &result.answer
 	s.queueProbeOTLP(result.answer, c, logTarget, result.fetched)
 	return out.result(true)
+}
+
+// settleBackoff records what the trip that ended as result says of its
+// target (backoff.go), and logs a target that starts to back off with it.
+func (s *Server) settleBackoff(turn *backoffTurn, read configRead, result collected, attrs []any) {
+	if turn == nil {
+		return
+	}
+	floor := model.DefaultFailureBackoffMinBudget
+	if turn.config.MinBudget != nil {
+		floor = time.Duration(*turn.config.MinBudget)
+	}
+	started, failures, until := turn.settle(read, outcomeOf(result, floor))
+	if started {
+		s.logger.Warn("target is backing off after consecutive failed scrapes; its probes and scrapes fail without contacting it until the wait has passed (failure_backoff)",
+			append(append([]any{}, attrs...), "failures", failures, "next_try", until.UTC().Format(time.RFC3339))...)
+	}
 }
 
 // carriedOnAnswer is what a probe of c that carried on past a failed stage,

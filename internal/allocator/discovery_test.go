@@ -31,6 +31,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubetest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"gopkg.in/yaml.v3"
 )
 
 // addresses are the addresses of found, in order.
@@ -134,6 +135,13 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 		"tls for http": {func(d *DiscoveryConfig) {
 			d.Kubernetes, d.HTTPSD = nil, &HTTPSDConfig{URL: "http://cmdb.example/sd"}
 			d.HTTPSD.TLS.CAFile = "ca.crt"
+		}, "never uses it"},
+		// A tls block written empty is a tls block, and never used either.
+		"an empty tls for http": {func(d *DiscoveryConfig) {
+			d.Kubernetes, d.HTTPSD = nil, &HTTPSDConfig{URL: "http://cmdb.example/sd"}
+			if err := yaml.Unmarshal([]byte("{}"), &d.HTTPSD.TLS); err != nil {
+				t.Fatal(err)
+			}
 		}, "never uses it"},
 		"no files": {func(d *DiscoveryConfig) { d.Kubernetes, d.FileSD = nil, &FileSDConfig{} }, "files must not be empty"},
 		"a file of another kind": {func(d *DiscoveryConfig) {

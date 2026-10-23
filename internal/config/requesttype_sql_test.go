@@ -127,3 +127,16 @@ func TestASQLCollectorsUnfilledPlaceholderNamesWhereTheyAreFilled(t *testing.T) 
 		t.Errorf("placeholders in database and args: %v", err)
 	}
 }
+
+// A tls block written empty, tls: {}, asks a sql collector for TLS like a
+// block with keys: beside sslmode disable it is refused, where it used to
+// be the zero block and loaded, the scrape plaintext.
+func TestAnEmptyTLSBlockAsksASQLCollectorForTLS(t *testing.T) {
+	_, err := Load(testutil.WriteFile(t, "config.yaml", strings.Replace(sqlCollector, "      type: sql\n", "      type: sql\n      tls: {}\n      options: {sslmode: disable}\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "sets request.tls, but request.options.sslmode is \"disable\", which uses no TLS") {
+		t.Errorf("tls: {} beside sslmode disable: %v", err)
+	}
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", strings.Replace(sqlCollector, "      type: sql\n", "      type: sql\n      tls: {}\n", 1))); err != nil {
+		t.Errorf("tls: {}: %v", err)
+	}
+}

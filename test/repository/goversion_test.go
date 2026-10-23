@@ -640,6 +640,7 @@ func TestTheVulnerabilityCheckScansWhatShips(t *testing.T) {
 	leftOut := map[string]string{
 		module + "/internal/grpctest":           "the stand-in gRPC server of the grpc tests",
 		module + "/internal/kubetest":           "the stand-in Kubernetes API server of the kubernetes and kubeapi tests",
+		module + "/internal/ldaptest":           "the stand-in LDAP server of the ldap tests",
 		module + "/internal/redistest":          "the stand-in Redis server of the redis tests",
 		module + "/internal/sqltest":            "the stand-in database of the sql tests",
 		module + "/internal/sshtest":            "the stand-in SSH and SFTP server of the sshfile tests",

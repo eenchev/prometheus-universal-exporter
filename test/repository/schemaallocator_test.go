@@ -89,6 +89,11 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 	if problems := schemaProblems(t, static, entry(source)); len(problems) > 0 {
 		t.Fatalf("the base entry is refused: %v", problems)
 	}
+	for _, dns := range []string{"{names: [_metrics._tcp.example.com], server: 10.0.0.53}", "{names: [a.example], type: SRV}", "{names: [a.example], type: A, port: 9100, refresh_interval: 1m, timeout: 5s}"} {
+		if problems := schemaProblems(t, static, entry("    discovery:\n      - dns_sd: "+dns+"\n")); len(problems) > 0 {
+			t.Errorf("the dns_sd source %s is refused: %v", dns, problems)
+		}
+	}
 	for name, document := range map[string]string{
 		"neither targets nor entries": "interval: 1m\n",
 		"empty targets alone":         "interval: 1m\ntargets: []\n",
@@ -120,6 +125,14 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 		"a bad source name":           entry("    discovery:\n      - name: -a\n        file_sd: {files: [sd.json]}\n"),
 		"a negative max_targets":      entry("    discovery:\n      - file_sd: {files: [sd.json]}\n        max_targets: -1\n"),
 		"a bad refresh_interval":      entry("    discovery:\n      - file_sd: {files: [sd.json], refresh_interval: often}\n"),
+		"dns_sd without names":        entry("    discovery:\n      - dns_sd: {names: []}\n"),
+		"a dns_sd name twice":         entry("    discovery:\n      - dns_sd: {names: [a.example, a.example]}\n"),
+		"a dns_sd name with a port":   entry("    discovery:\n      - dns_sd: {names: ['a.example:53']}\n"),
+		"an MX dns_sd":                entry("    discovery:\n      - dns_sd: {names: [a.example], type: MX}\n"),
+		"a port for SRV":              entry("    discovery:\n      - dns_sd: {names: [a.example], port: 9100}\n"),
+		"an A dns_sd without a port":  entry("    discovery:\n      - dns_sd: {names: [a.example], type: A}\n"),
+		"a dns_sd port out of range":  entry("    discovery:\n      - dns_sd: {names: [a.example], type: AAAA, port: 70000}\n"),
+		"an unknown dns_sd key":       entry("    discovery:\n      - dns_sd: {names: [a.example], transport: tcp}\n"),
 	} {
 		if problems := schemaProblems(t, static, document); len(problems) == 0 {
 			t.Errorf("%s: the allocator's static target schema takes\n%s", name, document)

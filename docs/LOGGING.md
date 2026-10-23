@@ -290,6 +290,15 @@ forgotten: the same failure later is logged as new, and its recovery after
 the silence is not logged; past that bound, a new failure is simply logged
 every time.
 
+A probe or static target scrape that
+[`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets) keeps
+from its target fails as its fetch would have, in the fetch stage, and its
+repeats are one failure, though the count of failures and the time of the
+next try in its text move. The failure that starts the backoff is logged
+once besides, at warning level: `target is backing off after consecutive
+failed scrapes; its probes and scrapes fail without contacting it until the
+wait has passed (failure_backoff)`, with its `failures` and `next_try`.
+
 A probe is one failing thing with everything that makes it the probe it is:
 its target, and its parameters and forwarded headers. Probes of one target
 that differ in `path`, a `param_` or a `header_` — tenants of one service,

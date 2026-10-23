@@ -314,8 +314,8 @@ while it stays the same.
 
 ### Sources
 
-Each source sets exactly one of `file_sd`, `http_sd` and `kubernetes`, and
-may set:
+Each source sets exactly one of `file_sd`, `http_sd`, `kubernetes` and
+`dns_sd`, and may set:
 
 - `name`, letters, digits, `_`, `.` and `-`, unique in its list; by default
   its kind and its place, such as `file_sd_1`. It names the source in the
@@ -337,8 +337,9 @@ HTTP service discovery does, sending `X-Prometheus-Refresh-Interval-Seconds`.
 `timeout`, no longer than the refresh interval, bounds the request; left
 out, it is `10s`, or the refresh interval when that is shorter; `bearer_token_file` holds a token sent as `Authorization:
 Bearer`, read again at every refresh; `tls` is the exporter's `tls` block
-(`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`).
-Redirects are not followed, and an answer that is not `200` fails.
+(`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`),
+for an `https` URL only: a `tls` block, even an empty one, beside an `http`
+URL is refused at load, since the request would never use it. Redirects are not followed, and an answer that is not `200` fails.
 
 **`kubernetes`** lists the `discovery.k8s.io/v1` EndpointSlices of the
 cluster the allocator runs in, every `refresh_interval`, `30s` by default,
@@ -381,6 +382,50 @@ when they have a value. The allocator needs only `list` on
 `endpointslices` in the API group `discovery.k8s.io`, since it neither gets
 one slice nor watches; the chart grants that alone
 ([On Kubernetes](#on-kubernetes)).
+
+**`dns_sd`** looks `names` up in the DNS every `refresh_interval`, `30s` by
+default, as Prometheus's `dns_sd_configs` does. `type` is the record type
+asked for: `SRV`, the default, `A` or `AAAA`. Each SRV record is a target at
+its target host, in lower case and without its trailing dot, and its port;
+a record whose target is `.`, which says the service is not offered there,
+is none. Each A or AAAA record is a target at its address and `port`, which
+`A` and `AAAA` require and `SRV` refuses, an IPv6 address written in
+brackets (`[2001:db8::1]:9100`). A name is written once in the list, a DNS
+name without a port or a scheme, and asked as an absolute name, so the
+system's search domains are never appended to it. The names go to the
+system's nameservers, or to `server`, `host` or `host:port` (port `53` by
+default), when it is set. `timeout`, as `http_sd`'s, bounds the lookups of
+all the names together. A name that does not exist, or has no records of
+the type, gives no targets and is no failure, so one service gone leaves the
+others; any other failure of any name, a server failure, a refusal or no
+answer in time, fails the whole answer, which keeps the targets of the last
+good one ([Failures and changes](#failures-and-changes)). A target that
+several names give, or one name twice, is taken once, with the labels of
+the first name in `names` that gives it, and the targets are sorted by
+address, so the same records give the same targets whatever order the
+server sends them in. Each target has the meta label `__meta_dns_name`, the
+name asked, and an SRV target `__meta_dns_srv_record_target` and
+`__meta_dns_srv_record_port`, its record's target, as written in the
+address, and port.
+
+```yaml
+probe_jobs:
+  - name: nodes
+    collector: node_health
+    target_template: http://{{address}}/health
+    discovery:
+      - dns_sd:
+          names: [_metrics._tcp.eu.example.com, _metrics._tcp.us.example.com]
+          server: 10.0.0.53:53         # optional: the system's resolver otherwise
+        labels:
+          service: __meta_dns_name
+      - name: legacy
+        dns_sd:
+          names: [legacy.example.com]
+          type: A
+          port: 9100
+          refresh_interval: 1m
+```
 
 There is no `relabel_configs`: the `labels` mapping takes the place of the
 relabeling that would copy a meta label to a target label, and a probe
@@ -661,7 +706,8 @@ becomes a Prometheus Operator `ScrapeConfig` reading `/v1/sd/<job>`. A
 `kubernetes` discovery source, in a probe job or in the static targets, gives
 the allocator a ServiceAccount of its own, with its token mounted, and a
 Role in each namespace it lists, or a ClusterRole for `all_namespaces`,
-allowing `list` on EndpointSlices.
+allowing `list` on EndpointSlices; `allocator.serviceAccount.name` runs the
+allocator as an existing account instead, to which those Roles are bound.
 
 The files a `file_sd` source reads, and an `http_sd` source's
 `bearer_token_file` and `tls` files, must be in the allocator's pod:

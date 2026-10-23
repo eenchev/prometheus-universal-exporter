@@ -178,6 +178,12 @@ func TestRequestTypeTagsScript(t *testing.T) {
 		{"", "", "s3file,redis"}:           "request_type_s3file,request_type_redis",
 		{"redis", "", ""}:                  "select_request_types,request_type_redis",
 		{"http", "", "redis,s3file"}:       "select_request_types,request_type_http,request_type_redis,request_type_s3file",
+		{"", "", "tcp"}:                    "request_type_tcp",
+		{"", "", "s3file,redis,tcp"}:       "request_type_s3file,request_type_redis,request_type_tcp",
+		{"tcp", "", ""}:                    "select_request_types,request_type_tcp",
+		{"", "", "ldap"}:                   "request_type_ldap",
+		{"", "", "s3file,redis,tcp,ldap"}:  "request_type_s3file,request_type_redis,request_type_tcp,request_type_ldap",
+		{"ldap", "", ""}:                   "select_request_types,request_type_ldap",
 	} {
 		got, stderr, err := withOptIn(lists[0], lists[1], lists[2])
 		if err != nil || got != want {

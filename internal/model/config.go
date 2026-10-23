@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -131,6 +132,11 @@ type Collector struct {
 	// MaxConcurrentProbes bounds the collector's trips to its targets at
 	// once; unset or 0 means DefaultMaxConcurrentProbes. See exporter/triplimit.go.
 	MaxConcurrentProbes int `yaml:"max_concurrent_probes"`
+	// FailureBackoff, when set, stops the collector's probes and static
+	// target scrapes from contacting a target that keeps failing, for a
+	// while that grows with each further failure. Nil leaves every trip to
+	// the target. See exporter/backoff.go.
+	FailureBackoff *FailureBackoffConfig `yaml:"failure_backoff,omitempty"`
 	// NameEscaping says what to do with a metric or label name that is not a
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
@@ -308,6 +314,22 @@ type RequestConfig struct {
 	DB           int            `yaml:"db,omitempty"`
 	InfoSections []string       `yaml:"info_sections,omitempty"`
 	Commands     []RedisCommand `yaml:"commands,omitempty"`
+	// Send and Terminator belong to the tcp type: the text written once
+	// the connection is made, nothing when empty, and what the answer ends
+	// with, the answer ending when the server closes the connection when
+	// it is empty (fetch/requesttype_tcp.go). Left out of a collector
+	// written as YAML when empty, as the sql keys are.
+	Send       string `yaml:"send,omitempty"`
+	Terminator string `yaml:"terminator,omitempty"`
+	// BindDN, StartTLS and Searches belong to the ldap type, with
+	// PasswordFile above: the DN a simple bind is made as, none for an
+	// anonymous bind, whether TLS is begun with the StartTLS operation on
+	// a plaintext connection, and the searches whose results the document
+	// holds (fetch/requesttype_ldap.go). Left out of a collector written as
+	// YAML when empty, as the sql keys are.
+	BindDN   string       `yaml:"bind_dn,omitempty"`
+	StartTLS bool         `yaml:"start_tls,omitempty"`
+	Searches []LDAPSearch `yaml:"searches,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -407,6 +429,35 @@ const RedisInfoSectionPattern = `^[a-z_]+$`
 // RedisCommandNamePattern is what request.commands[].name is written with:
 // a name a jq path reaches as .commands.<name>.
 const RedisCommandNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
+
+// LDAPSearch is one entry of an ldap collector's request.searches: the name
+// its result is put under in the document, where it searches, which
+// entries it matches and what of them it reads. Scope "" is sub, Filter ""
+// is (objectClass=*), no Attributes asks for the entries' DNs alone, and
+// MaxEntries 0 is the default bound.
+type LDAPSearch struct {
+	Name       string   `yaml:"name"`
+	Base       string   `yaml:"base,omitempty"`
+	Scope      string   `yaml:"scope,omitempty"`
+	Filter     string   `yaml:"filter,omitempty"`
+	Attributes []string `yaml:"attributes,omitempty"`
+	CountOnly  bool     `yaml:"count_only,omitempty"`
+	MaxEntries int      `yaml:"max_entries,omitempty"`
+}
+
+// LDAPSearchNamePattern is what request.searches[].name is written with: a
+// name a jq path reaches as .searches.<name>.
+const LDAPSearchNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
+
+// LDAPScopes are the values of request.searches[].scope.
+var LDAPScopes = []string{"base", "one", "sub"}
+
+// LDAPAttributePattern is what an entry of request.searches[].attributes
+// is written with: an attribute's name or OID, with options after ; as in
+// cn;lang-de, or * for every user attribute and + for every operational
+// one. The exporter and
+// the schema hold them to it alike.
+const LDAPAttributePattern = `^(\*|\+|[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*|[0-9]+(\.[0-9]+)+(;[A-Za-z0-9-]+)*)$`
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how
@@ -524,6 +575,51 @@ type TLSConfig struct {
 	// and sent as SNI, when the target is addressed by something else, such
 	// as an IP address.
 	ServerName string `yaml:"server_name" json:"server_name,omitempty"`
+	// Set says the tls key was written, even as an empty mapping: a request
+	// type that may speak TLS or not, such as tcp, ldap, redis, grpc and
+	// sql, speaks it when the block is written, so tls: {} asks for TLS
+	// verified with the system roots and never leaves a scrape plaintext.
+	// It is part of the value, so a block compared with TLSConfig{} is set
+	// when it was written. UnmarshalYAML sets it.
+	Set bool `yaml:"-" json:"-"`
+}
+
+// UnmarshalYAML reads a tls block, recording that it was written (Set). A
+// mapping a merge key (<<) or an alias supplies is written like one spelt
+// out, since the decoder reads it the same way.
+func (t *TLSConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain TLSConfig
+	n = resolveAlias(n)
+	if n.Kind != yaml.MappingNode {
+		return notAMapping(n, "model.TLSConfig")
+	}
+	// Node.Decode does not refuse unknown keys the way the file's decoder
+	// does, so they are checked here, or a misspelt key would be ignored.
+	if err := checkKnownKeys(n, reflect.TypeOf(plain{}), "model.TLSConfig"); err != nil {
+		return err
+	}
+	var out plain
+	if err := n.Decode(&out); err != nil {
+		return err
+	}
+	*t = TLSConfig(out)
+	t.Set = true
+	return nil
+}
+
+// MarshalYAML writes Set as written: true, so the YAML of a collector, which
+// a reload compares to tell a changed collector (config.encodedDefinition)
+// and the exporter's cache key is made from (collectorFingerprint), differs
+// between tls: {} and no tls block, which scrape differently.
+func (t TLSConfig) MarshalYAML() (any, error) {
+	type plain TLSConfig
+	if !t.Set {
+		return plain(t), nil
+	}
+	return struct {
+		Settings plain `yaml:",inline"`
+		Written  bool  `yaml:"written"`
+	}{plain(t), true}, nil
 }
 
 // ResponseConfig is a collector's response block: how to read the body the
@@ -808,9 +904,13 @@ type CacheConfig struct {
 	// StaleIfError is how long after TTL a result stands in for a trip that
 	// fails.
 	StaleIfError Duration `yaml:"stale_if_error"`
+	// Revalidate, unset or true, asks the target again with the validators
+	// of an expired cached response, ETag and Last-Modified, so that an
+	// unchanged response is not downloaded again (exporter/cache.go).
+	Revalidate *bool `yaml:"revalidate,omitempty"`
 }
 
-var cacheConfigKeys = []string{"ttl", "stale_if_error"}
+var cacheConfigKeys = []string{"ttl", "stale_if_error", "revalidate"}
 
 // UnmarshalYAML refuses the keys it does not know, which a custom decoder
 // would otherwise let through, and explains the one-value form. The keys of
@@ -821,16 +921,63 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: cache must be a mapping with ttl and stale_if_error", n.Line)
+		return fmt.Errorf("line %d: cache must be a mapping with ttl, stale_if_error and revalidate", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(cacheConfigKeys, key) {
-			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", entry.Key.Line, key, strings.Join(cacheConfigKeys, " and "))
+			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])
 		}
 	}
 	type plain CacheConfig
 	return n.Decode((*plain)(c))
 }
+
+// FailureBackoffConfig is a collector's failure_backoff: after After
+// consecutive failed trips to a target, its trips are answered as failed
+// without contacting it for Initial, the wait doubling with each further
+// failure up to Max. A trip that failed by running out of its budget counts
+// only when that budget was at least MinBudget. Each is nil until the load
+// fills in its default (config.validateFailureBackoff), so a value written
+// 0 is told from one left out.
+type FailureBackoffConfig struct {
+	After     *int      `yaml:"after"`
+	Initial   *Duration `yaml:"initial"`
+	Max       *Duration `yaml:"max"`
+	MinBudget *Duration `yaml:"min_budget"`
+}
+
+var failureBackoffKeys = []string{"after", "initial", "max", "min_budget"}
+
+// UnmarshalYAML refuses the keys it does not know in the words the cache's
+// do, naming the block rather than the type, and explains the one-value
+// form. The keys of a mapping merged in with << are the block's own keys,
+// and a key that is an alias is the key it names (KeyName).
+func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Line, n.Value, n.Value)
+	}
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: failure_backoff must be a mapping with after, initial, max and min_budget", n.Line)
+	}
+	for _, entry := range MappingEntries(n) {
+		if key := KeyName(entry.Key); !slices.Contains(failureBackoffKeys, key) {
+			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes after, initial, max and min_budget", entry.Key.Line, key)
+		}
+	}
+	type plain FailureBackoffConfig
+	return n.Decode((*plain)(b))
+}
+
+// Defaults of failure_backoff's keys.
+const (
+	DefaultFailureBackoffAfter   = 3
+	DefaultFailureBackoffInitial = 30 * time.Second
+	DefaultFailureBackoffMax     = 10 * time.Minute
+	// DefaultFailureBackoffMinBudget is below the budget Prometheus gives a
+	// scrape with its default timeout, and above what a caller asking for
+	// too little time would give one.
+	DefaultFailureBackoffMinBudget = time.Second
+)
 
 // CacheTTL is how long a collector's result answers repeats of its probe.
 func CacheTTL(c *Collector) time.Duration { return time.Duration(c.Cache.TTL) }
@@ -838,6 +985,10 @@ func CacheTTL(c *Collector) time.Duration { return time.Duration(c.Cache.TTL) }
 // StaleIfError is how long after its TTL a collector's result stands in for a
 // trip that fails.
 func StaleIfError(c *Collector) time.Duration { return time.Duration(c.Cache.StaleIfError) }
+
+// Revalidates reports whether an expired cached response of the collector is
+// revalidated with a conditional request (cache.revalidate, true when unset).
+func Revalidates(c *Collector) bool { return c.Cache.Revalidate == nil || *c.Cache.Revalidate }
 
 // UsesCache reports whether the collector keeps results at all.
 func UsesCache(c *Collector) bool { return CacheTTL(c) > 0 || StaleIfError(c) > 0 }

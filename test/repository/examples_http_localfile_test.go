@@ -59,11 +59,15 @@ func TestShippedExampleFilesLoadTogether(t *testing.T) {
 // different file format demos runs against, which is the only one of them carrying a
 // pre-script.
 func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
+	tree := shippedExamples(t)
 	for _, path := range append([]string{
 		"configs/config.example.yaml",
 		"configs/config.otlp.example.yaml",
-	}, shippedExamples(t).configs...) {
+	}, tree.configs...) {
 		t.Run(path, func(t *testing.T) {
+			if missing := exampleTypesNotBuilt(t, tree, path); len(missing) > 0 {
+				t.Skipf("this build lacks the request types %v", missing)
+			}
 			cfg, err := config.Load(path)
 			if err != nil {
 				t.Fatal(err)

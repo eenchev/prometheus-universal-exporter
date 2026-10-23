@@ -1,4 +1,4 @@
-//go:build select_request_types && !request_type_dns && !request_type_graphite && !request_type_grpc && !request_type_http && !request_type_kubernetes && !request_type_localfile && !request_type_redis && !request_type_s3file && !request_type_sql && !request_type_sshfile && !request_type_tlscert
+//go:build select_request_types && !request_type_dns && !request_type_graphite && !request_type_grpc && !request_type_http && !request_type_kubernetes && !request_type_ldap && !request_type_localfile && !request_type_redis && !request_type_s3file && !request_type_sql && !request_type_sshfile && !request_type_tcp && !request_type_tlscert
 
 package fetch
 

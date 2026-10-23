@@ -77,6 +77,9 @@ only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
 `timeout`, with no `target` at all, and for the opt-in
 [`s3file`](S3FILE.md#static-targets) `path` and `timeout`, with the bucket as
 its required `target`, and for the opt-in [`redis`](REDIS.md#static-targets)
+only `timeout`, with the server as its required `target`, and for the opt-in
+[`tcp`](TCP.md#static-targets) only `timeout`, with the service, `host:port`,
+as its required `target`, and for the opt-in [`ldap`](LDAP.md#static-targets)
 only `timeout`, with the server as its required `target`. An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, inline or file-backed, as basic authentication or a bearer
@@ -344,6 +347,15 @@ Its `http_exporter_result_age_seconds` is how old the data is when the
 endpoint is read, worked out at every read: it grows between scrapes, and
 starts again from `0` at a scrape that goes to the target.
 
+A collector with [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets)
+stops contacting a target whose scrapes keep failing: once it is backing
+off, the target's scrape fails at once, without waiting for a slot, as its
+fetch would have — `up` 0, or its last good result marked stale — until the
+wait has passed. A target that never answers then holds no slot of its
+collector's `max_concurrent_probes` for its whole interval on every turn.
+A static target and the identical `/probe` request share one backoff, as
+they share cache entries.
+
 A read of the endpoint does not merge the targets' results each time: the
 merge is kept until a scrape publishes a result or a reload changes the
 targets, so reads between two scrapes, as from several Prometheus replicas,
@@ -526,7 +538,7 @@ curl 'http://exporter:8080/static-targets?debug=legacy_eu'
 
 A debug scrape publishes nothing: the endpoint keeps serving the target's
 last scheduled result, and nothing is counted in the self-metrics but
-`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, but waits for a
+`http_exporter_debug_runs_total` or exported over OTLP. It skips the response cache like a debug probe, revalidating the response the scrape would without refreshing it ([Revalidating expired responses](CONFIGURATION.md#revalidating-expired-responses)), but waits for a
 slot of the collector's `max_concurrent_probes` as the scrape would. A name no
 target in force has is answered `404`; `debug` takes one name and cannot be
 combined with `targets` (`400`); below `--web.debug=full` it is `403`. The

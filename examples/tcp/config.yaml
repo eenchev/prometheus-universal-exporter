@@ -1,0 +1,239 @@
+# Three services that report their statistics as text over TCP, read with
+# the opt-in tcp request type (docs/TCP.md): memcached, ZooKeeper and
+# HAProxy's runtime API. The published image does not carry the type, so
+# build the exporter with it:
+#
+#   make build OPT_IN_REQUEST_TYPES=tcp
+#   ./prometheus-universal-exporter --config.file=examples/tcp/config.yaml
+#
+# Each probe's target is the service, host:port, whose port has no default:
+#
+#   curl 'http://localhost:8080/probe?collector=memcached&target=localhost:11211'
+#   curl 'http://localhost:8080/probe?collector=zookeeper&target=localhost:2181'
+#   curl 'http://localhost:8080/probe?collector=haproxy&target=localhost:9999'
+#
+# To try them on a laptop:
+#
+#   docker run -d -p 11211:11211 memcached:1.6
+#   docker run -d -p 2181:2181 -e ZOO_4LW_COMMANDS_WHITELIST=mntr zookeeper:3.9
+#
+# and an HAProxy whose global section opens its runtime API on a TCP port,
+# read-only at the user level:
+#
+#   global
+#     stats socket ipv4@0.0.0.0:9999 level user
+#
+# Every collector is a text example: the answer goes to the decoder as it
+# came, with nothing wrapped around it, and the rules are regular
+# expressions, or for HAProxy, whose answer is CSV, column names. A rule's
+# value is its first group, or the group named value.
+collectors:
+  # memcached answers `stats` with one STAT line for each statistic and an
+  # END line, and keeps the connection open for the next command, so the
+  # collector reads up to END rather than to the connection's close. Every
+  # line ends with a carriage return and a line feed: with (?m), $ matches
+  # before a line feed alone, so each rule writes the \r before it.
+  #
+  #   STAT uptime 3600
+  #   STAT curr_connections 10
+  #   ...
+  #   END
+  - name: memcached
+    request:
+      type: tcp
+      # Double quotes, in which YAML reads \r\n as a carriage return and a
+      # line feed; in single quotes they would be four characters.
+      send: "stats\r\n"
+      terminator: "END\r\n"
+    transform:
+      type: regex
+    metrics:
+      - name: memcached_uptime_seconds
+        description: Seconds since the server started
+        expression: '(?m)^STAT uptime (\d+)\r$'
+      - name: memcached_current_connections
+        description: Connections open to the server
+        expression: '(?m)^STAT curr_connections (\d+)\r$'
+      - name: memcached_connections_total
+        type: counter
+        description: Connections the server has accepted
+        expression: '(?m)^STAT total_connections (\d+)\r$'
+      - name: memcached_items
+        description: Items stored
+        expression: '(?m)^STAT curr_items (\d+)\r$'
+      - name: memcached_memory_used_bytes
+        description: Bytes the items take
+        expression: '(?m)^STAT bytes (\d+)\r$'
+      - name: memcached_memory_limit_bytes
+        description: The most bytes the items may take
+        expression: '(?m)^STAT limit_maxbytes (\d+)\r$'
+      # One family for the commands, by their name: cmd_get, cmd_set and the
+      # others, the group named command giving the label.
+      - name: memcached_commands_total
+        type: counter
+        description: Commands the server has run, by command
+        expression: '(?m)^STAT cmd_(?P<command>get|set|flush|touch) (?P<value>\d+)\r$'
+        labels:
+          - name: command
+            expression: command
+      - name: memcached_get_hits_total
+        type: counter
+        description: Gets that found their item
+        expression: '(?m)^STAT get_hits (\d+)\r$'
+      - name: memcached_get_misses_total
+        type: counter
+        description: Gets that found nothing
+        expression: '(?m)^STAT get_misses (\d+)\r$'
+      - name: memcached_evictions_total
+        type: counter
+        description: Items removed to make room for others
+        expression: '(?m)^STAT evictions (\d+)\r$'
+      - name: memcached_read_bytes_total
+        type: counter
+        description: Bytes the server has read from its clients
+        expression: '(?m)^STAT bytes_read (\d+)\r$'
+      - name: memcached_written_bytes_total
+        type: counter
+        description: Bytes the server has written to its clients
+        expression: '(?m)^STAT bytes_written (\d+)\r$'
+
+  # ZooKeeper answers the four-letter word mntr, which its
+  # 4lw.commands.whitelist must name, with a line of a name, a tab and a
+  # value for each statistic, then closes the connection, so the collector
+  # needs no terminator. mntr takes no line end.
+  #
+  #   zk_version	3.9.2-..., built on ...
+  #   zk_server_state	leader
+  #   zk_avg_latency	0.5
+  #   zk_znode_count	42
+  - name: zookeeper
+    request:
+      type: tcp
+      send: mntr
+    transform:
+      type: regex
+    metrics:
+      # Every number mntr reports, as one family by the statistic's name:
+      # the version and the server's state are text, so the rule, which
+      # wants the whole value to be a number, leaves them out.
+      - name: zookeeper_mntr
+        description: Each number mntr reports, by its name
+        expression: '(?m)^zk_(?P<name>\w+)\t(?P<value>-?[0-9]+(?:\.[0-9]+)?)$'
+        labels:
+          - name: name
+            expression: name
+      - name: zookeeper_packets_received_total
+        type: counter
+        description: Packets the server has received
+        expression: '(?m)^zk_packets_received\t(\d+)$'
+      - name: zookeeper_packets_sent_total
+        type: counter
+        description: Packets the server has sent
+        expression: '(?m)^zk_packets_sent\t(\d+)$'
+      # leader, follower, observer or standalone, of which only a leader
+      # is 1; value_map turns the word into the value.
+      - name: zookeeper_leader
+        description: 1 on the ensemble's leader
+        expression: '(?m)^zk_server_state\t(\w+)$'
+        value_map:
+          leader: 1
+          "*": 0
+      # A leader alone reports its followers; on the others the line is
+      # not there, and the rule makes no series rather than failing.
+      - name: zookeeper_synced_followers
+        description: Followers in sync with the leader
+        expression: '(?m)^zk_synced_followers\t(\d+)$'
+        required: false
+
+  # HAProxy answers `show stat` on its runtime API with CSV, a line for each
+  # frontend, backend and server, and closes the connection. Its header line
+  # begins "# pxname", which is the first column's name; type is 0 for a
+  # frontend, 1 for a backend and 2 for a server. A frontend has no queue
+  # and a server no request errors, so those cells are empty there, and the
+  # rules reading them are optional (required: false): an empty cell then
+  # makes no series rather than failing the rule.
+  #
+  #   # pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,...,status,...,type,...
+  #   web,FRONTEND,,,3,10,262124,120,1000,2000,...,OPEN,...,0,...
+  #   web,app1,0,0,2,5,,80,700,1500,...,UP,...,2,...
+  - name: haproxy
+    request:
+      type: tcp
+      send: "show stat\n"
+    # Whether a frontend or a server is serving is the first word of its
+    # status, which a value_map, matching whole texts, cannot read: HAProxy
+    # writes "UP 1/3" for a server going down, "DOWN 1/2" for one coming
+    # up and "MAINT (via app/app1)" for one in maintenance through the
+    # server it tracks. The pre_script adds a column, up, for haproxy_up to
+    # read: 0 for a status beginning DOWN, MAINT or STOP (a stopped
+    # frontend), or an empty one; 1 for any other, which is serving: UP,
+    # OPEN, NOLB and DRAIN (up, though the balancer sends it no new
+    # sessions), and "no check" (up, with no health check).
+    transform:
+      type: csv
+      pre_script: |
+        def up(status):
+            if not status or status.startswith(("DOWN", "MAINT", "STOP")):
+                return 0
+            return 1
+        data = [dict(row, up=up(row.get("status"))) for row in data]
+    # Each series carries its proxy, its frontend, backend or server, and
+    # which of the three it is: the first rule's labels, anchored as
+    # &haproxy, are every other rule's, *haproxy.
+    metrics:
+      - name: haproxy_current_sessions
+        description: Sessions open now
+        expression: scur
+        labels: &haproxy
+          - name: proxy
+            expression: "# pxname"
+          - name: name
+            expression: svname
+          - name: type
+            expression: type
+            value_map:
+              "0": frontend
+              "1": backend
+              "2": server
+      - name: haproxy_session_limit
+        description: The most sessions open at once, where one is set
+        expression: slim
+        required: false
+        labels: *haproxy
+      - name: haproxy_sessions_total
+        type: counter
+        description: Sessions opened
+        expression: stot
+        labels: *haproxy
+      - name: haproxy_queued_requests
+        description: Requests waiting for a server
+        expression: qcur
+        required: false
+        labels: *haproxy
+      - name: haproxy_received_bytes_total
+        type: counter
+        description: Bytes received from clients
+        expression: bin
+        labels: *haproxy
+      - name: haproxy_sent_bytes_total
+        type: counter
+        description: Bytes sent to clients
+        expression: bout
+        labels: *haproxy
+      - name: haproxy_connection_errors_total
+        type: counter
+        description: Connections to a server that failed
+        expression: econ
+        required: false
+        labels: *haproxy
+      - name: haproxy_http_responses_5xx_total
+        type: counter
+        description: HTTP responses with a 5xx status
+        expression: hrsp_5xx
+        required: false
+        labels: *haproxy
+      # The column the pre_script added.
+      - name: haproxy_up
+        description: 1 when the frontend, backend or server is serving
+        expression: up
+        labels: *haproxy

@@ -4,268 +4,33 @@ package fetch
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
-	"net/netip"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// The DNS wire format is not vendored (golang.org/x/net/dns/dnsmessage is
-// not among the modules), so the stand-in server below reads a question and
-// writes its answer by hand: RFC 1035's header, one question, and answers
-// whose owner names are written out, never compressed, apart from a pointer
-// to the question's name.
-
-// DNS record types, by number.
+// The stand-in server is testutil.DNSStub; these are its parts by shorter
+// names.
 const (
-	dnsTypeA     = 1
-	dnsTypeNS    = 2
-	dnsTypeCNAME = 5
-	dnsTypePTR   = 12
-	dnsTypeMX    = 15
-	dnsTypeTXT   = 16
-	dnsTypeAAAA  = 28
-	dnsTypeSRV   = 33
+	dnsTypeNS    = testutil.DNSTypeNS
+	dnsTypeCNAME = testutil.DNSTypeCNAME
+	dnsTypePTR   = testutil.DNSTypePTR
 )
 
-// stubRecord is one record the stand-in server answers: its owner name,
-// lower case and absolute, its type and its data as the wire carries it.
-type stubRecord struct {
-	owner string
-	rtype uint16
-	data  []byte
-}
-
-// stubDNS is a DNS server on 127.0.0.1, over UDP and TCP on the same port.
-// rcode, when set, answers every question with that response code and no
-// record; silent answers nothing at all.
-type stubDNS struct {
-	t       *testing.T
-	addr    string
-	mu      sync.Mutex
-	records []stubRecord
-	rcode   int
-	silent  bool
-	// truncate answers every question over UDP with no record, marked
-	// truncated, as a server does an answer too long for UDP.
-	truncate bool
-	// asked is every question, as "name type network".
-	asked []string
-}
-
-// wireName is name as the wire writes it, in labels.
-func wireName(name string) []byte {
-	var b []byte
-	for label := range strings.SplitSeq(strings.TrimSuffix(name, "."), ".") {
-		b = append(b, byte(len(label)))
-		b = append(b, label...)
-	}
-	return append(b, 0)
-}
-
-func u16(v uint16) []byte { return binary.BigEndian.AppendUint16(nil, v) }
-
-// The records' data, by type.
-func recA(owner, ip string) stubRecord {
-	return stubRecord{strings.ToLower(owner) + ".", dnsTypeA, netip.MustParseAddr(ip).AsSlice()}
-}
-func recAAAA(owner, ip string) stubRecord {
-	return stubRecord{strings.ToLower(owner) + ".", dnsTypeAAAA, netip.MustParseAddr(ip).AsSlice()}
-}
-func recName(owner string, rtype uint16, target string) stubRecord {
-	return stubRecord{strings.ToLower(owner) + ".", rtype, wireName(target)}
-}
-func recMX(owner string, pref uint16, host string) stubRecord {
-	return stubRecord{strings.ToLower(owner) + ".", dnsTypeMX, append(u16(pref), wireName(host)...)}
-}
-func recSRV(owner string, priority, weight, port uint16, target string) stubRecord {
-	data := append(append(append(u16(priority), u16(weight)...), u16(port)...), wireName(target)...)
-	return stubRecord{strings.ToLower(owner) + ".", dnsTypeSRV, data}
-}
-func recTXT(owner string, parts ...string) stubRecord {
-	var data []byte
-	for _, part := range parts {
-		data = append(append(data, byte(len(part))), part...)
-	}
-	return stubRecord{strings.ToLower(owner) + ".", dnsTypeTXT, data}
-}
-
-// newStubDNS starts a server answering records.
-func newStubDNS(t *testing.T, records ...stubRecord) *stubDNS {
-	t.Helper()
-	s := &stubDNS{t: t, records: records}
-	tcp, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	udp, err := net.ListenPacket("udp", tcp.Addr().String())
-	if err != nil {
-		_ = tcp.Close()
-		t.Skipf("no UDP on the port of the TCP listener: %v", err)
-	}
-	s.addr = tcp.Addr().String()
-	t.Cleanup(func() { _ = tcp.Close(); _ = udp.Close() })
-	go func() {
-		buf := make([]byte, 65535)
-		for {
-			n, from, err := udp.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			if answer := s.answer(buf[:n], "udp"); answer != nil {
-				_, _ = udp.WriteTo(answer, from)
-			}
-		}
-	}()
-	go func() {
-		for {
-			conn, err := tcp.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-				for {
-					var size [2]byte
-					if _, err := io.ReadFull(conn, size[:]); err != nil {
-						return
-					}
-					query := make([]byte, binary.BigEndian.Uint16(size[:]))
-					if _, err := io.ReadFull(conn, query); err != nil {
-						return
-					}
-					answer := s.answer(query, "tcp")
-					if answer == nil {
-						return
-					}
-					_, _ = conn.Write(append(u16(uint16(len(answer))), answer...))
-				}
-			}()
-		}
-	}()
-	return s
-}
-
-// answer is the server's answer to query, nil to answer nothing.
-func (s *stubDNS) answer(query []byte, network string) []byte {
-	if len(query) < 12 {
-		return nil
-	}
-	// The question's name, its type and class.
-	i := 12
-	var labels strings.Builder
-	for i < len(query) && query[i] != 0 {
-		n := int(query[i])
-		if i+1+n > len(query) {
-			return nil
-		}
-		labels.WriteString(strings.ToLower(string(query[i+1 : i+1+n])))
-		labels.WriteByte('.')
-		i += 1 + n
-	}
-	name := labels.String()
-	if i+5 > len(query) {
-		return nil
-	}
-	questionEnd := i + 5
-	qtype := binary.BigEndian.Uint16(query[i+1 : i+3])
-	s.mu.Lock()
-	s.asked = append(s.asked, name+" "+dnsTypeName(qtype)+" "+network)
-	records, rcode, silent, truncated := s.records, s.rcode, s.silent, s.truncate && network == "udp"
-	s.mu.Unlock()
-	if silent {
-		return nil
-	}
-	var answers [][]byte
-	if rcode == 0 && !truncated {
-		// A CNAME of the name answers any question of it, followed by the
-		// records of its target, as a recursive server answers.
-		owner := name
-		for range 8 {
-			var next string
-			for _, r := range records {
-				if r.owner == owner && r.rtype == dnsTypeCNAME && qtype != dnsTypeCNAME {
-					answers = append(answers, s.record(r, name))
-					next = string(decodeWireName(r.data))
-				}
-			}
-			for _, r := range records {
-				if r.owner == owner && r.rtype == qtype {
-					answers = append(answers, s.record(r, name))
-				}
-			}
-			if next == "" {
-				break
-			}
-			owner = next
-		}
-		known := false
-		for _, r := range records {
-			known = known || r.owner == name
-		}
-		if !known {
-			rcode = 3 // NXDOMAIN
-		}
-	}
-	header := make([]byte, 12)
-	copy(header, query[:2])
-	flags := 0x8180 | uint16(rcode) // QR, RD, RA
-	if truncated {
-		flags |= 0x0200 // TC
-	}
-	binary.BigEndian.PutUint16(header[2:], flags)
-	binary.BigEndian.PutUint16(header[4:], 1)
-	binary.BigEndian.PutUint16(header[6:], uint16(len(answers)))
-	out := append(header, query[12:questionEnd]...)
-	for _, a := range answers {
-		out = append(out, a...)
-	}
-	return out
-}
-
-// record is r written as an answer: its owner a pointer to the question's
-// name when it is that name, written out otherwise; class IN; a TTL of 60.
-func (s *stubDNS) record(r stubRecord, question string) []byte {
-	var b []byte
-	if r.owner == question {
-		b = []byte{0xc0, 12}
-	} else {
-		b = wireName(r.owner)
-	}
-	b = append(b, u16(r.rtype)...)
-	b = append(b, u16(1)...)
-	b = binary.BigEndian.AppendUint32(b, 60)
-	b = append(b, u16(uint16(len(r.data)))...)
-	return append(b, r.data...)
-}
-
-// decodeWireName reads a name written in labels, as wireName writes it.
-func decodeWireName(b []byte) []byte {
-	var out []byte
-	for i := 0; i < len(b) && b[i] != 0; i += 1 + int(b[i]) {
-		out = append(append(out, b[i+1:i+1+int(b[i])]...), '.')
-	}
-	return out
-}
-
-func dnsTypeName(t uint16) string {
-	return map[uint16]string{dnsTypeA: "A", dnsTypeNS: "NS", dnsTypeCNAME: "CNAME", dnsTypePTR: "PTR", dnsTypeMX: "MX", dnsTypeTXT: "TXT", dnsTypeAAAA: "AAAA", dnsTypeSRV: "SRV"}[t]
-}
-
-// questions is what the server was asked.
-func (s *stubDNS) questions() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.asked...)
-}
+var (
+	newStubDNS = testutil.NewDNSStub
+	recA       = testutil.DNSA
+	recAAAA    = testutil.DNSAAAA
+	recName    = testutil.DNSNamed
+	recMX      = testutil.DNSMX
+	recSRV     = testutil.DNSSRV
+	recTXT     = testutil.DNSTXT
+)
 
 // dnsCollector is a validated dns collector asking server for recordType.
 func dnsCollector(t *testing.T, server, recordType string, edit ...func(*model.Collector)) *model.Collector {
@@ -326,7 +91,7 @@ func TestADNSCollectorAnswersEachRecordTypeAsADocument(t *testing.T) {
 		{"SRV", "_http._tcp.example.test", `[{"target":"front.example.test","priority":0,"weight":1,"port":80},{"target":"web.example.test","priority":10,"weight":5,"port":8080}]`},
 		{"PTR", "192.0.2.1", `[{"name":"www.example.test"}]`},
 	} {
-		c := dnsCollector(t, s.addr, tc.recordType)
+		c := dnsCollector(t, s.Addr, tc.recordType)
 		doc, err := resolveDoc(t, c, tc.target)
 		if err != nil {
 			t.Errorf("%s %s: %v", tc.recordType, tc.target, err)
@@ -336,16 +101,16 @@ func TestADNSCollectorAnswersEachRecordTypeAsADocument(t *testing.T) {
 		if string(answers) != tc.want {
 			t.Errorf("%s %s: answers %s, want %s", tc.recordType, tc.target, answers, tc.want)
 		}
-		if doc.NotFound || doc.Count != len(doc.Answers) || doc.RecordType != strings.ToUpper(strings.TrimSpace(tc.recordType)) || doc.Server != s.addr || doc.Transport != "udp" || doc.DurationSeconds <= 0 {
+		if doc.NotFound || doc.Count != len(doc.Answers) || doc.RecordType != strings.ToUpper(strings.TrimSpace(tc.recordType)) || doc.Server != s.Addr || doc.Transport != "udp" || doc.DurationSeconds <= 0 {
 			t.Errorf("%s %s: document %+v", tc.recordType, tc.target, doc)
 		}
 	}
-	if doc, _ := resolveDoc(t, dnsCollector(t, s.addr, "A"), "Www.Example.Test"); doc.Name != "www.example.test" {
+	if doc, _ := resolveDoc(t, dnsCollector(t, s.Addr, "A"), "Www.Example.Test"); doc.Name != "www.example.test" {
 		t.Errorf("the name is shown as %q", doc.Name)
 	}
 	// The name is asked as an absolute one: no search domain of the
 	// system's configuration is appended to it.
-	for _, q := range s.questions() {
+	for _, q := range s.Questions() {
 		if !strings.HasSuffix(strings.Fields(q)[0], ".test.") && !strings.HasSuffix(strings.Fields(q)[0], ".arpa.") {
 			t.Errorf("the server was asked %q", q)
 		}
@@ -363,27 +128,24 @@ func TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails(t *testing.T) {
 		if target == "www.example.test" {
 			recordType = "MX"
 		}
-		doc, err := resolveDoc(t, dnsCollector(t, s.addr, recordType), target)
+		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, recordType), target)
 		if err != nil || !doc.NotFound || doc.Count != 0 || doc.Answers == nil || len(doc.Answers) != 0 {
 			t.Errorf("%s %s: %+v, %v", recordType, target, doc, err)
 		}
 	}
 	for rcode, name := range map[int]string{2: "SERVFAIL", 5: "REFUSED"} {
-		s.mu.Lock()
-		s.rcode = rcode
-		s.mu.Unlock()
-		_, err := resolveDoc(t, dnsCollector(t, s.addr, "A"), "www.example.test")
-		if err == nil || !strings.Contains(err.Error(), "on "+s.addr) {
+		s.SetRcode(rcode)
+		_, err := resolveDoc(t, dnsCollector(t, s.Addr, "A"), "www.example.test")
+		if err == nil || !strings.Contains(err.Error(), "on "+s.Addr) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	s.mu.Lock()
-	s.rcode, s.silent = 0, true
-	s.mu.Unlock()
+	s.SetRcode(0)
+	s.SetSilent(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := FetchCollector(ctx, "www.example.test", dnsCollector(t, s.addr, "A"), RequestOverrides{}, nil)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "resolving A www.example.test on "+s.addr) {
+	_, err := FetchCollector(ctx, "www.example.test", dnsCollector(t, s.Addr, "A"), RequestOverrides{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "resolving A www.example.test on "+s.Addr) {
 		t.Errorf("a server that does not answer: %v", err)
 	}
 }
@@ -392,8 +154,8 @@ func TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails(t *testing.T) {
 func TestADNSCollectorAsksOverTheTransportItNames(t *testing.T) {
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
 	for _, transport := range []string{"", "tcp", "udp"} {
-		before := len(s.questions())
-		doc, err := resolveDoc(t, dnsCollector(t, s.addr, "A", func(c *model.Collector) { c.Request.Transport = transport }), "www.example.test")
+		before := len(s.Questions())
+		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "A", func(c *model.Collector) { c.Request.Transport = transport }), "www.example.test")
 		if err != nil || doc.Count != 1 {
 			t.Fatalf("%q: %+v, %v", transport, doc, err)
 		}
@@ -401,7 +163,7 @@ func TestADNSCollectorAsksOverTheTransportItNames(t *testing.T) {
 		if transport == "tcp" {
 			want = "tcp"
 		}
-		for _, q := range s.questions()[before:] {
+		for _, q := range s.Questions()[before:] {
 			if !strings.HasSuffix(q, " "+want) {
 				t.Errorf("transport %q: the server was asked %q", transport, q)
 			}
@@ -508,16 +270,16 @@ func TestADNSCollectorsTargetListsMatchTheName(t *testing.T) {
 		{"a denied address", nil, []string{"10.0.0.0/8"}, "PTR", "10.0.0.5", true},
 		{"an allowed address", []string{"10.0.0.0/8"}, nil, "PTR", "10.0.0.5", false},
 	} {
-		c := dnsCollector(t, s.addr, tc.recordType, func(c *model.Collector) {
+		c := dnsCollector(t, s.Addr, tc.recordType, func(c *model.Collector) {
 			c.Request.AllowedTargets, c.Request.DeniedTargets = tc.allowed, tc.denied
 		})
-		before := len(s.questions())
+		before := len(s.Questions())
 		_, err := resolveDoc(t, c, tc.target)
 		if refused := errors.Is(err, ErrTargetRefused); refused != tc.refused || (!tc.refused && err != nil) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
-		if tc.refused && len(s.questions()) != before {
-			t.Errorf("%s: the server was asked %v", tc.name, s.questions()[before:])
+		if tc.refused && len(s.Questions()) != before {
+			t.Errorf("%s: the server was asked %v", tc.name, s.Questions()[before:])
 		}
 	}
 }
@@ -527,7 +289,7 @@ func TestADNSCollectorsTargetListsMatchTheName(t *testing.T) {
 func TestADNSLookupIsTracedForADebugProbe(t *testing.T) {
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
 	ctx, trace := WithRequestTrace(context.Background())
-	if _, err := FetchCollector(ctx, "www.example.test", dnsCollector(t, s.addr, "A"), RequestOverrides{}, nil); err != nil {
+	if _, err := FetchCollector(ctx, "www.example.test", dnsCollector(t, s.Addr, "A"), RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	requests := trace.Requests()
@@ -535,7 +297,7 @@ func TestADNSLookupIsTracedForADebugProbe(t *testing.T) {
 		t.Fatalf("traced %+v", requests)
 	}
 	r := requests[0]
-	if r.Method != "QUERY" || r.URL != "dns://"+s.addr+"/www.example.test" || r.Header.Get("Dns-Type") != "A" || r.Header.Get("Dns-Server") != s.addr || r.Header.Get("Dns-Transport") != "udp" || r.Outcome != "1 record" {
+	if r.Method != "QUERY" || r.URL != "dns://"+s.Addr+"/www.example.test" || r.Header.Get("Dns-Type") != "A" || r.Header.Get("Dns-Server") != s.Addr || r.Header.Get("Dns-Transport") != "udp" || r.Outcome != "1 record" {
 		t.Errorf("traced %+v", r)
 	}
 }
@@ -558,8 +320,8 @@ func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 		"text.example.test":    "not found",
 		"missing.example.test": "not found",
 	} {
-		before := len(s.questions())
-		doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), target)
+		before := len(s.Questions())
+		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME"), target)
 		answers, _ := json.Marshal(doc.Answers)
 		got := string(answers)
 		if doc.NotFound {
@@ -568,41 +330,37 @@ func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 		if err != nil || got != want || doc.Count != len(doc.Answers) || (doc.NotFound && (doc.Count != 0 || doc.Answers == nil)) {
 			t.Errorf("CNAME %s: %+v, %v; want %s", target, doc, err, want)
 		}
-		if asked := s.questions()[before:]; len(asked) != 1 || asked[0] != target+". CNAME udp" {
+		if asked := s.Questions()[before:]; len(asked) != 1 || asked[0] != target+". CNAME udp" {
 			t.Errorf("CNAME %s: the server was asked %q, want the CNAME question alone", target, asked)
 		}
 	}
-	before := len(s.questions())
-	if doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME", func(c *model.Collector) { c.Request.Transport = "tcp" }), "alias.example.test"); err != nil || doc.Count != 1 {
+	before := len(s.Questions())
+	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME", func(c *model.Collector) { c.Request.Transport = "tcp" }), "alias.example.test"); err != nil || doc.Count != 1 {
 		t.Errorf("CNAME over tcp: %+v, %v", doc, err)
 	}
-	if asked := s.questions()[before:]; len(asked) != 1 || asked[0] != "alias.example.test. CNAME tcp" {
+	if asked := s.Questions()[before:]; len(asked) != 1 || asked[0] != "alias.example.test. CNAME tcp" {
 		t.Errorf("transport tcp: the server was asked %q", asked)
 	}
 	// An answer marked truncated over UDP is asked again over TCP.
-	s.mu.Lock()
-	s.truncate = true
-	s.mu.Unlock()
-	before = len(s.questions())
-	if doc, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), "alias.example.test"); err != nil || doc.Count != 1 {
+	s.SetTruncate(true)
+	before = len(s.Questions())
+	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME"), "alias.example.test"); err != nil || doc.Count != 1 {
 		t.Errorf("CNAME truncated over udp: %+v, %v", doc, err)
 	}
-	if asked := s.questions()[before:]; strings.Join(asked, ",") != "alias.example.test. CNAME udp,alias.example.test. CNAME tcp" {
+	if asked := s.Questions()[before:]; strings.Join(asked, ",") != "alias.example.test. CNAME udp,alias.example.test. CNAME tcp" {
 		t.Errorf("a truncated answer: the server was asked %q", asked)
 	}
-	s.mu.Lock()
-	s.rcode, s.truncate = 2, false
-	s.mu.Unlock()
-	if _, err := resolveDoc(t, dnsCollector(t, s.addr, "CNAME"), "alias.example.test"); err == nil || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.addr) || !strings.Contains(err.Error(), "SERVFAIL") {
+	s.SetRcode(2)
+	s.SetTruncate(false)
+	if _, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME"), "alias.example.test"); err == nil || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.Addr) || !strings.Contains(err.Error(), "SERVFAIL") {
 		t.Errorf("SERVFAIL: %v", err)
 	}
-	s.mu.Lock()
-	s.rcode, s.silent = 0, true
-	s.mu.Unlock()
+	s.SetRcode(0)
+	s.SetSilent(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := FetchCollector(ctx, "alias.example.test", dnsCollector(t, s.addr, "CNAME"), RequestOverrides{}, nil)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.addr) {
+	_, err := FetchCollector(ctx, "alias.example.test", dnsCollector(t, s.Addr, "CNAME"), RequestOverrides{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.Addr) {
 		t.Errorf("a server that does not answer: %v", err)
 	}
 }

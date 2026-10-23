@@ -54,7 +54,7 @@ collectors:
 | `username` | — | **Required.** The account the statement runs as. Not blanks alone. |
 | `password_file` | — | The file of the account's password. Left out, no password is sent. |
 | `private_key_file` | — | `snowflake` only: the RSA key of key-pair authentication, instead of `password_file` (see [Authentication](#authentication)). |
-| `tls` | — | `ca_file`, `cert_file` and `key_file`, `server_name`, `insecure_skip_verify`, as for [any request](REQUESTS.md#tls): a key set here switches TLS on, verified, unless the driver's TLS option says otherwise (see [Drivers](#drivers)). |
+| `tls` | — | `ca_file`, `cert_file` and `key_file`, `server_name`, `insecure_skip_verify`, as for [any request](REQUESTS.md#tls): the block written, even empty, switches TLS on, verified, unless the driver's TLS option says otherwise (see [Drivers](#drivers)). |
 | `options` | — | The driver's own settings, from a short list for each (see [Drivers](#drivers)); any other is a startup error. |
 | `max_rows` | `10000` | The most rows the statement may return; one more fails the scrape, and the statement is ended there, the rest of its rows not read (the driver may close its connection to do so). |
 | `max_response_bytes` | limit | The most bytes the rows may hold: each value, text and binary data by its length and every other value as 8, with its column's name's length, which the rows the transforms read have in each row the column has a value in; a `NULL`, left out of its row, counts nothing. A driver reads a row before the limit sees it: how much a row larger than the limit costs is under [Limitations](#limitations). |
@@ -244,15 +244,18 @@ configuration itself, and Kerberos, IAM and Azure AD tokens are not used.
 ## Drivers
 
 Each driver takes a short list of `options`, and the option that switches its
-TLS. With that option left out, a collector that sets a `tls` key has TLS, the
-server's certificate verified against `tls.server_name` or the target's host,
-and one that sets none has no TLS.
+TLS. With that option left out, a collector that writes a `tls` block has
+TLS, the server's certificate verified against `tls.server_name` or the
+target's host, and one that writes none has no TLS. A `tls` block, even an
+empty one, counts: `tls: {}` asks for TLS verified against the system's
+roots, and beside an option that switches TLS off it is refused like any
+other.
 
 | Driver | Options | TLS |
 | --- | --- | --- |
 | `postgres` | `sslmode`: `disable`, `require` (TLS, the certificate not verified) or `verify-full`; `application_name`, `prometheus-universal-exporter` by default | `sslmode` |
 | `mysql` | `tls`: `false`, `true` or `skip-verify` (TLS, the certificate not verified) | `tls` |
-| `sqlserver` | `encrypt`: `disable` (no TLS at all), `false` (the login alone, its certificate not verified), `true` or `strict` (TDS 8.0, TLS first) | `encrypt`; `true` with `tls` keys, `false` without |
+| `sqlserver` | `encrypt`: `disable` (no TLS at all), `false` (the login alone, its certificate not verified), `true` or `strict` (TDS 8.0, TLS first) | `encrypt`; `true` with a `tls` block, `false` without |
 | `oracle` | `ssl`: `false` or `true` | `ssl`; `tls.server_name` is refused, since the driver checks the certificate against the target's host itself |
 | `clickhouse` | `protocol`: `native` or `http`; `compress`: `none`, `lz4` or `zstd`; `secure`: `false` or `true` | `secure` |
 | `snowflake` | `warehouse`, `role`, `schema` | always TLS, verified |
@@ -273,7 +276,8 @@ no more than that however often the files change.
 SQL Server encrypts the login alone with a certificate
 it makes itself unless given one, and its own tools do not verify that
 certificate: neither does the exporter, with `encrypt: false` or left out,
-unless `tls` keys say how to (`ca_file`, `server_name`). Unless `encrypt` is
+unless a `tls` block says how to (`ca_file`, `server_name`, or none for the
+system's roots). Unless `encrypt` is
 `disable`, the login is never sent unencrypted: a server that answers it does
 not support encryption fails the scrape, `the server answered that it does
 not support encryption, so the login would be sent unencrypted`; enable

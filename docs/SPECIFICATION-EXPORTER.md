@@ -26214,6 +26214,195 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   run in the job lint, and vet, the default, darwin's, the image's and the
   opt-in builds in the job build (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
 
+## 34.184 The opt-in tcp request type
+
+- A tcp collector writes send and reads the answer until it ends with the
+  terminator, which stays in the body, though the server keeps the
+  connection open as memcached does; the body is the answer as written,
+  with no status and no Content-Type, the url label tcp://host:port and the
+  http_method SEND (TestATCPCollectorReadsUntilItsTerminator).
+- Without a terminator the answer ends when the server closes the
+  connection, as ZooKeeper's after mntr; without send nothing is written and
+  a banner is the answer, the http_method READ; a server that closes before
+  the terminator came fails the scrape saying how many bytes came
+  (TestATCPCollectorWithoutATerminatorReadsUntilTheServerCloses).
+- A server that keeps the connection open without the terminator, or
+  without closing when there is none, fails the scrape at the probe's
+  deadline with the deadline's error, naming the terminator waited for or
+  saying the server kept the connection open
+  (TestATCPServerThatNeverEndsItsAnswerFailsAtTheDeadline).
+- The answer is held to max_response_bytes and limits.max_response_bytes
+  as it arrives, with and without a terminator: one past the limit fails as
+  a limit exceeded without waiting for the rest, and one of exactly the
+  limit is taken (TestATCPAnswerIsHeldToTheResponseLimit).
+- A tls block speaks TLS verified against ca_file, labelled tls://host:port;
+  a certificate of an unknown authority fails the TLS handshake, and
+  plaintext to a TLS server is not taken (TestATCPCollectorSpeaksTLS).
+- allowed_targets and denied_targets are kept to and the metadata service
+  is refused without them, a refused target never connected to
+  (TestATCPCollectorKeepsToItsTargetLists).
+- A placeholder in send is filled from the probe; a value holding a carriage
+  return or a line feed is refused before a connection is made; an unused
+  probe parameter names request.send
+  (TestATCPCollectorFillsSendsPlaceholders).
+- A tcp collector's keys are refused at load: send or terminator past
+  64 KiB, a placeholder in terminator, a broken or filtered placeholder in
+  send, a key of another type, half a client certificate; a target is
+  host:port or [v6]:port with its port, and a missing port, a scheme, a
+  path, a user, a bad port or no host is refused
+  (TestATCPCollectorsKeysAndTargetsAreChecked).
+- A debug trace shows SEND or READ, tcp://host:port, the bytes sent quoted
+  in Tcp-Send with \r\n visible, and the bytes read and how reading
+  stopped, or the refused connection's error; --dry-run reads the tls
+  block's files (TestATCPScrapeIsTraced).
+- optInRequestKeys lists send and terminator, tcp's own keys
+  (TestTheOptInRequestKeysAreTCPsOwn), and the refusal of an unused probe
+  parameter names request.send for tcp
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+- A build without tcp, the default build among them, refuses a tcp
+  collector at load saying it is opt-in and naming OPT_IN_REQUEST_TYPES=tcp
+  and request_type_tcp (TestABuildWithoutTCPRefusesATCPCollector).
+- A tcp collector's decoder is the one its transform implies, text for
+  regex and csv for csv, or the one it sets, and send and terminator are
+  read with \r\n as YAML's double quotes write them
+  (TestATCPCollectorDecodesAsItsTransformReads).
+- Through the exporter, a tcp probe answers the series regex rules read
+  from memcached's stats and ZooKeeper's mntr, the verbose self-metrics
+  label it tcp://host:port and SEND, a denied target is answered 403 and
+  counted in http_exporter_targets_refused_total, a target without a port
+  and a parameter with a line feed are refused before anything is sent,
+  and the collectors page hints host:port (TestATCPCollectorProbe).
+- A debug probe of a tcp collector shows the bytes sent quoted, how reading
+  stopped and the answer (TestADebugProbeOfATCPCollector).
+- A python transform reads a tcp collector's answer as response.text, its
+  label values filled from the probe (TestATCPCollectorsAnswerInPython).
+- The examples of docs/TCP.md work as written against stand-in services:
+  memcached's stats through regex, ZooKeeper's mntr by name and its leader,
+  HAProxy's show stat CSV by proxy and server with its "# pxname" column;
+  the TLS block, the placeholder example and the static targets load
+  (TestTCPDocumentationExamples).
+- A tcp collector's allowed_targets[] and denied_targets[] entries get one
+  verdict from the schema and the exporter
+  (TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty).
+- A build of tcp alone links no package a build of no request type lacks
+  but the standard library's (TestTheTCPTypeLinksNothingOutsideTheStandardLibrary),
+  and none of the gRPC, SSH or AWS modules, nor does OPT_IN_REQUEST_TYPES=tcp
+  link the AWS SDK (TestOnlyTheTypesThatNeedThemLinkTheirModules).
+- tools/request-type-tags.sh takes tcp as an opt-in type, alone, with the
+  others and as a REQUEST_TYPES entry (TestRequestTypeTagsScript); ci.yml's
+  and the Makefile's opt-in build, test and lint name s3file, redis and tcp
+  (TestCIBuildsEveryOptInRequestType); the README's opening, the chart
+  README's and the request-type pages name tcp
+  (TestReadmeOpeningNamesEveryRequestType, TestTheChartDescribesEverySource,
+  TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet).
+
+## 34.185 The opt-in ldap request type
+
+- An ldap collector binds anonymously, searches page by page and answers
+  each search's count, references and entries, each with its DN and the
+  attributes asked for as lists of values, a search with no attributes
+  asking for 1.1, the scope sub by default, the paged results control not
+  critical, an unbind at the end, the method SEARCH and the label
+  ldap://host:port (TestAnLDAPCollectorAnswersItsSearchesAsADocument).
+- With bind_dn the scrape binds as the account with password_file's
+  password, read at every scrape; a wrong password fails with
+  invalidCredentials (49) and the server's words, never the password; an
+  anonymous search a server refuses fails with insufficientAccessRights;
+  an empty password file fails before anything is sent
+  (TestAnLDAPCollectorBindsWithItsDNAndPasswordFile).
+- start_tls sends StartTLS before the bind and verifies the server, a
+  refused StartTLS and an unknown authority fail; ldaps:// and a bare
+  target with a tls block speak TLS from the start, labelled ldaps://
+  (TestAnLDAPCollectorSpeaksTLS).
+- A search of 1200 entries is read in pages of 500, each after the first
+  sent the last page's cookie; a server that ignores the control answers
+  in one go with the same result (TestAnLDAPSearchIsReadPageByPage).
+- A count_only search counts 1500 entries across pages asking for 1.1 and
+  holds no entries; a search past max_entries, 1000 by default, fails
+  asking for a narrower filter or count_only
+  (TestAnLDAPSearchCountsOrBoundsItsEntries).
+- RFC 4515 filters — and, or, not, equality, substrings, >=, <=, presence,
+  approximate, extensible match with Active Directory's bitwise AND,
+  escapes — reach the server as written and match; malformed filters, an
+  empty &, a bad escape, * in >= or an extensible match's value, ( in a
+  value and nesting past 32 are refused at load (TestLDAPFiltersAreParsed).
+- A probe's value fills a filter's value escaped per RFC 4515, so *)(uid=*
+  matches nothing, and a base's value escaped per RFC 4514, so it adds no
+  RDN; a placeholder in an attribute's name, the filter's structure, a
+  whole DN or a DN's type, the scope, attributes or bind_dn is refused at
+  load; an unused parameter names the searches' base and filter
+  (TestLDAPPlaceholdersCannotChangeASearchsStructure).
+- The server's messages are held to the response limit, a count_only
+  search's included; a length past what is left fails before it is read; a
+  length of five bytes, an indefinite length, an element past its parent,
+  a two-byte tag, a constructed value, another message's answer and no LDAP
+  at all are refused; a declared gigabyte allocates only what came
+  (TestAnLDAPServersMessagesAreHeldToTheResponseLimit).
+- A value that is not UTF-8 fails the scrape naming the attribute and the
+  entry, and a document whose JSON escapes take it past the limit fails as
+  a limit exceeded (TestAnLDAPValueThatIsNotTextFailsTheScrape).
+- A result other than success fails with its name, number and diagnostic,
+  a referral and sizeLimitExceeded saying what to do, a missing base with
+  noSuchObject, and a notice of disconnection with the server's reason
+  (TestAnLDAPResultCodeFailsTheScrape).
+- The metadata service, denied and not allowed targets are refused and
+  never connected to (TestAnLDAPCollectorKeepsToItsTargetLists).
+- An ldap collector's keys are refused at load — no searches, a bad or
+  repeated name, a base that is no DN, a scope other than base, one or sub,
+  a bad or repeated attribute, count_only with attributes or max_entries, a
+  negative max_entries, bind_dn or password_file alone, a bind_dn that is
+  no DN — and its targets are checked: host, host:port, [v6]:port,
+  ldap://, ldaps://, port 389 or 636, a scheme, user, path or bad port
+  refused, ldap:// with a tls block and ldaps:// with start_tls refused
+  (TestAnLDAPCollectorsKeysAndTargetsAreChecked).
+- A debug trace shows STARTTLS, BIND with the DN and ***, and each page of
+  the SEARCH with base, scope, filter, attributes and its entries, never
+  the password; --dry-run reads the password file
+  (TestAnLDAPScrapeIsTracedWithoutItsPassword).
+- A server that never answers fails at the deadline naming the bind, and a
+  refused connection names the address
+  (TestAnLDAPServerThatNeverAnswersFailsAtTheDeadline).
+- optInRequestKeys lists bind_dn, start_tls and searches as ldap's own
+  (TestTheOptInRequestKeysAreLDAPsOwn).
+- A build without ldap refuses an ldap collector saying it is opt-in and
+  naming OPT_IN_REQUEST_TYPES=ldap and request_type_ldap
+  (TestABuildWithoutLDAPRefusesAnLDAPCollector).
+- An ldap collector's decoder is json, an extensible match filter loads,
+  the defaults stay unset, and a regex transform or a yaml decoder is
+  refused, the refusal reading "an ldap collector"
+  (TestAnLDAPCollectorDecodesJSON).
+- Through the exporter, an ldap probe answers a count_only count and a
+  group's members, a probe's *)(uid=* matches no one, the verbose label is
+  ldap://host:port with SEARCH, a denied target is answered 403 and
+  counted, a target with a path 400, and the collectors page hints an ldap
+  target (TestAnLDAPCollectorProbe).
+- A debug probe of an ldap collector shows the bind masked, the page of the
+  search with the probe's value escaped in its filter, and the document,
+  never the password (TestADebugProbeOfAnLDAPCollector).
+- A python transform reads an ldap collector's entries and attribute lists
+  as data, with label values from param_<name>
+  (TestAnLDAPCollectorsDocumentInPython).
+- The examples of docs/LDAP.md work against the stand-in: OpenLDAP's
+  cn=Monitor connections, statistics and operations, Active Directory's
+  disabled and locked accounts, a group's members per probe; the TLS block,
+  the placeholder search and the static targets load
+  (TestLDAPDocumentationExamples).
+- The schema and the exporter agree on searches[].name, searches[].scope,
+  searches[].attributes[], bind_dn and password_file beside bind_dn, left
+  out, written "", well and badly (TestSchemaAndExporterAgreeOnLDAPKeysWrittenEmpty),
+  and searches[].name, scope and attributes[] are held to text alone
+  (TestTheKeysHeldToTextAloneAreTheSchemas).
+- tools/request-type-tags.sh takes ldap as an opt-in type, alone and with
+  s3file and redis (TestRequestTypeTagsScript); a build of ldap alone links
+  no gRPC, SSH or AWS module (TestOnlyTheTypesThatNeedThemLinkTheirModules);
+  docs/LDAP.md names the static target's keys
+  (TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet); the README's
+  tagline and sources name LDAP directories (TestReadmeOpeningNamesEveryRequestType); the chart
+  README names an LDAP directory (TestTheChartDescribesEverySource);
+  internal/ldaptest is a package only tests import, left out of the
+  vulnerability scan, and ci.yml's filters match it
+  (TestEachSideOfCIRunsWhenAFileItsTestsNeedChanges).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

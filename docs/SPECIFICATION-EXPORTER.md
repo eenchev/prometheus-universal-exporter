@@ -26429,6 +26429,39 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   TestShippedExampleScriptsSatisfyTheContract,
   TestExampleStaticTargetFilesMatchTheSchemaAndTheirConfiguration).
 
+## 34.187 The chart's service accounts and TLS files
+
+- With `serviceAccount.create: false`, an empty `serviceAccount.name`, alone
+  and beside `kubernetesAccess`, and `serviceAccount.annotations` beside a
+  named account each fail rendering, refused by the values schema naming the
+  value and, with the schema skipped, by the templates with the message
+  that names the missing account or says annotations belong on the existing
+  account; `name: default` written out renders the pods as `default`, and
+  annotations on a created account render
+  (`TestChartRefusesAnExistingServiceAccountItCannotName`).
+- With `serviceAccount.create: false` and a name, the chart renders no
+  ServiceAccount, the exporter's pods run as the named account without a
+  token, and with its token under `kubernetesAccess`, whose RoleBinding and
+  ClusterRoleBinding name it, and the allocator without a `kubernetes`
+  source runs as it (`TestChartRunsTheExporterAsAnExistingServiceAccount`).
+- `allocator.serviceAccount.name` with `kubernetes` sources renders no
+  `<fullname>-allocator` ServiceAccount, runs the allocator's pods as the
+  named account with its token, and binds the Role and the ClusterRole to
+  it; with `allocator.rbac.create: false` nothing is rendered; without a
+  `kubernetes` source the pods still run as it, without a token; a
+  key it does not take is refused by the schema
+  (`TestChartRunsTheAllocatorAsANamedServiceAccount`).
+- The chart README's Service account section shows an existing account by
+  name, whose example renders no ServiceAccount, and names the token,
+  `kubernetesAccess`, annotations and the allocator's account; the TCP,
+  Redis and LDAP sections point to the TLS files subsection, whose one
+  example renders a mount of the Secret and names `ca.crt`, `tls.crt` and
+  `tls.key` under that mount in a `tcp` collector's `tls` block
+  (`TestChartReadmeShowsTheServiceAccountAndTheTLSFiles`).
+- The render of `serviceAccount.create: false` with `name: default` mounts
+  no token on the default account (`TestChartRendersItsOptions`, adjusted:
+  an unnamed existing account now fails rendering).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -70,7 +70,7 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		}
 		errs = append(errs, inCollectorFile(file, validateCollector(c, x)))
 	}
-	errs = append(errs, validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
+	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
 	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}

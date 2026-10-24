@@ -61,6 +61,10 @@ const (
 	pythonLabel          = pythonCollector + "        labels:\n          - name: note\n            expression: note\n            truncate: true\n"
 )
 
+// hostRateLimit is an entry of rate_limits but for its name, with a
+// comment where a row writes it.
+const hostRateLimit = "rate_limits:\n  - rate_limit:\n      requests_per_second: 1\n    hosts: [api.example]\n    # entry\n"
+
 // switchedOnOTLP is a configuration with its otlp block switched on.
 const switchedOnOTLP = "otlp:\n  enabled: true\n  endpoint: http://collector.invalid:4318/v1/metrics\n  # otlp\n" + testutil.MinimalConfig
 
@@ -168,6 +172,10 @@ func httpSchemaKeys() []schemaKey {
 		// both, which the schema did not do for a target it may or may not
 		// reach.
 		{key: "collector_files[]", document: "# files\n" + jqCollector, at: "# files\n", setting: "collector_files: [%s]\n", absent: true},
+		// An entry of rate_limits needs a name, which labels its
+		// self-metrics, and each of its hosts something to match.
+		{key: "rate_limits[].name", document: jqCollector + hostRateLimit, at: "    # entry\n", setting: "    name: %s\n", valid: "api", invalid: "bad-name"},
+		{key: "rate_limits[].hosts[]", document: jqCollector + hostRateLimit + "    name: api\n", at: "    hosts: [api.example]\n", setting: "    hosts: [%s]\n", valid: "api.example"},
 		{key: "collectors[].request.accept_status[]", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "written with a point", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "with an exponent", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},

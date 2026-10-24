@@ -4,8 +4,14 @@ The exporter reads one YAML document, named by `--config.file`, and any
 [collector files](#collector-files) it lists. It declares the
 collectors — how to call a target, how to read what comes back, and which
 metrics to publish — and, optionally, the exporter's own settings under `web`
-and `otlp`. Target URLs are deliberately not part of it: Prometheus supplies
-each one per scrape.
+and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
+limits per host that every collector's requests share. Target URLs are
+deliberately not part of it: Prometheus supplies each one per scrape.
+
+The top-level keys are `collectors`, `collector_files`, `rate_limits`, `otlp`
+and `web`. `rate_limits` is a key of its own rather than part of a
+collector's `limits`, which bound one collector's scrape: its entries belong
+to no collector, and bound the requests of all of them together.
 
 `configs/config.example.yaml` is a complete working document to
 start from. This page is the reference for what it may contain.
@@ -2397,7 +2403,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
-| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin. See [Rate limiting](REQUESTS.md#rate-limiting). |
+| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -4958,7 +4964,10 @@ The report lists:
   A request that waited for its turn under
   [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line of how long
   and why: `sent after waiting 500ms for its turn under the rate limit of 2
-  requests per second for http://legacy.example:80`.
+  requests per second for http://legacy.example:80`, and so has one that
+  waited under an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host):
+  `sent after waiting 200ms for its turn under the rate limit of 5 requests
+  per second of rate_limits entry "billing_api" for api.billing.example`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the

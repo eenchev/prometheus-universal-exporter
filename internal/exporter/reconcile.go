@@ -356,11 +356,16 @@ func (s *Server) reconcile() *followedConfig {
 			}
 			// The request types that keep connections across scrapes close
 			// those no collector in force uses any more.
+			// The entries of rate_limits are followed with them, their
+			// buckets kept where a reload left an entry as it was.
 			var collectors []model.Collector
+			var hostRateLimits []model.HostRateLimit
 			if followed.config != nil {
 				collectors = followed.config.Collectors
+				hostRateLimits = followed.config.RateLimits
 			}
 			fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
+			fetch.FollowHostRateLimits(hostRateLimits)
 			return followed
 		}
 		previous, cfg, targets = followed, inForce, file

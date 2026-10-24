@@ -457,6 +457,7 @@ The exporter MUST expose HTTP response status and request duration in its self-m
 Recommended top-level structure:
 
 ```yaml
+rate_limits: []   # optional; rate limits per host for every collector (§ 5.1, http)
 collectors:
   - name: example
     metrics_prefix: example   # optional
@@ -950,6 +951,49 @@ not apply to its type. Its keys:
   the least recently used forgotten first beyond that. A reload MUST forget
   the buckets of the collectors it removed, and the exporter's shutdown
   every bucket.
+
+###### Rate limits per host
+
+The top-level `rate_limits` list MUST bound how fast the `http` and
+`graphite` requests of every collector together ask a host. Each entry has:
+
+- `name`, **required**: a name as a collector's is (§ 5), unique among the
+  entries; an entry without one, with an invalid one, or with the name of
+  another MUST be refused at load.
+- `hosts`, **required**, at least one: host names, matched in any case and
+  without a final dot; IP addresses, matched in canonical form, an IPv6 one
+  with or without brackets; and `*.example.com` wildcards, which MUST match
+  every subdomain of `example.com`, at any depth, and MUST NOT match
+  `example.com` itself. A host with a scheme, a port, a path, a `*`
+  anywhere but a leading `*.`, or a wildcard over an IP address MUST be
+  refused at load. A host, in canonical form, MUST be listed once across
+  every entry; listed twice it MUST be refused at load, naming both entries.
+- `rate_limit`, **required**: the keys of `request.rate_limit`, checked as
+  they are and refused at load as they would be, naming the entry, `burst`
+  filled in as 1 when left out.
+
+- An entry MUST match a request by the host of its URL alone, on every port
+  and scheme. The first entry, in the list's order, whose hosts match MUST
+  apply; a request MUST take a turn under at most one entry.
+- Every `http` and `graphite` request that `request.rate_limit` counts — each
+  attempt, page, followed redirect hop, against the host it goes to, and
+  login request — MUST take a turn from the bucket of the entry its host
+  matches, one bucket for each entry whichever of its hosts a request goes
+  to, from any collector, probe or static target, in addition to the turn
+  it takes under its collector's or static target's own `rate_limit`, after
+  it. The turn MUST be taken, waited for and refused as under
+  `request.rate_limit`, with an error naming the entry and the host:
+  `rate limit of 5 requests per second of rate_limits entry "billing_api"
+  for api.billing.example would delay the request past its deadline: ...`.
+  A request refused under one limit MUST give back the turn it took under
+  the other.
+- Requests of every other type MUST NOT take a turn under an entry.
+- A debug run's requests MUST take their turns, and MUST NOT be counted in
+  the entries' self-metrics (§ 22).
+- A reload MUST keep the bucket of an entry it leaves as it was, its name,
+  hosts and `rate_limit` alike, and MUST start an entry it changes from a
+  full bucket. It MUST forget the bucket and the counts of an entry it
+  removes, and the exporter's shutdown every bucket and count.
 
 #### `localfile`
 
@@ -6622,6 +6666,8 @@ http_exporter_login_failures_total
 
 http_exporter_rate_limit_waits_total
 http_exporter_rate_limit_refused_total
+http_exporter_host_rate_limit_waits_total
+http_exporter_host_rate_limit_refused_total
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -6736,6 +6782,18 @@ origin: the requests the collector's rate limit, or a static target's own,
 made wait for their turn, and those it refused for a turn past their
 deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
 shutdown and be forgotten with a collector a reload removes.
+`http_exporter_host_rate_limit_waits_total` and
+`http_exporter_host_rate_limit_refused_total`, counters, MUST be
+exporter-wide, labelled `rule` with the name of an entry of `rate_limits`
+and no `collector` label, a series of each for every entry in force from 0:
+the requests of every collector that the entry made wait for their turn,
+and those it refused for a turn past their deadline, a debug run's not
+counted (§ 5.1, `http`, Rate limits per host). They MUST be exported over
+OTLP as every other self-metric. An entry's counts MUST be kept across a
+reload that keeps an entry of its name, changed or not, forgotten with an
+entry a reload removes, and start at 0 at the exporter's shutdown; their
+created time MUST be the exporter's start for an entry it started with, and
+when the reload put it in force for one a reload added.
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,
@@ -29728,7 +29786,8 @@ and MUST answer `200` with a `text/plain` report of it, with
   and outcome, a redirect with the headers it was sent and the names of the
   ones withheld from it (§ 42.15c); a request of `request.pagination` with
   the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a request
-  that waited for its turn under `request.rate_limit` with how long and why,
+  that waited for its turn under `request.rate_limit`, or under an entry of
+  `rate_limits` naming the entry, with how long and why,
   its duration counted from when it was sent (§ 5.1, `http`); a `grpc`
   call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before

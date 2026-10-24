@@ -48,6 +48,10 @@ type Config struct {
 	CollectorFiles []string   `yaml:"collector_files"`
 	OTLP           OTLPConfig `yaml:"otlp"`
 	Web            WebConfig  `yaml:"web"`
+	// RateLimits bounds how fast the http and graphite requests of every
+	// collector together ask a host, for an API whose quota is the host's
+	// rather than one collector's (fetch/hostratelimit.go).
+	RateLimits []HostRateLimit `yaml:"rate_limits"`
 	// CollectorSources records the file each collector was defined in, and
 	// LoadedCollectorFiles the collector files read, in order. Neither is read
 	// from the document.
@@ -350,6 +354,16 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
 	// Burst is nil until the load fills in its default, 1.
 	Burst *int `yaml:"burst" json:"burst,omitempty"`
+}
+
+// HostRateLimit is an entry of rate_limits: a rate limit, as
+// request.rate_limit writes one, that every http and graphite request to one
+// of Hosts takes a turn under, whichever collector, probe or static target
+// sends it. Name labels its self-metrics.
+type HostRateLimit struct {
+	Name      string          `yaml:"name"`
+	Hosts     []string        `yaml:"hosts"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
 // LoginConfig is request.login: how the exporter logs in to get the token

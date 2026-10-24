@@ -229,7 +229,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		file reflect.Type
 		want []string
 	}{
-		"the configuration": {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]"}, ofCollectors...)},
+		"the configuration": {reflect.TypeOf(model.Config{}), append([]string{"collector_files[]", "rate_limits[].name"}, ofCollectors...)},
 		"a collector file":  {reflect.TypeOf(collectorFile{}), ofCollectors},
 		"one collector":     {reflect.TypeOf(model.Collector{}), slices.Clone(collector)},
 		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check",

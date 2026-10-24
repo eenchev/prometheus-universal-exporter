@@ -132,6 +132,13 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 		}
 	}
 	s.statsMu.Unlock()
+	// The entries of rate_limits are in force from the start, counting
+	// since it; a reload's are followed with its collectors (reconcile).
+	var hostRateLimits []model.HostRateLimit
+	if cfg != nil {
+		hostRateLimits = cfg.RateLimits
+	}
+	fetch.FollowHostRateLimits(hostRateLimits)
 	// The state kept per collector follows a reload when it is made
 	// (reconcile.go), and what following it needs that takes long is worked
 	// out before the reload puts its configuration in force (prepareReload).

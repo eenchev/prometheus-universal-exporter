@@ -121,6 +121,22 @@ probes are, and the time they take in
 the [static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint),
 not here.
 
+## Rate limits per host
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_host_rate_limit_waits_total` | counter | Labelled `rule`, the `name` of an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host): the `http` and `graphite` requests of every collector together — each attempt, page, redirect and login request counted — that waited for their turn under the entry before they were sent, but not those of a debug run's. |
+| `http_exporter_host_rate_limit_refused_total` | counter | Labelled `rule`: the requests the entry refused before they were sent, their turn coming at or past their deadline; each failed its scrape. |
+
+An entry's bucket is the exporter's, shared by every collector, so the
+families have no `collector` label: which collectors used the turns up shows
+in their own scrapes' failures and durations. Every entry in force has its
+two series from zero, so a rate works from the start; an entry a reload
+removes has none, and one a reload changes keeps its counts. A request that
+waited under its collector's own `request.rate_limit` as well is counted in
+both its collector's `http_exporter_rate_limit_waits_total` and here. They
+are exported over [OTLP](OTLP.md) as every other self-metric.
+
 ## Configuration reloads
 
 A reload that is rejected — an invalid file, a duplicate collector name, a
@@ -832,6 +848,8 @@ The time is when the series began to count:
 | Series | Created |
 | --- | --- |
 | The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total`, the [scrape-time histogram](#scrape-time-histograms) and the [Python worker](#python-workers) counters of a collector the exporter started with | The exporter's start. |
+| The [rate limits per host](#rate-limits-per-host) of an entry the exporter started with | The exporter's start. |
+| The same, of an entry a reload added, or removed and brought back | When the reload put it in force. |
 | The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |
 | `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the counters of the [Python execution pool](#the-python-execution-pool), and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The pool's counters keep what a collector counted when a reload removes it, so they do not start again. |

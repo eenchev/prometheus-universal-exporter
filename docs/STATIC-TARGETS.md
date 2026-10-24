@@ -101,7 +101,9 @@ An `http` or `graphite` target may set its own
 [`rate_limit`](REQUESTS.md#rate-limiting), checked as a collector's is, which
 replaces the collector's for that target's requests, both keys together:
 they have a limit of their own for each origin they go to, apart from the
-one the collector's other targets share there. It changes no answer, so it
+one the collector's other targets share there. Its requests take their turns
+under the configuration's [`rate_limits`](REQUESTS.md#rate-limits-per-host)
+as well, as every collector's do. It changes no answer, so it
 is no part of the cache key.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target

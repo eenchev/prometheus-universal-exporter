@@ -237,6 +237,8 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_collector_config_valid":                     "1 for every collector of the configuration in force; a rejected reload shows in http_exporter_config_last_reload_successful, not here.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
 	"http_exporter_cache_revalidations_total":                  "Trips of this http or graphite collector that revalidated an expired cached response with If-None-Match or If-Modified-Since (cache.revalidate), by result: not_modified (the target answered 304 and the cached body was transformed again) or modified (it sent a new response the collector accepts).",
+	"http_exporter_host_rate_limit_waits_total":                "Requests of every http and graphite collector together, each attempt, page, redirect and login request counted, that waited for their turn under this entry of rate_limits before they were sent.",
+	"http_exporter_host_rate_limit_refused_total":              "Requests of every http and graphite collector together that this entry of rate_limits refused before they were sent, because their turn would have come at or past their deadline; the scrape failed with them.",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
@@ -465,6 +467,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	}
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, cacheRevalidationMetrics(names, values, requestTypes)...)
+	out = append(out, hostRateLimitMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
@@ -520,6 +523,34 @@ func cacheRevalidationMetrics(names []string, values map[string]statsValues, req
 				Name: name, Help: exporterMetricHelp[name], Type: model.CounterMetricType,
 				Value: float64(r.value(v)), Labels: map[string]string{"collector": collector, "result": r.result}, Created: createdMillis(v.created),
 			})
+		}
+	}
+	return out
+}
+
+// hostRateLimitMetrics are http_exporter_host_rate_limit_waits_total and
+// http_exporter_host_rate_limit_refused_total: a series of each for every
+// entry of rate_limits in force, labelled by its name, from zero. The
+// buckets are the exporter's, shared by every collector, so the families
+// have no collector label.
+func hostRateLimitMetrics() []model.Metric {
+	counts := fetch.HostRateLimitCounts()
+	var out []model.Metric
+	for _, family := range []struct {
+		name  string
+		value func(fetch.HostRateLimitCount) uint64
+	}{
+		{"http_exporter_host_rate_limit_waits_total", func(c fetch.HostRateLimitCount) uint64 { return c.Waited }},
+		{"http_exporter_host_rate_limit_refused_total", func(c fetch.HostRateLimitCount) uint64 { return c.Refused }},
+	} {
+		for _, count := range counts {
+			// An entry the exporter started with counts since its start,
+			// one a reload added since then.
+			created := exporterStart()
+			if !count.Since.IsZero() {
+				created = count.Since
+			}
+			out = append(out, model.Metric{Name: family.name, Help: exporterMetricHelp[family.name], Type: model.CounterMetricType, Value: float64(family.value(count)), Labels: map[string]string{"rule": count.Name}, Created: createdMillis(created)})
 		}
 	}
 	return out

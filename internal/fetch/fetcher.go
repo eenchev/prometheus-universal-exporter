@@ -897,7 +897,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, err
 		}
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
-		traceRateLimitWait(requestContext, req.URL, waited, false)
+		traceRateLimitWait(requestContext, waited, false)
 		resp, err := client.Do(req)
 		if err != nil {
 			// Go's error quotes the whole URL, request.query included.

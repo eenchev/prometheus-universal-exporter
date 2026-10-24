@@ -741,11 +741,14 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 // takes several times what it takes without: go test's own limit of ten
 // minutes a package, meant for one plain run, was what a slow machine would
 // have failed on before any test did. So the command carries a limit of its
-// own, at least twice go test's. CI runs it in one step for each side, the
-// exporter's and the allocator's, over the packages tools/ci-packages.sh
-// lists for the side and under the condition of the side's filter, by the
-// same command, and `make test` runs that very command over every package,
-// so that what passes here is what passes there.
+// own, at least twice go test's. CI runs it by the same command over the
+// packages tools/ci-packages.sh lists, in one step for the allocator's side
+// and in two for the exporter's, whose race run was one of CI's two longest
+// jobs: one of internal/exporter alone (exporter-core) and one of the rest
+// of the side (exporter-rest), which together list every package of the
+// side once. Each runs under the condition of its side's filter, and `make
+// test` runs that very command over every package, so that what passes here
+// is what passes there.
 func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 	pattern := regexp.MustCompile(`^go test -race -count=2 -shuffle=on -timeout (\S+) \$packages$`)
 	side := regexp.MustCompile(`^packages="\$\(sh tools/ci-packages\.sh (\S+)\)"$`)
@@ -777,12 +780,26 @@ func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 			t.Errorf("ci.yml runs the race detector with %q and with %q; the sides were meant to run one command", command, lines[1])
 		}
 		command = lines[1]
-		if condition := step["if"]; condition != sideCondition(name) {
-			t.Errorf("ci.yml runs %q for the %s side under the condition %q, not %q", command, name, condition, sideCondition(name))
+		// A part of a side, exporter-core, runs under its side's filter.
+		output, _, _ := strings.Cut(name, "-")
+		if condition := step["if"]; condition != sideCondition(output) {
+			t.Errorf("ci.yml runs %q for %s under the condition %q, not %q", command, name, condition, sideCondition(output))
 		}
 	}
-	if !reflect.DeepEqual(sides, map[string]int{"allocator": 1, "exporter": 1}) {
-		t.Errorf("ci.yml runs the race detector for the sides %v; one step for the exporter and one for the allocator were meant", sides)
+	if !reflect.DeepEqual(sides, map[string]int{"allocator": 1, "exporter-core": 1, "exporter-rest": 1}) {
+		t.Errorf("ci.yml runs the race detector for the package lists %v; one step for the allocator and one each for exporter-core and exporter-rest were meant", sides)
+	}
+	core, rest := ciSidePackages(t, "exporter-core"), ciSidePackages(t, "exporter-rest")
+	module := regexp.MustCompile(`(?m)^module (\S+)$`).FindStringSubmatch(read(t, "go.mod"))
+	if module == nil {
+		t.Fatal("go.mod names no module")
+	}
+	if want := []string{module[1] + "/internal/exporter"}; !slices.Equal(core, want) {
+		t.Errorf("tools/ci-packages.sh exporter-core lists %v, not internal/exporter alone (%v)", core, want)
+	}
+	parts := slices.Sorted(slices.Values(slices.Concat(core, rest)))
+	if exporter := slices.Sorted(slices.Values(ciSidePackages(t, "exporter"))); !slices.Equal(parts, exporter) {
+		t.Errorf("tools/ci-packages.sh lists %v for exporter-core and exporter-rest together, not the exporter's side %v once each", parts, exporter)
 	}
 	match := pattern.FindStringSubmatch(command)
 	if match == nil {
@@ -840,7 +857,12 @@ func everyPackage(command string) string {
 // filter whose files the setup's own condition, the go output's, covers
 // (cisides_test.go keeps that so); and no job of ci.yml has a job-level
 // `if`, which would leave a matrix job reported as skipped under a name no
-// check requires.
+// check requires. A job that runs no Go and no Python, as the image's build
+// does, whose Dockerfile brings both, starts with the setup's steps up to
+// the step changes, checkout, the filter and the outputs its steps read,
+// and nothing of the rest: its machine is test's, and the environment, which
+// is for the Go tests, is not required of it. A job that sets up Go or
+// Python, or runs go, python3, pip or make, has the whole setup.
 func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 	const path = ".github/workflows/ci.yml"
 	all := workflowSteps(t, path)
@@ -858,6 +880,10 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 	if len(setup) < 8 {
 		t.Fatalf("only %d setup steps were read from ci.yml's job test; the reader has stopped finding them", len(setup))
 	}
+	common := slices.IndexFunc(setup, func(step map[string]any) bool { return step["id"] == "changes" }) + 1
+	if common < 3 {
+		t.Fatal("ci.yml's job test has no step changes after its checkout and filter, where the setup a job without Go needs ends")
+	}
 	jobs, _ := workflowDocument(t, path)["jobs"].(map[string]any)
 	testJob, _ := jobs["test"].(map[string]any)
 	others := 0
@@ -871,31 +897,54 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 		}
 		others++
 		steps := all[name]
-		if len(steps) <= len(setup) {
-			t.Errorf("ci.yml's job %s has %d steps, not test's %d setup steps and its own after them", name, len(steps), len(setup))
+		want := setup
+		if len(steps) > common && !slices.ContainsFunc(steps[common:], setsUpGoOrPython) {
+			want = setup[:common]
+		}
+		if len(steps) <= len(want) {
+			t.Errorf("ci.yml's job %s has %d steps, not test's %d setup steps and its own after them", name, len(steps), len(want))
 			continue
 		}
-		for index, want := range setup {
-			if !reflect.DeepEqual(steps[index], want) {
-				t.Errorf("ci.yml's job %s has step %d\n%s\nwhere test's setup has\n%s", name, index+1, yamlText(steps[index]), yamlText(want))
+		for index, step := range want {
+			if !reflect.DeepEqual(steps[index], step) {
+				t.Errorf("ci.yml's job %s has step %d\n%s\nwhere test's setup has\n%s", name, index+1, yamlText(steps[index]), yamlText(step))
 			}
 		}
-		for _, step := range steps[len(setup):] {
+		for _, step := range steps[len(want):] {
 			if condition := step["if"]; !slices.Contains([]any{sideCondition("go"), sideCondition("exporter"), sideCondition("allocator")}, condition) {
 				t.Errorf("ci.yml's job %s runs a step under the condition %v, not that of the go, exporter or allocator filter:\n%s", name, condition, yamlText(step))
 			}
 		}
-		for _, key := range []string{"env", "runs-on"} {
+		keys := []string{"env", "runs-on"}
+		if len(want) == common {
+			keys = keys[1:]
+		}
+		for _, key := range keys {
 			if !reflect.DeepEqual(definition[key], testJob[key]) {
 				t.Errorf("ci.yml's job %s has the %s %v, but test has %v", name, key, definition[key], testJob[key])
 			}
 		}
 	}
-	// The linters, the builds, the race job, the request types' matrix and
-	// the allocator's job.
-	if others < 5 {
-		t.Errorf("ci.yml has %d jobs beside test; the linters, the builds, the race run, the request types' tests and the allocator's tests were meant to have one each", others)
+	// The linters, the builds, the image, the two race jobs, the request
+	// types' matrix and the allocator's job.
+	if others < 7 {
+		t.Errorf("ci.yml has %d jobs beside test; the linters, the builds, the image, the two race runs, the request types' tests and the allocator's tests were meant to have one each", others)
 	}
+}
+
+// setsUpGoOrPython reports whether a step sets up Go or Python, or runs go,
+// python3, pip or make, which a job does only after test's whole setup.
+func setsUpGoOrPython(step map[string]any) bool {
+	if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "actions/setup-go@") || strings.HasPrefix(uses, "actions/setup-python@") {
+		return true
+	}
+	run, _ := step["run"].(string)
+	for line := range strings.SplitSeq(run, "\n") {
+		if first, _, _ := strings.Cut(strings.TrimSpace(line), " "); slices.Contains([]string{"go", "python3", "pip", "make"}, first) {
+			return true
+		}
+	}
+	return false
 }
 
 // test ran every check one after another and took a quarter of an hour, the
@@ -912,7 +961,7 @@ func TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn(t *testing.T) {
 		{"build", "vets the code", "go vet ./..."},
 		{"build", "builds the code", "go build ./..."},
 		{"build", "builds for darwin", "GOOS=darwin"},
-		{"build", "builds the image", "docker build"},
+		{"image", "builds the image", "docker/build-push-action"},
 		{"build", "builds with the opt-in sql drivers", "request-type-tags.sh '' oracle"},
 		{"build", "builds with the opt-in request types", "request-type-tags.sh '' '' "},
 	} {

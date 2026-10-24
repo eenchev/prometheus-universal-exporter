@@ -10655,8 +10655,12 @@ otherwise, and a test MUST run the step that sets them.
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
 than after it. The linters (gofmt, golangci-lint and gopls) MUST run in a job
-of their own, the builds (vet, the default build, darwin's, the image's and
-those with the opt-in drivers and request types) in another, and each
+of their own, the builds (vet, the default build, darwin's and those with the
+opt-in drivers and request types) in another, the image's build in a third,
+which MUST keep the image's layers in the GitHub Actions cache between runs,
+the exporter's race suite in two, one for `internal/exporter` and one for
+the rest of the exporter's side, whose two package lists MUST together be
+that side, each package once, and each
 single-type selection's vet and build in that selection's job of the
 single-type matrix, not in a loop in one job: the job that runs the
 repository's checks and the exporter's tests MUST NOT also run them. Each job
@@ -10670,7 +10674,10 @@ leaves unused is reported nowhere else. `make lint-request-types`, which
 naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
-environment, and MUST gate its steps on that filter's outputs rather than with
+environment; a job that sets up and runs neither Go nor Python, as the
+image's build, MUST start with the same first of them, checkout, the filter
+and the step of the outputs its steps read, and nothing of the rest. Every
+job MUST gate its steps on that filter's outputs rather than with
 a job-level condition, so that a job with nothing to do still succeeds under
 its own name; a test MUST keep those setups identical, and MUST keep the
 matrix of the single-type tests naming every request type of the tree.
@@ -18813,10 +18820,13 @@ Tests MUST show:
 
 ## 34.101 The race suite's limit and the size of a test's input under the race detector
 
-- `ci.yml` runs the race detector in one step for each side, the
-  exporter's and the allocator's, whose command is
+- `ci.yml` runs the race detector in one step for the allocator's side and
+  in two for the exporter's, one of `internal/exporter` alone
+  (`exporter-core`) and one of the rest of the side (`exporter-rest`), whose
+  two lists `tools/ci-packages.sh` prints together are the exporter's side,
+  each package once; every step's command is
   `go test -race -count=2 -shuffle=on -timeout <limit> $packages` with a
-  limit of at least twenty minutes, the side's packages listed by
+  limit of at least twenty minutes, the packages listed by
   `tools/ci-packages.sh` before it, under the condition of the side's
   filter output, and the `test` target of the Makefile runs that very
   command over `./...`: a Makefile without the limit, or with another, fails
@@ -24249,11 +24259,14 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
 
 The race run and each request type's run in jobs of their own beside the test job, with one setup (§ 42.12):
 
-- ci.yml runs the race suite in a job of its own (`race`) and each request
-  type's tests in a job of a matrix (`request-types`), beside the `test` job;
+- ci.yml runs the race suite in two jobs of its own (`race` and
+  `race-rest`) and each request type's tests in a job of a matrix
+  (`request-types`), beside the `test` job;
   every job of ci.yml other than `test` starts with `test`'s setup steps, the
   helm setup alone left out, equal to them in their order, has `test`'s env
-  and machine, runs each of its own steps under the condition of the go,
+  and machine, or, when none of its steps sets up or runs Go or Python, as
+  `image`'s, starts with the setup's checkout, filter and step `changes`
+  alone and has `test`'s machine, runs each of its own steps under the condition of the go,
   exporter or allocator filter output, and no job of ci.yml has a job-level
   `if`: a copy of a setup step
   that differs, a missing environment or a job-level `if` fails the test.
@@ -24541,7 +24554,7 @@ The exporter's tests and the target allocator's run when a file each needs chang
 - The patterns are read as paths-filter reads them: `**` across any number
   of directories, none among them, `*` within one name.
 - ci.yml's job test runs `test/repository` under the go output and the
-  exporter's packages under the exporter output; the race job and the
+  exporter's packages under the exporter output; the two race jobs and the
   request types' matrix run the exporter's packages under the exporter
   output; the allocator job, which starts with the setup of test, runs the
   allocator's packages once and under the race detector under the allocator
@@ -25985,9 +25998,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `-ldflags`, the revision among them, from the values the image's build is
   given (§ 42.12).
 - CI's job build builds the code for darwin on amd64 and arm64, linking both
-  commands, and builds the image from the Dockerfile with `docker build`,
-  pushing nothing, both under the go filter, which matches every file the
-  image's build reads (§ 42.12).
+  commands, and its job image builds the image from the Dockerfile with
+  `docker/build-push-action` after buildx's setup, pushing nothing, loaded,
+  with the Actions cache (`type=gha`, `mode=max`) read and written, and runs
+  its `--version` against the commit, all under the go filter, which
+  matches every file the image's build reads (§ 42.12).
 - A regex histogram rule with labels `a` and `b` reading
   `"x\xfeb\xffy  5\nx y 7\n"` makes two histograms, `{a="x�b�y"}`
   of count 1 and sum 5 and `{a="x",b="y"}` of count 1 and sum 7, where the
@@ -26485,8 +26500,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `${{ matrix.type }}`, and `make build-request-types` runs the same commands
   in a loop naming every type (TestCIBuildsEveryRequestTypeOnItsOwn).
 - CI's job test runs no linter and no build: gofmt, golangci-lint and gopls
-  run in the job lint, and vet, the default, darwin's, the image's and the
-  opt-in builds in the job build (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
+  run in the job lint, vet, the default, darwin's and the opt-in builds in
+  the job build, and the image's in the job image (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
 
 ## 34.184 The opt-in tcp request type
 

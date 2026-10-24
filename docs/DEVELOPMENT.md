@@ -2253,13 +2253,13 @@ docs. `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every
 string literal of `test/repository`'s Go files that names an existing path
 of the repository, from its root, and fails for a file no pattern of the
 `go` output matches: a file those tests read whose change alone skipped them
-would merge unchecked. When it fails, add the file to the `go` output in all
-four jobs. Under the same output, `test` also builds the code for `darwin` on
+would merge unchecked. When it fails, add the file to the `go` output in
+every job. Under the same output, `build` builds the code for `darwin` on
 `amd64` and `arm64`, linking both commands, since the release builds archives
-for macOS from it, and builds the image from the `Dockerfile` with
-`docker build`, pushing nothing, and runs its `--version` to see the
-revision it was given; a change that breaks either fails on its pull request
-rather than at release time. The Helm lint/template
+for macOS from it, and `image` builds the image from the `Dockerfile` with
+`docker/build-push-action`, pushing nothing, loads it and runs its
+`--version` to see the revision it was given; a change that breaks either
+fails on its pull request rather than at release time. The Helm lint/template
 checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
 files the chart steps render. A change under `charts/` runs the Go checks
 because the template guard above lives there and is worth least on exactly
@@ -2296,8 +2296,14 @@ add its directory or the file to the side's list in every job.
 CI runs in jobs side by side, so it takes about as long as its longest job:
 `lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
 and the opt-in request types') and gopls; `build` runs `go vet`, the default
-build, darwin's, the image's, and the builds with the opt-in sql drivers and
-request types with their tests; `race` runs the exporter's race suite;
+build, darwin's, and the builds with the opt-in sql drivers and request types
+with their tests; `image` builds the image, its layers read from and written
+to the GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a
+change to the sources alone downloads no module and installs nothing in the
+runtime stage again; `race` runs the race suite of `internal/exporter`, which
+has by far the most tests, and `race-rest` that of every other package of the
+exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
+which together list the side once each, as a test checks);
 `request-types`, a matrix over the request types (its checks are named
 `test (<type>)`), vets, builds and lints each type on its own under the `go`
 output and runs the exporter's tests with it under `exporter`; `allocator` runs the
@@ -2310,7 +2316,10 @@ tests (under `exporter`) and the chart steps; a test fails when it runs a
 linter or a build again. Each of the other jobs starts with `test`'s setup
 steps but helm's, written out again, and
 `TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
-`test`'s, so change them in every job at once. They gate their steps on the changed-path filter's outputs rather than
+`test`'s, so change them in every job at once. `image` runs no Go and no
+Python, which the `Dockerfile` brings, so it starts with the first three of
+them alone, checkout, the filter and the step `changes`, and the test holds
+a job to the whole setup as soon as it sets up or runs Go or Python. They gate their steps on the changed-path filter's outputs rather than
 with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over

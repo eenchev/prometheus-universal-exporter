@@ -3,6 +3,10 @@
 # "allocator", the target allocator (cmd/pue-allocator and internal/allocator
 # with what is under it), or "exporter", every other package of the module but
 # test/repository, the repository's own checks, which CI tests on their own.
+# The exporter's side is also listed in two parts, which CI runs under the
+# race detector in two jobs, since one would be its longest: "exporter-core",
+# internal/exporter alone, and "exporter-rest", every other package of the
+# side.
 # A second argument gives the build tags the packages are listed with, so a
 # package a build with those tags compiles nothing of is left out rather than
 # named to go test, which would fail on it.
@@ -22,6 +26,7 @@ tags="${2:-}"
 module="$(go list -m)"
 allocator="^${module}/(cmd/pue-allocator|internal/allocator)(/.*)?\$"
 repository="^${module}/test/repository\$"
+core="^${module}/internal/exporter\$"
 packages="$(go list -tags "$tags" ./...)"
 
 case "$side" in
@@ -31,8 +36,14 @@ allocator)
 exporter)
 	selected="$(printf '%s\n' "$packages" | grep -v -E -e "$allocator" -e "$repository" || true)"
 	;;
+exporter-core)
+	selected="$(printf '%s\n' "$packages" | grep -E "$core" || true)"
+	;;
+exporter-rest)
+	selected="$(printf '%s\n' "$packages" | grep -v -E -e "$allocator" -e "$repository" -e "$core" || true)"
+	;;
 *)
-	echo "ci-packages: the side must be allocator or exporter, not \"${side}\"" >&2
+	echo "ci-packages: the side must be allocator, exporter, exporter-core or exporter-rest, not \"${side}\"" >&2
 	exit 2
 	;;
 esac

@@ -490,7 +490,8 @@ label name the drivers a build has; of a build without the `sql` type,
   forever, past the scrape's deadline, holding the statement's connection
   and its place at `max_per_target`. To tell, the exporter reads each answer
   to a statement whole before the driver does, the result's first chunk
-  with it, which is held twice for a moment.
+  with it, which is held twice for a moment: the exporter's copy and the
+  driver's. That read is held to the response limit (below).
 - **gosnowflake's own behaviour.** Its platform detection, which would ask
   the cloud metadata services and AWS STS which platform it runs on, is
   turned off (`SNOWFLAKE_DISABLE_PLATFORM_DETECTION=true`, set by the
@@ -536,8 +537,11 @@ label name the drivers a build has; of a build without the `sql` type,
   `sf_client_config.json` it finds (above) sends them where it says instead.
   The error it logs for a statement whose result came in more than one
   chunk, which the exporter fails (above) — `error: 262000 (08006): the
-  statement's result came from Snowflake in more than one chunk, ...` — is
-  logged at debug: the scrape's own failure says what happened.
+  statement's result came from Snowflake in more than one chunk, ...` — and
+  the one for an answer larger than the response limit (below) — `error:
+  262000 (08006): the statement's result came from Snowflake larger than the
+  exporter's response limit` — are logged at debug: the scrape's own failure
+  says what happened.
 - **A row is read before `max_response_bytes` sees it.** The limit counts
   the values as a driver hands them on, and a driver reads a row, at least,
   whole before it hands any of it on. Where a driver can be told, the
@@ -568,9 +572,29 @@ label name the drivers a build has; of a build without the `sql` type,
     `tls`, the driver starts TLS itself on that connection, and the packets
     are inside it, where only the driver sees them; a bound that held without
     TLS and not with it is not given.
-  - The opt-in drivers read a row, or a block of rows as their protocol
-    sends it (`clickhouse`'s blocks, `snowflake`'s result chunk), whole, with
-    no bound the exporter sets.
+  - `snowflake`'s answer to a statement, which holds the result's first
+    chunk, the only one the exporter takes (above), is read by the exporter
+    before the driver sees it, and that read is held to the limit: an answer
+    whose `Content-Length` passes the limit is refused unread, one without
+    a `Content-Length` once a byte past the limit has been read, and a
+    gzipped one, however small, once a byte past the limit has been
+    decompressed, without decompressing further, so that a gzip bomb costs
+    no more than the limit. The scrape fails at once, as a limit, not the
+    driver's error, and the driver does not retry it: `running the
+    statement: the statement's answer from Snowflake was larger than the
+    response limit of 1048576 bytes (decompressed, when it came gzipped),
+    and was refused; return fewer rows or columns, with WHERE, GROUP BY or
+    LIMIT, or raise request.max_response_bytes or limits.max_response_bytes`.
+    A gzipped answer within the limit is handed to the driver decompressed,
+    in place of the gzipped one. So the exporter holds one copy of an answer
+    of at most the limit, and the driver another while it decodes it: what
+    the driver builds of that copy as it decodes it (its rows, a string for
+    each value) is the driver's, and the limit on the rows' values then
+    applies as for every driver. The login and the driver's other requests,
+    whose answers are not results, are not bounded.
+  - `clickhouse` and `vertica` read a row, or a block of rows as their
+    protocol sends it (`clickhouse`'s blocks), whole, with no bound the
+    exporter sets.
 - **No connection string.** A setting a driver has that no key or option
   above names cannot be set.
 
@@ -582,6 +606,7 @@ label name the drivers a build has; of a build without the `sql` type,
 | `connecting to postgres at ...: ... password authentication failed` | The account or its password; check `password_file`. |
 | `request.password_file ... is empty` | The file is there and empty: the Secret's key, or its mount. |
 | `running the statement: the statement's result came from Snowflake in more than one chunk, ...` | Return fewer rows or columns (see [Limitations](#limitations)). |
+| `running the statement: the statement's answer from Snowflake was larger than the response limit ...` | Return fewer rows or columns, or raise `max_response_bytes` (see [Limitations](#limitations)). |
 | `running the statement: ... read-only transaction`, `... READ ONLY transaction` | The statement writes; it ran read-only, as it always does where the database can. |
 | `running the statement: the scrape's deadline came first` | The statement takes longer than the probe may; make it cheaper, or raise the probe's `timeout`. |
 | `column 1 of the statement's result has no name` | Name the column with `AS`. |

@@ -480,6 +480,105 @@ func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 	}
 }
 
+// The lint job lints builds that carry every request type, where a helper
+// a build of one type leaves unused - one in an untagged file only another
+// type's tests call - is used, so twice such a helper reached main. So the
+// request types' matrix lints each type's build on its own too: a step reads
+// the tags tools/request-type-tags.sh prints for the job's type, under the
+// go filter, and the golangci-lint action, pinned and at the version as the
+// lint job's, lints with them after it, under the same condition; and
+// `make lint-request-types`, which `make ci` includes, lints the same
+// builds in a loop naming every type of the tree.
+func TestCIAndMakeLintEveryRequestTypeOnItsOwn(t *testing.T) {
+	const tags, output = `tags="$(sh tools/request-type-tags.sh "$type")"`, `echo "tags=$tags" >> "$GITHUB_OUTPUT"`
+	all := workflowSteps(t, ".github/workflows/ci.yml")
+	var action string
+	for _, step := range all["lint"] {
+		if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "golangci/golangci-lint-action@") {
+			action = uses
+			break
+		}
+	}
+	if action == "" {
+		t.Fatal("ci.yml's job lint no longer uses the golangci-lint action")
+	}
+	version := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION := (\S+)$`).FindStringSubmatch(read(t, "Makefile"))
+	if version == nil {
+		t.Fatal("the Makefile no longer pins GOLANGCI_LINT_VERSION")
+	}
+	jobs, _ := workflowDocument(t, ".github/workflows/ci.yml")["jobs"].(map[string]any)
+	matrixJobs := 0
+	for name, raw := range jobs {
+		definition, _ := raw.(map[string]any)
+		strategy, _ := definition["strategy"].(map[string]any)
+		matrix, _ := strategy["matrix"].(map[string]any)
+		if _, ok := matrix["type"]; !ok {
+			continue
+		}
+		matrixJobs++
+		steps := all[name]
+		at := stepIndex(steps, tags, output)
+		if at < 0 {
+			t.Errorf("ci.yml's job %s does not read the tags of its type with %s and %s", name, tags, output)
+			continue
+		}
+		step := steps[at]
+		if env, _ := step["env"].(map[string]any); env["type"] != "${{ matrix.type }}" {
+			t.Errorf("ci.yml's job %s reads the tags of the type %v, not ${{ matrix.type }}", name, env["type"])
+		}
+		if step["if"] != sideCondition("go") {
+			t.Errorf("ci.yml's job %s reads the tags of its type under the condition %v, not %q", name, step["if"], sideCondition("go"))
+		}
+		id, _ := step["id"].(string)
+		want := "--build-tags ${{ steps." + id + ".outputs.tags }}"
+		linted := false
+		for _, lint := range steps[at+1:] {
+			if lint["uses"] != action {
+				continue
+			}
+			with, _ := lint["with"].(map[string]any)
+			if with["args"] != want {
+				continue
+			}
+			linted = true
+			if with["version"] != version[1] {
+				t.Errorf("ci.yml's job %s lints its type with golangci-lint %v, but the Makefile pins %s", name, with["version"], version[1])
+			}
+			if lint["if"] != sideCondition("go") {
+				t.Errorf("ci.yml's job %s lints its type under the condition %v, not %q", name, lint["if"], sideCondition("go"))
+			}
+		}
+		if id == "" || !linted {
+			t.Errorf("ci.yml's job %s has no step after the one reading its type's tags that uses %s with the args %s", name, action, want)
+		}
+	}
+	if matrixJobs != 1 {
+		t.Errorf("ci.yml has %d jobs of a matrix over the request types; one was meant", matrixJobs)
+	}
+	prerequisites, recipes := makefileRules(t)
+	recipe := recipes["lint-request-types"]
+	for _, want := range []string{tags, `golangci-lint run --build-tags "$tags"`} {
+		if !strings.Contains(recipe, want) {
+			t.Errorf("make lint-request-types does not run %s:\n%s", want, recipe)
+		}
+	}
+	if !slices.Contains(prerequisites["lint-request-types"], "lint-version") {
+		t.Error("make lint-request-types does not check the golangci-lint version first (lint-version)")
+	}
+	loop := requestTypeLoop.FindStringSubmatch(recipe)
+	if loop == nil {
+		t.Fatalf("make lint-request-types has no loop over the request types:\n%s", recipe)
+	}
+	listed := strings.Fields(loop[1])
+	sort.Strings(listed)
+	if types := requestTypesInTheTree(t); !slices.Equal(listed, types) {
+		t.Errorf("make lint-request-types lints the request types %v, but the tree has %v", listed, types)
+	}
+	if !slices.Contains(prerequisites["ci"], "lint-request-types") {
+		t.Error("make ci does not include lint-request-types")
+	}
+}
+
 // makeRule is a rule of the Makefile: a target, its prerequisites after the
 // colon, and no assignment (:=).
 var makeRule = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+):([^=\n][^\n]*)?$`)

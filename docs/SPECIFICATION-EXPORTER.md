@@ -755,8 +755,8 @@ and the source MUST list the opt-in types.
   build-opt-in-types`, `make lint-opt-in-types` and `make
   test-opt-in-types`, which `make ci` includes, do, and a test MUST keep
   their lists naming every opt-in type of the tree; each single-type
-  selection, an opt-in type's included, is vetted, built and tested as
-  below.
+  selection, an opt-in type's included, is vetted, built, linted (§ 34.33)
+  and tested as below.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
   `go test` once under each selection's tags, over the exporter's packages
   when they are to run (§ 34.33), which `make test-request-types` runs over
@@ -1780,10 +1780,22 @@ of objects, one a row, of its columns by name. Its keys:
   connection, when it is made and before each use, to twice the limit and two
   bytes, so that the server cuts a longer `varchar(max)`, `nvarchar(max)`,
   `varbinary(max)`, `text`, `ntext` or `image` value, a cut value being over
-  the limit as read and so never handed on. What no driver can be told — a
-  `mysql` row, up to the server's `max_allowed_packet`; a SQL Server `xml` or
-  CLR-type value; the opt-in drivers' rows and blocks of rows — is read
-  before the limit applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
+  the limit as read and so never handed on; `snowflake`'s answer to a
+  statement, or to the driver's ask for a statement's result, which the
+  exporter reads before the driver (below), MUST be read to the limit and no
+  further: one whose `Content-Length` passes the limit refused unread, one
+  without once a byte past the limit is read, and a gzipped one once a byte
+  past the limit is decompressed, without decompressing further. Such an
+  answer MUST fail the statement at once as a limit, in the limit's words
+  (`the statement's answer from Snowflake was larger than the response
+  limit of N bytes ...`), the driver given an answer it neither retries nor
+  reads a result from, and the exporter MUST keep no more than one copy of
+  at most the limit of an answer it has read, a gzipped one within the limit
+  handed to the driver decompressed and its gzipped copy let go of. What no driver can be told — a `mysql` row, up to
+  the server's `max_allowed_packet`; a SQL Server `xml` or CLR-type value;
+  `clickhouse`'s and `vertica`'s rows and blocks of rows; what gosnowflake
+  builds as it decodes the bounded answer — is read before the limit
+  applies, and SQL.md MUST say so. The rows MUST be read by a `csv` transform by column name, one row
   at a time as a CSV file's with a header, and by `jq`, `yq` and `python` as
   the list; `decoder.type` other than its default, any other transform and
   any `response` setting MUST be refused at load, with no warning that the
@@ -10421,7 +10433,15 @@ of their own, the builds (vet, the default build, darwin's, the image's and
 those with the opt-in drivers and request types) in another, and each
 single-type selection's vet and build in that selection's job of the
 single-type matrix, not in a loop in one job: the job that runs the
-repository's checks and the exporter's tests MUST NOT also run them. Every job that runs Go checks MUST start with the same setup
+repository's checks and the exporter's tests MUST NOT also run them. Each job
+of that matrix MUST also lint its selection's build alone with golangci-lint,
+at the version and action pin of the linters' job, with the tags
+`tools/request-type-tags.sh` prints for the type, under the `go` output: the
+linters' job lints builds that carry every type, in which a helper only
+another type's code or tests call is used, so a helper a single-type build
+leaves unused is reported nowhere else. `make lint-request-types`, which
+`make ci` includes, MUST lint the same builds, and a test MUST keep its loop
+naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment, and MUST gate its steps on that filter's outputs rather than with
@@ -26511,6 +26531,60 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheTCPExamplesReadTheirServices` (extended): examples/tcp's haproxy collector reads `haproxy_up` from the column its `pre_script` adds: 1 for servers whose status is `UP 1/3`, `NOLB`, `DRAIN` and `no check`, 0 for `DOWN 1/2`, `MAINT`, `MAINT (via app/app1)`, `DOWN (agent)` and an empty status, and 0 for a `STOP` frontend, with no rule failing.
 - `TestTCPDocumentationExamples` (extended): docs/TCP.md's HAProxy example reads `UP 1/3` and `no check` as 1 and `MAINT (via web/app1)`, `DOWN 1/2` and a `STOP` frontend as 0.
 
+## 34.190 Snowflake's answers held to the response limit
+
+- A Snowflake answer larger than the response limit, sent without a
+  Content-Length, and a gzipped one of a few kilobytes that decompresses past
+  it, each fail the statement at once with ErrLimitExceeded in the limit's
+  words ("the statement's answer from Snowflake was larger than the response
+  limit of ..."), not the driver's error nor the deadline, with nothing
+  logged at error; each scrape allocates at most 8 MiB, the limit being
+  1 MiB and the answers 32 MiB and 64 MiB decompressed (the exporter read the
+  whole answer and decompressed the whole gzip before, some 245 MB and
+  500 MB). A result within the limit is read as before and one in more than
+  one chunk still fails with errSnowflakeChunks
+  (TestASnowflakeAnswerLargerThanTheResponseLimitFailsWithTheLimit).
+- The snowflake transport refuses an answer whose Content-Length passes the
+  limit unread, one without a Content-Length once it has read a byte past
+  the limit, and a gzipped one (Content-Encoding left by Go's transport)
+  once it has decompressed a byte past it, each with the statement's
+  failure the driver neither retries nor reads a result from and the
+  limit's failure noted for the statement; a gzipped answer within the limit
+  is passed on decompressed without its Content-Encoding, one that is not
+  gzip after all as it came, an answer of exactly the limit is passed on, and
+  without a limit nothing is refused
+  (TestTheSnowflakeTransportHoldsAnAnswerToTheResponseLimit).
+- The driver's log line for an answer larger than the response limit is
+  logged at debug, as the one for a result in more than one chunk is
+  (TestTheSnowflakeDriversLogGoesToTheExportersLogger).
+
+## 34.191 Each type linted on its own, a lighter transform suite and Dependabot majors
+
+- Each job of ci.yml's matrix over the request types reads the tags
+  `tools/request-type-tags.sh` prints for its `${{ matrix.type }}` in a step
+  under the `go` output, and a later step lints with them through the lint
+  job's golangci-lint action pin at the Makefile's version, under the same
+  condition; `make lint-request-types` runs `golangci-lint run --build-tags`
+  over the same tags after `lint-version`, in a loop naming every request
+  type of the tree, and `make ci` includes it; the test fails without the
+  step, without the target, and with another version in the step
+  (`TestCIAndMakeLintEveryRequestTypeOnItsOwn`, § 34.33).
+- Every golangci-lint action step of ci.yml names its version first and at
+  the Makefile's `GOLANGCI_LINT_VERSION`, the request types' matrix's
+  included (`TestTheLinterVersionIsPinnedConsistently`).
+- `.github/dependabot.yml`'s `gomod` and `pip` updates ignore
+  `version-update:semver-major` for every dependency, and its
+  `github-actions` updates of `/` ignore nothing and group every action's
+  minor and patch updates in one group and their majors in another; the
+  test fails on a single group of every update, and on `pip` without the
+  ignore (`TestDependabotUpdatesTheWorkflowActions`, § 42.16).
+- A script is handed CSV rows by header of a body of 5,000 columns over
+  5,000 one-field lines in a request no longer than four times the body,
+  decoded without making the list of dicts the rows stand for, so the test
+  takes tens of MiB under the race detector rather than over 4 GiB; it
+  fails when the rows are written as that list
+  (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -29439,17 +29513,26 @@ Dependency updates MUST be proposed automatically and MUST never be applied
 automatically: every update arrives as a pull request a maintainer merges.
 
 The Go modules and the GitHub Actions used by the workflows MUST be updated by
-Dependabot, configured in `.github/dependabot.yml`. Each ecosystem MUST be
-grouped into a single pull request, because these move together and reviewing
-one green build is better than triaging one pull request per module. Major
-version updates MUST be excluded: a Go major version lives at a different import
-path and needs code changes, so it is deliberate work rather than an automated
-proposal.
+Dependabot, configured in `.github/dependabot.yml`. The minor and patch updates
+of each MUST be grouped into a single pull request, because these move together
+and reviewing one green build is better than triaging one pull request per
+module. The Go modules' major version updates MUST be excluded, by an `ignore`
+of `version-update:semver-major` for every module: a Go major version lives at
+a different import path and needs code changes, so it is deliberate work rather
+than an automated proposal. The GitHub Actions' major version updates MUST be
+proposed, in a group of their own apart from the minor and patch one: every
+action is pinned to a commit SHA, so a new major runs only once its pull
+request is merged, and in a pull request of its own it is reviewed by itself
+and holds up no minor or patch update. Tests MUST keep the Go modules' ignore
+and the Actions' two groups by reading the configuration.
 
 The Python modules that only the tests use — `prometheus-client`, for its
 strict OpenMetrics parser — are no part of the image and MUST be pinned, each
 to one version, in `test/python/requirements.txt`, and updated by Dependabot's
-`pip` updates of that directory. Every workflow that runs the test suite MUST
+`pip` updates of that directory, which MUST stay within each module's major
+version by the same `ignore` as the Go modules': a new major of the parser can
+read the exposition formats differently, which the suite's verdicts rest on.
+Every workflow that runs the test suite MUST
 install that file before the suite and MUST run the suite with
 `STRICT_OPENMETRICS_PARSER` set, and the tests that give answers to that
 parser MUST then fail, with the message they are otherwise skipped with, where

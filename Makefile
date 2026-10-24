@@ -20,7 +20,7 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
+.PHONY: build build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
 # but the opt-in ones.
@@ -88,6 +88,18 @@ build-opt-in-types:
 # default build's types.
 lint-opt-in-types: lint-version
 	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && golangci-lint run --build-tags "$$tags"
+
+# golangci-lint over each request type's build on its own, as ci.yml's
+# request-types matrix runs it, a job for each type: a helper a one-type
+# build leaves unused, such as one in an untagged file only another type's
+# tests call, is reported by no lint of a build with every type. A test
+# keeps the loop naming every type in the tree.
+lint-request-types: lint-version
+	@set -e; for type in dns graphite grpc http kubernetes ldap localfile redis s3file sql sshfile tcp tlscert; do \
+		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
+		echo "golangci-lint run --build-tags $$tags"; \
+		golangci-lint run --build-tags "$$tags"; \
+	done
 
 # The internal/fetch and repository tests of the build with every opt-in
 # request type, as ci.yml runs them: the opt-in types' tests beside the
@@ -527,4 +539,4 @@ helm-test: helm-version
 		fi; \
 	done
 
-ci: fmt-check lint lint-sql-drivers lint-opt-in-types gopls-check test vet build-request-types test-request-types build-sql-drivers test-sql-drivers build-opt-in-types test-opt-in-types helm-test
+ci: fmt-check lint lint-sql-drivers lint-opt-in-types lint-request-types gopls-check test vet build-request-types test-request-types build-sql-drivers test-sql-drivers build-opt-in-types test-opt-in-types helm-test

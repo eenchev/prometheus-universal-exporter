@@ -12,12 +12,13 @@ make vet
 make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
+make lint-request-types  # golangci-lint for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
-make ci         # what CI runs, one after another: fmt-check, lint, gopls-check, test, vet,
-                #   build-request-types, test-request-types, the sql drivers' and
-                #   the opt-in request types' builds, and helm-test
+make ci         # what CI runs, one after another: fmt-check, lint, lint-request-types,
+                #   gopls-check, test, vet, build-request-types, test-request-types,
+                #   the sql drivers' and the opt-in request types' builds, and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
@@ -665,7 +666,9 @@ build, `helpers_http_test.go` for a build with http,
 `helpers_http_or_localfile_test.go` for a build with either. A helper compiled
 into a build in which nothing calls it is what the linter reports as unused
 when it is run with that build's tags
-(`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`).
+(`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`),
+which `make lint-request-types` does for every type, and CI in each type's
+job.
 
 ### Opt-in request types
 
@@ -2291,8 +2294,8 @@ and the opt-in request types') and gopls; `build` runs `go vet`, the default
 build, darwin's, the image's, and the builds with the opt-in sql drivers and
 request types with their tests; `race` runs the exporter's race suite;
 `request-types`, a matrix over the request types (its checks are named
-`test (<type>)`), vets and builds each type on its own under the `go` output
-and runs the exporter's tests with it under `exporter`; `allocator` runs the
+`test (<type>)`), vets, builds and lints each type on its own under the `go`
+output and runs the exporter's tests with it under `exporter`; `allocator` runs the
 allocator's tests, once and then under the race detector, when the
 `allocator` output names a change. The allocator's tests are not run with
 each type on its own: those that need a type are built with it, so such a

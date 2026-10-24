@@ -702,9 +702,14 @@ func TestAScriptIsHandedCSVRowsAsLongAsTheirBody(t *testing.T) {
 	for range 5000 {
 		body.WriteString("1\n")
 	}
-	now, _, r := decodeCSVRows([]byte(body.String()), model.CSVConfig{})
-	if now == nil {
-		t.Fatal("the body does not decode")
+	// Decoded without decodeCSVRows, which also makes the list of dicts the
+	// rows stand for: of this body that list is 1.5 GiB of memory, over
+	// 4 GiB under the race detector, and the test reads none of it.
+	c := model.Collector{Name: "rows", Decoder: model.DecoderConfig{Type: "csv"}}
+	r := &fetch.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(body.String()), Headers: http.Header{"Content-Type": {"text/csv"}}, Target: "http://rows.example/"}
+	now, err := decode.Decode(r, &c)
+	if err != nil {
+		t.Fatalf("the body does not decode: %v", err)
 	}
 	line, err := pythonRequest("data", "pass", now, r, &model.Collector{Name: "rows"})
 	if err != nil {
@@ -717,7 +722,7 @@ func TestAScriptIsHandedCSVRowsAsLongAsTheirBody(t *testing.T) {
 	requirePython(t)
 	short := []byte("host,used,,free\nweb01,72\ndb1,5,,9\n")
 	now, _, r = decodeCSVRows(short, model.CSVConfig{})
-	c := model.Collector{Name: "echo", Decoder: model.DecoderConfig{Type: "csv"}, Transform: model.TransformConfig{Type: "python", Script: "import json\nmetric(name='rows', value=len(data), labels={'echo': json.dumps(data)})\n"},
+	c = model.Collector{Name: "echo", Decoder: model.DecoderConfig{Type: "csv"}, Transform: model.TransformConfig{Type: "python", Script: "import json\nmetric(name='rows', value=len(data), labels={'echo': json.dumps(data)})\n"},
 		Limits: model.Limits{ScriptTimeout: model.Duration(10 * time.Second)}}
 	set, err := Transform(t.Context(), now, r, &c, "python3")
 	if err != nil {

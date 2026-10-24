@@ -217,10 +217,12 @@ func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 // two requests — a histogram exported as gauges under its samples' names —
 // is kept again when the later fails, and a series none of whose points is
 // sent, left out for another written later (otlpMetricsOf), is the first
-// request's.
+// request's. points are the data points of each request, which the status
+// page counts of the requests sent.
 type otlpRequests struct {
 	bodies [][]byte
 	last   [][]int
+	points []int
 }
 
 // otlpRequestsOf makes the requests that send resources to the endpoint. Of
@@ -246,14 +248,14 @@ func (s *Server) otlpRequestsOf(cfg model.OTLPConfig, resources []otlpResourceSe
 			if err != nil {
 				return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
 			}
-			return otlpRequests{bodies: [][]byte{body}}, nil
+			return otlpRequests{bodies: [][]byte{body}, points: []int{otlpPayloadPoints(payload)}}, nil
 		}
 	}
 	split, err := splitOTLP(payload, maxPoints, maxBytes)
 	if err != nil {
 		return otlpRequests{}, fmt.Errorf("encoding the export: %w", err)
 	}
-	requests := otlpRequests{bodies: make([][]byte, len(split)), last: make([][]int, len(resources))}
+	requests := otlpRequests{bodies: make([][]byte, len(split)), last: make([][]int, len(resources)), points: make([]int, len(split))}
 	for r := range resources {
 		requests.last[r] = make([]int, len(resources[r].Set.Metrics))
 	}
@@ -277,6 +279,7 @@ func (s *Server) otlpRequestsOf(cfg model.OTLPConfig, resources []otlpResourceSe
 			}
 			scope := &part.ResourceMetrics[len(part.ResourceMetrics)-1].ScopeMetrics[0]
 			scope.Metrics = append(scope.Metrics, otlpMetricPart(rm.ScopeMetrics[0].Metrics[piece.metric], piece.from, piece.to))
+			requests.points[k] += piece.to - piece.from
 			series := sources[piece.resource].of[piece.metric]
 			for _, i := range series[piece.from:piece.to] {
 				requests.last[made[piece.resource]][i] = k
@@ -490,7 +493,7 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return otlpAnswer{}, err
+		return otlpAnswer{}, fetch.RedactURLErrors(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.Compression != model.OTLPCompressionNone {
@@ -502,7 +505,10 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	resp, err := client.Do(req)
 	if err != nil {
 		// Unreachable, reset, timed out: the next attempt may get through.
-		return otlpAnswer{retryable: true}, err
+		// Go's client quotes the endpoint in its error with its query as
+		// written, which may carry a token: the error is logged and shown
+		// on the status page with the URL's credentials withheld.
+		return otlpAnswer{retryable: true}, fetch.RedactURLErrors(err)
 	}
 	// The body is read to the end, however little of it matters, so the
 	// connection goes back to the pool for the next export.
@@ -1280,39 +1286,121 @@ func otlpSummaryPoint(m model.Metric, attributes []otlpAttribute, at string) otl
 type otlpStatus struct {
 	mu                  sync.Mutex
 	successes, failures uint64
-	retries, dropped    int
-	lastDuration        time.Duration
-	lastSuccess         time.Time
+	retries             int
+	// dropped counts the data points given up on, by why
+	// (otlpDropReason); http_exporter_otlp_points_dropped_total is their
+	// sum.
+	dropped      [otlpDropReasons]int
+	lastDuration time.Duration
+	lastSuccess  time.Time
 	// consecutiveFailures counts the exports to endpoint since the last
 	// success.
 	consecutiveFailures int
 	endpoint            string
+	// history is what the status page shows of the exports to endpoint
+	// (otlpstatuspage.go): a reload that points OTLP somewhere else starts
+	// it again, as it does consecutiveFailures. It is a few values and one
+	// error text of at most model.MaxFailureBytes, whatever the exports.
+	history otlpHistory
 }
 
-// record records an export to endpoint and how many retries it took.
-func (o *otlpStatus) record(endpoint string, duration time.Duration, retries int, ok bool) {
+// otlpDropReason is why data points were given up on.
+type otlpDropReason int
+
+const (
+	// otlpDropRefused: the endpoint refused a request with an answer that
+	// is not retried, a redirect included.
+	otlpDropRefused otlpDropReason = iota
+	// otlpDropRejected: the endpoint accepted a request but rejected some
+	// of its points in its partialSuccess.
+	otlpDropRejected
+	// otlpDropPendingCap: the oldest waiting past otlp.max_pending_points.
+	otlpDropPendingCap
+	// otlpDropShutdown: those of the last export before exiting, which
+	// failed.
+	otlpDropShutdown
+	otlpDropReasons
+)
+
+// otlpExport is how one export went, as the status page shows it: when it
+// began, how long it took with its retries, how many requests of it were
+// sent and how many data points they carried, what the endpoint rejected of
+// them in a partialSuccess, and how many retries it made.
+type otlpExport struct {
+	started  time.Time
+	duration time.Duration
+	requests int
+	points   int
+	rejected int64
+	retries  int
+}
+
+// otlpHistory is what the status page keeps of the exports to one endpoint.
+type otlpHistory struct {
+	// last is the last export, ok whether it got through; zero before the
+	// first.
+	last otlpExport
+	ok   bool
+	// lastSuccess is when the last export that got through ended.
+	lastSuccess time.Time
+	// errorText is the shown error of the last failed export, which
+	// failedAt began, kept through the successes after it.
+	errorText string
+	failedAt  time.Time
+	// unreadySince is when the failed export ended that made the
+	// exporter unready under otlp.unready_after_failures, unreadyAfter
+	// then; zero while the exporter is ready.
+	unreadySince time.Time
+	unreadyAfter int
+}
+
+// record records an export to endpoint, which failed with err unless err is
+// nil. unreadyAfter is otlp.unready_after_failures at the export.
+func (o *otlpStatus) record(endpoint string, export otlpExport, err error, unreadyAfter int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if endpoint != o.endpoint {
-		o.endpoint, o.consecutiveFailures = endpoint, 0
+		o.endpoint, o.consecutiveFailures, o.history = endpoint, 0, otlpHistory{}
 	}
-	o.lastDuration = duration
-	o.retries += retries
-	if ok {
+	now := time.Now()
+	o.lastDuration = export.duration
+	o.retries += export.retries
+	h := &o.history
+	h.last, h.ok = export, err == nil
+	if err == nil {
 		o.successes++
-		o.lastSuccess = time.Now()
+		o.lastSuccess, h.lastSuccess = now, now
 		o.consecutiveFailures = 0
+		h.unreadySince = time.Time{}
 		return
 	}
 	o.failures++
 	o.consecutiveFailures++
+	// Only the text is kept, shown as the page shows it, so no error value
+	// outlives the export.
+	h.errorText = shownOTLPError(err)
+	h.failedAt = export.started
+	// A reload that changed otlp.unready_after_failures during the run
+	// makes the next failure the one the exporter is unready since.
+	if unreadyAfter > 0 && o.consecutiveFailures >= unreadyAfter && (h.unreadySince.IsZero() || h.unreadyAfter != unreadyAfter) {
+		h.unreadySince, h.unreadyAfter = now, unreadyAfter
+	}
 }
 
-// drop counts data points given up on.
-func (o *otlpStatus) drop(points int) {
+// drop counts data points given up on, and why.
+func (o *otlpStatus) drop(points int, why otlpDropReason) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.dropped += points
+	o.dropped[why] += points
+}
+
+// droppedLocked is every data point given up on, under mu.
+func (o *otlpStatus) droppedLocked() int {
+	n := 0
+	for _, points := range o.dropped {
+		n += points
+	}
+	return n
 }
 
 // failing reports the exports to endpoint that have failed since the last
@@ -1343,7 +1431,7 @@ func (s *Server) otlpStatusMetrics() []model.Metric {
 		metric("http_exporter_otlp_exports_total", model.CounterMetricType, float64(o.successes), map[string]string{"result": "success"}),
 		metric("http_exporter_otlp_exports_total", model.CounterMetricType, float64(o.failures), map[string]string{"result": "failure"}),
 		metric("http_exporter_otlp_export_retries_total", model.CounterMetricType, float64(o.retries), nil),
-		metric("http_exporter_otlp_points_dropped_total", model.CounterMetricType, float64(o.dropped), nil),
+		metric("http_exporter_otlp_points_dropped_total", model.CounterMetricType, float64(o.droppedLocked()), nil),
 		metric("http_exporter_otlp_export_duration_seconds", model.GaugeMetricType, o.lastDuration.Seconds(), nil),
 		metric("http_exporter_otlp_last_export_success_timestamp_seconds", model.GaugeMetricType, model.ScrapeTimestamp(o.lastSuccess), nil),
 	}
@@ -1516,7 +1604,7 @@ func (s *Server) capPendingLocked(limit int) {
 		}
 	}
 	s.otlpPoints -= drop
-	s.otlp.drop(drop)
+	s.otlp.drop(drop, otlpDropPendingCap)
 	s.logger.Warn("OTLP data points waiting for export reached otlp.max_pending_points; the oldest were dropped", "max_pending_points", limit, "dropped_points", drop)
 }
 
@@ -1637,6 +1725,10 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 	deadline := start.Add(budget)
 	requests, err := s.otlpRequestsOf(cfg, resources)
 	retries, ok := 0, true
+	export := otlpExport{started: start}
+	// refusedErr is why the endpoint last refused a request, which fails
+	// the export without stopping it, for the status page.
+	var refusedErr error
 	for k := 0; err == nil && k < len(requests.bodies); k++ {
 		// A request after the first is only worth starting if it has time
 		// to finish; the first is sent as an export of one request always
@@ -1648,6 +1740,8 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 		}
 		var tries int
 		var partial otlpPartialSuccess
+		export.requests++
+		export.points += requests.points[k]
 		tries, partial, err = s.deliverOTLP(ctx, cfg, requests.bodies[k], deadline)
 		retries += tries
 		if err != nil && ctx.Err() != nil {
@@ -1661,7 +1755,8 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 			// like a refused request's.
 			switch {
 			case partial.rejected > 0:
-				s.otlp.drop(int(min(partial.rejected, int64(math.MaxInt32))))
+				export.rejected += partial.rejected
+				s.otlp.drop(int(min(partial.rejected, int64(math.MaxInt32))), otlpDropRejected)
 				s.logger.Warn("OTLP endpoint accepted an export but rejected some of its data points; they are dropped", "rejected_points", partial.rejected, "error_message", partial.message, "retries", tries)
 			case partial.message != "":
 				s.logger.Warn("OTLP endpoint accepted an export with a warning", "error_message", partial.message)
@@ -1670,9 +1765,9 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 		}
 		var refused *otlpRefusedError
 		if errors.As(err, &refused) {
-			ok, err = false, nil
+			ok, refusedErr, err = false, err, nil
 			points := requests.of(pending, k)
-			s.otlp.drop(points)
+			s.otlp.drop(points, otlpDropRefused)
 			attrs := []any{"status", refused.status, "dropped_points", points, "retries", tries}
 			if len(requests.bodies) > 1 {
 				attrs = append(attrs, "request", k+1, "requests", len(requests.bodies))
@@ -1692,13 +1787,18 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 		// it are what is left to deliver.
 		pending = requests.from(pending, k)
 	}
-	s.otlp.record(cfg.Endpoint, time.Since(start), retries, ok && err == nil)
+	export.duration, export.retries = time.Since(start), retries
+	failure := err
+	if failure == nil && !ok {
+		failure = refusedErr
+	}
+	s.otlp.record(cfg.Endpoint, export, failure, cfg.UnreadyAfterFailures)
 	if err == nil {
 		return
 	}
 	if last {
 		points := countPoints(pending)
-		s.otlp.drop(points)
+		s.otlp.drop(points, otlpDropShutdown)
 		s.logger.Warn("the last OTLP export before exiting failed; its data points are dropped", "error", err, "dropped_points", points, "retries", retries)
 		return
 	}

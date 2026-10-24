@@ -29511,8 +29511,8 @@ The endpoint MUST be served, empty, without a static target document.
 
 The exporter MUST serve a status page at the static targets path followed by
 `/status`, `/static-targets/status` by default, for people who cannot ask
-Prometheus: a section of the static targets, then one of the recent probes.
-Of the static targets:
+Prometheus: a section of the static targets, then one of the recent probes,
+then one of the OTLP export. Of the static targets:
 
 - It MUST have one row per static target in force, with its name, its
   collector, its target as its health series show it (with any credential
@@ -29596,6 +29596,53 @@ Of the recent probes:
 - A reload MUST forget the recent probes of every collector it removes or
   changes, with the rest of the state kept per collector, and a probe of the
   old definition that ends after the reload MUST record nothing.
+
+Of the OTLP export:
+
+- With OTLP export off (`otlp.enabled` false, or no endpoint) the section
+  MUST say so in one line, and the JSON's `otlp` MUST be `{"enabled":
+  false}` alone.
+- With it on, the section MUST show the endpoint with the URL's userinfo
+  withheld and the values of query parameters named like credentials masked,
+  as a target is shown, and MUST NOT show `otlp.headers`; the protocol, `http/json`;
+  `otlp.interval`; and what the exports carry: the probes' results, the
+  number of static targets with `export_via_otlp`, and the self-metrics.
+- It MUST show the last export to the endpoint: when it began, how long ago,
+  how long it took, its result — `success`, `failed`, or `partial success`
+  when the endpoint took it and rejected data points in its
+  `partialSuccess`, with how many — the requests of it sent, the data points
+  they carried and its retries; when the last export that got through
+  ended, or that none has; and the failed exports in a row. With
+  `otlp.unready_after_failures` set it MUST show the readiness they make, by
+  the rule `/ready` answers by (§ 23): `ready`, or `unready` with when
+  the failed export that made it so ended.
+- It MUST show the error of the last failed export, one of which the
+  endpoint refused a request included, with when that export began, kept
+  through later successes, shown as a static target's error is: every URL's
+  credentials withheld, masked again for what reads as a credential, and cut
+  to the bound of a failure's text (§ 25). The error MUST NOT show the
+  endpoint's userinfo or a credential in its query, and neither MUST the
+  warning that logs it.
+- It MUST show the data points waiting for the next export and
+  `otlp.max_pending_points`; and, since the start, the data points dropped,
+  in all and by why (refused, rejected in a `partialSuccess`, over
+  `otlp.max_pending_points`, of the last export at shutdown), the retries,
+  and the exports that succeeded and failed. These MUST be the counters
+  `http_exporter_otlp_points_dropped_total`,
+  `http_exporter_otlp_export_retries_total` and
+  `http_exporter_otlp_exports_total` are read from, and MUST equal them.
+- What the page keeps of its own MUST be one record of the endpoint in
+  force: the last export and the last failure's error, bounded whatever the
+  exports. A reload that changes `otlp.endpoint` MUST show the new endpoint
+  at once, without the old endpoint's last export, last success, failures
+  or error, until the new endpoint's own export; the numbers since the start
+  MUST go on.
+- While the last export failed, a line at the top of the page MUST say OTLP
+  export is failing, with the failed exports in a row and whether the
+  exporter is unready.
+- In allocator mode the section MUST say the exports are this replica's.
+- Every value MUST be HTML-escaped, and `?format=json` MUST give the section
+  as `otlp`.
 
 Every replica of the exporter scrapes every static target; running static
 targets with more than one replica, or with autoscaling, contacts each target

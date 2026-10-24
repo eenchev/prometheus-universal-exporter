@@ -268,6 +268,12 @@ the [self-metrics](SELF-METRICS.md#otlp-export-status):
 time() - http_exporter_otlp_last_export_success_timestamp_seconds > 600
 ```
 
+The [status page](ENDPOINTS.md#otlp-export) shows the same without a
+Prometheus to ask: the endpoint with its credentials withheld, the last
+export and the last that got through, the failures in a row and the
+readiness they make, the last failure's error, the data points pending and
+those dropped, by why, and the retries.
+
 Failing exports do not make the exporter unready by default: it still answers
 probes, and in Kubernetes a pod that is not ready stops receiving them. For an
 exporter whose job is delivering [static targets](STATIC-TARGETS.md) over

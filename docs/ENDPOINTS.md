@@ -13,7 +13,7 @@ the [command-line flags](FLAGS.md).
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
-| `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — and the recent probes of each collector and target, as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
+| `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — the recent probes of each collector and target, and how the OTLP export is going, as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
 | `/-/reload` | `POST` or `PUT` reloads the configuration, with `--web.enable-lifecycle`, as either does Prometheus's own; any other method is answered `405`. See [Reloading on demand](CONFIGURATION.md#reloading-on-demand). |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it), the exporter is shutting down, or in allocator mode before the first bundle, not after a rejected reload; see [Readiness](CONFIGURATION.md#readiness). Never authenticated. |
 
@@ -32,13 +32,18 @@ For people who have no Prometheus to ask, the exporter serves a status page
 at the static targets path followed by `/status`, `/static-targets/status` by
 default, with or without static targets; the landing page links it. It moves
 with `--web.static-targets-path`, so a `--web.self-metrics-path` on it is
-refused. It has two sections:
+refused. It has three sections:
 
 - the static targets, a row per target with how its last scrape went (see
   [Status page](STATIC-TARGETS.md#status-page) in Static targets), or a line
   saying none are configured;
 - the recent probes: the `/probe` requests the exporter answered, which is
-  how Prometheus scrapes most setups.
+  how Prometheus scrapes most setups;
+- the [OTLP export](#otlp-export): whether exports get through, or a line
+  saying OTLP export is off.
+
+While the last OTLP export failed, a line at the top of the page says so,
+with the failed exports in a row and whether they made the exporter unready.
 
 ### Recent probes
 
@@ -122,6 +127,88 @@ The page shows nothing the self-metrics, the series and the log do not: it is
 protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
 only, and every value on it is escaped. It shows the moment it was served and
 does not refresh itself: reload it. In allocator mode it says that it shows
-the static targets the allocator gave this replica and the probes this
-replica answered: each replica has a page of its own, and Prometheus spreads
-its probes over them.
+the static targets the allocator gave this replica, the probes this
+replica answered and this replica's OTLP exports: each replica has a page of
+its own, and Prometheus spreads its probes over them.
+
+### OTLP export
+
+With [OTLP export](OTLP.md) on, the section shows:
+
+- the endpoint as `otlp.endpoint` has it, with its credentials withheld as a
+  target's are: the URL's user and password are `redacted:redacted`, and the
+  values of query parameters named like credentials (`token`, `api_key`, …)
+  `<redacted>`; `otlp.headers` are never shown. Then the protocol, always
+  `http/json` (OTLP/HTTP with a JSON body, the only one the exporter
+  speaks), and `otlp.interval`;
+- what the exports carry: the probes' results, the static targets with
+  `export_via_otlp` (how many), and the exporter's own metrics, which go
+  with every export;
+- the last export: when it began, how long ago, how long it took with its
+  retries, its result — `success`, `failed`, or `partial success` when the
+  endpoint took it but rejected some of its data points in its
+  `partialSuccess`, with how many — the requests of it that were sent
+  (`otlp.batch_max_size` and `otlp.batch_max_bytes` split an export), the
+  data points they carried and the retries it made;
+- when the last export that got through ended, or `never`;
+- the failed exports in a row, and, with `otlp.unready_after_failures` set,
+  the readiness they make: `ready`, or `unready` since the end of the
+  failed export that made it so, as `/ready` answers (see
+  [Readiness](CONFIGURATION.md#readiness));
+- the error of the last failed export and when that export began, kept
+  after exports get through again, as a static target's is: the log's text,
+  with every URL's credentials withheld, anything else that reads as a
+  credential masked — a URL an error quotes has every query value masked,
+  as in the log — and cut to 2000 bytes. An export of which the endpoint
+  refused a request is a failed export, and its error is the refusal's, such
+  as `the OTLP endpoint answered 400`;
+- the data points pending — waiting for the next export, not those of an
+  export in progress — and `otlp.max_pending_points`;
+- since the start, the data points dropped, by why: refused by the endpoint,
+  rejected in a `partialSuccess`, the oldest over `otlp.max_pending_points`,
+  and those of the last export at shutdown when it failed; the retries; and
+  the exports that succeeded and failed.
+
+The numbers since the start are the
+[self-metrics'](SELF-METRICS.md#otlp-export-status)
+`http_exporter_otlp_points_dropped_total`,
+`http_exporter_otlp_export_retries_total` and
+`http_exporter_otlp_exports_total`, read where they are kept; the page keeps
+of its own only the last export's details and the last failure's error, one
+record whatever the exports.
+
+A reload that changes `otlp.endpoint` shows the new endpoint at once, and
+starts that record again: no last export, last success, failures or error
+until the new endpoint's first export, as the failures that make the
+exporter unready start again. The numbers since the start go on, as the
+self-metrics do. A reload that changes the other settings shows them at
+once and keeps the record.
+
+In the JSON the section is `otlp`, `{"enabled": false}` alone while OTLP
+export is off, and otherwise:
+
+```json
+"otlp": {"enabled": true,
+ "endpoint": "https://redacted:redacted@otel.example/v1/metrics?token=<redacted>&tenant=acme",
+ "protocol": "http/json", "interval": "30s",
+ "exported": {"probes": true, "static_targets": 2, "self_metrics": true},
+ "allocator_mode": false, "failing": true,
+ "last_export": {"started": "2026-10-24T08:59:30Z", "age_seconds": 30.2, "duration_seconds": 29.6,
+  "result": "failed", "requests": 1, "data_points": 812, "rejected_points": 0, "retries": 4},
+ "last_success": "2026-10-24T08:58:31Z",
+ "consecutive_failures": 2,
+ "unready_after_failures": 3, "readiness": "ready",
+ "last_error": "Post \"https://redacted:redacted@otel.example/v1/metrics?token=<redacted>&tenant=<redacted>\": dial tcp 10.0.0.7:443: connect: connection refused",
+ "last_error_at": "2026-10-24T08:59:30Z",
+ "pending_points": 812, "max_pending_points": 100000,
+ "points_dropped": 0,
+ "points_dropped_by_reason": {"refused": 0, "rejected": 0, "over_max_pending_points": 0, "last_export_at_shutdown": 0},
+ "retries": 9, "exports_succeeded": 41, "exports_failed": 2}
+```
+
+`failing` says the last export failed. `last_export`, `last_success`,
+`last_error`, `last_error_at`, `unready_after_failures`, `readiness` and
+`unready_since` are left out when there is nothing to say: `readiness`
+without `otlp.unready_after_failures`, `unready_since` while ready, or when
+a reload changed `otlp.unready_after_failures` after the exporter became
+unready, until the next failed export.

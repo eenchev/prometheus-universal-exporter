@@ -636,8 +636,9 @@ run another collector on what it fetched.
 For people who have no Prometheus to ask, the exporter serves a status page
 at the static targets path followed by `/status`, `/static-targets/status` by
 default; the landing page links it. It shows the static targets first, then
-the recent probes, which [Status page](ENDPOINTS.md#status-page) in Endpoints
-describes with the page as a whole. The static targets section has a row per
+the recent probes and how the OTLP export is going, which
+[Status page](ENDPOINTS.md#status-page) in Endpoints describes with the page
+as a whole. The static targets section has a row per
 target:
 
 - its name, collector, target and labels, its interval, and whether it is

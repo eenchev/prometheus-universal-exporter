@@ -37,7 +37,9 @@ import (
 // keep the self-metrics off it.
 //
 // The page is served with or without static targets: the recent probes are
-// there either way, and most exporters have no static target.
+// there either way, and most exporters have no static target. So is its
+// OTLP section (otlpstatuspage.go), which says OTLP export is off when it
+// is.
 
 // staticTargetsStatusSuffix follows the static targets path to make the
 // status page's.
@@ -161,7 +163,7 @@ type staticStatusRow struct {
 }
 
 // staticStatusPage is the page, and the JSON: the static targets, then the
-// recent probes.
+// recent probes, then the OTLP export.
 type staticStatusPage struct {
 	GeneratedAt string `json:"generated_at"`
 	// Allocator says the targets are those the allocator gave this
@@ -176,6 +178,8 @@ type staticStatusPage struct {
 	ProbeKeys     int              `json:"probe_keys"`
 	FailingProbes int              `json:"failing_probe_keys"`
 	Probes        []probeStatusRow `json:"probes"`
+	// OTLP is how OTLP exports are going.
+	OTLP otlpStatusSection `json:"otlp"`
 	// PerKey and MaxKeys are the bounds of the recent probes, as the page
 	// says them.
 	PerKey  int `json:"-"`
@@ -221,6 +225,13 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		}
 	}
 	s.staticMu.Unlock()
+	exported := 0
+	for i := range targets {
+		if targets[i].ExportViaOTLP {
+			exported++
+		}
+	}
+	page.OTLP = s.otlpStatusSectionFor(cfg.OTLP, exported, now)
 	page.Rows = make([]staticStatusRow, 0, len(targets))
 	for i := range targets {
 		target := &targets[i]
@@ -369,6 +380,8 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 .good { color: var(--good); }
 .muted { color: var(--muted); }
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
+table.facts { width: auto; }
+table.facts th { background: none; font-weight: 600; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -378,6 +391,9 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 {{- if .Allocator}}
 <p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
 {{- end}}
+{{- if .OTLP.Enabled}}{{if .OTLP.Failing}}
+<p class="bad">OTLP export is failing: the last {{.OTLP.Failures}} export{{if ne .OTLP.Failures 1}}s{{end}} failed{{if eq .OTLP.Readiness "unready"}}, and the exporter is unready{{end}}. See <a href="#otlp">OTLP export</a>.</p>
+{{- end}}{{end}}
 <p>This page is also served as JSON with <code>?format=json</code>.</p>
 
 <h2>Static targets</h2>
@@ -425,6 +441,32 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 </div>
 {{- else}}
 <p class="muted">No probe has been answered since the exporter started{{if .Allocator}} on this replica{{end}}, or since a reload changed the collectors probed.</p>
+{{- end}}
+
+<h2 id="otlp">OTLP export</h2>
+{{- with .OTLP}}
+{{- if .Enabled}}
+<p>Exported {{.Protocol}} every {{.Interval}}: the probes' results, {{if .Exported.StaticTargets}}{{.Exported.StaticTargets}} static target{{if ne .Exported.StaticTargets 1}}s{{end}} with <code>export_via_otlp</code>, {{end}}and the exporter's own metrics.{{if .Allocator}} These are the exports of this replica.{{end}}</p>
+<div class="scroll">
+<table class="facts">
+<tbody>
+<tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+<tr><th>Last export</th><td>{{with .LastExport}}{{.Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
+{{- if .UnreadyAfter}}
+<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
+{{- end}}
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
+<tr><th>Dropped since start</th><td>{{.Dropped}} data point{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.Refused}} refused, {{.DroppedBy.Rejected}} rejected, {{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
+<tr><th>Since start</th><td>{{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</td></tr>
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="muted">OTLP export is off.</p>
+{{- end}}
 {{- end}}
 </main>
 </body>

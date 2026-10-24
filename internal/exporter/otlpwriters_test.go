@@ -386,7 +386,7 @@ func TestTwoWritersOfOneStreamAreExportedAsTheLater(t *testing.T) {
 		// A point left out for a later one of its stream is replaced, as
 		// one waiting is, and not a point given up on.
 		server.Server.otlp.mu.Lock()
-		dropped := server.Server.otlp.dropped
+		dropped := server.Server.otlp.droppedLocked()
 		server.Server.otlp.mu.Unlock()
 		if dropped != 0 {
 			t.Errorf("%s: %d points are counted as dropped", c.name, dropped)

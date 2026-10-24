@@ -27330,6 +27330,57 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `last_probe_age_seconds`, `duration_seconds`, `status`, `series` and its
   `probes`, each with `at`.
 
+## 34.207 OTLP export on the status page
+
+- With OTLP export off the status page's OTLP section says so in one line,
+  and the JSON's `otlp` is `{"enabled": false}` alone; the test fails when
+  the section is missing or carries more (§ 42.14a).
+- An OTLP export that gets through is shown with when it began, its age and
+  duration, `success`, 1 request and the data points the endpoint received,
+  the last success at its time, no failures, and the points pending before
+  and after; the endpoint, `http/json`, the interval and what the exports
+  carry (the probes, the 1 static target of 2 with `export_via_otlp`, the
+  self-metrics) are shown; the test fails when any of them is missing.
+- An OTLP export to an endpoint with `user:pass@` and a `token` query
+  parameter that fails with a network error is shown `failed`, with the
+  error quoting the URL, its retries, the endpoint as
+  `redacted:redacted@…?token=<redacted>`, and the summary line at the top
+  saying OTLP export is failing; neither the JSON, the page nor the log
+  holds the password or the token, and the tenant `<b>acme</b>` is escaped.
+  An export that then gets through ends the failures and keeps the error
+  and its time. The test fails when the warning logs the token (the
+  network error not redacted where the export is sent).
+- Against an endpoint that refuses (400), then answers 503 past a
+  `max_pending_points` of 10, then takes an export with 2 data points
+  rejected, the section's points dropped, retries and exports equal
+  `http_exporter_otlp_points_dropped_total`,
+  `http_exporter_otlp_export_retries_total` and
+  `http_exporter_otlp_exports_total`, the dropped by why are 3 or more
+  refused, 2 rejected, 2 over the bound and none at shutdown, adding up, the
+  last export is `partial success` with 2 rejected, and the points pending
+  are those waiting.
+- With `otlp.unready_after_failures: 2` the section shows `ready` before any
+  export and after 1 failed export, `unready` since the second failed
+  export's end, as `/ready` answers 503, with the summary line saying the
+  exporter is unready, and `ready` again once an export gets through.
+- A reload that points OTLP at another endpoint shows the new endpoint at
+  once, with no last export, success, failures or error of the old one, the
+  failed exports since the start still counted, and the new endpoint's own
+  export after it.
+- The JSON's `otlp` object has exactly the documented fields, its
+  `last_export`, `points_dropped_by_reason` and `exported` theirs; in
+  allocator mode the section says the exports are this replica's.
+- The failure log of 1,000 probes (200 under the race detector) of failing
+  8 KiB targets holds at most 1536 bytes a probe, measured with the server
+  kept alive through both measurements, so the recent probes the server
+  holds are not counted as the failure log's; the test fails under the race
+  detector when the server may be collected between them.
+- The recent probes of 1,000 probes (200 under the race detector) of failing
+  8 KiB targets with an 8 KiB probe parameter keep 500 keys, each with its
+  target cut to 512 bytes, its parameters to 512 and its error to 2000, and
+  hold at most 3.5 KiB a key; the test fails when a key's target is a slice
+  of the 8 KiB one.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

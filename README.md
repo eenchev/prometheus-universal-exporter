@@ -25,7 +25,9 @@ make run EXAMPLE=open-meteo PORT=9115
 It builds `bin/prometheus-universal-exporter` and runs it on 127.0.0.1:9115
 with the example's configuration and static targets. Open
 <http://127.0.0.1:9115/> for the landing page and
-<http://127.0.0.1:9115/static-targets/status> for the targets' last scrapes.
+<http://127.0.0.1:9115/static-targets/status> for the targets' last scrapes
+and the recent probes; every example has the status page, and the command
+also prints a probe URL when the example's configuration gives one.
 `make run` alone lists the examples; `make build` builds into `bin/` too.
 
 ## How it works

@@ -81,6 +81,30 @@ example() {
 	printf '%s\n' "$line"
 }
 
+# config_files prints the YAML files of the configuration $1: a directory
+# example's collector files are beside it or below.
+config_files() {
+	case "$1" in
+	examples/*/*) find "$(dirname "$1")" -name '*.yaml' -o -name '*.yml' ;;
+	*) printf '%s\n' "$1" ;;
+	esac
+}
+
+# probe_query prints the query of the first probe URL that the comment
+# opening the configuration $1 gives as `curl '...://.../probe?QUERY'`, or
+# nothing when the comment gives none or names a collector that no
+# collector file of the example has, since a stale comment would send the
+# reader to a probe that fails.
+probe_query() {
+	query=$(awk '!/^#/ { exit } match($0, /^#[[:space:]]+curl '\''[a-z]+:\/\/[^\/'\'']+\/probe\?[^'\'']+'\''/) { line = substr($0, RSTART, RLENGTH); sub(/^[^?]*\?/, "", line); sub(/'\''$/, "", line); print line; exit }' "$1")
+	collector=$(printf '%s\n' "$query" | tr '&' '\n' | sed -n 's/^collector=//p' | head -n 1)
+	[ -n "$collector" ] || return 0
+	# shellcheck disable=SC2046 # the file names have no spaces
+	if grep -Eq "^[[:space:]]*-?[[:space:]]*name:[[:space:]]*[\"']?${collector}[\"']?[[:space:]]*(#.*)?\$" $(config_files "$1"); then
+		printf '%s\n' "$query"
+	fi
+}
+
 case "${1:-}" in
 list)
 	examples | sort | awk -F '\t' '{ printf "  %-16s %s%s\n", $1, $2, ($3 == "" ? "" : " " $3) }'
@@ -94,11 +118,7 @@ files)
 opt-in-types)
 	line=$(example "${2:-}")
 	config=$(printf '%s\n' "$line" | cut -f2)
-	# A directory example's collector files are YAML beside it or below.
-	case "$config" in
-	examples/*/*) files=$(find "$(dirname "$config")" -name '*.yaml' -o -name '*.yml') ;;
-	*) files=$config ;;
-	esac
+	files=$(config_files "$config")
 	types=$(printf '%s' "${3:-}" | tr ',' ' ')
 	for source in internal/fetch/requesttype_*.go; do
 		name=${source#internal/fetch/requesttype_}
@@ -131,9 +151,18 @@ run)
 	config=$(printf '%s\n' "$line" | cut -f2)
 	targets=$(printf '%s\n' "$line" | cut -f3)
 	echo "Open http://$host:$port/ for the landing page and its collectors."
+	# The status page is served for every example: with static targets it
+	# leads with their last scrapes, and its recent probes fill as soon as
+	# anything probes.
 	if [ -n "$targets" ]; then
-		echo "Open http://$host:$port/static-targets/status for the static targets' last scrapes."
+		echo "Open http://$host:$port/static-targets/status for the static targets' last scrapes and the recent probes."
 		set -- "--static-targets-file=$targets" "$@"
+	else
+		echo "Open http://$host:$port/static-targets/status for the recent probes."
+	fi
+	query=$(probe_query "$config")
+	if [ -n "$query" ]; then
+		echo "Open http://$host:$port/probe?$query for a probe."
 	fi
 	set -- "--config.file=$config" "--web.listen-address=$host:$port" "$@"
 	echo "bin/$app $*"

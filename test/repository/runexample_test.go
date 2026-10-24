@@ -195,10 +195,13 @@ func TestMakeRunAddsTheOptInTypesAnExampleNeeds(t *testing.T) {
 	}
 }
 
-// The run itself: the URLs to open first, the landing page and, with static
-// targets, their status page, then bin/'s binary with the example's files,
-// the listen address and the flags of ARGS. It runs in a copy of the tree's
-// shape whose bin/ binary is a script that prints what it was given.
+// The run itself: the URLs to open first, the landing page, the status page,
+// for the static targets' last scrapes when the example has them and the
+// recent probes always, and the first probe the configuration's opening
+// comment gives, when its collector is the example's, then bin/'s binary
+// with the example's files, the listen address and the flags of ARGS. It
+// runs in a copy of the tree's shape whose bin/ binary is a script that
+// prints what it was given.
 func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 	script, err := filepath.Abs("tools/run-example.sh")
 	if err != nil {
@@ -213,6 +216,15 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A comment that names a collector the configuration no longer has gives
+	// no probe URL.
+	stale := strings.Replace(read(t, "examples/config.ecb.xml-test.yaml"), "collector=ecb_reference_rates", "collector=renamed_rates", 1)
+	if !strings.Contains(stale, "collector=renamed_rates") {
+		t.Fatal("examples/config.ecb.xml-test.yaml no longer gives a probe of ecb_reference_rates")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "examples", "config.stale.xml-test.yaml"), []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +234,7 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 	for name, want := range map[string][]string{
 		"open-meteo": {
 			"Open http://127.0.0.1:9115/ for the landing page",
-			"Open http://127.0.0.1:9115/static-targets/status for the static targets' last scrapes.",
+			"Open http://127.0.0.1:9115/static-targets/status for the static targets' last scrapes and the recent probes.",
 			"arg: --config.file=examples/open-meteo/config.yaml",
 			"arg: --web.listen-address=127.0.0.1:9115",
 			"arg: --static-targets-file=examples/open-meteo/static-targets.yaml",
@@ -230,7 +242,16 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 		},
 		"ecb": {
 			"Open http://127.0.0.1:9115/ for the landing page",
+			"Open http://127.0.0.1:9115/static-targets/status for the recent probes.",
+			"Open http://127.0.0.1:9115/probe?collector=ecb_reference_rates&target=https://www.ecb.europa.eu for a probe.",
 			"arg: --config.file=examples/config.ecb.xml-test.yaml",
+			"arg: --web.listen-address=127.0.0.1:9115",
+			"arg: --log.level=debug",
+		},
+		"stale": {
+			"Open http://127.0.0.1:9115/ for the landing page",
+			"Open http://127.0.0.1:9115/static-targets/status for the recent probes.",
+			"arg: --config.file=examples/config.stale.xml-test.yaml",
 			"arg: --web.listen-address=127.0.0.1:9115",
 			"arg: --log.level=debug",
 		},

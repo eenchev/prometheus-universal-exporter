@@ -34,7 +34,11 @@ while one is there. An example is a directory under `examples/`, named by the
 directory, such as `open-meteo`, or `examples/config.<name>.<format>-test.yaml`,
 named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
 files and the opt-in request types an example needs (a `type: tcp` line, for
-`examples/tcp`) from the tree. `HOST` is `127.0.0.1` so that an example is
+`examples/tcp`) from the tree. Before it runs the binary it prints the
+landing page's URL, the status page's, which every example has (its recent
+probes fill as soon as anything probes), and the first probe URL that the
+comment opening the configuration gives as `curl '…/probe?…'`, when the
+collector it names is one of the example's. `HOST` is `127.0.0.1` so that an example is
 reachable from this machine alone; `HOST=0.0.0.0` serves it to the network.
 
 ## Code layout

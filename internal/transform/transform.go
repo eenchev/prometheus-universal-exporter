@@ -84,6 +84,13 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	mapLabelValues(set, c)
 	truncateLabels(set, c)
 	cuts.apply(set, c.Limits.MaxLabelValueLength)
+	// Derived series are computed from the series as the rules made and
+	// mapped them, so their operands and by labels are written as the rules
+	// write their names, and they get the collector-wide labels, the prefix
+	// and the escaping below as every series does (derived.go).
+	if err := deriveSeries(ctx, set, c); err != nil {
+		return nil, err
+	}
 	applyCollectorLabels(set, c.Transform)
 	applyMetricsPrefix(set, c.MetricsPrefix)
 	// After the prefix, so a values-escaped name still starts with U__

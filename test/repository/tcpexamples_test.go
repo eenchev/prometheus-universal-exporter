@@ -94,8 +94,9 @@ func tcpExampleServer(conn net.Conn) {
 }
 
 // examples/tcp reads its three services as its comments say, in a build
-// with the type: memcached's counters and gauges and its commands by name,
-// the version left out; ZooKeeper's numbers by name, its packets, that it
+// with the type: memcached's counters and gauges, its commands by name and
+// its get hit ratio, derived from its hits and misses, the version left
+// out; ZooKeeper's numbers by name, its packets, that it
 // leads and its followers, the version and state left out of the numbers;
 // HAProxy's sessions, queues, bytes, errors and states by proxy, name and
 // type, an empty cell making no series rather than failing its rule. No
@@ -117,7 +118,10 @@ func TestTheTCPExamplesReadTheirServices(t *testing.T) {
 				`memcached_commands_total{command="get"} 100`, `memcached_commands_total{command="set"} 40`, `memcached_commands_total{command="flush"} 0`, `memcached_commands_total{command="touch"} 2`,
 				"memcached_get_hits_total 90", "memcached_get_misses_total 10", "memcached_evictions_total 3",
 				"memcached_read_bytes_total 52000", "memcached_written_bytes_total 98000",
+				"memcached_get_hit_ratio 0.9",
 			},
+			// The sum the ratio reads is hidden.
+			absent: []string{"memcached_gets "},
 		},
 		"zookeeper": {
 			want: []string{

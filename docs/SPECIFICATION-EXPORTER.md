@@ -5935,6 +5935,61 @@ of any other, MUST get from the load the verdict, the error and the defaults
 it got before them. PYTHON.md MUST say, in one place, what a rule of a
 `python` collector is for and what it does not take.
 
+A collector MAY set `derived`, a list of entries each computing a metric
+family from the collector's own series, the same way under every transform.
+An entry MUST have a `name` and MAY have a `description`, its help text, and
+a `type`, `gauge`, `counter` or `untyped`, defaulting to `gauge`; any other
+type MUST be rejected at load. It MUST set exactly one of `sum`,
+`difference` and `ratio`, each a list of the names of the families it reads:
+`sum` of two families or more MUST add up their series, `difference: [a, b]`
+MUST be `a - b` and `ratio: [a, b]` `a / b`, each of the series of the
+operands matched one to one as PromQL matches them without `on` or
+`ignoring`, by identical label sets, a label of an empty value being no
+label; the result MUST have those labels. A series with no partner in every
+other operand, and a label set two series of one operand have, MUST make no
+derived series. `by` MUST be taken only beside a `sum` of exactly one
+family, whose series it MUST add up into one series for each set of values
+of the labels it lists, with those labels only, a label of an empty value
+being absent; `by: []` MUST give one series without labels. A result that is
+NaN or infinite, a ratio over 0 among them, MUST make no series and MUST NOT
+be a failure. A derived series MUST have no timestamp and no created
+timestamp.
+
+The entries MUST be computed in their order, and an entry MAY read an
+earlier one; `hidden: true` MUST compute an entry for the later ones without
+exporting it. Derivation MUST read the series as the rules made them —
+after the rules' `value_map`, `scale` and `time_format`, the label value
+maps and truncation — and MUST come before `transform.labels`,
+`remove_labels`, `rename_labels`, `metrics_prefix` and name escaping, which
+MUST apply to derived series as to every other: operands and `by` labels are
+written as the rules write their names. Each exported derived series MUST
+count against `limits.max_metrics`, a scrape past it failing as one whose
+rules make too many does; a hidden entry's series MUST NOT be counted. The
+derived series of a prometheus pass-through MUST be added without writing
+to the decoded series.
+
+At load the exporter MUST reject, naming the collector and the entry (by its
+place, counted from 1, when it has no name): an entry without a name; a
+name that is no valid metric name under the collector's `name_escaping`,
+that is exported longer than `limits.max_metric_name_length`, that is a
+rule's name, a `_bucket`, `_sum` or `_count` of a histogram or summary rule,
+or another entry's; a `description` longer than `limits.max_help_length`;
+no operation or more than one; a `sum` of fewer than two families without
+`by`, a `difference` or `ratio` of other than two; `by` beside another
+operation or a `sum` of other than one family, and a `by` label that is no
+label name or is listed twice; an operand that is empty, the entry itself, a
+later entry, a histogram or summary rule, or, under every transform but
+`python` and `prometheus`, neither a rule's name nor an earlier entry's; and
+a hidden entry that no later entry reads. Under `python` and `prometheus`,
+whose series are named at run time, an operand no rule names MUST be taken
+and read from the series of that name each scrape makes; a family of it a
+scrape shows to be a histogram or a summary MUST make no series of the entry
+and MUST be a failure of the entry under `error_mode: log`, logged and
+counted in `http_exporter_rule_failures_total` under the entry's name, a
+series every entry MUST have from 0. A debug probe's report MUST mark each
+derived family it lists as derived, with its operation and operands, and
+MUST list the exported entries that gave no series apart from the rules.
+
 ## 18.2 Metrics per item
 
 For the `jq`, `yq` and `css` transforms a metric MAY set `items`. For `jq` and

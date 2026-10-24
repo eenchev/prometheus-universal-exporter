@@ -583,7 +583,7 @@ func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.
 	if !complete || !s.failures.remembersRules(l.key, failing) {
 		return
 	}
-	for _, rule := range c.Metrics {
+	for _, rule := range transform.ReportedRules(c) {
 		if rule.ErrorMode != model.ErrorModeLog {
 			continue
 		}

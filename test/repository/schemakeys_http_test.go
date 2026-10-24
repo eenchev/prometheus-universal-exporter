@@ -43,6 +43,13 @@ const (
 	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - name: up\n        # metric\n"
 )
 
+// derivedCollector is jqCollector with a derived entry that adds up its
+// rule's series twice, and a comment where a row writes a key of the entry.
+const derivedCollector = jqCollector + "    derived:\n      - hidden: false\n        name: d\n        sum: [v, v]\n        # derived\n"
+
+// derivedBy is derivedCollector adding up the rule's series by its label.
+var derivedBy = strings.Replace(derivedCollector, "        sum: [v, v]\n", "        sum: [v]\n        by: [l]\n", 1)
+
 // paginatedCollector is jqCollector fetching its pages by page number.
 var paginatedCollector = strings.Replace(jqCollector, "      # request\n", "      pagination:\n        type: page\n        param: page\n        items: .items\n", 1)
 
@@ -90,6 +97,17 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].transform.type", document: jqCollector, at: "      type: jq\n", setting: "      type: %s\n", valid: "jq", invalid: "jsonpath"},
 		{key: "collectors[].request.type", document: jqCollector, at: "      type: http\n", setting: "      type: %s\n", valid: "http", invalid: "gopher"},
 		{key: "collectors[].metrics[].labels[].name", document: jqCollector, at: "            name: l\n", setting: "            name: %s\n", valid: "l", invalid: "bad-name"},
+		// A derived entry's name is required, and its operation reads
+		// families named by text that is not blanks: without it the entry
+		// computes nothing, and a sum by nothing but blanks keeps no label.
+		// Its name is held to a classic name by the collector's condition
+		// on name_escaping, which the schema as it was had none of.
+		{key: "collectors[].derived[].name", document: derivedCollector, at: "        name: d\n", setting: "        name: %s\n", valid: "d", invalid: "bad-name", invalidWas: taken},
+		{key: "collectors[].derived[].type", document: derivedCollector, at: "        # derived\n", setting: "        type: %s\n", valid: "counter", invalid: "histogram", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].derived[].sum[]", document: derivedCollector, at: "        sum: [v, v]\n", setting: "        sum: [v, %s]\n", valid: "v", invalid: `"  "`},
+		{key: "collectors[].derived[].difference[]", document: strings.Replace(derivedCollector, "sum: [v, v]", "difference: [v, v]", 1), at: "        difference: [v, v]\n", setting: "        difference: [v, %s]\n", valid: "v", invalid: `"  "`},
+		{key: "collectors[].derived[].ratio[]", document: strings.Replace(derivedCollector, "sum: [v, v]", "ratio: [v, v]", 1), at: "        ratio: [v, v]\n", setting: "        ratio: [v, %s]\n", valid: "v", invalid: `"  "`},
+		{key: "collectors[].derived[].by[]", document: derivedBy, at: "        by: [l]\n", setting: "        by: [%s]\n", valid: "l", invalid: `"  "`},
 		// A rule's name is required of every transform but prometheus: the
 		// schema took a rule without one, and refused "" where the exporter
 		// takes it. A python rule names a series of the script, and one

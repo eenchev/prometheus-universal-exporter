@@ -557,7 +557,7 @@ func hostRateLimitMetrics() []model.Metric {
 }
 
 // ruleFailureMetrics is http_exporter_rule_failures_total: a series for every
-// metric rule of every collector, from zero, so a rate works from the start
+// metric rule and derived entry of every collector, from zero, so a rate works from the start
 // and a rule that never fails still has its series. Two rules exporting one
 // metric name share it.
 func (s *Server) ruleFailureMetrics() []model.Metric {
@@ -570,7 +570,7 @@ func (s *Server) ruleFailureMetrics() []model.Metric {
 		// long as those are kept, whenever the rule was added.
 		created := createdMillis(stats.snapshot().created)
 		seen := map[string]bool{}
-		for _, rule := range c.Metrics {
+		for _, rule := range transform.ReportedRules(c) {
 			if rule.Name == "" || seen[rule.Name] {
 				continue
 			}

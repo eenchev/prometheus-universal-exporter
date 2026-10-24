@@ -2264,6 +2264,123 @@ of each bucket. `--dry-run` checks the block as startup does, and a
 [debug probe](#debug-probes) counts each histogram as one series of its
 metric and shows it among the metrics as the probe answers it.
 
+### Derived series
+
+A target often counts what a dashboard wants as a ratio or a total: memcached
+counts the gets that found their item and those that did not, not its hit
+ratio; a queue lists its items by shard, where the depth of each queue is
+wanted. A collector's `derived` list computes series from the collector's
+own series once its transform made them, the same way under every
+transform — `regex`, `csv`, `xpath`, `css`, `jq`, `yq`, `python` and
+`prometheus` — so no Python script or recording rule is needed for it:
+
+```yaml
+- name: memcached
+  request:
+    type: tcp
+    send: "stats\r\n"
+    terminator: "END\r\n"
+  transform:
+    type: regex
+  metrics:
+    - name: memcached_get_hits_total
+      type: counter
+      expression: '(?m)^STAT get_hits (\d+)\r$'
+    - name: memcached_get_misses_total
+      type: counter
+      expression: '(?m)^STAT get_misses (\d+)\r$'
+  derived:
+    - name: memcached_gets_total
+      type: counter
+      hidden: true
+      sum: [memcached_get_hits_total, memcached_get_misses_total]
+    - name: memcached_get_hit_ratio
+      description: The share of gets that found their item
+      ratio: [memcached_get_hits_total, memcached_gets_total]
+```
+
+```text
+# HELP memcached_get_hit_ratio The share of gets that found their item
+# TYPE memcached_get_hit_ratio gauge
+memcached_get_hit_ratio 0.9
+```
+
+[examples/tcp/config.yaml](../examples/tcp/config.yaml) has it for a real
+memcached. Each entry has a `name`, an optional `description`, which is the
+help text, and a `type`, `gauge` (the default), `counter` or `untyped`, and
+sets exactly one operation, a list of the names of the families it reads:
+
+| Operation | Computes |
+| --- | --- |
+| `sum: [a, b, ...]` | `a + b + ...` of two families or more, series by series |
+| `difference: [a, b]` | `a - b`, series by series |
+| `ratio: [a, b]` | `a / b`, series by series |
+| `sum: [a]` with `by: [l, ...]` | the series of `a` added up into one for each set of values of the labels `l, ...`, the other labels dropped |
+| `sum: [a]` with `by: []` | every series of `a` added up into one series without labels |
+
+```yaml
+derived:
+  - name: queue_depth
+    sum: [queue_items]
+    by: [queue]
+```
+
+**Matching.** Series by series means as PromQL matches two vectors one to one
+without `on` or `ignoring`: a series of `a` is paired with the series of `b`
+that has exactly its labels, names and values, a label of an empty value
+being no label, and the result has those labels. A series with no partner
+in every other family makes no derived series, nor does a label set that two
+series of one family have, which has no one partner. To compute over
+families whose labels differ, add up the one with more labels `by` the
+labels of the other first, in a hidden entry, and read that.
+
+**Order and hidden entries.** The entries are computed in their order, and
+an entry may read an earlier one as it reads a rule. An entry with `hidden:
+true` is computed for the entries after it and not exported, as the sum of
+hits and misses above, which `memcached_commands_total{command="get"}`
+exports already; a hidden entry that no later entry reads is refused.
+
+**No number, no series.** A result that is NaN or infinite makes no series:
+a `ratio` over 0, such as the hit ratio of a server that has had no get yet,
+is left out rather than exported as NaN, which no query can use. That is no
+failure: the target answered every value it was asked for.
+
+**Where in the scrape.** The entries read the series as the rules made them:
+after each rule's `value_map`, `scale` and `time_format`, the label value
+maps and [truncation](#long-label-values), and before `transform.labels`,
+`remove_labels` and `rename_labels`, [`metrics_prefix`](#prefixing-a-collectors-metrics)
+and [`name_escaping`](#utf-8-names), which then apply to the derived series
+as to every other. So an operand is written as the rule's `name` is written,
+without the prefix, a label of `by` as the rule's label is named, before any
+rename, and a derived series gets the collector's static labels whatever its
+operands' labels were. A derived series has no timestamp, whatever its
+operands had. Each exported derived series counts against
+[`limits.max_metrics`](#memory), and a scrape whose rules and derived entries
+make more fails as one whose rules make too many does; a hidden entry's
+series are not counted. Derived series are cached, served to
+[static targets](STATIC-TARGETS.md) and exported to [OTLP](OTLP.md) like any
+other, and a [debug probe](#debug-probes) lists each family it got as
+`memcached_get_hit_ratio: 1 (derived: ratio of memcached_get_hits_total,
+memcached_gets_total)`, and the entries that got none apart from the rules.
+
+**Checked at load.** An entry's name may be no rule's of the collector and no
+other entry's, nor a `_bucket`, `_sum` or `_count` of a histogram or summary
+rule; it is held to the rules' name checks and to
+`limits.max_metric_name_length` as exported, and its `description` to
+`limits.max_help_length`. Each operand is the name of a rule of the
+collector or of an earlier entry, of a counter, a gauge or an untyped
+family: a histogram or a summary has no one value to compute with. `sum`
+reads two families or more, `difference` and `ratio` two, and `by` goes only
+with a `sum` of one, its labels each once. The series of a `python` script
+and of a `prometheus` pass-through are named at run time, so under those two
+an operand that no rule names is taken, and read from the series of that
+name each scrape makes; a family of that name that a scrape shows to be a
+histogram or a summary makes no series of the entry and is a failure of the
+entry under `error_mode: log`: [logged](#when-a-metric-cannot-be-extracted)
+once per failing target, counted in `http_exporter_rule_failures_total`
+under the entry's name, which every entry has from 0, and shown by a debug
+probe.
+
 ### Conditional metrics and labels
 
 There is no `when` key: each transform already says in its own language which
@@ -2854,6 +2971,12 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   histogram` without the block is refused for every transform but
   `prometheus`, the error saying the block is the way to count the values in
   a histogram;
+- a [`derived`](#derived-series) entry has a name no rule of the collector
+  and no other entry has, the type `gauge`, `counter` or `untyped`, and
+  exactly one of `sum`, `difference` and `ratio`, each reading counters,
+  gauges or untyped families that are rules of the collector or earlier
+  entries; `by` is only beside a `sum` of one family, and a `hidden` entry is
+  read by a later one;
 - `transform.labels` and `rename_labels` must give label names, classic ones
   unless `name_escaping` escapes the others, and two renames may not target
   the same label. A key of `transform.labels` or a rule's label that

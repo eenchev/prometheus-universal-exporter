@@ -1077,8 +1077,9 @@ func shownBody(body []byte, convertedFrom string) debugBody {
 	return out
 }
 
-// writeTransform renders the series each metric got, the rules that got
-// none, and the rules that carried on without some: each rule by itself,
+// writeTransform renders the series each metric got, a derived one marked
+// with what it computes, the rules and derived entries that got none, and
+// the rules that carried on without some: each rule by itself,
 // under its metric name, and with its expression, and its items when it has
 // any, where several of the collector's rules export the name
 // (sharedRuleNames). A prometheus rule without a name is shown as that.
@@ -1096,13 +1097,36 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 			counts[m.Name]++
 		}
 	}
+	// A derived family is marked as one, with what it computes, so it is
+	// not looked for among the rules (transform/derived.go).
+	derived := map[string]string{}
+	var derivedNone []string
+	for i := range c.Derived {
+		if d := &c.Derived[i]; !d.Hidden {
+			name := transform.ExportedMetricName(c, d.Name)
+			derived[name] = transform.DescribeDerived(d)
+			if counts[name] == 0 {
+				derivedNone = append(derivedNone, name)
+			}
+		}
+	}
 	if len(order) == 0 {
 		b.WriteString("  no series\n")
 	} else {
 		b.WriteString("  Series by metric\n")
 		for _, name := range order {
-			fmt.Fprintf(b, "    %s: %d\n", shownStart(name, debugNameLimit), counts[name])
+			line := fmt.Sprintf("    %s: %d", shownStart(name, debugNameLimit), counts[name])
+			if what, ok := derived[name]; ok {
+				line += " (derived: " + what + ")"
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
+	}
+	if len(derivedNone) > 0 {
+		b.WriteString("  Derived entries that gave no series: ")
+		b.WriteString(strings.Join(derivedNone, ", "))
+		b.WriteString("\n")
 	}
 	var empty []string
 	seen := map[string]bool{}

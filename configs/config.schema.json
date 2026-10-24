@@ -254,6 +254,37 @@
           {
             "if": {
               "not": {
+                "properties": {
+                  "name_escaping": {
+                    "enum": [
+                      "underscores",
+                      "values"
+                    ]
+                  }
+                },
+                "required": [
+                  "name_escaping"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "derived": {
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
                 "anyOf": [
                   {
                     "properties": {
@@ -399,6 +430,156 @@
               }
             },
             "type": "object"
+          },
+          "derived": {
+            "description": "Series computed from the collector's own series once its transform made them, in order, so an entry may read an earlier one: a sum, a difference or a ratio, such as a hit ratio of hits and misses. See docs/CONFIGURATION.md#derived-series.",
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "properties": {
+                    "name": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              ],
+              "else": {
+                "properties": {
+                  "sum": {
+                    "minItems": 2
+                  }
+                }
+              },
+              "if": {
+                "required": [
+                  "by"
+                ]
+              },
+              "oneOf": [
+                {
+                  "required": [
+                    "sum"
+                  ]
+                },
+                {
+                  "required": [
+                    "difference"
+                  ]
+                },
+                {
+                  "required": [
+                    "ratio"
+                  ]
+                }
+              ],
+              "properties": {
+                "by": {
+                  "description": "With a sum of one family: adds up its series into one for each set of values of these labels, as the rules name them, the others dropped; [] makes one series of them all.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "description": {
+                  "description": "The help text of the derived metric.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "difference": {
+                  "description": "[a, b]: a - b, of the series of a and b matched by their label sets. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "hidden": {
+                  "description": "Computes the entry for later entries to read, without exporting it. Defaults to false.",
+                  "type": "boolean"
+                },
+                "name": {
+                  "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values.",
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                    "type": "string"
+                  },
+                  "type": "string"
+                },
+                "ratio": {
+                  "description": "[a, b]: a / b, of the series of a and b matched by their label sets. A ratio over 0 makes no series. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "sum": {
+                  "description": "Adds up the series of the families listed, two or more, matched by their label sets; with by, the series of the one family listed. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": {
+                  "description": "gauge, the default, counter or untyped: a derived series is one number.",
+                  "enum": [
+                    "gauge",
+                    "counter",
+                    "untyped",
+                    ""
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "then": {
+                "properties": {
+                  "sum": {
+                    "maxItems": 1
+                  }
+                },
+                "required": [
+                  "sum"
+                ]
+              },
+              "type": "object"
+            },
+            "type": "array"
           },
           "error_handling": {
             "additionalProperties": false,

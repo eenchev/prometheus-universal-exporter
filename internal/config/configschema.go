@@ -659,6 +659,20 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].time_format":                  {"description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms."},
 		"collectors[].metrics[].time_zone":                    {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
 		"collectors[].metrics[]":                              metricRuleSchemaRule(),
+		"collectors[].derived":                                {"description": "Series computed from the collector's own series once its transform made them, in order, so an entry may read an earlier one: a sum, a difference or a ratio, such as a hit ratio of hits and misses. See docs/CONFIGURATION.md#derived-series."},
+		"collectors[].derived[]":                              derivedSchemaRule(),
+		"collectors[].derived[].name":                         {"type": "string", "not": onlyBlanks(), "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values."},
+		"collectors[].derived[].type":                         {"enum": optionalEnum([]string{string(model.GaugeMetricType), string(model.CounterMetricType), string(model.UntypedMetricType)}), "description": "gauge, the default, counter or untyped: a derived series is one number."},
+		"collectors[].derived[].description":                  {"description": "The help text of the derived metric."},
+		"collectors[].derived[].sum":                          {"minItems": 1, "description": "Adds up the series of the families listed, two or more, matched by their label sets; with by, the series of the one family listed. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].sum[]":                        derivedOperandRule(),
+		"collectors[].derived[].difference":                   {"minItems": 2, "maxItems": 2, "description": "[a, b]: a - b, of the series of a and b matched by their label sets. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].difference[]":                 derivedOperandRule(),
+		"collectors[].derived[].ratio":                        {"minItems": 2, "maxItems": 2, "description": "[a, b]: a / b, of the series of a and b matched by their label sets. A ratio over 0 makes no series. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].ratio[]":                      derivedOperandRule(),
+		"collectors[].derived[].by":                           {"uniqueItems": true, "description": "With a sum of one family: adds up its series into one for each set of values of these labels, as the rules name them, the others dropped; [] makes one series of them all."},
+		"collectors[].derived[].by[]":                         {"type": "string", "minLength": 1, "not": onlyBlanks()},
+		"collectors[].derived[].hidden":                       {"description": "Computes the entry for later entries to read, without exporting it. Defaults to false."},
 		"collectors[].metrics[].histogram": {
 			"required":    []string{"buckets"},
 			"description": "With type: histogram: counts the values the rule reads — every value its expression gives, or one per item, node, element, match or row — in a histogram, one for each set of label values, instead of making each a series. The values of this response alone: the histogram is made anew on every scrape. Not for the prometheus and python transforms.",
@@ -825,8 +839,9 @@ func metricRuleSchemaRule() map[string]any {
 // text key written "" is the key left out there as everywhere; required is
 // a boolean, written when it is there.
 //
-// A rule's name and the names of its labels are classic Prometheus names
-// unless the collector's name_escaping is underscores or values, under which
+// A rule's name, a derived entry's and the names of a rule's labels are
+// classic Prometheus names unless the collector's name_escaping is
+// underscores or values, under which
 // a scrape exports any name escaped and the exporter takes any written one
 // (transform.TakesLabelName): the patterns of the two keys hold where the
 // collector does not say one of those two. A label's name that the
@@ -884,9 +899,32 @@ func collectorSchemaRule() map[string]any {
 			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
 			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
+			map[string]any{"if": map[string]any{"not": escapesNames}, "then": map[string]any{"properties": map[string]any{"derived": map[string]any{"items": classicNames}}}},
 			map[string]any{"if": map[string]any{"not": map[string]any{"anyOf": []any{escapesNames, takesOffLabels}}}, "then": rules(classicLabelNames)},
 		},
 	}
+}
+
+// derivedSchemaRule is a derived entry's, as the exporter checks it
+// (transform.CheckDerived): a name, not "", and exactly one of sum, difference and
+// ratio; by only beside sum, which then reads one family, and without it a
+// sum reads two or more.
+func derivedSchemaRule() map[string]any {
+	required := func(key string) map[string]any { return map[string]any{"required": []string{key}} }
+	return map[string]any{
+		"required": []string{"name"},
+		"allOf":    []any{writtenKey("name")},
+		"oneOf":    []any{required("sum"), required("difference"), required("ratio")},
+		"if":       required("by"),
+		"then":     map[string]any{"required": []string{"sum"}, "properties": map[string]any{"sum": map[string]any{"maxItems": 1}}},
+		"else":     map[string]any{"properties": map[string]any{"sum": map[string]any{"minItems": 2}}},
+	}
+}
+
+// derivedOperandRule is an operand of a derived entry: the name of a family,
+// text that is not blanks alone.
+func derivedOperandRule() map[string]any {
+	return map[string]any{"type": "string", "minLength": 1, "not": onlyBlanks()}
 }
 
 // labelSchemaRule is a label's: a name, and exactly one of value and

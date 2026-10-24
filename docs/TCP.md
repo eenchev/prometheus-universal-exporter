@@ -81,6 +81,12 @@ collectors:
       - name: memcached_evictions_total
         type: counter
         expression: '(?m)^STAT evictions (\d+)\r$'
+    derived:
+      - name: memcached_gets
+        hidden: true
+        sum: [memcached_get_hits_total, memcached_get_misses_total]
+      - name: memcached_get_hit_ratio
+        ratio: [memcached_get_hits_total, memcached_gets]
 ```
 
 ```text
@@ -89,6 +95,9 @@ collectors:
 
 memcached ends each line with `\r\n`, so a rule's `$` comes after a `\r`:
 with `(?m)`, `$` matches before a line feed alone.
+memcached counts hits and misses, not their ratio, so the ratio is
+[derived](CONFIGURATION.md#derived-series) from the two, over their hidden
+sum; a server that has had no get yet has no ratio.
 
 | Key | Default | Notes |
 | --- | --- | --- |

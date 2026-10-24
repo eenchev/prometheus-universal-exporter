@@ -44,6 +44,7 @@ var yamlPlaces = map[string]string{
 	"Limits":              "limits",
 	"MetricRule":          "a metric rule",
 	"LabelRule":           "a label",
+	"DerivedRule":         "a derived entry",
 	"TransformConfig":     "transform",
 	"CacheConfig":         "cache",
 	"StaticTarget":        "a static target",
@@ -64,6 +65,7 @@ var yamlValues = map[string]string{
 	"[]model.Collector":    "a list of collectors",
 	"[]model.MetricRule":   "a list of metric rules",
 	"[]model.LabelRule":    "a list of labels",
+	"[]model.DerivedRule":  "a list of derived entries",
 	"[]model.StaticTarget": "a list of static targets",
 	"model.MetricType":     "a metric type: gauge, counter, histogram, summary or untyped",
 }

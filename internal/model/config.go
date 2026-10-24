@@ -125,8 +125,11 @@ type Collector struct {
 	Decoder       DecoderConfig   `yaml:"decoder"`
 	Transform     TransformConfig `yaml:"transform"`
 	Metrics       []MetricRule    `yaml:"metrics"`
-	ErrorHandling ErrorHandling   `yaml:"error_handling"`
-	Limits        Limits          `yaml:"limits"`
+	// Derived computes series from the collector's own series once its
+	// transform made them; see transform/derived.go.
+	Derived       []DerivedRule `yaml:"derived,omitempty"`
+	ErrorHandling ErrorHandling `yaml:"error_handling"`
+	Limits        Limits        `yaml:"limits"`
 	// Cache answers repeats of a probe from memory, and can stand in for a
 	// trip that fails; see exporter/cache.go.
 	Cache CacheConfig `yaml:"cache"`
@@ -806,6 +809,25 @@ type MetricRule struct {
 	// prometheus reads one value per series and cannot be a histogram, so
 	// the block is what asks for one.
 	Histogram *HistogramRule `yaml:"histogram"`
+}
+
+// DerivedRule is one entry of a collector's derived list: a metric family
+// computed from families the collector's rules, or earlier entries, make. It
+// sets exactly one of Sum, Difference and Ratio, each a list of the names
+// of the families it reads, as the rules name them. By, which only Sum
+// takes, makes Sum add up the series of its one family into one series for
+// each set of values of the labels By keeps; written as [], into one series.
+// Hidden computes the family for later entries to read without exporting
+// it.
+type DerivedRule struct {
+	Name        string     `yaml:"name"`
+	Type        MetricType `yaml:"type"`
+	Description string     `yaml:"description"`
+	Sum         []string   `yaml:"sum"`
+	By          *[]string  `yaml:"by"`
+	Difference  []string   `yaml:"difference"`
+	Ratio       []string   `yaml:"ratio"`
+	Hidden      bool       `yaml:"hidden"`
 }
 
 // HistogramRule is a metric rule's histogram block: the upper bounds of the

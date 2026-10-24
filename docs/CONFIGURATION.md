@@ -5267,7 +5267,10 @@ under `details.warnings` of the `config` entry, or of the `static_targets`
 entry for a target's own files, and logged, without failing the check, since
 a file may be put in place after the exporter starts. So are the password,
 private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
-static target's own credential file, and the secret files of an `http` or
+static target's own credential and TLS files, the password and TLS files of
+a [`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
+collector and the TLS files of a [`tcp`](TCP.md#static-targets) or
+[`grpc`](GRPC.md#tls) one, and a static target's own, and the secret files of an `http` or
 `graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
 and of a static target's own.
 

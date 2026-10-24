@@ -328,8 +328,9 @@ The consumer groups of a stream, each one's pending messages:
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `redis` collector names the server
-as its `target`, which it requires, and may set under its `request` only
-`timeout`. The account, the database and the commands are the
+as its `target`, which it requires, and may set under its `request`
+`timeout` and its own account and TLS settings: `username` and
+`password_file`, and `tls`. The database and the commands are the
 collector's, and `params` fills its placeholders:
 
 ```yaml
@@ -343,7 +344,34 @@ targets:
     target: rediss://queues.internal:6380
     params:
       param_queue: emails
+  - name: tenant_cache
+    collector: redis
+    target: tenant.cache:6379
+    request:
+      username: tenant_exporter
+      password_file: /etc/exporter/redis/tenant-password
+      tls:
+        ca_file: /etc/exporter/redis/tenant-ca.pem
 ```
+
+So one collector serves servers that each take a password of their own. A
+target's `password_file` replaces the collector's, and is the password of
+the collector's user, or of the target's own `username`, which replaces
+the collector's and needs the target's own `password_file`: one without it
+is refused when the file loads, since the collector's password is not
+another user's. A target that names neither logs in with the collector's
+account. A target's `tls` replaces the
+collector's whole block, a key it leaves out not being taken from the
+collector's; written, even as `tls: {}`, it asks for TLS, which a
+`redis://` target, asking for plaintext, contradicts, refused when the file
+loads. A target cannot turn off the TLS its collector asks for. Its
+password and TLS files are read at each scrape, as the collector's are, and
+by [`--dry-run`](CONFIGURATION.md#dry-run), which warns of them under the
+target's name; the debug report shows its `AUTH user ***`. None of these
+keys holds a placeholder, and no probe parameter sets them: a probe always
+logs in as the collector does. A target's account and block are part of its
+[cache key](CONFIGURATION.md#response-caching), so targets that log in
+differently never share an answer, nor a trip to the server.
 
 ## Limits
 

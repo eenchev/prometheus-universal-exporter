@@ -14,13 +14,18 @@ import (
 // RequestConfig without deciding which types accept it would be rejected for
 // all of them; this makes that decision impossible to forget. The keys of an
 // opt-in type the build left out are claimed by it all the same
-// (optInRequestKeys).
+// (optInRequestKeys, optInTargetKeys).
 func TestEveryRequestKeyBelongsToAType(t *testing.T) {
 	claimed := map[string]bool{"type": true}
 	targetClaimed := map[string]bool{}
 	for _, keys := range optInRequestKeys {
 		for _, key := range keys {
 			claimed[key] = true
+		}
+	}
+	for _, keys := range optInTargetKeys {
+		for _, key := range keys {
+			targetClaimed[key] = true
 		}
 	}
 	for _, rt := range RequestTypes {

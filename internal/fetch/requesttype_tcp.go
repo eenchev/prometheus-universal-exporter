@@ -65,18 +65,21 @@ func init() {
 		Name:         RequestTypeTCP,
 		Fields:       []string{"send", "terminator", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
-		TargetFields: []string{"timeout"},
+		TargetFields: []string{"timeout", "tls"},
 		Validate:     validateTCPRequest,
 		Fetch:        fetchTCP,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseTCPTarget(target)
 			return err
 		},
-		Label:      tcpLabel,
-		Method:     tcpMethod,
-		Display:    tcpDisplay,
-		Stage:      "tcp",
-		CheckFiles: checkTCPFiles,
+		// A target's own tls block, which replaces the collector's whole
+		// (withTargetAccount), is checked as the collector's is.
+		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkTargetTLS(t) },
+		Label:              tcpLabel,
+		Method:             tcpMethod,
+		Display:            tcpDisplay,
+		Stage:              "tcp",
+		CheckFiles:         checkTCPFiles,
 	})
 }
 
@@ -179,12 +182,12 @@ func tcpURL(a tcpAddress, secure bool) string {
 	return "tcp://" + a.hostPort
 }
 
-func tcpLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
 	a, err := parseTCPTarget(target)
 	if err != nil {
 		return "", err
 	}
-	return tcpURL(a, tcpSecure(c)), nil
+	return tcpURL(a, tcpSecure(withTargetAccount(c, overrides))), nil
 }
 
 func tcpMethod(c *model.Collector, _ RequestOverrides) string {
@@ -207,6 +210,8 @@ func tcpDisplay(target string) string {
 // server wrote back.
 func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
+	// A static target's own tls block, in place of the collector's.
+	c = withTargetAccount(c, overrides)
 	address, err := parseTCPTarget(target)
 	if err != nil {
 		return nil, err
@@ -351,15 +356,10 @@ func tcpFailure(ctx context.Context, err error) error {
 	return err
 }
 
-// checkTCPFiles reads the tls block's files as a scrape reads them, for
-// --dry-run. Loading the configuration reads none of them, since a file may
-// be mounted after the exporter starts.
+// checkTCPFiles reads the tls block's files as a scrape reads them, the
+// collector's or those of a static target's own block, for --dry-run.
+// Loading the configuration reads none of them, since a file may be mounted
+// after the exporter starts.
 func checkTCPFiles(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil || !tcpSecure(c) {
-		return nil
-	}
-	if _, err := tlsConfig(c.Request.TLS); err != nil {
-		return []string{fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each connection, so one put in place later is used then)", c.Name, err)}
-	}
-	return nil
+	return accountFileWarnings(c, t)
 }

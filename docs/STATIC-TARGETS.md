@@ -60,27 +60,26 @@ every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the
 `retry` settings — overriding the collector's own request for that target only.
 Which of these keys a target may set follows its collector's
-[request type](CONFIGURATION.md#request-types); for `http` it is all of them,
-for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
-with `target` optional, for [`graphite`](GRAPHITE.md#static-targets) all
-but `method` and `body`, plus its own `targets`, `from` and `until`, and for
-[`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
-with its `codes`, and its own `message` and `metadata`, and for
-[`sshfile`](SSHFILE.md#static-targets) `path` and `timeout`, and its own
-account and credential files, `username`, `private_key_file`,
-`passphrase_file` and `password_file`, and for [`sql`](SQL.md#static-targets)
-`timeout`, its own `username` and `password_file` or `private_key_file`, and
-`connections`, but `max_targets`, a target whose `connections` change a
-setting being a target of its own for the collector's limits, and for
-[`dns`](DNS.md#static-targets) and [`tlscert`](TLSCERT.md#static-targets)
-only `timeout`, for [`kubernetes`](KUBERNETES.md#static-targets) only
-`timeout`, with no `target` at all, and for the opt-in
-[`s3file`](S3FILE.md#static-targets) `path` and `timeout`, with the bucket as
-its required `target`, and for the opt-in [`redis`](REDIS.md#static-targets)
-only `timeout`, with the server as its required `target`, and for the opt-in
-[`tcp`](TCP.md#static-targets) only `timeout`, with the service, `host:port`,
-as its required `target`, and for the opt-in [`ldap`](LDAP.md#static-targets)
-only `timeout`, with the server as its required `target`. An `http` or `graphite` target also takes static
+[request type](CONFIGURATION.md#request-types), as the table says; a key the
+type does not take is refused when the file loads, naming the target:
+
+| Type | `target` | What a target's `request` may set |
+| --- | --- | --- |
+| `http` | an absolute URL | `method`, `path`, `body`, `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`, [`accept_status`](REQUESTS.md#accepting-other-statuses), [`rate_limit`](REQUESTS.md#rate-limiting), and its own credentials: `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` and [`login`](AUTHENTICATION.md#logging-in-to-a-target) |
+| [`graphite`](GRAPHITE.md#static-targets) | the Graphite server's URL | all `http`'s keys but `method` and `body`, plus its own `targets`, `from` and `until` |
+| [`grpc`](GRPC.md#static-targets) | the server | `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`, with its `codes`, [`accept_codes`](GRPC.md#errors-and-retries), its own credentials, `basic_auth`, `basic_auth_file`, `bearer_token` and `bearer_token_file`, and its own `tls` |
+| [`localfile`](LOCALFILE.md#static-targets) | a file under `request.root`, optional | `path` and `timeout` |
+| [`sshfile`](SSHFILE.md#static-targets) | the host | `path`, `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file` |
+| [`sql`](SQL.md#static-targets) | the database server, or a `snowflake` account | `timeout`, its own `username` and `password_file` or `private_key_file`, its own `tls`, and `connections` but `max_targets`, a target whose `connections` change a setting being a target of its own for the collector's limits |
+| [`dns`](DNS.md#static-targets) | the name to resolve | `timeout` |
+| [`tlscert`](TLSCERT.md#static-targets) | the server | `timeout` |
+| [`kubernetes`](KUBERNETES.md#static-targets) | none at all | `timeout` |
+| [`s3file`](S3FILE.md#static-targets), opt-in | the bucket, required | `path` and `timeout` |
+| [`redis`](REDIS.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
+| [`tcp`](TCP.md#static-targets), opt-in | the service, `host:port`, required | `timeout`, and its own `tls` |
+| [`ldap`](LDAP.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `bind_dn` and `password_file`, and `tls` |
+
+An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, inline or file-backed, as basic authentication or a bearer
 token; a basic username
@@ -164,8 +163,9 @@ written there is exported as the text it is.
 A `{{param_…}}` placeholder anywhere a target writes a value of its own — its
 `target`, `request.path`, `request.body` or a header value — is refused when
 the file loads, naming the target and the field: there is no probe to fill
-it, and it would reach the target as text. So is `{{` in an `sshfile` or
-`sql` target's `username` and credential files, which are used as written. Braces that do not open
+it, and it would reach the target as text. So is `{{` in an `sshfile`, `sql`,
+`redis` or `ldap` target's account — `username`, `bind_dn` and the credential
+files — and in a target's own `tls` block, which are used as written. Braces that do not open
 `{{param_` are left alone, so a JSON body is written as usual. The same holds
 for a value an environment variable supplies, since the file is checked after
 it is expanded.
@@ -256,6 +256,72 @@ Check a target file together with its configuration before deploying it:
 reports whether each would load, including whether every target names a
 collector that exists and whether a target exported over OTLP has OTLP export
 to go to — see [Dry run](CONFIGURATION.md#dry-run).
+
+## Credentials and TLS of a target
+
+One collector can serve several servers that each take their own password
+or client certificate: a target names its own account, or its own `tls`
+block, in place of the collector's. This is what each type takes:
+
+| Type | A target's own account | A target's own `tls` |
+| --- | --- | --- |
+| `http`, `graphite` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`, `login`, each replacing the collector's as above | no; `insecure_skip_verify` alone |
+| `grpc` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` | yes |
+| `sshfile` | `username`, and `private_key_file`, `passphrase_file` and `password_file`, any of the three replacing all three of the collector's | no; the host is verified with the collector's `known_hosts_file` |
+| `sql` | `username`, and `password_file` or, for `snowflake`, `private_key_file`, either replacing the collector's credential file | yes |
+| `redis` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file` | yes |
+| `ldap` | `password_file`, replacing the collector's, and `bind_dn`, which needs the target's own `password_file` | yes |
+| `tcp` | none: a tcp service is asked no password | yes |
+| `localfile`, `s3file`, `dns`, `tlscert`, `kubernetes` | none | no |
+
+A target's `tls` replaces the collector's whole block, a key it leaves out
+not being taken from the collector's, so a target with a client certificate
+of its own names the CA it verifies the server with too. Written, even as
+`tls: {}`, it asks for TLS, as the collector's block does; so a target can
+ask for TLS its collector does not, but not leave out the TLS its collector
+asks for. It is checked when the file loads as the collector's is: a client
+certificate needs both `cert_file` and `key_file`, and a target whose
+address asks for plaintext — `redis://`, `ldap://` without the collector's
+`start_tls`, `grpc://` — is refused with a block of its own, as is one the
+`sql` driver's options switch TLS off for.
+
+```yaml
+interval: 1m
+targets:
+  - name: tenant_a
+    collector: redis_memory
+    target: tenant-a.cache:6379
+    request:
+      username: exporter
+      password_file: /etc/exporter/redis/tenant-a
+  - name: tenant_b
+    collector: redis_memory
+    target: rediss://tenant-b.cache:6380
+    request:
+      username: exporter
+      password_file: /etc/exporter/redis/tenant-b
+      tls:
+        ca_file: /etc/exporter/redis/tenant-b-ca.pem
+```
+
+Only a static target sets these keys: the file is the operator's, and no
+`/probe` parameter sets an account, a credential file or a `tls` block, so a
+probe always reads as its collector does. A target's own files are read
+when its scrape needs them, at each scrape or connection as the collector's
+are, so a rotated password is used without a reload; `--dry-run` reads them
+too and warns, under the target's name, of one a scrape would fail on now.
+A debug report masks a target's password as it masks the collector's.
+
+A target's account and `tls` block are part of the key of everything that
+tells requests apart: the key its answers are
+[cached](CONFIGURATION.md#response-caching) under, the key of the trip
+identical scrapes and probes share, and the key
+[`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets)
+backs off by, and, for the types that keep connections, the key of the
+`sql` pool, the `grpc` connection and the `sshfile` connection it is made
+on. Two targets that read as different accounts, or with different `tls`
+blocks, never share an answer, a trip, a backoff or a connection, even of
+one collector and one server.
 
 ## Scraping
 

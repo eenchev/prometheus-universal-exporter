@@ -1308,7 +1308,9 @@ keys:
   all of them, a reserved name left out.
 - Connections MUST be kept per target and TLS settings and reused, closed
   after 5 minutes unused, and made again when a TLS file changes on disk,
-  without cancelling a call still using the old one. A connection MUST be
+  without cancelling a call still using the old one. `--dry-run` MUST read
+  the `tls` block's files of a collector, and of a static target's own
+  block, and warn of one a connection would fail on. A connection MUST be
   closed by a timer once no call or reflection question has held it for 5
   minutes, whether or not another call comes, since grpc-go goes on
   reconnecting a connection whose server is gone. At most 1000 connections
@@ -1344,7 +1346,9 @@ keys:
   `message`, which replaces `request.message`, placeholders and all; a
   parameter only another type accepts MUST be answered `400`. A static target
   MAY set `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`,
-  `accept_codes` and the basic and bearer credential keys; its message and
+  `accept_codes`, the basic and bearer credential keys and its own `tls`
+  block (§ 42.14), which a `grpc://` target MUST be refused with at load;
+  its message and
   metadata MUST NOT
   hold placeholders, its message MUST be JSON, and with descriptors read at
   load fit the input type. Its message MUST enter its cache key as the probe
@@ -1656,8 +1660,8 @@ of objects, one a row, of its columns by name. Its keys:
   then used again, so that the driver keeps no more names than connections
   were made at once. No inline password MUST be offered, and `passphrase_file` MUST be refused as a key of another
   type. `--dry-run` MUST read those files, and the TLS files, of every `sql`
-  collector, and a static target's own credential file, and warn of what a
-  scrape would fail on, as for `sshfile`.
+  collector, and a static target's own credential file and TLS files, and
+  warn of what a scrape would fail on, as for `sshfile`.
 - **Options and TLS.** Each driver MUST take only its own options, refusing
   any other naming the ones it takes, and only the listed values of an
   option that has them: `postgres` `sslmode` (`disable`, `require`,
@@ -1865,11 +1869,14 @@ of objects, one a row, of its columns by name. Its keys:
   be closed, not given back, unless its driver's connection both resets its
   session and says whether it is valid.
 - **Static targets** MAY set `timeout`, `username`, `password_file`,
-  `private_key_file` (either credential file replacing the collector's) and
-  `connections`; `params` fills the placeholders of `args` and `database`. A
+  `private_key_file` (either credential file replacing the collector's),
+  `tls` and `connections`; `params` fills the placeholders of `args` and
+  `database`. A
   `{{` in a static target's `username`, `password_file` or
   `private_key_file` MUST be refused at load, by the loader and the schema,
-  as `sshfile`'s are.
+  as `sshfile`'s are. A target's `tls` (§ 42.14) MUST be held at load to
+  what the driver honours with the collector's `options`, as the
+  collector's is, and MUST be part of the key of the target's pool.
 - A driver's own log (`vertica`'s and `snowflake`'s) MUST go into the
   exporter's log at its level, with `sql_driver` naming the driver, never to
   stdout, stderr or a file of the driver's own unless gosnowflake's client
@@ -2286,8 +2293,13 @@ carries it. Its keys:
 - The document MUST be held to the response limit as the replies are: one
   whose JSON is larger than the limit MUST fail the scrape as a limit
   exceeded, saying the document's size.
-- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
-  `param_<name>`.
+- A static target MAY set `timeout`, its own account, `username` and
+  `password_file`, and its own `tls` block (§ 42.14); a probe MAY set
+  `timeout` and `param_<name>`. A target's `password_file` MUST replace the
+  collector's, as the password of the collector's `username`, or of the
+  target's own, which MUST replace the collector's; a target's `username`
+  without its own `password_file`, and a `redis://` target with its own
+  `tls` block, MUST be refused at load.
 
 #### `tcp`
 
@@ -2357,6 +2369,8 @@ types at build time): only a build asked for it carries it. Its keys:
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and
   list what a scrape would fail on as warnings of the `config` check.
+- A static target MAY set `timeout` and its own `tls` block (§ 42.14); a
+  probe MAY set `timeout` and `param_<name>`.
 
 #### `ldap`
 
@@ -2470,8 +2484,14 @@ asked for it carries it. Its keys:
   search's name, base, scope, filter and attributes, and how each ended as
   its outcome. The verbose `url` label MUST be `ldap://host:port` or
   `ldaps://host:port`, and `http_method` MUST be `SEARCH`.
-- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
-  `param_<name>`.
+- A static target MAY set `timeout`, its own account, `bind_dn` and
+  `password_file`, and its own `tls` block (§ 42.14); a probe MAY set
+  `timeout` and `param_<name>`. A target's `password_file` MUST replace the
+  collector's, as the password of the collector's `bind_dn`, or of the
+  target's own, which MUST replace the collector's; a target's `bind_dn`
+  without its own `password_file`, a `password_file` alone of a target
+  whose collector binds anonymously, and an `ldap://` target with its own
+  `tls` block and no `start_tls` on its collector MUST be refused at load.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -28541,7 +28561,26 @@ target only. An `http` or `graphite` target MUST also accept static request
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, as inline or file-backed basic authentication or a bearer
 token; an `sshfile` or `sql` target MAY instead name its own user and key
-or password files, as § 5.1 says for each. A request that carries an
+or password files, a `redis` target its own `username` and `password_file`
+and an `ldap` target its own `bind_dn` and `password_file`, as § 5.1 says
+for each. A `redis`, `ldap`, `tcp`, `sql` or `grpc` target MAY name its own
+`tls` block, which MUST replace the collector's whole block for that target,
+no key of the collector's being taken for a key it leaves out; written, even
+as `tls: {}`, it MUST ask for TLS, so a target MAY ask for TLS its collector
+does not but MUST NOT leave out TLS its collector asks for. A target's own
+account and `tls` block MUST be checked at load as the collector's are —
+cert and key files both or neither, a `username` or `bind_dn` with its
+`password_file`, a target address that asks for plaintext refused beside a
+block of its own — MUST NOT hold a placeholder, and MUST NOT be settable by
+any probe parameter. They MUST be part of every key that tells the target's
+requests apart: its cache key, the key of the trip it shares with identical
+requests, `failure_backoff`'s key, and the key of every connection kept for
+it, a `sql` pool, a `grpc` connection or an `sshfile` connection, so two
+targets that differ in them never share an answer, a trip, a backoff or a
+connection. Their files MUST be read when the scrape needs them, as the
+collector's are, and by `--dry-run`, which MUST warn under the target's name
+of one a scrape would fail on; a debug report MUST mask a target's password
+as it masks the collector's. A request that carries an
 `Authorization` of its own — a static target's credential, or one a probe
 forwards — sends it instead of the collector's, and the collector's
 credential files MUST NOT be read for it: a missing or empty one MUST fail

@@ -351,11 +351,11 @@ func sshSettingsOf(c *model.Collector, overrides RequestOverrides) sshSettings {
 	if r.IdleTimeout != nil {
 		s.idleTimeout = time.Duration(*r.IdleTimeout)
 	}
-	if name := strings.TrimSpace(overrides.SSHUsername); name != "" {
+	if name := strings.TrimSpace(overrides.Username); name != "" {
 		s.username = name
 	}
-	if overrides.SSHPrivateKeyFile != "" || overrides.SSHPassphraseFile != "" || overrides.SSHPasswordFile != "" {
-		s.privateKeyFile, s.passphraseFile, s.passwordFile = overrides.SSHPrivateKeyFile, overrides.SSHPassphraseFile, overrides.SSHPasswordFile
+	if overrides.PrivateKeyFile != "" || overrides.PassphraseFile != "" || overrides.PasswordFile != "" {
+		s.privateKeyFile, s.passphraseFile, s.passwordFile = overrides.PrivateKeyFile, overrides.PassphraseFile, overrides.PasswordFile
 	}
 	return s
 }

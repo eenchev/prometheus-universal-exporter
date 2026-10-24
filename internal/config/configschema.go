@@ -261,8 +261,14 @@ func onlyBlanks() map[string]any {
 // target's account and credential files may not be, a placeholder being
 // used as it is written there (fetch's checkSQLTargetRequest and
 // checkSSHTargetRequest).
+// placeholder is the rule of a value holding a {{param_...}} placeholder,
+// for a key a static target writes out in full.
+func placeholder() map[string]any {
+	return map[string]any{"type": "string", "pattern": `\{\{`}
+}
+
 func blanksOrPlaceholder() map[string]any {
-	return map[string]any{"anyOf": []any{onlyBlanks(), map[string]any{"type": "string", "pattern": `\{\{`}}}
+	return map[string]any{"anyOf": []any{onlyBlanks(), placeholder()}}
 }
 
 // headerNameChars are the characters of a header name, an HTTP token
@@ -1099,22 +1105,36 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
 			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
-		"targets[].export_via_otlp":                         {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
-		"targets[].request":                                 {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
-		"targets[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
-		"targets[].request.path":                            {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.timeout":                         {"description": "How long a scrape of this target may take. At most the target's interval."},
-		"targets[].request.targets":                         {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.from":                            {"description": "graphite: replaces the collector's request.from for this target."},
-		"targets[].request.until":                           {"description": "graphite: replaces the collector's request.until for this target."},
-		"targets[].request.message":                         {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.headers":                         {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
-		"targets[].request.metadata":                        {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.basic_auth.username":             {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
-		"targets[].request.username":                        {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
+		"targets[].export_via_otlp":             {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
+		"targets[].request":                     {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
+		"targets[].request.method":              {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
+		"targets[].request.path":                {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.timeout":             {"description": "How long a scrape of this target may take. At most the target's interval."},
+		"targets[].request.targets":             {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.from":                {"description": "graphite: replaces the collector's request.from for this target."},
+		"targets[].request.until":               {"description": "graphite: replaces the collector's request.until for this target."},
+		"targets[].request.message":             {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.headers":             {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
+		"targets[].request.metadata":            {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.basic_auth.username": {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"targets[].request.username":            {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
+		"targets[].request.bind_dn":             {"not": blanksOrPlaceholder(), "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires."},
+		"targets[].request.tls": {
+			// A client certificate is both files or neither, "" being a
+			// file left out, as the exporter checks a target's block.
+			"allOf": []any{
+				map[string]any{"if": writtenKey("cert_file"), "then": writtenKey("key_file")},
+				map[string]any{"if": writtenKey("key_file"), "then": writtenKey("cert_file")},
+			},
+			"description": "redis, ldap, tcp, sql and grpc: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+		},
+		"targets[].request.tls.ca_file":                     {"not": placeholder()},
+		"targets[].request.tls.cert_file":                   {"not": placeholder()},
+		"targets[].request.tls.key_file":                    {"not": placeholder()},
+		"targets[].request.tls.server_name":                 {"not": placeholder()},
 		"targets[].request.private_key_file":                {"not": blanksOrPlaceholder(), "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does."},
 		"targets[].request.passphrase_file":                 {"not": blanksOrPlaceholder(), "description": "sshfile, with the target's private_key_file: the file of its passphrase."},
-		"targets[].request.password_file":                   {"not": blanksOrPlaceholder(), "description": "sshfile and sql: the target's own password file; see private_key_file."},
+		"targets[].request.password_file":                   {"not": blanksOrPlaceholder(), "description": "sshfile and sql: the target's own password file; see private_key_file. redis and ldap: replaces the collector's password_file for this target: the password of the target's own username or bind_dn, or, without one, of the collector's."},
 		"targets[].request.connections":                     {"not": map[string]any{"required": []string{"max_targets"}}, "description": "sql: replaces, key by key, the collector's request.connections for this target; not max_targets, which is the collector's and refused here."},
 		"targets[].request.connections.max_per_target":      {"minimum": 0, "description": "sql: the most connections open to this target at once; 0 sets no limit."},
 		"targets[].request.connections.max_idle_per_target": {"minimum": 0, "description": "sql: how many connections to this target are kept idle; 0 keeps none."},

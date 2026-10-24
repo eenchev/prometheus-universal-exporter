@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"runtime/debug"
 	"strconv"
@@ -366,9 +367,12 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 
 // targetOwnRequest is what the target's request sets that no probe can, for
 // its cache key: a graphite collector's targets, a grpc collector's metadata
-// and retry codes, the retried statuses, an sshfile collector's account and credential files, an http or graphite collector's login. Each section names itself and how many values follow, so
-// a value that looks like the next section's name cannot move the boundary
-// between two sections, and two different targets never share a key.
+// and retry codes, the retried statuses, an sshfile, sql, redis or ldap
+// collector's account and credential files, a redis, ldap, tcp, sql or grpc
+// collector's tls block, an http or graphite collector's login. Each section
+// names itself and how many values follow, so a value that looks like the
+// next section's name cannot move the boundary between two sections, and
+// two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
 	var own []string
 	if len(t.Request.Targets) > 0 {
@@ -392,8 +396,15 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	if t.Request.AcceptCodes != nil {
 		own = append(append(own, "accept_codes", strconv.Itoa(len(t.Request.AcceptCodes))), t.Request.AcceptCodes...)
 	}
-	if r := &t.Request; r.Username != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
-		own = append(own, "ssh_account", "4", r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	if r := &t.Request; r.Username != "" || r.BindDN != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
+		own = append(own, "account", "5", r.Username, r.BindDN, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	}
+	// A target's own tls block, every key of it, tls: {} as much as one
+	// with files: the certificate a scrape presents is part of the account
+	// it reads as, and the roots it trusts decide which server's answer it
+	// takes.
+	if r := &t.Request; r.TLS != nil {
+		own = append(own, "tls", "1", fmt.Sprintf("%#v", *r.TLS))
 	}
 	// A target that logs in as it does itself is answered for that login.
 	if login := fetch.LoginFingerprint(t.Request.Login); login != "" {

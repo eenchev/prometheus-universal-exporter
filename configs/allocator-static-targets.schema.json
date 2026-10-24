@@ -625,6 +625,26 @@
                   "boolean"
                 ]
               },
+              "bind_dn": {
+                "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "body": {
                 "type": [
                   "string",
@@ -1333,7 +1353,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sql: the target's own password file; see private_key_file.",
+                "description": "sshfile and sql: the target's own password file; see private_key_file. redis and ldap: replaces the collector's password_file for this target: the password of the target's own username or bind_dn, or, without one, of the collector's.",
                 "not": {
                   "anyOf": [
                     {
@@ -1472,6 +1492,114 @@
                   "integer"
                 ]
               },
+              "tls": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    }
+                  }
+                ],
+                "description": "redis, ldap, tcp, sql and grpc: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+                "properties": {
+                  "ca_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "cert_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "insecure_skip_verify": {
+                    "type": "boolean"
+                  },
+                  "key_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "server_name": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
               "until": {
                 "description": "graphite: replaces the collector's request.until for this target.",
                 "type": [
@@ -1481,7 +1609,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
+                "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
                 "not": {
                   "anyOf": [
                     {
@@ -1713,6 +1841,26 @@
                   "boolean"
                 ]
               },
+              "bind_dn": {
+                "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "body": {
                 "type": [
                   "string",
@@ -2421,7 +2569,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sql: the target's own password file; see private_key_file.",
+                "description": "sshfile and sql: the target's own password file; see private_key_file. redis and ldap: replaces the collector's password_file for this target: the password of the target's own username or bind_dn, or, without one, of the collector's.",
                 "not": {
                   "anyOf": [
                     {
@@ -2560,6 +2708,114 @@
                   "integer"
                 ]
               },
+              "tls": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    }
+                  }
+                ],
+                "description": "redis, ldap, tcp, sql and grpc: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+                "properties": {
+                  "ca_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "cert_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "insecure_skip_verify": {
+                    "type": "boolean"
+                  },
+                  "key_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "server_name": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
               "until": {
                 "description": "graphite: replaces the collector's request.until for this target.",
                 "type": [
@@ -2569,7 +2825,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
+                "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
                 "not": {
                   "anyOf": [
                     {

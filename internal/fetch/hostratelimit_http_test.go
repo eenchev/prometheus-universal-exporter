@@ -132,3 +132,22 @@ func TestHostRateLimitCountsRedirectsAndLogins(t *testing.T) {
 		}
 	})
 }
+
+// A request whose host has a character outside ASCII is refused by the
+// target policy before it takes a turn under any entry, so the entry of its
+// xn-- form, the one an entry is written in, is the only one its host is
+// ever asked under: two such requests in a row neither wait nor count.
+func TestAHostOutsideASCIITakesNoTurn(t *testing.T) {
+	clock := freshRateLimits(t)
+	FollowHostRateLimits([]model.HostRateLimit{hostEntry("books", 1, 1, "xn--bcher-kva.example")})
+	c := limitedCollector(t, "a", nil, nil)
+	for range 2 {
+		var refused *TargetRefusedError
+		if err := fetchCounted("http://bücher.example/", c, 500*time.Millisecond); !errors.As(err, &refused) {
+			t.Fatalf("got %v; want the target refused", err)
+		}
+	}
+	if counts := HostRateLimitCounts(); len(counts) != 1 || counts[0].Waited != 0 || counts[0].Refused != 0 || len(clock.waited()) != 0 {
+		t.Errorf("counts %+v after waits %v; want none", counts, clock.waited())
+	}
+}

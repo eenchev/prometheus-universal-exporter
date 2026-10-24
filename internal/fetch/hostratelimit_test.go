@@ -50,6 +50,84 @@ func TestHostRateLimitsMatchTheirHosts(t *testing.T) {
 	}
 }
 
+// An entry matches every spelling of its host a request may use: an IPv4
+// address mapped into IPv6, which Go dials as the IPv4 address, matches the
+// IPv4 entry and the other way round; an IPv6 address with a zone matches
+// the entry of the address; and an internationalised name, which a request
+// names in its xn-- form, matches in any case and with a final dot.
+func TestHostRateLimitsMatchEverySpellingOfAHost(t *testing.T) {
+	freshRateLimits(t)
+	FollowHostRateLimits([]model.HostRateLimit{
+		hostEntry("plain", 1, 1, "10.0.0.1", "fe80::1", "XN--Bcher-Kva.example."),
+		hostEntry("mapped", 1, 1, "::ffff:10.0.0.2", "[::FFFF:a00:3]", "*.xn--mnchen-3ya.example"),
+	})
+	for raw, want := range map[string]string{
+		"http://10.0.0.1/":                         "plain",
+		"http://[::ffff:10.0.0.1]:8080/":           "plain",
+		"http://[::FFFF:a00:1]/":                   "plain",
+		"http://[0:0:0:0:0:ffff:10.0.0.1]/":        "plain",
+		"http://[fe80::1%25eth0]/":                 "plain",
+		"http://[FE80::1%25En0]:9090/":             "plain",
+		"http://[fe80::1]/":                        "plain",
+		"http://xn--bcher-kva.example/":            "plain",
+		"https://XN--BCHER-KVA.EXAMPLE.:8443/":     "plain",
+		"http://10.0.0.2/":                         "mapped",
+		"http://[::ffff:10.0.0.2]/":                "mapped",
+		"http://10.0.0.3:81/":                      "mapped",
+		"http://api.xn--mnchen-3ya.example/":       "mapped",
+		"http://API.XN--MNCHEN-3YA.EXAMPLE./":      "mapped",
+		"http://xn--mnchen-3ya.example/":           "",
+		"http://[::10.0.0.1]/":                     "",
+		"http://[fe80::2%25eth0]/":                 "",
+		"http://xn--bcher-kva.example.example.org": "",
+	} {
+		rule, host := matchHostRateLimit(mustParseURL(t, raw))
+		got := ""
+		if rule != nil {
+			got = rule.key.collector
+		}
+		if got != want {
+			t.Errorf("%s: matched %q as %q, want %q", raw, got, host, want)
+		}
+	}
+	if err := ValidateHostRateLimits([]model.HostRateLimit{hostEntry("ok", 1, 1, "::ffff:10.0.0.9", "[::ffff:10.0.0.8]")}); err != nil {
+		t.Errorf("mapped addresses refused: %v", err)
+	}
+}
+
+// Two spellings of one host are one host to the checks at load, as they are
+// to a request: a mapped address after its IPv4 form is listed twice, and
+// one under an earlier wildcard is covered. A name outside ASCII is refused,
+// naming the character and the xn-- form to write, since no request a limit
+// applies to names its host so; and an address with a zone is refused,
+// since the zone names an interface here and not the host.
+func TestHostRateLimitsKnowAHostUnderEverySpelling(t *testing.T) {
+	err := ValidateHostRateLimits([]model.HostRateLimit{
+		hostEntry("plain", 1, 1, "10.0.0.1", "xn--bcher-kva.example", "*.xn--mnchen-3ya.example"),
+		hostEntry("mapped", 1, 1, "::ffff:10.0.0.1", "[::ffff:a00:1]"),
+		hostEntry("unicode", 1, 1, "bücher.example", "*.münchen.example"),
+		hostEntry("upper", 1, 1, "XN--BCHER-KVA.EXAMPLE.", "API.XN--MNCHEN-3YA.EXAMPLE"),
+		hostEntry("zoned", 1, 1, "fe80::1%eth0", "[fe80::2%25eth0]"),
+	})
+	if err == nil {
+		t.Fatal("loaded; want refused")
+	}
+	for _, want := range []string{
+		`rate_limits entry "mapped" lists "::ffff:10.0.0.1", which rate_limits entry "plain" lists already`,
+		`rate_limits entry "mapped" lists "[::ffff:a00:1]", which rate_limits entry "plain" lists already`,
+		`rate_limits entry "unicode" hosts[0] "bücher.example" has U+00FC 'ü', a character outside ASCII: write an internationalised name in its ASCII form, as xn--bcher-kva.example for bücher.example`,
+		`rate_limits entry "unicode" hosts[1] "*.münchen.example" has U+00FC 'ü', a character outside ASCII`,
+		`rate_limits entry "upper" lists "XN--BCHER-KVA.EXAMPLE.", which rate_limits entry "plain" lists already`,
+		`rate_limits entry "upper" lists "API.XN--MNCHEN-3YA.EXAMPLE", which rate_limits entry "plain"'s "*.xn--mnchen-3ya.example" covers already`,
+		`rate_limits entry "zoned" hosts[0] "fe80::1%eth0" has the zone "eth0"; write the address without it, which matches it through every interface`,
+		`rate_limits entry "zoned" hosts[1] "[fe80::2%25eth0]" has the zone "25eth0"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("no %q in:\n%v", want, err)
+		}
+	}
+}
+
 // A request takes a turn under the entry its host matches whatever its
 // collector, as well as under its collector's own limit: one refused by the
 // entry gives back the turn it took under its collector's, since it is not

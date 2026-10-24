@@ -93,19 +93,41 @@ func matchHostRateLimit(u *url.URL) (*hostRateLimitRule, string) {
 
 // canonicalRequestHost is host in the form entries are matched in: in lower
 // case, without the dot that may end a fully qualified name, and an address
-// as netip writes it, so 2001:DB8:0::1 is 2001:db8::1.
+// as netip writes it, so 2001:DB8:0::1 is 2001:db8::1. An IPv4 address mapped
+// into IPv6, ::ffff:10.0.0.1, is the IPv4 address, which is what Go dials for
+// it, and an IPv6 address's zone is dropped: the zone names an interface of
+// this machine, not another host, so it matters to an entry no more than a
+// port does, and an entry has none (canonicalRuleHost).
+//
+// A name is matched as the URL writes it. One with a character outside
+// ASCII never gets here: the target policy refuses it before the request is
+// sent (canonicalHost), since Go would send it under two names, so a request
+// that takes a turn names an internationalised host in its xn-- form, the
+// one an entry is written in.
 func canonicalRequestHost(host string) string {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.String()
+		return addr.Unmap().WithZone("").String()
 	}
 	return host
 }
 
 // hostNamePattern is a host name: labels of letters, digits, hyphens and
 // underscores, joined by dots. An internationalised name is written in its
-// ASCII (punycode) form, which is what a request's URL carries.
+// ASCII (xn--) form, the only form a request a limit applies to can name it
+// in (canonicalRequestHost).
 var hostNamePattern = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$`)
+
+// canonicalRuleAddr is an address of an entry in the form requests are
+// matched in (canonicalRequestHost), or the reason it is refused: an
+// address with a zone, which would match only requests written with that
+// zone though the zone names nothing of the host.
+func canonicalRuleAddr(addr netip.Addr) (string, error) {
+	if addr.Zone() != "" {
+		return "", fmt.Errorf("has the zone %q; write the address without it, which matches it through every interface", addr.Zone())
+	}
+	return addr.Unmap().String(), nil
+}
 
 // canonicalRuleHost is a host of an entry in canonical form, and whether it
 // is a "*." wildcard, whose suffix the returned form then is with its dot.
@@ -114,15 +136,22 @@ func canonicalRuleHost(written string) (string, bool, error) {
 	if host == "" {
 		return "", false, errors.New("is empty")
 	}
+	// Refused rather than converted, as the target policy's lists refuse
+	// it: no request a limit applies to names a host so (canonicalRequestHost).
+	if r, found := outsideASCII(host); found {
+		return "", false, fmt.Errorf("has %#U, %s", r, writtenInASCII)
+	}
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		addr, err := netip.ParseAddr(host[1 : len(host)-1])
 		if err != nil || !addr.Is6() {
 			return "", false, errors.New("is not an IPv6 address in brackets")
 		}
-		return addr.String(), false, nil
+		canonical, err := canonicalRuleAddr(addr)
+		return canonical, false, err
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.String(), false, nil
+		canonical, err := canonicalRuleAddr(addr)
+		return canonical, false, err
 	}
 	wildcard := strings.HasPrefix(host, "*.")
 	name := strings.TrimSuffix(strings.TrimPrefix(host, "*."), ".")

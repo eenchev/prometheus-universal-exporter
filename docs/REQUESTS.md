@@ -1419,19 +1419,32 @@ An entry's hosts are host names, matched in any case and with or without a
 final dot; IP addresses, matched however they are written, an IPv6 one with
 or without brackets; and wildcards `*.example.com`, which match every
 subdomain of `example.com` at any depth, `api.example.com` and
-`a.b.example.com`, but not `example.com` itself: list both for both. A host
-is written alone, without a scheme, port or path: an entry applies to every
-port and scheme of its hosts, since a quota is kept for a host rather than
-for one of its ports. A request matches by the host of its URL, not by the
-address it resolves to, so a host reached by two names needs both listed.
-The first entry whose hosts match a request applies, in the order of the
-list, so an exact name listed before a wildcard over it takes its requests
-out of the wildcard's entry. A host may be listed once, in one entry, and
-the same host twice is refused when the configuration loads; so is a host
-that a wildcard of an earlier entry covers — `api.example.com` or
-`*.api.example.com` after an entry with `*.example.com` — since the earlier
-entry would always match it first and the later one never apply. The error
-names both entries; list the narrower entry first:
+`a.b.example.com`, but not `example.com` itself: list both for both. An IPv4
+address and the same address mapped into IPv6 are one host, which Go dials
+alike: `10.0.0.1` matches `http://[::ffff:10.0.0.1]/` and `::ffff:10.0.0.1`
+matches `http://10.0.0.1/`. An entry's IPv6 address has no zone, and is
+refused at load with one (`fe80::1%eth0`), since a zone names an interface
+of the exporter's machine rather than the host; a request's zone is ignored,
+so `fe80::1` matches `http://[fe80::1%25eth0]/` through every interface. An
+internationalised name is written in its `xn--` form,
+`xn--bcher-kva.example` for `bücher.example`, and matches that form in any
+case and with or without a final dot. A host with a character outside ASCII
+is refused at load, as in `allowed_targets`, and is not converted: a request
+whose host has one is [refused](#restricting-targets) before it is sent and
+takes no turn, so the `xn--` form is the only one a limited request names
+such a host in. A host is written alone, without a scheme, port or path: an
+entry applies to every port and scheme of its hosts, since a quota is kept
+for a host rather than for one of its ports. A request matches by the host
+of its URL, not by the address it resolves to, so a host reached by two
+names needs both listed. The first entry whose hosts match a request
+applies, in the order of the list, so an exact name listed before a wildcard
+over it takes its requests out of the wildcard's entry. A host may be listed
+once, in one entry, and the same host twice is refused when the
+configuration loads; so is a host that a wildcard of an earlier entry covers
+— `api.example.com` or `*.api.example.com` after an entry with
+`*.example.com` — since the earlier entry would always match it first and
+the later one never apply. The error names both entries; list the narrower
+entry first:
 
 ```
 rate_limits entry "exact" lists "api.example.com", which rate_limits entry "wild"'s "*.example.com" covers already; the first entry that matches applies, so rate_limits entry "exact" would never apply to it: list the narrower entry before the broader one

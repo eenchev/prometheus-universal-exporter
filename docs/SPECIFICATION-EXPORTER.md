@@ -964,15 +964,23 @@ The top-level `rate_limits` list MUST bound how fast the `http` and
   without a final dot; IP addresses, matched in canonical form, an IPv6 one
   with or without brackets; and `*.example.com` wildcards, which MUST match
   every subdomain of `example.com`, at any depth, and MUST NOT match
-  `example.com` itself. A host with a scheme, a port, a path, a `*`
-  anywhere but a leading `*.`, or a wildcard over an IP address MUST be
-  refused at load. A host, in canonical form, MUST be listed once across
-  every entry; listed twice it MUST be refused at load, naming both entries.
-  A host that a wildcard of an earlier entry matches — an exact name or a
-  narrower wildcard under it — MUST be refused at load, naming both entries
-  and saying to list the narrower entry first, since the later entry could
-  never apply to it; listed before the broader wildcard it MUST be accepted.
-  A host that a wildcard of its own entry matches MUST be accepted.
+  `example.com` itself. An IPv4 address mapped into IPv6 MUST be matched, in
+  an entry and in a request's URL, as the IPv4 address. A request's IPv6 zone
+  MUST be ignored. An internationalised name MUST be matched in its `xn--`
+  form, the only form a request that takes a turn names it in, since a
+  request whose host has a character outside ASCII is refused before it is
+  sent (§ 26.1). A host with a scheme, a port, a path, a `*` anywhere but a
+  leading `*.`, a wildcard over an IP address, an IPv6 zone, or a character
+  outside ASCII, the last refused naming the character and saying to write
+  the `xn--` form, MUST be refused at load. A host, in canonical form —
+  `::ffff:10.0.0.1` and `10.0.0.1` one host, as `XN--BCHER-KVA.example.` and
+  `xn--bcher-kva.example` are — MUST be listed once across every entry;
+  listed twice it MUST be refused at load, naming both entries. A host that a
+  wildcard of an earlier entry matches — an exact name or a narrower wildcard
+  under it — MUST be refused at load, naming both entries and saying to list
+  the narrower entry first, since the later entry could never apply to it;
+  listed before the broader wildcard it MUST be accepted. A host that a
+  wildcard of its own entry matches MUST be accepted.
 - `rate_limit`, **required**: the keys of `request.rate_limit`, checked as
   they are and refused at load as they would be, naming the entry, `burst`
   filled in as 1 when left out.

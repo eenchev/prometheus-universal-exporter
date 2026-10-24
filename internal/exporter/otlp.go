@@ -1299,9 +1299,13 @@ type otlpStatus struct {
 	endpoint            string
 	// history is what the status page shows of the exports to endpoint
 	// (otlpstatuspage.go): a reload that points OTLP somewhere else starts
-	// it again, as it does consecutiveFailures. It is a few values and one
-	// error text of at most model.MaxFailureBytes, whatever the exports.
+	// it again, as it does consecutiveFailures. It is a few values, one
+	// error text of at most model.MaxFailureBytes and at most
+	// model.MaxOTLPUnreadyAfterFailures times, whatever the exports.
 	history otlpHistory
+	// now is time.Now unless a test sets a clock of its own, to tell the
+	// failures of a run apart by more than the page's second.
+	now func() time.Time
 }
 
 // otlpDropReason is why data points were given up on.
@@ -1347,22 +1351,40 @@ type otlpHistory struct {
 	// failedAt began, kept through the successes after it.
 	errorText string
 	failedAt  time.Time
-	// unreadySince is when the failed export ended that made the
-	// exporter unready under otlp.unready_after_failures, unreadyAfter
-	// then; zero while the exporter is ready.
-	unreadySince time.Time
-	unreadyAfter int
+	// failureEnds are when the failed exports of the current run of
+	// failures ended, the first first, up to
+	// model.MaxOTLPUnreadyAfterFailures of them; empty after a success.
+	// The exporter is unready under otlp.unready_after_failures N since the
+	// end of the Nth, whatever N a reload sets during the run: one under
+	// the run's length is a failure kept, one over it leaves the exporter
+	// ready. N is at most the bound, so the failures past it are never one
+	// the exporter is unready since, and are not kept: at most a thousand
+	// times, whatever the run's length.
+	failureEnds []time.Time
+}
+
+// unreadySince is when the exporter became unready under
+// otlp.unready_after_failures unreadyAfter, by the failures of the current
+// run; zero while it is ready by them.
+func (h *otlpHistory) unreadySince(unreadyAfter int) time.Time {
+	if unreadyAfter <= 0 || unreadyAfter > len(h.failureEnds) {
+		return time.Time{}
+	}
+	return h.failureEnds[unreadyAfter-1]
 }
 
 // record records an export to endpoint, which failed with err unless err is
-// nil. unreadyAfter is otlp.unready_after_failures at the export.
-func (o *otlpStatus) record(endpoint string, export otlpExport, err error, unreadyAfter int) {
+// nil.
+func (o *otlpStatus) record(endpoint string, export otlpExport, err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if endpoint != o.endpoint {
 		o.endpoint, o.consecutiveFailures, o.history = endpoint, 0, otlpHistory{}
 	}
 	now := time.Now()
+	if o.now != nil {
+		now = o.now()
+	}
 	o.lastDuration = export.duration
 	o.retries += export.retries
 	h := &o.history
@@ -1371,7 +1393,7 @@ func (o *otlpStatus) record(endpoint string, export otlpExport, err error, unrea
 		o.successes++
 		o.lastSuccess, h.lastSuccess = now, now
 		o.consecutiveFailures = 0
-		h.unreadySince = time.Time{}
+		h.failureEnds = nil
 		return
 	}
 	o.failures++
@@ -1380,10 +1402,8 @@ func (o *otlpStatus) record(endpoint string, export otlpExport, err error, unrea
 	// outlives the export.
 	h.errorText = shownOTLPError(err)
 	h.failedAt = export.started
-	// A reload that changed otlp.unready_after_failures during the run
-	// makes the next failure the one the exporter is unready since.
-	if unreadyAfter > 0 && o.consecutiveFailures >= unreadyAfter && (h.unreadySince.IsZero() || h.unreadyAfter != unreadyAfter) {
-		h.unreadySince, h.unreadyAfter = now, unreadyAfter
+	if len(h.failureEnds) < model.MaxOTLPUnreadyAfterFailures {
+		h.failureEnds = append(h.failureEnds, now)
 	}
 }
 
@@ -1792,7 +1812,7 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 	if failure == nil && !ok {
 		failure = refusedErr
 	}
-	s.otlp.record(cfg.Endpoint, export, failure, cfg.UnreadyAfterFailures)
+	s.otlp.record(cfg.Endpoint, export, failure)
 	if err == nil {
 		return
 	}

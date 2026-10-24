@@ -209,6 +209,9 @@ export is off, and otherwise:
 `failing` says the last export failed. `last_export`, `last_success`,
 `last_error`, `last_error_at`, `unready_after_failures`, `readiness` and
 `unready_since` are left out when there is nothing to say: `readiness`
-without `otlp.unready_after_failures`, `unready_since` while ready, or when
-a reload changed `otlp.unready_after_failures` after the exporter became
-unready, until the next failed export.
+without `otlp.unready_after_failures`, and `unready_since` while ready.
+`unready_since` is when the failed export ended that made the exporter
+unready, the Nth of the current run of failures under
+`otlp.unready_after_failures` N, whenever N was set: a reload that lowers it
+to the run's length or under shows the end of the new Nth failure at once, and
+one that raises it over the run's length shows `ready`.

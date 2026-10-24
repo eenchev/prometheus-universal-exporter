@@ -148,8 +148,12 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 	// The record of another endpoint, before the first export since a
 	// reload changed it, is not this one's.
 	var h otlpHistory
+	var unreadySince time.Time
 	if o.endpoint == cfg.Endpoint {
 		h, d.Failures = o.history, o.consecutiveFailures
+		// Read under mu: the next failure appends to the times.
+		unreadySince = h.unreadySince(d.UnreadyAfter)
+		h.failureEnds = nil
 	}
 	o.mu.Unlock()
 
@@ -185,8 +189,8 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 		d.Readiness = "ready"
 		if d.Failures >= d.UnreadyAfter {
 			d.Readiness = "unready"
-			if h.unreadyAfter == d.UnreadyAfter && !h.unreadySince.IsZero() {
-				d.UnreadySince = h.unreadySince.UTC().Format(time.RFC3339)
+			if !unreadySince.IsZero() {
+				d.UnreadySince = unreadySince.UTC().Format(time.RFC3339)
 			}
 		}
 	}

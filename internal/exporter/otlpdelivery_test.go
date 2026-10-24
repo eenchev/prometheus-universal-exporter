@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -40,5 +41,28 @@ func TestOTLPRetryAfter(t *testing.T) {
 	}
 	if otlpBackoff(0) != otlpRetryBackoff || otlpBackoff(1) != 2*otlpRetryBackoff || otlpBackoff(30) != otlpMaxBackoff {
 		t.Errorf("backoff %s %s %s", otlpBackoff(0), otlpBackoff(1), otlpBackoff(30))
+	}
+}
+
+// The times a run of failures keeps, to say when the exporter is unready
+// since under any threshold, stop at the most a threshold may be, however
+// long the run.
+func TestARunOfOTLPFailuresKeepsBoundedTimes(t *testing.T) {
+	o := &otlpStatus{}
+	start := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	n := 0
+	o.now = func() time.Time { n++; return start.Add(time.Duration(n) * time.Second) }
+	for range model.MaxOTLPUnreadyAfterFailures + 500 {
+		o.record("http://collector.invalid/v1/metrics", otlpExport{}, errors.New("503 Service Unavailable"))
+	}
+	if got := len(o.history.failureEnds); got != model.MaxOTLPUnreadyAfterFailures {
+		t.Errorf("a run of %d failures keeps %d times, want %d", model.MaxOTLPUnreadyAfterFailures+500, got, model.MaxOTLPUnreadyAfterFailures)
+	}
+	if got, want := o.history.unreadySince(model.MaxOTLPUnreadyAfterFailures), start.Add(model.MaxOTLPUnreadyAfterFailures*time.Second); !got.Equal(want) {
+		t.Errorf("unready since %v under the most, want %v", got, want)
+	}
+	o.record("http://collector.invalid/v1/metrics", otlpExport{}, nil)
+	if o.history.failureEnds != nil {
+		t.Errorf("a success keeps %d times", len(o.history.failureEnds))
 	}
 }

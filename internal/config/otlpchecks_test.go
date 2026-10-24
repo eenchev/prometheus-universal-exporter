@@ -108,6 +108,31 @@ func TestServiceNameIsNotAResourceAttribute(t *testing.T) {
 	}
 }
 
+// otlp.unready_after_failures is from 0 to its most, 1000, which bounds the
+// times the status page keeps of a run of failed exports; a block switched
+// off is not checked.
+func TestOTLPUnreadyAfterFailuresHasAMost(t *testing.T) {
+	for value, want := range map[int]string{
+		-1:                                    "otlp.unready_after_failures must not be negative",
+		model.MaxOTLPUnreadyAfterFailures + 1: "otlp.unready_after_failures is 1001, over the most, 1000",
+	} {
+		change := func(o *model.OTLPConfig) { o.UnreadyAfterFailures = value }
+		if err := Validate(otlpSettings(change)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%d: error %v, want %q", value, err, want)
+		}
+		off := otlpSettings(change)
+		off.OTLP.Enabled = false
+		if err := Validate(off); err != nil {
+			t.Errorf("%d, with enabled: false: %v", value, err)
+		}
+	}
+	for _, value := range []int{0, 1, model.MaxOTLPUnreadyAfterFailures} {
+		if err := Validate(otlpSettings(func(o *model.OTLPConfig) { o.UnreadyAfterFailures = value })); err != nil {
+			t.Errorf("%d: %v", value, err)
+		}
+	}
+}
+
 // otlp.batch_max_size is not negative and otlp.batch_max_bytes, when it is
 // set, at least 64KiB, in a size written with a unit too; left out, or 0,
 // they are 8192 points and 4MiB. A block switched off is not checked.

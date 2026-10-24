@@ -728,6 +728,7 @@ type OTLPConfig struct {
 	BatchMaxBytes ByteSize `yaml:"batch_max_bytes"`
 	// UnreadyAfterFailures makes /ready answer 503 after this many failed
 	// exports in a row; 0, the default, leaves readiness to the configuration.
+	// At most MaxOTLPUnreadyAfterFailures.
 	UnreadyAfterFailures int `yaml:"unready_after_failures"`
 }
 
@@ -737,6 +738,15 @@ func (o *OTLPConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain OTLPConfig
 	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPConfig", "otlp")
 }
+
+// MaxOTLPUnreadyAfterFailures is the most otlp.unready_after_failures may
+// be. The status page shows when the failed export ended that made the
+// exporter unready, under whatever threshold a reload sets during a run of
+// failures, so it keeps the end of each failure of the run up to the
+// threshold's most (exporter/otlp.go); the bound keeps that a few kilobytes.
+// A thousand failed exports are 17 minutes at the least otlp.interval, 1s,
+// and more than 8 hours at the default, 30s.
+const MaxOTLPUnreadyAfterFailures = 1000
 
 // DefaultOTLPMaxPendingPoints is otlp.max_pending_points when unset.
 const DefaultOTLPMaxPendingPoints = 100000

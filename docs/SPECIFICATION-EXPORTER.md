@@ -751,8 +751,12 @@ and the source MUST list the opt-in types.
   does, with the opt-in request types the example's files name on a
   `type: <name>` line added to `OPT_IN_REQUEST_TYPES`, so that the binary
   it runs is never older than the tree, and MUST then print the URL of the
-  landing page and, for an example with static targets, of
-  `/static-targets/status`, and run `bin/prometheus-universal-exporter` with
+  landing page, of `/static-targets/status` for every example, saying it
+  shows the static targets' last scrapes for an example with static targets
+  and the recent probes always, and of the first probe that the comment
+  opening the example's configuration gives as `curl '<url>/probe?<query>'`,
+  on `HOST:PORT`, when the collector it names is one of the example's (none
+  otherwise), and run `bin/prometheus-universal-exporter` with
   the example's configuration, its static target file when it has one, the
   listen address `HOST:PORT`, `127.0.0.1:8080` unless the command line sets
   them, and the flags of `ARGS`. An example's name MUST come from the tree
@@ -7428,8 +7432,10 @@ Recommended behavior:
   which never makes the exporter unready over OTLP: an exporter whose exports
   fail still answers probes, and a Kubernetes pod that is not ready stops
   receiving them. The failures MUST be counted per endpoint, so a reload that
-  changes `otlp.endpoint` starts the count again, and a negative value MUST be
-  rejected. A `503` body MUST name each reason on a line of its
+  changes `otlp.endpoint` starts the count again, and a negative value, or
+  one over 1000, MUST be rejected: the status page keeps when each failure
+  of a run ended, up to the most the threshold may be, to say when the
+  exporter became unready under any threshold (§ 42.14a). A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration. A rejected reload of the configuration or of the
@@ -8464,8 +8470,8 @@ that is switched on, the schemas MUST refuse only there, under a rule that
 goes by `enabled` being `true`. Of the `otlp` block that is a negative
 `timeout` or `interval`, a `compression` that is neither `gzip` nor `none`,
 a negative `max_pending_points`, `unready_after_failures` or
-`batch_max_size`, and a `batch_max_bytes` written as a number under its
-least; the rest of what the exporter checks of the block — the endpoint, the
+`batch_max_size`, an `unready_after_failures` over 1000, and a
+`batch_max_bytes` written as a number under its least; the rest of what the exporter checks of the block — the endpoint, the
 headers, the `tls` files, the least interval, `service.name` among the
 attributes, a `batch_max_bytes` under its least written as text — no schema
 can tell. What is not of a key's type at all — text for a number, a list for
@@ -27283,8 +27289,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   EXAMPLE=tcp` builds with `request-type-tags.sh '' '' 'tcp'`; and `make -n
   run` with an unknown example fails before any `go build`.
 - `tools/run-example.sh run`, in a copy of the tree with a `bin/` binary
-  that prints its arguments, prints the landing page's URL and, for
-  open-meteo, the static targets' status page's, then runs the binary with
+  that prints its arguments, prints the landing page's URL, the status
+  page's, for the static targets' last scrapes and the recent probes for
+  open-meteo and for the recent probes for ecb, and ecb's probe URL from its
+  opening comment, but none for a copy of ecb whose comment names a
+  collector it does not have, then runs the binary with
   `--config.file`, `--web.listen-address=127.0.0.1:9115`, the static target
   file for open-meteo alone, and the extra flag.
 - `make build` runs `tools/run-example.sh check-root-binaries $(APP)
@@ -29666,7 +29675,12 @@ Of the OTLP export:
   ended, or that none has; and the failed exports in a row. With
   `otlp.unready_after_failures` set it MUST show the readiness they make, by
   the rule `/ready` answers by (§ 23): `ready`, or `unready` with when
-  the failed export that made it so ended.
+  the failed export that made it so ended — the Nth of the current run of
+  failures under `otlp.unready_after_failures` N, whenever N was set: a
+  reload that lowers N to the run's length or under MUST show the end of the
+  new Nth failure at once, and one that raises it over the run's length
+  `ready`. It MUST keep for that the end of each failure of the run up to
+  the most N may be, 1000, and no more, whatever the run's length.
 - It MUST show the error of the last failed export, one of which the
   endpoint refused a request included, with when that export began, kept
   through later successes, shown as a static target's error is: every URL's
@@ -29683,8 +29697,8 @@ Of the OTLP export:
   `http_exporter_otlp_export_retries_total` and
   `http_exporter_otlp_exports_total` are read from, and MUST equal them.
 - What the page keeps of its own MUST be one record of the endpoint in
-  force: the last export and the last failure's error, bounded whatever the
-  exports. A reload that changes `otlp.endpoint` MUST show the new endpoint
+  force: the last export, the last failure's error and the ends of the
+  current run's failures up to 1000, bounded whatever the exports. A reload that changes `otlp.endpoint` MUST show the new endpoint
   at once, without the old endpoint's last export, last success, failures
   or error, until the new endpoint's own export; the numbers since the start
   MUST go on.

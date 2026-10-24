@@ -3616,7 +3616,7 @@
           "type": "object"
         },
         "unready_after_failures": {
-          "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes.",
+          "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000.",
           "type": "integer"
         }
       },
@@ -3660,6 +3660,7 @@
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
           },
           "unready_after_failures": {
+            "maximum": 1000,
             "minimum": 0
           }
         }

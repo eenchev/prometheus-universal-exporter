@@ -280,7 +280,9 @@ exporter whose job is delivering [static targets](STATIC-TARGETS.md) over
 OTLP, set `otlp.unready_after_failures: 3` to have `/ready` answer `503` after
 three failed exports in a row, until one gets through (see
 [Readiness](CONFIGURATION.md#readiness)). The count is per endpoint: a reload
-that changes `otlp.endpoint` starts it again.
+that changes `otlp.endpoint` starts it again. It is at most 1000: the status
+page keeps when each failure of a run ended, up to that many, so that it can
+say when the exporter became unready under any count a reload sets.
 
 On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
 then makes one last export, bounded by `otlp.timeout`, of what they, earlier

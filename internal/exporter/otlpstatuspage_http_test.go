@@ -331,6 +331,54 @@ func TestTheStatusPageShowsTheReadinessOTLPFailuresMake(t *testing.T) {
 	}
 }
 
+// A reload that changes otlp.unready_after_failures during a run of
+// failures moves when the exporter is unready since to the end of the
+// failure the new threshold counts to: one under the run's length shows
+// unready since that failure, at once, and one over it ready, as /ready
+// answers.
+func TestTheStatusPageFollowsAReloadOfTheOTLPUnreadyThreshold(t *testing.T) {
+	fastRetries(t)
+	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
+	server := otlpServer(t, endpoint.server.URL)
+	cfg := &server.manager.Get().OTLP
+	cfg.UnreadyAfterFailures = 3
+	start := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	var ends atomic.Int64
+	// The nth failure of the run ends n minutes after start.
+	server.otlp.now = func() time.Time { return start.Add(time.Duration(ends.Add(1)) * time.Minute) }
+	for range 4 {
+		server.exportOTLP(context.Background(), 20*time.Millisecond)
+	}
+	at := func(n int) string { return start.Add(time.Duration(n) * time.Minute).Format(time.RFC3339) }
+	for _, step := range []struct {
+		unreadyAfter    int
+		readiness, from string
+		code            int
+	}{
+		{3, "unready", at(3), http.StatusServiceUnavailable},
+		{2, "unready", at(2), http.StatusServiceUnavailable},
+		{1, "unready", at(1), http.StatusServiceUnavailable},
+		{4, "unready", at(4), http.StatusServiceUnavailable},
+		{5, "ready", "", http.StatusOK},
+		{model.MaxOTLPUnreadyAfterFailures, "ready", "", http.StatusOK},
+	} {
+		cfg.UnreadyAfterFailures = step.unreadyAfter
+		d := otlpDetails(t, server)
+		if d.Failures != 4 || d.Readiness != step.readiness || d.UnreadySince != step.from {
+			t.Errorf("after 4 failed exports, reloaded with unready_after_failures %d, the readiness is shown as %q since %q, want %q since %q", step.unreadyAfter, d.Readiness, d.UnreadySince, step.readiness, step.from)
+		}
+		if code, _ := ready(t, server); code != step.code {
+			t.Errorf("unready_after_failures %d: /ready answers %d, want %d", step.unreadyAfter, code, step.code)
+		}
+	}
+	// A fifth failure under 5 makes the exporter unready since its end.
+	cfg.UnreadyAfterFailures = 5
+	server.exportOTLP(context.Background(), 20*time.Millisecond)
+	if d := otlpDetails(t, server); d.Readiness != "unready" || d.UnreadySince != at(5) {
+		t.Errorf("after a fifth failed export under 5 the readiness is shown as %q since %q, want unready since %s", d.Readiness, d.UnreadySince, at(5))
+	}
+}
+
 // A reload that points OTLP at another endpoint shows the new endpoint at
 // once, with none of the old one's exports, failures or error, until its own
 // export; the counts since the start, as the self-metrics have them, go on.

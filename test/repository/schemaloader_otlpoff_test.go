@@ -49,7 +49,7 @@ var otlpKeys = map[string]struct {
 	"probe_attributes":       {noValue: []string{"maybe", "1"}},
 	"compression":            {checked: []otlpValue{{"zstd", ""}, {"GZIP", ""}, {`" "`, ""}, {"5", ""}, {"true", ""}}, noValue: []string{"[gzip]", "{a: b}"}},
 	"max_pending_points":     {checked: []otlpValue{{"-1", ""}, {"-100000", ""}}, noValue: []string{"1.5", "many", "[1]"}},
-	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}}, noValue: []string{"1.5", "many", "[1]"}},
+	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}, {"1001", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"batch_max_size":         {checked: []otlpValue{{"-1", ""}, {"-8192", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	// A size written as text is the exporter's alone to hold to the least.
 	"batch_max_bytes": {
@@ -120,7 +120,7 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 		t.Errorf("the table has %d keys, and the block %d beside enabled", len(otlpKeys), fields.NumField()-1)
 	}
 	// Values in order, off and on.
-	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB"} {
+	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB"} {
 		key, value, _ := strings.Cut(setting, ": ")
 		agree(t, schema, "otlp."+setting+", switched off", block(false, key, value), true)
 		agree(t, schema, "otlp."+setting+", switched on", block(true, key, value), true)

@@ -77,6 +77,18 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
+# The exporter's /probe sends requests on its caller's behalf, to any target
+# allowed_targets and denied_targets let through, and answers with what the
+# collectors read. ingress.enabled, and service.type NodePort or LoadBalancer,
+# make it reachable from outside the cluster, so rendering fails with either
+# unless webAuth is enabled: without authentication the exporter would be an
+# open proxy to its targets. The chart cannot see authentication anywhere
+# else. Set allowWithoutWebAuth when callers are authenticated elsewhere, at
+# the ingress controller or by a web.basic_auth written into the
+# configuration (an external ConfigMap's included), or when the exporter is to
+# be reachable without a credential on purpose.
+exposure:
+  allowWithoutWebAuth: false
 # Exporter process settings. These become command-line flags on the container.
 server:
   # Address the exporter listens on. The container port follows the port in

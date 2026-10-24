@@ -341,6 +341,21 @@ HTTP port. When disabled, the Service resource MUST NOT be rendered.
 schema MUST refuse `ExternalName`, a DNS alias with no endpoints through which
 nothing would reach the exporter.
 
+`/probe` sends requests on its caller's behalf to any target `allowed_targets`
+and `denied_targets` let through, so an exporter reachable from outside the
+cluster without authentication is an open proxy to its targets. Rendering
+MUST fail when `ingress.enabled` is true, or the Service is enabled with
+`service.type` `NodePort` or `LoadBalancer`, while `webAuth.enabled` is false
+and `exposure.allowWithoutWebAuth`, false by default, is false. The message
+MUST name the setting that exposes the exporter (`ingress.enabled`, or
+`service.type=NodePort` or `service.type=LoadBalancer`), say that it would be
+an open proxy to its targets, and name both ways out: enabling `webAuth`, and
+setting `exposure.allowWithoutWebAuth` when callers are authenticated
+elsewhere. `webAuth` is the only authentication the chart MUST treat as seen:
+a `web.basic_auth` in `config.data` or in an external ConfigMap, and
+authentication at an ingress controller, need the opt-out, and the chart
+documentation MUST say so. A `ClusterIP` Service MUST render without either.
+
 The Service MUST be usable as the target of Prometheus Operator
 `ServiceMonitor` resources. The documentation MUST warn that the chart's
 generated ServiceMonitor and PodMonitor routing requires this Service.
@@ -1418,7 +1433,11 @@ are skipped and the text checks of the templates still run:
    without an interval, and the timings of a disabled entry, of
    `selfMetrics` when disabled and of a static targets monitor that is not
    rendered MUST render. `ingress.enabled` MUST render an Ingress to the
-   Service and, with `service.enabled: false`, fail rendering.
+   Service and, with `service.enabled: false`, fail rendering. `ingress.enabled`,
+   and `service.type` `NodePort` and `LoadBalancer`, MUST fail rendering
+   without `webAuth.enabled` and `exposure.allowWithoutWebAuth`, the message
+   naming the setting, the open proxy, `webAuth` and the opt-out, and MUST
+   render with either; a `ClusterIP` Service MUST render with neither.
    `webAuth.mountPath` or `targetAuth.mountPath` at the configuration
    directory, with or without a trailing slash, the two at one path, an
    `extraVolumeMounts` entry at either or at the configuration directory
@@ -1889,7 +1908,9 @@ The Helm chart MUST support:
   failing rendering;
 - an optional Ingress resource with class, host, path, TLS, and annotations;
   it routes to the exporter's Service, so `ingress.enabled` with
-  `service.enabled: false` MUST fail rendering;
+  `service.enabled: false` MUST fail rendering, and it exposes the exporter,
+  so it MUST fail rendering without `webAuth.enabled` or
+  `exposure.allowWithoutWebAuth` (§ 33.4);
 - optional NEG integration, implemented by a configurable Service annotation
   such as the GKE `cloud.google.com/neg` annotation.
 

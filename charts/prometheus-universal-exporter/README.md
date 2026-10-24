@@ -346,7 +346,7 @@ config:
               expression: 'status:\s+(\d+(?:\.\d+)?)'
 ```
 
-A password written there ends up in the chart's ConfigMap, and the monitors need the credential too. Mount it from a Secret with `webAuth` instead and point the configuration at the files; every monitor the chart renders then presents it:
+A password written there ends up in the chart's ConfigMap, and the monitors need the credential too; nor does the chart see it, so an Ingress or a `NodePort` or `LoadBalancer` Service also needs `exposure.allowWithoutWebAuth` with it (see [Exposing the exporter](#exposing-the-exporter)). Mount it from a Secret with `webAuth` instead and point the configuration at the files; every monitor the chart renders then presents it:
 
 ```yaml
 webAuth:
@@ -378,6 +378,8 @@ monitors:
 ```
 
 With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath`, `sshAuth.mountPath`, `sqlAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering, and so is a path inside or above the configuration directory or another credential's directory, or an `extraVolumeMounts` entry inside it.
+
+`webAuth.enabled` is also what lets the chart render an Ingress or a `NodePort` or `LoadBalancer` Service; see [Exposing the exporter](#exposing-the-exporter).
 
 The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while it shuts down and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; a rejected reload of its configuration leaves it ready, serving the configuration in force; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
@@ -952,11 +954,16 @@ service:
 
 `service.type` is `ClusterIP`, `NodePort` or `LoadBalancer`; not `ExternalName`, a DNS alias with no endpoints, through which neither Prometheus nor the monitors would reach the exporter.
 
+`NodePort` and `LoadBalancer` make the exporter reachable from outside the cluster, so they need the exporter to authenticate its callers; see [Exposing the exporter](#exposing-the-exporter).
+
 `service.sessionAffinity: ClientIP` sends every probe from one Prometheus to one pod, so with several replicas its probes keep finding that pod's [cache](#autoscaling); empty, the default, leaves Kubernetes' `None`.
 
 ### Ingress
 
 ```yaml
+webAuth:
+  enabled: true
+  secretName: exporter-auth        # keys: username, password
 ingress:
   enabled: true
   className: nginx
@@ -967,7 +974,31 @@ ingress:
           pathType: Prefix
 ```
 
-The Ingress routes to the exporter's Service, so it needs `service.enabled: true`; with the Service off, rendering fails.
+The Ingress routes to the exporter's Service, so it needs `service.enabled: true`; with the Service off, rendering fails. It makes the exporter reachable from outside the cluster, so it needs the exporter to authenticate its callers, here with `webAuth`, whose files the configuration's `web.basic_auth` points at as in [Exporter authentication](#exporter-authentication); see [Exposing the exporter](#exposing-the-exporter). TLS is the Ingress's to terminate, with `ingress.tls`; the exporter serves plain HTTP.
+
+### Exposing the exporter
+
+`/probe` sends a request on its caller's behalf to any target `allowed_targets` and `denied_targets` let through, and answers with what the collector read. An exporter anyone can reach without a credential is an open proxy into wherever its pod can connect, and hands out what its collectors read. So rendering fails when the exporter is made reachable from outside the cluster — by `ingress.enabled`, or by `service.type` `NodePort` or `LoadBalancer` — while `webAuth.enabled` is false. The message names the setting that exposes the exporter.
+
+`webAuth` is the one place the chart sees the exporter authenticate its callers. A `web.basic_auth` written into `config.data."config.yaml"` with the password in place, or in an external ConfigMap, the chart does not read, and authentication at the ingress controller, such as ingress-nginx's `nginx.ingress.kubernetes.io/auth-type` annotations, is the controller's. With either, say so with `exposure.allowWithoutWebAuth`:
+
+```yaml
+exposure:
+  allowWithoutWebAuth: true   # callers authenticate at the ingress controller
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: exporter-ingress-auth
+  hosts:
+    - host: exporter.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+```
+
+The same value lets an exporter be reachable without a credential on purpose, behind a load balancer only a private network reaches, say. A `ClusterIP` Service, the default, is reached from inside the cluster only and needs neither; limit who reaches it there with a [NetworkPolicy](#networkpolicy).
 
 ### NetworkPolicy
 
@@ -1515,9 +1546,10 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`; `name` is required, and `annotations` refused, with `create: false`. See [Service account](#service-account). |
 | `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`; see [Kubernetes collectors](#kubernetes-collectors). |
-| `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
+| `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`, the last two with `webAuth` or `exposure.allowWithoutWebAuth`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
-| `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
+| `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
+| `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
 | `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
@@ -1593,6 +1625,7 @@ The chart runs the exporter with security-focused defaults:
 * Read-only root filesystem
 * All Linux capabilities dropped
 * Privilege escalation disabled
+* No Ingress, `NodePort` or `LoadBalancer` Service without the exporter's own authentication, `webAuth`, unless `exposure.allowWithoutWebAuth` says callers are authenticated elsewhere; see [Exposing the exporter](#exposing-the-exporter)
 * No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as, unless `kubernetesAccess` grants `kubernetes` collectors `list` on the resources its rules name, and never on the core group's Secrets
 
 ## Uninstall

@@ -364,6 +364,24 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /* The exporter's /probe sends requests on its caller's behalf, to any
+       target allowed_targets and denied_targets let through, and answers with
+       what the collectors read. Reachable from outside the cluster with no
+       credential, it is an open proxy into wherever the pod can reach. The
+       chart sees the exporter authenticate its callers only through webAuth;
+       a web.basic_auth written into the configuration, or authentication at
+       an ingress controller, it cannot see, so the operator says so with
+       exposure.allowWithoutWebAuth. Takes (list $root setting), setting the
+       value that exposes the exporter, for the message. */ -}}
+{{- define "prometheus-universal-exporter.requireAuthForExposure" -}}
+{{- $root := index . 0 -}}
+{{- $setting := index . 1 -}}
+{{- $webAuth := and $root.Values.webAuth $root.Values.webAuth.enabled -}}
+{{- $allowed := and $root.Values.exposure $root.Values.exposure.allowWithoutWebAuth -}}
+{{- if not (or $webAuth $allowed) }}
+{{- fail (printf "%s exposes the exporter outside the cluster, and webAuth is not enabled: /probe sends requests on its caller's behalf, so without authentication anyone who reaches it has an open proxy to every target allowed_targets and denied_targets let through, and reads what the collectors read. Enable webAuth and point the configuration's web.basic_auth at its files, or, when callers are authenticated elsewhere, at the ingress controller or by web.basic_auth written into the configuration, set exposure.allowWithoutWebAuth=true" $setting) }}
+{{- end }}
+{{- end }}
 {{- /* Whether the chart renders the self-metrics monitor: with
        selfMetrics.enabled, when the chart renders another monitor, which
        says the Prometheus Operator's resources exist, or the cluster

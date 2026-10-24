@@ -744,7 +744,23 @@ and the source MUST list the opt-in types.
   `make build-request-types`, which `make ci` includes, MUST run the same
   commands. `make build` MUST build the main package into
   `bin/prometheus-universal-exporter`, with the tags of `REQUEST_TYPES`, and
-  the documentation that gives it MUST say where the binary lands. CI MUST
+  the documentation that gives it MUST say where the binary lands, and MUST
+  warn when `./prometheus-universal-exporter` or `./pue-allocator`, which
+  a plain `go build` leaves in the repository root and `.gitignore` MUST
+  ignore, is there. `make run EXAMPLE=<name>` MUST build as `make build`
+  does, with the opt-in request types the example's files name on a
+  `type: <name>` line added to `OPT_IN_REQUEST_TYPES`, so that the binary
+  it runs is never older than the tree, and MUST then print the URL of the
+  landing page and, for an example with static targets, of
+  `/static-targets/status`, and run `bin/prometheus-universal-exporter` with
+  the example's configuration, its static target file when it has one, the
+  listen address `HOST:PORT`, `127.0.0.1:8080` unless the command line sets
+  them, and the flags of `ARGS`. An example's name MUST come from the tree
+  (`tools/run-example.sh`): a directory under `examples/` is named by the
+  directory, `examples/config.<name>.<anything>.yaml` by `<name>`, and a
+  name two examples share MUST fail; `make run` without `EXAMPLE` MUST list
+  the names and exit non-zero, and an unknown name MUST fail before
+  anything is built. `make ci` MUST NOT reach `run`. CI MUST
   also vet, build and test (the `internal/fetch` package) a build with every
   opt-in `sql` driver, which `make build-sql-drivers` and
   `make test-sql-drivers`, which `make ci` includes, MUST run the same; CI

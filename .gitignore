@@ -12,6 +12,7 @@
 
 # Go build and test artifacts
 /prometheus-universal-exporter
+/pue-allocator
 bin/
 dist/
 *.test

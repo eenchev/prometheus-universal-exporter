@@ -10,6 +10,9 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
+make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
+                #   configuration and static targets on 127.0.0.1:8080; PORT=, HOST= and ARGS= change
+                #   that, the opt-in types the example needs are added, and EXAMPLE= alone lists the examples
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make lint-request-types  # golangci-lint for each request type built on its own
@@ -22,6 +25,17 @@ make ci         # what CI runs, one after another: fmt-check, lint, lint-request
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
+
+The binaries `make build` makes are in `bin/`, and `make run` always builds
+before it runs, so the binary that runs is never one built before a pull. A
+plain `go build .` leaves `./prometheus-universal-exporter` in the repository
+root instead, ignored by git and soon older than `bin/`'s; `make build` warns
+while one is there. An example is a directory under `examples/`, named by the
+directory, such as `open-meteo`, or `examples/config.<name>.<format>-test.yaml`,
+named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
+files and the opt-in request types an example needs (a `type: tcp` line, for
+`examples/tcp`) from the tree. `HOST` is `127.0.0.1` so that an example is
+reachable from this machine alone; `HOST=0.0.0.0` serves it to the network.
 
 ## Code layout
 

@@ -233,7 +233,8 @@ That is [`examples/open-meteo/static-targets.yaml`](../examples/open-meteo/stati
 shortened; the configuration with its collector is
 [`config.yaml`](../examples/open-meteo/config.yaml) beside it, and the two run
 together as
-`prometheus-universal-exporter --config.file=examples/open-meteo/config.yaml --static-targets-file=examples/open-meteo/static-targets.yaml`.
+`prometheus-universal-exporter --config.file=examples/open-meteo/config.yaml --static-targets-file=examples/open-meteo/static-targets.yaml`,
+which `make run EXAMPLE=open-meteo` builds and runs.
 
 A merge key works inside a target's `request` too — `request: {<<: *request,
 timeout: 2s}` — and a `path` or `body` it brings in replaces the collector's

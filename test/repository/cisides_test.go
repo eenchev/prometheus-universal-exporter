@@ -544,8 +544,11 @@ func repositoryTestFiles(t *testing.T) []string {
 				if _, err := os.Lstat(match); err != nil {
 					continue
 				}
+				// bin/ is where make builds, ignored by git, so no change
+				// to it reaches a pull request; a test that names "bin" for
+				// a directory of its own does not read it.
 				switch top, _, _ := strings.Cut(filepath.ToSlash(match), "/"); top {
-				case ".git", "vendor":
+				case ".git", "vendor", "bin":
 					continue
 				}
 				if err := addTree(files, match); err != nil {

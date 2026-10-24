@@ -697,7 +697,8 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	_, recipes := makefileRules(t)
 	const command = `tags="$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)' '$(OPT_IN_REQUEST_TYPES)')" && go build -tags "$tags" -o bin/$(APP) . && go build -tags "$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)`
-	if got := strings.TrimSpace(recipes["build"]); got != command {
+	// The first line builds; the second warns of an old binary in the root.
+	if got, _, _ := strings.Cut(recipes["build"], "\n"); strings.TrimSpace(got) != command {
 		t.Errorf("make build runs %q, want %q", got, command)
 	}
 	app := regexp.MustCompile(`(?m)^APP := (\S+)$`).FindStringSubmatch(read(t, "Makefile"))

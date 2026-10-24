@@ -312,7 +312,8 @@ under `request` it may set `path`, `timeout`, `insecure_skip_verify`,
 keys (`basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`),
 its own [`login`](AUTHENTICATION.md#logging-in-to-a-target),
 its own [`rate_limit`](REQUESTS.md#rate-limiting),
-its own [`accept_status`](REQUESTS.md#accepting-other-statuses), and its own
+its own [`accept_status`](REQUESTS.md#accepting-other-statuses), its own
+[`tls` block](STATIC-TARGETS.md#credentials-and-tls-of-a-target), and its own
 `targets`, `from` and `until`, which replace the collector's:
 
 ```yaml

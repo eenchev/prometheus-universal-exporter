@@ -65,7 +65,7 @@ type does not take is refused when the file loads, naming the target:
 
 | Type | `target` | What a target's `request` may set |
 | --- | --- | --- |
-| `http` | an absolute URL | `method`, `path`, `body`, `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`, [`accept_status`](REQUESTS.md#accepting-other-statuses), [`rate_limit`](REQUESTS.md#rate-limiting), and its own credentials: `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` and [`login`](AUTHENTICATION.md#logging-in-to-a-target) |
+| `http` | an absolute URL | `method`, `path`, `body`, `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`, [`accept_status`](REQUESTS.md#accepting-other-statuses), [`rate_limit`](REQUESTS.md#rate-limiting), its own credentials: `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` and [`login`](AUTHENTICATION.md#logging-in-to-a-target), and its own `tls` |
 | [`graphite`](GRAPHITE.md#static-targets) | the Graphite server's URL | all `http`'s keys but `method` and `body`, plus its own `targets`, `from` and `until` |
 | [`grpc`](GRPC.md#static-targets) | the server | `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`, with its `codes`, [`accept_codes`](GRPC.md#errors-and-retries), its own credentials, `basic_auth`, `basic_auth_file`, `bearer_token` and `bearer_token_file`, and its own `tls` |
 | [`localfile`](LOCALFILE.md#static-targets) | a file under `request.root`, optional | `path` and `timeout` |
@@ -267,7 +267,7 @@ block, in place of the collector's. This is what each type takes:
 
 | Type | A target's own account | A target's own `tls` |
 | --- | --- | --- |
-| `http`, `graphite` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`, `login`, each replacing the collector's as above | no; `insecure_skip_verify` alone |
+| `http`, `graphite` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`, `login`, each replacing the collector's as above | yes, or `insecure_skip_verify` alone |
 | `grpc` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` | yes |
 | `sshfile` | `username`, and `private_key_file`, `passphrase_file` and `password_file`, any of the three replacing all three of the collector's | no; the host is verified with the collector's `known_hosts_file` |
 | `sql` | `username`, and `password_file` or, for `snowflake`, `private_key_file`, either replacing the collector's credential file | yes |
@@ -286,6 +286,20 @@ certificate needs both `cert_file` and `key_file`, and a target whose
 address asks for plaintext — `redis://`, `ldap://` without the collector's
 `start_tls`, `grpc://` — is refused with a block of its own, as is one the
 `sql` driver's options switch TLS off for.
+
+For `http` and `graphite` the target URL's scheme decides whether TLS is
+spoken, so `tls: {}` verifies an `https://` target with the system roots
+alone, and a block on an `http://` target is taken, as the collector's is,
+for the `https` requests its trips make. The target's block is the one every
+request of its trips is made with: the target's request and its pages,
+each hop of a followed redirect, and its [login](AUTHENTICATION.md#logging-in-to-a-target),
+unless the `login` block names a `tls` of its own. Its client certificate
+is a credential as the collector's is: a redirect over `https` to a host
+that is not the target's origin and is not in `redirect_trusted_hosts` is
+refused rather than shown it
+([What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries)).
+Beside the block, the target's `insecure_skip_verify` is refused: write it
+in the block.
 
 ```yaml
 interval: 1m
@@ -320,10 +334,12 @@ tells requests apart: the key its answers are
 identical scrapes and probes share, and the key
 [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets)
 backs off by, and, for the types that keep connections, the key of the
-`sql` pool, the `grpc` connection and the `sshfile` connection it is made
-on. Two targets that read as different accounts, or with different `tls`
-blocks, never share an answer, a trip, a backoff or a connection, even of
-one collector and one server.
+`sql` pool, the `grpc` connection, the `sshfile` connection and the `http`
+[connection pool](REQUESTS.md#connections) it is made on, and of the
+token an `http` or `graphite` login keeps for it. Two targets that read as
+different accounts, or with different `tls` blocks, never share an answer,
+a trip, a backoff, a connection or a login's token, even of one collector
+and one server.
 
 ## Scraping
 

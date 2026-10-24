@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_grpc || request_type_sql || request_type_redis || request_type_ldap || request_type_tcp
+//go:build !select_request_types || request_type_grpc || request_type_sql || request_type_redis || request_type_ldap || request_type_tcp || request_type_http || request_type_graphite
 
 package fetch
 
@@ -11,9 +11,9 @@ import (
 )
 
 // checkTargetTLS checks a static target's own tls block, which replaces its
-// collector's whole for a redis, ldap, tcp, sql or grpc collector, as the
-// collector's is checked: a client certificate needs both its files, and
-// server_name is a host's name. Its values take no placeholder, as no value
+// collector's whole for a redis, ldap, tcp, sql, grpc, http or graphite
+// collector, as the collector's is checked: a client certificate needs both
+// its files, and server_name is a host's name. Its values take no placeholder, as no value
 // of a target's own does: there is no probe to fill one.
 func checkTargetTLS(t *model.StaticTarget) error {
 	s := t.Request.TLS

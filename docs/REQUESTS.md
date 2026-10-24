@@ -650,7 +650,10 @@ redirect to https://other.example/x refused: it would send the request body to o
 
 The collector's TLS client certificate, [`tls.cert_file` and
 `tls.key_file`](#tls), is a credential too, and every TLS connection the
-collector makes presents it. A redirect over `https` to a destination that is
+collector makes presents it; so is a static target's own, in the `tls` block
+that replaces the collector's for it, which every TLS connection of that
+target's requests presents, and whose refusal says `the static target's TLS
+client certificate`. A redirect over `https` to a destination that is
 not trusted is therefore refused before a connection is made there, and, like
 the refusal of a body, not retried:
 
@@ -917,7 +920,9 @@ TLS settings — the whole `tls` block: `ca_file`, `cert_file`, `key_file`,
 `insecure_skip_verify` and `server_name` — the same `enable_http2` and the same
 `allowed_targets` and `denied_targets` shares one connection pool; a scrape
 overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
-settings. Collectors with different target lists never share a connection,
+settings, and so does a static target with a `tls` block of its own, so no
+connection made with one client certificate carries a request that is to
+present another. Collectors with different target lists never share a connection,
 since a connection is checked against the lists once, when it is made.
 A certificate or key replaced on disk is picked up by the next request. An idle
 connection is closed after 90 seconds, and a pool nothing has used for five
@@ -1523,6 +1528,13 @@ set or the target is a `rediss://` URL, a [`tcp`](TCP.md#tls) collector
 takes it whole too, and speaks TLS when it is set, and so does an
 [`ldap`](LDAP.md#tls) collector, with `ldaps://`, or after StartTLS with
 `start_tls`.
+
+A [static target](STATIC-TARGETS.md#credentials-and-tls-of-a-target) of an
+`http` or `graphite` collector may name a `tls` block of its own, which
+replaces the collector's whole for every request of that target: its pages,
+its redirects and its login. `tls: {}` there verifies with the system roots
+alone; the URL's scheme, not the block, decides whether TLS is spoken. No
+probe parameter sets it.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

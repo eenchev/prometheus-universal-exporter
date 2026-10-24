@@ -1175,7 +1175,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 				map[string]any{"if": writtenKey("cert_file"), "then": writtenKey("key_file")},
 				map[string]any{"if": writtenKey("key_file"), "then": writtenKey("cert_file")},
 			},
-			"description": "redis, ldap, tcp, sql and grpc: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+			"description": "redis, ldap, tcp, sql, grpc, http and graphite: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for; for http and graphite, whose URL's scheme decides, it is the block every https request of the target's trips is made with, its redirects' and its login's, and is not written beside the target's insecure_skip_verify. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
 		},
 		"targets[].request.tls.ca_file":                     {"not": placeholder()},
 		"targets[].request.tls.cert_file":                   {"not": placeholder()},

@@ -101,11 +101,12 @@ type TargetRequestConfig struct {
 	PrivateKeyFile string `yaml:"private_key_file"`
 	PassphraseFile string `yaml:"passphrase_file"`
 	PasswordFile   string `yaml:"password_file"`
-	// TLS replaces, as a whole block, a redis, ldap, tcp, sql or grpc
-	// collector's request.tls for this target; nil keeps the collector's.
-	// Written, even as tls: {}, it asks for TLS (TLSConfig.Set), so a
-	// target can ask for TLS its collector does not, but not leave out
-	// TLS its collector asks for.
+	// TLS replaces, as a whole block, a redis, ldap, tcp, sql, grpc, http
+	// or graphite collector's request.tls for this target; nil keeps the
+	// collector's. Written, even as tls: {}, it asks for TLS
+	// (TLSConfig.Set), so a target can ask for TLS its collector does not,
+	// but not leave out TLS its collector asks for; for http and graphite
+	// the URL's scheme decides, and tls: {} verifies with the system roots.
 	TLS *TLSConfig `yaml:"tls,omitempty"`
 	// Connections replaces, key by key, a sql collector's
 	// request.connections for this target.

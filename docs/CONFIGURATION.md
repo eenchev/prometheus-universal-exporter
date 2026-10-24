@@ -5589,7 +5589,8 @@ a [`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
 collector and the TLS files of a [`tcp`](TCP.md#static-targets) or
 [`grpc`](GRPC.md#tls) one, and a static target's own, and the secret files of an `http` or
 `graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
-and of a static target's own.
+and of a static target's own, with the TLS files of an `http` or `graphite`
+static target's own `tls` block.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

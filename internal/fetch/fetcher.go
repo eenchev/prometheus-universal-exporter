@@ -162,8 +162,8 @@ type RequestOverrides struct {
 	// Username, BindDN and the credential files are a static target's
 	// request.username, bind_dn, private_key_file, passphrase_file and
 	// password_file, replacing an sshfile, sql, redis or ldap collector's
-	// account, and TLS its request.tls, replacing a redis, ldap, tcp, sql
-	// or grpc collector's whole block; no probe parameter sets them, so a
+	// account, and TLS its request.tls, replacing a redis, ldap, tcp, sql,
+	// grpc, http or graphite collector's whole block; no probe parameter sets them, so a
 	// probe can neither choose the account a scrape logs in as nor the
 	// certificate it presents.
 	Username       string
@@ -707,7 +707,24 @@ func requestMethod(c *model.Collector, overrides RequestOverrides) string {
 	return c.Request.Method
 }
 
+// withTargetTLS is c with a static target's own tls block in place of the
+// collector's whole, as a request of an http or graphite collector to that
+// target is made; c itself when the target names none. c is never written,
+// being the configuration's.
+func withTargetTLS(c *model.Collector, o RequestOverrides) *model.Collector {
+	if o.TLS == nil {
+		return c
+	}
+	x := *c
+	x.Request.TLS = *o.TLS
+	return &x
+}
+
 func fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded ...http.Header) (*HTTPResponse, error) {
+	// A static target's own tls block replaces the collector's for every
+	// request of the trip: its pages, its redirects, which are judged by
+	// the client certificate it presents, and its login.
+	c = withTargetTLS(c, overrides)
 	u, err := requestURL(target, c, overrides)
 	if err != nil {
 		return nil, err
@@ -728,7 +745,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		enableHTTP2 = *overrides.EnableHTTP2
 	}
 	// The connection pool is shared with every request made with the same
-	// TLS and HTTP/2 settings (transport.go).
+	// TLS and HTTP/2 settings (transport.go), so a static target with a tls
+	// block of its own has a pool of its own, and no connection made with
+	// one client certificate carries a request that is to present another.
 	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, followRedirects, 0)
 	if err != nil {
 		return nil, err
@@ -740,7 +759,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		proxy = transport.Proxy
 	}
-	ctx, err = withTargetPolicy(ctx, c, u, proxy)
+	ctx, err = withTargetPolicy(ctx, c, u, proxy, overrides.TLS != nil)
 	if err != nil {
 		return nil, err
 	}

@@ -28007,8 +28007,9 @@ and otherwise with the collector's `request.tls`, never with an
 `insecure_skip_verify` a probe parameter or a static target sets for the
 target.
 
-A token MUST be kept, by the collector, the login block, the URL the
-login was sent to and the `Host` it was sent with, and sent on every request
+A token MUST be kept, by the collector, the login block, the `tls` block the
+login was made with (the login's own, a static target's or the
+collector's), the URL the login was sent to and the `Host` it was sent with, and sent on every request
 until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
@@ -28024,7 +28025,8 @@ meanwhile, and the request MUST be sent once more with the token of a new
 login, whatever its method; that request MUST NOT be one of
 `retry.attempts`, and MUST be made within the trip's deadline. At most 1000
 tokens MUST be kept, the one used longest ago dropped first, and a reload
-MUST drop the tokens of a login it changes or removes.
+MUST drop the tokens of a login it changes or removes, or whose `tls` block
+it changes.
 
 A login that fails MUST fail the trip in the `login` stage, saying where it
 went, with its query's values masked, and why: for an answer that is not
@@ -29034,11 +29036,19 @@ credentials, as inline or file-backed basic authentication or a bearer
 token; an `sshfile` or `sql` target MAY instead name its own user and key
 or password files, a `redis` target its own `username` and `password_file`
 and an `ldap` target its own `bind_dn` and `password_file`, as § 5.1 says
-for each. A `redis`, `ldap`, `tcp`, `sql` or `grpc` target MAY name its own
-`tls` block, which MUST replace the collector's whole block for that target,
-no key of the collector's being taken for a key it leaves out; written, even
-as `tls: {}`, it MUST ask for TLS, so a target MAY ask for TLS its collector
-does not but MUST NOT leave out TLS its collector asks for. A target's own
+for each. A `redis`, `ldap`, `tcp`, `sql`, `grpc`, `http` or `graphite`
+target MAY name its own `tls` block, which MUST replace the collector's whole
+block for that target, no key of the collector's being taken for a key it
+leaves out; written, even as `tls: {}`, it MUST ask for TLS, so a target MAY
+ask for TLS its collector does not but MUST NOT leave out TLS its collector
+asks for. For `http` and `graphite`, whose URL's scheme decides whether TLS
+is spoken, `tls: {}` MUST verify with the system roots alone, a block on an
+`http://` target MUST be taken as the collector's is, and the target's block
+MUST be the one every request of the target's trips is made with: its
+pages, every hop of a followed redirect, whose client certificate rule
+(§ 42.15c, rule 5a) MUST apply with the target's certificate, and its
+login, unless the login block has a `tls` of its own; beside it the
+target's `insecure_skip_verify` MUST be refused at load. A target's own
 account and `tls` block MUST be checked at load as the collector's are —
 cert and key files both or neither, a `username` or `bind_dn` with its
 `password_file`, a target address that asks for plaintext refused beside a
@@ -29046,9 +29056,10 @@ block of its own — MUST NOT hold a placeholder, and MUST NOT be settable by
 any probe parameter. They MUST be part of every key that tells the target's
 requests apart: its cache key, the key of the trip it shares with identical
 requests, `failure_backoff`'s key, and the key of every connection kept for
-it, a `sql` pool, a `grpc` connection or an `sshfile` connection, so two
-targets that differ in them never share an answer, a trip, a backoff or a
-connection. Their files MUST be read when the scrape needs them, as the
+it, a `sql` pool, a `grpc` connection, an `sshfile` connection or an `http`
+connection pool (§ 42.15b), and, for `http` and `graphite`, the key of the
+login token kept for it, so two targets that differ in them never share an
+answer, a trip, a backoff, a connection or a token. Their files MUST be read when the scrape needs them, as the
 collector's are, and by `--dry-run`, which MUST warn under the target's name
 of one a scrape would fail on; a debug report MUST mask a target's password
 as it masks the collector's. A request that carries an
@@ -29813,7 +29824,7 @@ The Helm chart MUST expose both as list-valued `params` entries on each
 Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
-`server_name` — and HTTP/2
+`server_name`, a static target's own `tls` block being its set — and HTTP/2
 choice, shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
@@ -29920,8 +29931,9 @@ probe or a static target.
    rule 3's headers when it is not trusted, unless rule 5a refuses it.
 
    5a. The collector's TLS client certificate (`request.tls.cert_file` and
-   `key_file`) is a credential that every TLS connection of the request
-   presents. When the collector has one, a redirect over `https` to a
+   `key_file`), or a static target's own, in the `tls` block that replaces
+   the collector's for it (§ 42.14), is a credential that every TLS
+   connection of the request presents. When the request has one, a redirect over `https` to a
    destination that is not trusted MUST be refused before any connection is
    made there, with an error that names the redirect's URL, redacted as in
    rule 5, the destination, the certificate and

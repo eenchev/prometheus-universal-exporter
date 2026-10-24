@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_grpc || request_type_sql || request_type_redis || request_type_ldap || request_type_tcp
+//go:build !select_request_types || request_type_grpc || request_type_sql || request_type_redis || request_type_ldap || request_type_tcp || request_type_http || request_type_graphite
 
 package fetch
 

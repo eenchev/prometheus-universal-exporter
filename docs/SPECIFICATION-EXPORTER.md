@@ -968,6 +968,11 @@ The top-level `rate_limits` list MUST bound how fast the `http` and
   anywhere but a leading `*.`, or a wildcard over an IP address MUST be
   refused at load. A host, in canonical form, MUST be listed once across
   every entry; listed twice it MUST be refused at load, naming both entries.
+  A host that a wildcard of an earlier entry matches — an exact name or a
+  narrower wildcard under it — MUST be refused at load, naming both entries
+  and saying to list the narrower entry first, since the later entry could
+  never apply to it; listed before the broader wildcard it MUST be accepted.
+  A host that a wildcard of its own entry matches MUST be accepted.
 - `rate_limit`, **required**: the keys of `request.rate_limit`, checked as
   they are and refused at load as they would be, naming the entry, `burst`
   filled in as 1 when left out.
@@ -1000,6 +1005,12 @@ The top-level `rate_limits` list MUST bound how fast the `http` and
   So MUST the collectors and static targets in force that the request types
   keeping connections across scrapes, and the collectors' own
   `request.rate_limit`, follow.
+- An entry's bucket MAY be kept by each exporter process alone: several
+  replicas, behind the allocator (§ 42.14d) or otherwise, MAY together ask
+  an entry's hosts up to their number times its `requests_per_second`.
+  NOTE: per-process buckets are intended, as they need no state shared
+  between replicas; the documentation MUST say so and how to keep within a
+  quota.
 
 #### `localfile`
 

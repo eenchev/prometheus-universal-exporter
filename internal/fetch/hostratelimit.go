@@ -25,8 +25,8 @@ import (
 // A request counts as request.rate_limit counts it — each attempt, page,
 // redirect hop and login request, against the host it is sent to — and
 // waits, or is refused, by the same code. The first entry whose hosts match
-// applies; one host may not be listed twice, where the second could never
-// apply. A host matches whatever its port and scheme: a quota is the
+// applies; one host may not be listed twice, nor under an earlier entry's
+// wildcard, where the second could never apply. A host matches whatever its port and scheme: a quota is the
 // host's, and a service seldom keeps one per port.
 //
 // Requests of the other types (grpc, sql, redis, ...) take no turn: they carry no rateLimitSetting,
@@ -166,12 +166,23 @@ func compileHostRateLimit(entry *model.HostRateLimit) (*hostRateLimitRule, error
 
 // ValidateHostRateLimits checks rate_limits and fills in each entry's
 // burst. An entry needs a name, a label value of its self-metrics and so
-// unique, at least one host, each listed in one entry only, and a
-// rate_limit as request.rate_limit's is checked. Every mistake is reported.
+// unique, at least one host, each listed in one entry only and not covered
+// by a wildcard of an earlier entry, and a rate_limit as request.rate_limit's
+// is checked. Every mistake is reported.
+//
+// The first entry that matches applies, so a host an earlier entry's
+// wildcard matches — an exact name under it, or a narrower wildcard — could
+// never apply where it is listed: it is refused as the same host listed
+// twice is, and the error says to list the narrower first, the way to carve
+// a host out of a wildcard. Within one entry a host its own wildcard covers
+// is harmless, the entry applying to it either way, and is let be.
 func ValidateHostRateLimits(entries []model.HostRateLimit) error {
 	var errs []error
 	names := map[string]bool{}
 	hosts := map[string]string{}
+	// wildcards are the wildcards of the entries before the one checked.
+	type wildcardOf struct{ at, written, suffix string }
+	var wildcards []wildcardOf
 	for i := range entries {
 		entry := &entries[i]
 		at := fmt.Sprintf("rate_limits entry %q", entry.Name)
@@ -188,21 +199,36 @@ func ValidateHostRateLimits(entries []model.HostRateLimit) error {
 		if len(entry.Hosts) == 0 {
 			errs = append(errs, fmt.Errorf("%s lists no hosts; hosts is required", at))
 		}
+		var own []wildcardOf
 		for j, written := range entry.Hosts {
 			host, wildcard, err := canonicalRuleHost(written)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s hosts[%d] %q %w", at, j, written, err))
 				continue
 			}
+			key := host
 			if wildcard {
-				host = "*" + host
+				key = "*" + host
 			}
-			if first, ok := hosts[host]; ok {
+			if first, ok := hosts[key]; ok {
 				errs = append(errs, fmt.Errorf("%s lists %q, which %s lists already; a host may be listed once, in one entry", at, written, first))
 				continue
 			}
-			hosts[host] = at
+			hosts[key] = at
+			// host is matched as a request's host would be: an exact
+			// name, or a wildcard's suffix, which a broader wildcard's
+			// suffix ends.
+			for _, w := range wildcards {
+				if strings.HasSuffix(host, w.suffix) {
+					errs = append(errs, fmt.Errorf("%s lists %q, which %s's %q covers already; the first entry that matches applies, so %s would never apply to it: list the narrower entry before the broader one", at, written, w.at, w.written, at))
+					break
+				}
+			}
+			if wildcard {
+				own = append(own, wildcardOf{at: at, written: written, suffix: host})
+			}
 		}
+		wildcards = append(wildcards, own...)
 		if err := checkRateLimit(&entry.RateLimit); err != nil {
 			errs = append(errs, fmt.Errorf("%s rate_limit%w", at, err))
 			continue

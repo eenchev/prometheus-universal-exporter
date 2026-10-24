@@ -1426,11 +1426,33 @@ for one of its ports. A request matches by the host of its URL, not by the
 address it resolves to, so a host reached by two names needs both listed.
 The first entry whose hosts match a request applies, in the order of the
 list, so an exact name listed before a wildcard over it takes its requests
-out of the wildcard's entry; a host may be listed once, in one entry, and
-the same host twice is refused when the configuration loads, as are an
-entry without a `name`, two entries of one name, an entry without hosts and
-a `rate_limit` that `request.rate_limit` would refuse. `burst` is 1 when
-left out.
+out of the wildcard's entry. A host may be listed once, in one entry, and
+the same host twice is refused when the configuration loads; so is a host
+that a wildcard of an earlier entry covers — `api.example.com` or
+`*.api.example.com` after an entry with `*.example.com` — since the earlier
+entry would always match it first and the later one never apply. The error
+names both entries; list the narrower entry first:
+
+```
+rate_limits entry "exact" lists "api.example.com", which rate_limits entry "wild"'s "*.example.com" covers already; the first entry that matches applies, so rate_limits entry "exact" would never apply to it: list the narrower entry before the broader one
+```
+
+Within one entry a host its own wildcard covers is let be, since the entry
+applies to it either way. Also refused are an entry without a `name`, two
+entries of one name, an entry without hosts and a `rate_limit` that
+`request.rate_limit` would refuse. `burst` is 1 when left out.
+
+An entry's bucket is kept by each exporter process, not shared between
+processes. Several replicas — behind the [target allocator](ALLOCATOR.md) or
+otherwise — each have a bucket of their own for an entry, so N replicas
+together may ask its hosts up to N × `requests_per_second`, with N × `burst`
+at once. Give each replica the host's quota divided by the number of
+replicas, or have the allocator keep the targets that ask the host on one
+replica: [static targets](ALLOCATOR.md#static-targets) of one `shard_key`
+land on one replica, and a [probe job](ALLOCATOR.md#probe-targets) with
+`shard_key: address` keeps every probe of one host and port on one. A probe
+Prometheus sends to another replica, which any replica answers, takes its
+turn there.
 
 Only `http` and `graphite` requests are limited, as with
 `request.rate_limit`: a `grpc`, `sql`, `redis` or other collector's requests

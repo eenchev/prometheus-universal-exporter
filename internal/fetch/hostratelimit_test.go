@@ -187,3 +187,42 @@ func TestHostRateLimitsAreCheckedWhenTheyLoad(t *testing.T) {
 		t.Errorf("burst %v; want it filled in as 1", b)
 	}
 }
+
+// A host an earlier entry's wildcard covers could never apply where it is
+// listed, the first entry that matches applying: it is refused at load as
+// the same host listed twice is, naming both entries. Listed before the
+// wildcard it carves its host out, and within one entry it is harmless.
+func TestAHostAnEarlierWildcardCoversIsRefused(t *testing.T) {
+	err := ValidateHostRateLimits([]model.HostRateLimit{
+		hostEntry("wild", 1, 1, "*.example.com"),
+		hostEntry("exact", 1, 1, "API.example.com"),
+		hostEntry("narrower", 1, 1, "*.api.example.com"),
+		hostEntry("deep", 1, 1, "a.b.example.com", "example.com"),
+	})
+	if err == nil {
+		t.Fatal("loaded; want refused")
+	}
+	for _, want := range []string{
+		`rate_limits entry "exact" lists "API.example.com", which rate_limits entry "wild"'s "*.example.com" covers already; the first entry that matches applies, so rate_limits entry "exact" would never apply to it: list the narrower entry before the broader one`,
+		`rate_limits entry "narrower" lists "*.api.example.com", which rate_limits entry "wild"'s "*.example.com" covers already`,
+		`rate_limits entry "deep" lists "a.b.example.com", which rate_limits entry "wild"'s "*.example.com" covers already`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("no %q in:\n%v", want, err)
+		}
+	}
+	// example.com itself is not under *.example.com.
+	if strings.Contains(err.Error(), `lists "example.com"`) {
+		t.Errorf("example.com refused as covered by *.example.com:\n%v", err)
+	}
+	for _, entries := range [][]model.HostRateLimit{
+		{hostEntry("exact", 1, 1, "api.example.com"), hostEntry("wild", 1, 1, "*.example.com")},
+		{hostEntry("narrower", 1, 1, "*.api.example.com"), hostEntry("wild", 1, 1, "*.example.com")},
+		{hostEntry("one", 1, 1, "*.example.com", "api.example.com", "*.api.example.com")},
+		{hostEntry("one", 1, 1, "api.example.com", "*.example.com")},
+	} {
+		if err := ValidateHostRateLimits(entries); err != nil {
+			t.Errorf("%+v refused: %v", entries, err)
+		}
+	}
+}

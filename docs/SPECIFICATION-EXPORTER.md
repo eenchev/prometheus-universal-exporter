@@ -27390,6 +27390,35 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   hold at most 3.5 KiB a key; the test fails when a key's target is a slice
   of the 8 KiB one.
 
+## 34.208 make run's URLs and OTLP unreadiness after a reload
+
+- `tools/run-example.sh run`, in a copy of the tree with a `bin/` binary
+  that prints its arguments, prints the status page's URL for every
+  example: for open-meteo for the static targets' last scrapes and the
+  recent probes, for ecb, which has no static targets, for the recent
+  probes; it prints ecb's first probe URL from the comment opening its
+  configuration on `HOST:PORT`, and none for a copy of ecb whose comment
+  names a collector the configuration does not have
+  (TestRunExampleRunsTheBinOfMakeBuild); the script before printed no
+  status page URL for ecb and no probe URL.
+- After 4 failed exports under `otlp.unready_after_failures: 3`, each
+  ending a minute after the last on a test clock, the OTLP section shows
+  `unready` since the third's end; reloads to 2, 1 and 4 show `unready`
+  since the second's, the first's and the fourth's end at once, and to 5
+  and 1000 `ready`, as `/ready` answers 503 and 200; a fifth failure under
+  5 shows `unready` since its end
+  (TestTheStatusPageFollowsAReloadOfTheOTLPUnreadyThreshold); before, the
+  section showed no `unready_since` after the reloads to 2, 1 and 4.
+- A run of 1,500 failed exports keeps 1,000 failure ends, the most
+  `otlp.unready_after_failures` may be, the 1,000th the time unready since
+  under 1000, and a success keeps none
+  (TestARunOfOTLPFailuresKeepsBoundedTimes).
+- `otlp.unready_after_failures` of -1 and 1001 is refused, the latter as
+  over the most, 1000, and both are taken in a block with `enabled: false`;
+  0, 1 and 1000 are taken (TestOTLPUnreadyAfterFailuresHasAMost); the
+  schemas refuse 1001 only in a block that is switched on, as the exporter
+  does, and take 1000 in either (TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

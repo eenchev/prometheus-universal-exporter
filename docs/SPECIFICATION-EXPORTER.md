@@ -26892,6 +26892,126 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `LoadBalancer` type on a Service that is not rendered render with neither,
   and `exposure.allowWithoutWebAuth: false` lets no Ingress render.
 
+## 34.195 Metric lint
+
+- `counter-total` fires on a counter not named `_total`, whose message
+  names it as the text format and OpenMetrics write it and the name to give
+  it, on a counter named `_totals` and on a gauge named `_total`, and not on
+  a counter named `_total`, a gauge named `_totals` or an untyped rule of
+  either name (§ 30.1a).
+- `unit-suffix` gives the base unit's name and the `scale` for each unit
+  that is not a base unit at a name's end or before a counter's `_total`,
+  and the `seconds`, `timestamp_seconds` or `bytes` name for a duration,
+  time or memory word without its unit; it gives nothing for names with
+  `seconds`, `bytes` or `ratio`, for `timeout`, `timeouts`, `size`, `page`,
+  `storage` and `runtime`, for `ms` not at the end, for `us` and `ns`
+  without a duration word, and for `kbytes` (§ 30.1a).
+- The names of a `python` collector's rules and of a `prometheus` rule
+  without a name, and the type of one without a type, are not linted from
+  the configuration, and a run's series of a script are (§ 30.1a).
+- The name linted and named is the exported one, with `metrics_prefix`
+  (§ 30.1a).
+- `unbounded-label` fires on a label of 101 distinct values in a run, on a
+  UUID, 16 hex digits with or without `0x`, 10 digits, an RFC 3339 time, a
+  time with an offset and a date, and not on 100 values, 15 hex digits, 16
+  letters past `f`, 9 digits, a dotted version, an address with its port, a
+  UUID's start or a time of day; the configuration alone gives none of it,
+  and a value quoted is cut at 64 bytes between two characters (§ 30.1a).
+- `name-clash` reports a name two collectors make with another type, help or
+  labels, once for each, naming the other; not where a rule has no
+  description, not after `transform.rename_labels` and `remove_labels` make
+  the labels alike, not for alike rules, a `python` collector's or an
+  untyped `prometheus` rule's names, nor by the labels of a typed
+  `prometheus` rule, and not against a collector of the same name (§ 30.1a).
+- `lint.ignore` silences each rule it lists for its collector alone, the
+  other collector of a clash still reporting it, and every id of
+  `model.LintRules` fires in the test, so each is a rule applied (§ 30.1a).
+- A finding the configuration and a run's series both give is shown once
+  (§ 30.1a).
+- `lint.ignore` loads every rule id, and `lint: {}`, and refuses an unknown
+  id naming the collector, the id and the ids it takes, and an unknown key
+  of `lint` (§ 30.1a).
+- `--dry-run` lists the findings under `details.lint` of the `config` check,
+  by collector, rule, metric and message, logs each at WARN as `metric
+  lint`, and exits `0` with status `ok`; `lint.ignore` takes them out of the
+  list, a configuration without advice has no `details.lint`, and a failing
+  configuration with advice still exits `1` (§ 30.1).
+- A debug probe's report has a `Lint` section after the logs and before the
+  metrics with the `counter-total`, `name-clash` and `unbounded-label`
+  findings of the run, its verdict and metrics are those of the probe
+  without debug, and with the three rules ignored it shows `none` and the
+  rules ignored (§ 42.17).
+- The debug page answers a written collector's findings, against the
+  configured collectors, under `lint` with collector, rule, metric and
+  message, has them in its text report, and the page shows them (§ 42.17).
+- `lint.ignore[]` is in the schema table: `unit-suffix` taken and
+  `unit_suffix` refused by both the schemas and the exporter, the key
+  absent taken (§ 24.3).
+
+## 34.196 Derived series
+
+- A regex collector's derived entries compute each operation: a sum and a
+  difference of two counters and a ratio, series by series of the same
+  labels; a sum `by: [queue]` and a sum `by: []` of one family; and a ratio
+  over a hidden sum, the hit ratio of hits / (hits + misses), the sum not
+  exported; a ratio over 0 of one label set makes no series, and an entry
+  gets its type and help (§ 18.1).
+- A series without a partner of identical labels in the other operand makes
+  no derived series, and one that has one does (§ 18.1).
+- A ratio over 0, 0 / 0, and a sum with an infinite operand make no series
+  and no failure, while a difference beside them does (§ 18.1).
+- A csv collector derives a difference, a ratio and a `by: []` sum from its
+  columns' series, row by row (§ 18.1).
+- A jq collector's derived series get `transform.labels`, `rename_labels`,
+  `metrics_prefix` and `name_escaping`, the entry reading the rule's name and
+  its label as the rule writes them (§ 18.1).
+- Exported derived series count against `limits.max_metrics`, a scrape over
+  it failing with the count error, and a hidden entry's series are not
+  counted (§ 18.1).
+- Under a prometheus pass-through an operand no rule names is read from the
+  target's series; one that is a histogram makes no series and is reported
+  as the entry's failure under log; the derived series are added without
+  writing past the decoded series' end (§ 18.1).
+- Entries chain: a later entry reads an earlier, hidden or not, which reads
+  the rules' series after `scale` and `value_map` (§ 18.1).
+- `CheckDerived` refuses, in words naming the entry and what to write: no
+  name, an invalid name, a rule's name, a histogram's `_bucket`, a name
+  twice, a histogram type, no operation, two, a sum of one without `by`, a
+  ratio of three, `by` on a ratio, `by` on a sum of two, a `by` label twice
+  or invalid, an unknown operand, a later entry, the entry itself, a
+  histogram rule, a hidden entry nothing reads, and a name too long once
+  prefixed; it reports every bad entry, gives an entry without a type
+  gauge, and takes an unknown operand under prometheus and python (§ 18.1).
+- A configuration with `derived` loads: `by: []` is kept apart from `by`
+  left out, a type defaults to gauge; an unknown operand, a number as an
+  operand and an unknown key `on` are refused at load, and a python
+  collector's operand that no rule names loads (§ 18.1, § 24.3).
+- A debug probe's report marks a derived family with its operation and
+  operands under its exported name, lists the entries that gave no series,
+  and shows nothing of a hidden entry (§ 18.1).
+- Through `/probe`, a derived ratio is exported with its HELP, TYPE,
+  `transform.labels` and prefix, its hidden operand is not, and
+  `/self-metrics` has `http_exporter_rule_failures_total` of each entry, 1
+  for an entry whose pass-through operand was a histogram (§ 18.1).
+- examples/tcp's memcached collector exports `memcached_get_hit_ratio 0.9`
+  from 90 hits and 10 misses, and not its hidden sum (built with
+  `request_type_tcp`).
+- A derived entry whose pass-through operand is a histogram is logged as
+  failed once for its target, and as recovered once the operand is a gauge
+  and the entry makes its series again (§ 18.1).
+
+## 34.197 The static targets' status page
+
+- The static targets' status page has a row per target saying how its last scrape went: success, failed with the error of the HTTP status, skipped by backoff with the time the backoff ends and the failures it counts, stale result served with `stale` set, and not yet scraped without any scrape field; the summary counts 7 targets, 5 failing, 1 not yet scraped, and the failing targets come first, each part in name order.
+- A second scrape of a cached target is shown as answered from the cache, in the JSON and on the page, and the first is not.
+- The HTML page shows every value the JSON has for each row, escaped: a label value and an error quoting a target's page that are markup appear as text, never as tags; the summary line is there and the landing page is linked relatively.
+- A target whose URL carries a user, password and token query parameter is shown, in its target and in its connection error, with none of them, on the page and in the JSON.
+- The page and its JSON answer 401 without the exporter's Basic Auth credential, 200 to GET and HEAD with it, 405 with `Allow: GET, HEAD` to POST, and 400 to an unknown `format`.
+- Without static targets the status page answers 404 and the landing page does not link it; with them the landing page links it.
+- The page moves with `--web.static-targets-path` and links the landing page from its depth; a self-metrics path on the status page's is refused naming the status page.
+- In allocator mode the page says it shows the targets the allocator gave this replica, and the JSON has `allocator_mode` true.
+- The chart fails rendering with `selfMetrics.path` equal to `staticTargets.path` followed by `/status`, default or set, and renders with a path beside it.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

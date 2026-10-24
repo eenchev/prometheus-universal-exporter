@@ -13,7 +13,7 @@ the [command-line flags](FLAGS.md).
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
-| `/static-targets/status` | With static targets in force: each target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; `404` without static targets. See [Status page](STATIC-TARGETS.md#status-page). |
+| `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — and the recent probes of each collector and target, as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
 | `/-/reload` | `POST` or `PUT` reloads the configuration, with `--web.enable-lifecycle`, as either does Prometheus's own; any other method is answered `405`. See [Reloading on demand](CONFIGURATION.md#reloading-on-demand). |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it), the exporter is shutting down, or in allocator mode before the first bundle, not after a rejected reload; see [Readiness](CONFIGURATION.md#readiness). Never authenticated. |
 
@@ -25,3 +25,103 @@ or `same-site`, with Basic Auth on or off: a browser sends the exporter's
 credential with such requests too. The exporter's own pages, an address typed
 in, and clients that are not browsers, Prometheus among them, pass. See
 [Requests from other sites](AUTHENTICATION.md#requests-from-other-sites).
+
+## Status page
+
+For people who have no Prometheus to ask, the exporter serves a status page
+at the static targets path followed by `/status`, `/static-targets/status` by
+default, with or without static targets; the landing page links it. It moves
+with `--web.static-targets-path`, so a `--web.self-metrics-path` on it is
+refused. It has two sections:
+
+- the static targets, a row per target with how its last scrape went (see
+  [Status page](STATIC-TARGETS.md#status-page) in Static targets), or a line
+  saying none are configured;
+- the recent probes: the `/probe` requests the exporter answered, which is
+  how Prometheus scrapes most setups.
+
+### Recent probes
+
+Every probe the exporter answers is recorded under its collector, its target
+as the log shows it, with a credential in its URL withheld, and its probe
+parameters: `param_<name>`, `path`, `method`, `body`, `message`, `timeout` and
+the rest that change the request, since each makes a request of its own, a
+tenant or a path. A parameter's value is shown with anything reading as a
+credential masked, the whole value withheld when its name reads as one
+(`param_token`), and cut to 64 bytes; forwarded headers (`header_<name>`) are
+not shown. A probe answered from the response cache, or by a trip another
+identical probe started at the same moment, is recorded too, marked `cached`
+or shared: it is what Prometheus was given. A debug probe
+(`&debug=true`) is not recorded, nor is a probe refused for its parameters
+(`400`), nor one whose caller went away before it was answered.
+
+Each collector and target has a row, the failing ones first, then in order of
+collector, target and parameters:
+
+- the collector, target and parameters;
+- when its latest probe began, how long ago that was and how long it took;
+- its result: `success`, `cached` (answered from the response cache),
+  `failed`, `refused by policy` (`allowed_targets` or `denied_targets`
+  refused the target, `403`), `rejected by limit` (`max_concurrent_probes` or
+  `--probe.max-concurrent` turned it away, `503`), `stale result served`
+  (failed, and the last good result served under `cache.stale_if_error`) or
+  `backing off` (`failure_backoff` kept it from the target); whether it was
+  shared; the HTTP status the exporter answered and the series it gave;
+- the results of its last 10 probes as a strip, oldest first: `✓` success or
+  cached, `✗` failed, refused or rejected, `~` stale result served, `…`
+  backing off; each mark's title has the probe's time, result and status;
+- the error of the latest failed probe of the ten, and when that probe began,
+  shown as the static targets' errors are: the log's text, with every URL's
+  credentials withheld, anything else that reads as a credential masked, and
+  cut to 2000 bytes.
+
+A row is failing when its latest probe did not succeed: `success` and
+`cached` are the successes. A summary line says how many collectors and
+targets were probed and how many are failing.
+
+The targets come from whoever may call `/probe`, so what is kept is bounded:
+the last 10 probes of each collector and target, and no more than 500 of
+them, the one probed least recently forgotten when a new one comes. A target
+is cut to 512 bytes and the parameters to 512 bytes in all, so two probes that
+differ only past the cut, or in what is withheld, share a row. The errors
+kept take at most 500 × 10 × 2000 bytes, 10 MB, and far less in practice: a
+probe failing as the one before keeps the one text. The bounds are fixed;
+there is no flag for them.
+
+A reload forgets the recent probes of every collector it removes or changes,
+as it does the rest of what is kept per collector; a probe of the old
+definition that ends after the reload records nothing. A collector a reload
+leaves as it was keeps its rows.
+
+`?format=json` serves the same as JSON: `probe_keys` and
+`failing_probe_keys` beside the static targets' summary, and `probes`, an
+array with an object per row and, in it, the row's probes, oldest first:
+
+```json
+{"generated_at": "2026-10-24T09:00:00Z", "allocator_mode": false, "targets": 0, "failing": 0, "not_yet_scraped": 0,
+ "static_targets": [], "probe_keys": 2, "failing_probe_keys": 1,
+ "probes": [
+  {"collector": "billing", "target": "https://billing-eu.example", "params": "param_tenant=acme",
+   "result": "failed", "failing": true, "shared": false,
+   "last_probe": "2026-10-24T08:59:45Z", "last_probe_age_seconds": 15.1, "duration_seconds": 0.212,
+   "status": 502, "series": 0,
+   "last_error": "fetch https://billing-eu.example/v1/usage/acme: received HTTP status 503",
+   "last_error_at": "2026-10-24T08:59:45Z",
+   "probes": [
+    {"at": "2026-10-24T08:59:15Z", "duration_seconds": 0.198, "result": "success", "shared": false, "status": 200, "series": 41},
+    {"at": "2026-10-24T08:59:45Z", "duration_seconds": 0.212, "result": "failed", "shared": false, "status": 502, "series": 0,
+     "error": "fetch https://billing-eu.example/v1/usage/acme: received HTTP status 503"}
+   ]},
+  {"collector": "weather", "...": "..."}
+ ]}
+```
+
+`params`, `last_error` and a probe's `error` are left out when empty.
+
+The page shows nothing the self-metrics, the series and the log do not: it is
+protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
+only, and every value on it is escaped. It shows the moment it was served and
+does not refresh itself: reload it. In allocator mode it says that it shows
+the static targets the allocator gave this replica and the probes this
+replica answered: each replica has a page of its own, and Prometheus spreads
+its probes over them.

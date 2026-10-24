@@ -43,6 +43,8 @@ type Server struct {
 	// staticStatus is how each target's last scrape went, by name, for the
 	// status page (statictargetstatus.go), under staticMu.
 	staticStatus map[string]*staticTargetStatus
+	// recent is the recent probes the status page shows (recentprobes.go).
+	recent *recentProbes
 	// staticGeneration counts the results published, under staticMu, and
 	// staticView is the endpoint's merge of them, rebuilt when a result is
 	// published or the targets change (statictargetsendpoint.go).
@@ -126,7 +128,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), recent: newRecentProbes(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
 	// The collectors the exporter starts with count from its start; one a
 	// reload adds, from when its statistics are made (selfcreated.go).
 	cfg, targets := m.InForce()
@@ -477,6 +479,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true, false)
+			s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), recentProbe{
+				at: start, duration: time.Since(start), result: probeCached,
+				status: http.StatusOK, series: len(answer.Metrics),
+			})
 			writeMetricSet(w, r, &answer)
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return
@@ -511,6 +517,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// verdict, as a shared one every caller left does below: counted on
 		// the collector, and no new request tracked.
 		finish(result.ok, result.refused || result.abandoned)
+		if !result.abandoned {
+			s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), result.recentProbe(start, false))
+		}
 		result.writeTo(w, r)
 		return
 	}
@@ -539,6 +548,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
 	}
 	finish(result.ok, result.refused)
+	s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), result.recentProbe(start, shared))
 	result.writeTo(w, r)
 }
 
@@ -633,7 +643,9 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	out.metrics = &answer
 	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
 	// A stale answer is not a success: the trip failed.
-	return out.result(false)
+	stale := out.result(false)
+	stale.outcome, stale.failure = probeStale, result.failure
+	return stale
 }
 
 // probeTrip is one trip to the target, or the fresh cache entry a probe that
@@ -659,7 +671,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			// their own, and the probe that filled the entry queued its own
 			// answer, not this one's.
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
-			return out.result(true)
+			hit := out.result(true)
+			hit.outcome = probeCached
+			return hit
 		}
 		missed = true
 	}
@@ -692,7 +706,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			rec.update(func(x *serverStats) { countRejection(x, full) })
 			s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 			http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
-			return out.result(false)
+			rejected := out.result(false)
+			rejected.outcome, rejected.failure = probeRejected, shownFailureText(full.message)
+			return rejected
 		}
 		defer s.trips.release(name)
 		if missed {
@@ -722,17 +738,24 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Target:    logTarget,
 			Error:     result.err.Error(),
 		})
-		return out.result(false)
+		failure := out.result(false)
+		failure.failure = shownStatusError(result.err)
+		return failure
 	case result.refused:
 		// The caller asked for a target the collector may not reach.
 		http.Error(out, fmt.Sprintf("collector %s refused the target: %v", name, result.err), http.StatusForbidden)
 		refused := out.result(false)
 		refused.refused = true
+		refused.outcome, refused.failure = probeRefused, shownStatusError(result.err)
 		return refused
 	case result.failed():
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, result.stage, result.err), http.StatusBadGateway)
 		failure := out.result(false)
 		failure.unauthorized = result.unauthorized
+		failure.failure = shownStatusError(result.err)
+		if job.backingOff != nil {
+			failure.outcome = probeBackoff
+		}
 		return failure
 	case result.carriedOn:
 		// The stage's policy said to carry on: answered as a probe whose

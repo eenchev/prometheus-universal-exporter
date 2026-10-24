@@ -7382,8 +7382,8 @@ Recommended behavior:
   and `PUT`, and no other. It MUST show when the last reload that put
   something in force did, and what it changed, as § 24.1a says it, and
   before the first that the exporter has not been reloaded since it
-  started. With static targets in force it MUST link the static targets'
-  status page (§ 42.14a), and without them MUST NOT. Only `/` itself MUST be
+  started. It MUST link the status page (§ 42.14a), with static targets in
+  force or without them. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -29441,9 +29441,10 @@ metrics with its labels, or its stale result, and its health result — at
 
 The endpoint MUST be served, empty, without a static target document.
 
-The exporter MUST serve a status page of the static targets at the static
-targets path followed by `/status`, `/static-targets/status` by default, for
-people who cannot ask Prometheus:
+The exporter MUST serve a status page at the static targets path followed by
+`/status`, `/static-targets/status` by default, for people who cannot ask
+Prometheus: a section of the static targets, then one of the recent probes.
+Of the static targets:
 
 - It MUST have one row per static target in force, with its name, its
   collector, its target as its health series show it (with any credential
@@ -29476,9 +29477,10 @@ people who cannot ask Prometheus:
 - `?format=json` MUST serve the same rows and summary as JSON; another
   `format` MUST be answered `400`.
 - In allocator mode the page MUST say that it shows the targets the
-  allocator gave this replica.
-- Without a static target in force the page MUST answer `404`; a reload that
-  adds targets MUST make it served without a restart.
+  allocator gave this replica, and the probes this replica answered.
+- The page MUST be served with or without static targets in force; without
+  them its static targets section MUST say that none are configured, and the
+  JSON MUST have an empty `static_targets` array.
 - It MUST answer `GET` and `HEAD`, and `405` otherwise with `Allow: GET,
   HEAD`, and MUST be protected by `web.basic_auth` like every endpoint but
   `/health` and `/ready`.
@@ -29493,6 +29495,39 @@ people who cannot ask Prometheus:
 - A self-metrics path equal to the status page's path MUST make the exporter
   exit with status 2, as a self-metrics path equal to the static targets
   path does.
+
+Of the recent probes:
+
+- Every `/probe` the exporter answers MUST be recorded under its collector,
+  its target as the logs show it (with any credential withheld) and its probe
+  parameters that change the request, each value with what reads as a
+  credential masked, withheld whole when its parameter's name reads as a
+  credential, and cut; forwarded headers MUST NOT be shown. A probe answered
+  from the response cache MUST be recorded as `cached`, and one answered by
+  another probe's trip (§ 42.13a) MUST be recorded and marked shared. A
+  debug probe MUST NOT be recorded, nor a probe answered `400`, nor one whose
+  caller went away before it was answered.
+- Each probe MUST be recorded with when it began, how long it took, its
+  result — `success`, `cached`, `failed`, `refused by policy` (`403`),
+  `rejected by limit` (`503`), `stale result served` or `backing off` — the
+  HTTP status the exporter answered, the series it gave and its error, shown
+  and cut as a static target's error is.
+- The last 10 probes of each collector and target MUST be kept, and no more
+  than 500 collectors and targets: a new one MUST make the one probed least
+  recently forgotten. A target MUST be cut to 512 bytes and the parameters to
+  512 bytes in all.
+- The page MUST have a row per collector and target with its latest probe's
+  details, the results of its kept probes as a strip, oldest first, and the
+  error of the latest failed probe kept with when it began; the rows failing
+  their latest probe (any result but `success` and `cached`) MUST come first,
+  each part in order of collector, target and parameters, under a summary
+  line with the number of rows and of those failing. Every value MUST be
+  HTML-escaped.
+- `?format=json` MUST give `probe_keys`, `failing_probe_keys` and `probes`,
+  an array with an object per row and, in it, the row's probes, oldest first.
+- A reload MUST forget the recent probes of every collector it removes or
+  changes, with the rest of the state kept per collector, and a probe of the
+  old definition that ends after the reload MUST record nothing.
 
 Every replica of the exporter scrapes every static target; running static
 targets with more than one replica, or with autoscaling, contacts each target

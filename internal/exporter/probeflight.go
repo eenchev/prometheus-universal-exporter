@@ -64,6 +64,11 @@ type probeResult struct {
 	// refused says the collector's allowed_targets or denied_targets refused
 	// the target (collected.refused): no stale result answers it either.
 	refused bool
+	// outcome is the result the recent probes show (recentprobes.go) when
+	// it is not plain success or failure: cached, refused, rejected, stale
+	// or backing off; failure is the error, as they show it.
+	outcome string
+	failure string
 }
 
 func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +185,7 @@ func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlig
 			recorder := newProbeRecorder()
 			http.Error(recorder, "probe failed: internal error: "+panicText(recovered), http.StatusInternalServerError)
 			flight.result = recorder.result(false)
+			flight.result.failure = shownFailureText("internal error: " + panicText(recovered))
 			slog.Default().Error("probe panicked", "panic", panicText(recovered), "stack", string(debug.Stack()))
 		}
 		f.mu.Lock()

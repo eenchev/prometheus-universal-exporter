@@ -13,26 +13,31 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The static targets' status page, at the static targets path followed by
-// /status, shows how each static target's last scrape went, for people who
-// have no Prometheus to ask: when it began and how long it took, whether it
-// succeeded, came from the cache, failed and served a stale result, or was
-// skipped by failure_backoff, the error of the last failed scrape, and
-// whether the target is backing off. ?format=json serves the same as JSON.
+// The status page, at the static targets path followed by /status, shows
+// how each static target's last scrape went, and the probes the exporter
+// answered lately (recentprobes.go), for people who have no Prometheus to
+// ask. Of a static target: when its last scrape began and how long it took,
+// whether it succeeded, came from the cache, failed and served a stale
+// result, or was skipped by failure_backoff, the error of the last failed
+// scrape, and whether the target is backing off. ?format=json serves the
+// same as JSON.
 //
-// It shows what the static targets endpoint's series and the exporter's log
-// already show, read by whoever may read the endpoint: the same Basic Auth
-// protects it. The target is shown as its health series and the log show it
-// (fetch.DisplayTarget), with any credential in it withheld, and an error as
-// the log has it, its URLs already redacted where the fetch made it, masked
-// once more for anything reading as a credential (fetch.RedactText) and cut
-// to model.MaxFailureBytes. What is kept of each target is one record,
-// replaced by its next scrape, so the page holds no more than the targets
-// are many. The path is the static targets path's, so it needs no flag of
-// its own, and moves with --web.static-targets-path.
+// It shows what the static targets endpoint's series, the self-metrics and
+// the exporter's log already show, read by whoever may read the endpoints:
+// the same Basic Auth protects it. A target is shown as its health series
+// and the log show it (fetch.DisplayTarget), with any credential in it
+// withheld, and an error as the log has it, its URLs already redacted where
+// the fetch made it, masked once more for anything reading as a credential
+// (fetch.RedactText) and cut to model.MaxFailureBytes. What is kept of each
+// static target is one record, replaced by its next scrape, so the page
+// holds no more than the targets are many; what is kept of the probes is
+// bounded apart (recentprobes.go). The path is the static targets path's,
+// so it needs no flag of its own, and moves with --web.static-targets-path:
+// it was the static targets' alone, and both flags and the chart already
+// keep the self-metrics off it.
 //
-// With no static target in force the page is not found: there is nothing to
-// show, and the targets may come with a reload, so the path stays routed.
+// The page is served with or without static targets: the recent probes are
+// there either way, and most exporters have no static target.
 
 // staticTargetsStatusSuffix follows the static targets path to make the
 // status page's.
@@ -114,8 +119,7 @@ func shownStatusError(err error) string {
 	if err == nil {
 		return "the scrape failed"
 	}
-	text := fetch.RedactText(strings.Join(strings.Fields(boundedTripFailure(err).Error()), " "))
-	return model.CutTo(text, model.MaxFailureBytes, false)
+	return shownFailureText(boundedTripFailure(err).Error())
 }
 
 // The results a row shows.
@@ -156,7 +160,8 @@ type staticStatusRow struct {
 	DurationText string `json:"-"`
 }
 
-// staticStatusPage is the page, and the JSON.
+// staticStatusPage is the page, and the JSON: the static targets, then the
+// recent probes.
 type staticStatusPage struct {
 	GeneratedAt string `json:"generated_at"`
 	// Allocator says the targets are those the allocator gave this
@@ -166,6 +171,15 @@ type staticStatusPage struct {
 	Failing    int               `json:"failing"`
 	NotScraped int               `json:"not_yet_scraped"`
 	Rows       []staticStatusRow `json:"static_targets"`
+	// ProbeKeys is how many keys the recent probes have, FailingProbes how
+	// many of them failed their latest probe.
+	ProbeKeys     int              `json:"probe_keys"`
+	FailingProbes int              `json:"failing_probe_keys"`
+	Probes        []probeStatusRow `json:"probes"`
+	// PerKey and MaxKeys are the bounds of the recent probes, as the page
+	// says them.
+	PerKey  int `json:"-"`
+	MaxKeys int `json:"-"`
 	// StaticTargetsPath is the static targets endpoint; HomeHref the
 	// landing page, as a link relative to this page, so it holds behind a
 	// reverse proxy that serves the exporter under a path of its own.
@@ -186,6 +200,15 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		Total:             len(targets),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
 		HomeHref:          rootLink(s.staticTargetsStatusEndpoint()),
+		PerKey:            recentProbesPerKey,
+		MaxKeys:           recentProbeKeys,
+	}
+	page.Probes = s.probeRowsAt(now)
+	page.ProbeKeys = len(page.Probes)
+	for i := range page.Probes {
+		if page.Probes[i].Failing {
+			page.FailingProbes++
+		}
 	}
 	// The records are copied under the lock and read after it: the backoff
 	// state is under a lock of its own, which is never taken under this one.
@@ -302,7 +325,7 @@ func shortDuration(d time.Duration) string {
 }
 
 func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Request) {
-	if !readOnly(w, r, "use GET or HEAD to read the static targets' status") {
+	if !readOnly(w, r, "use GET or HEAD to read the status page") {
 		return
 	}
 	format := r.URL.Query().Get("format")
@@ -312,15 +335,11 @@ func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Reque
 	}
 	cfg, file := s.manager.InForce()
 	targets := staticTargetsOf(file)
-	if len(targets) == 0 {
-		http.Error(w, "no static targets are configured", http.StatusNotFound)
-		return
-	}
 	page := s.staticStatusPageFor(cfg, targets, time.Now())
 	if format == "json" {
 		body, err := json.Marshal(page)
 		if err != nil {
-			s.logger.Error("rendering the static targets' status failed", "error", err)
+			s.logger.Error("rendering the status page failed", "error", err)
 			http.Error(w, "the status could not be rendered", http.StatusInternalServerError)
 			return
 		}
@@ -338,7 +357,7 @@ var staticStatusTemplate = template.Must(template.New("static-status").Parse(`<!
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Static targets · Prometheus Universal Exporter</title>
+<title>Status · Prometheus Universal Exporter</title>
 <style>` + pageStyle + `
 main { max-width: 1200px; }
 .scroll { overflow-x: auto; }
@@ -349,16 +368,21 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 .bad { color: var(--bad); font-weight: 600; }
 .good { color: var(--good); }
 .muted { color: var(--muted); }
+.strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 </style>
 </head>
 <body>
 <main>
-<h1>Static targets</h1>
-<p class="meta">{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. As of {{.GeneratedAt}}; reload the page to see it again. <a href="{{.HomeHref}}">Home</a></p>
+<h1>Status</h1>
+<p class="meta">As of {{.GeneratedAt}}; reload the page to see it again. <a href="{{.HomeHref}}">Home</a></p>
 {{- if .Allocator}}
-<p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds.</p>
+<p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
 {{- end}}
-<p>The targets' series are served at <code>{{.StaticTargetsPath}}</code>; this page is also served as JSON with <code>?format=json</code>.</p>
+<p>This page is also served as JSON with <code>?format=json</code>.</p>
+
+<h2>Static targets</h2>
+{{- if .Total}}
+<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>.</p>
 <div class="scroll">
 <table>
 <thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Failures</th><th>Last error</th></tr></thead>
@@ -376,6 +400,32 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 </tbody>
 </table>
 </div>
+{{- else}}
+<p class="muted">No static targets are configured.</p>
+{{- end}}
+
+<h2>Recent probes</h2>
+{{- if .ProbeKeys}}
+<p>{{.ProbeKeys}} collector and target{{if ne .ProbeKeys 1}}s{{end}} probed, {{.FailingProbes}} failing their latest probe. The last {{.PerKey}} probes of each are kept, oldest first in the strip (✓ success or cached, ✗ failed, refused or rejected, ~ stale result served, … backing off), and of no more than {{.MaxKeys}}, the one probed least recently forgotten first.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Probe</th><th>Last probe</th><th>Result</th><th>Recent</th><th>Last error</th></tr></thead>
+<tbody>
+{{- range .Probes}}
+<tr>
+<td><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{.Target}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{.Params}}{{end}}</td>
+<td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
+<td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
+<td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
+<td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="muted">No probe has been answered since the exporter started{{if .Allocator}} on this replica{{end}}, or since a reload changed the collectors probed.</p>
+{{- end}}
 </main>
 </body>
 </html>

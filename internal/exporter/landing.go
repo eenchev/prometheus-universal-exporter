@@ -76,8 +76,8 @@ type landingPage struct {
 	StaticTargetsPath    string
 	StaticTargets        int
 	StaticTargetsViaOTLP int
-	// StatusPath and StatusHref are the static targets' status page
-	// (statictargetstatus.go), linked when there are static targets.
+	// StatusPath and StatusHref are the status page
+	// (statictargetstatus.go), always linked: it has the recent probes.
 	StatusPath, StatusHref string
 	// Reloaded says a reload has put something in force since the exporter
 	// started; ReloadedAt is when the last did, and ReloadChanges what it
@@ -101,7 +101,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <p class="meta">Version {{.Version}}, revision {{.Revision}}, {{.GoVersion}}</p>
 
 <h2>Collectors</h2>
-<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="collectors">Probe a target through one</a>, with the parameters and credentials it takes.{{if .Debug}} Write or debug one on the <a href="debug">debug page</a>.{{end}}</p>
+<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="collectors">Probe a target through one</a>, with the parameters and credentials it takes.{{if .Debug}} Write or debug one on the <a href="debug">debug page</a>.{{end}} <a href="{{.StatusHref}}">See how the recent probes went</a>.</p>
 {{- if .StaticTargets}}
 
 <h2>Static targets</h2>
@@ -123,9 +123,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 {{- end}}
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
 <li><a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
-{{- if .StaticTargets}}
-<li><a href="{{.StatusHref}}">{{.StatusPath}}</a> — each static target's last scrape: its result, its error and whether it is backing off; <code>?format=json</code> as JSON</li>
-{{- end}}
+<li><a href="{{.StatusHref}}">{{.StatusPath}}</a> — the status page: each static target's last scrape, its result, its error and whether it is backing off, and the recent probes of each collector and target; <code>?format=json</code> as JSON</li>
 <li><a href="{{.SelfMetricsHref}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="health">/health</a> and <a href="ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}

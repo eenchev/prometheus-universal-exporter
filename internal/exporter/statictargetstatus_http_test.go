@@ -253,22 +253,6 @@ func TestTheStatusPageIsReadOnlyAndAuthenticated(t *testing.T) {
 	}
 }
 
-// Without static targets there is no status page: it is not found, and the
-// landing page does not link it; with them, the landing page does.
-func TestTheStatusPageIsThereOnlyWithStaticTargets(t *testing.T) {
-	server := landingServer(t, weatherConfig())
-	if r := getPath(server, http.MethodGet, "/static-targets/status"); r.Code != http.StatusNotFound {
-		t.Errorf("without static targets the status page answered %d, want 404", r.Code)
-	}
-	if page := getPage(t, server, "/"); strings.Contains(page, "static-targets/status") {
-		t.Errorf("the landing page links the status page without static targets:\n%s", page)
-	}
-	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
-	server = newStaticServer(t, weatherConfig(), file)
-	page := getPage(t, server, "/")
-	requireContains(t, page, `<a href="static-targets/status">/static-targets/status</a>`)
-}
-
 // The page moves with --web.static-targets-path, and a self-metrics path
 // where it would be is refused.
 func TestTheStatusPageFollowsTheStaticTargetsPath(t *testing.T) {

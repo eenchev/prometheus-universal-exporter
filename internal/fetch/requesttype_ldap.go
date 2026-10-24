@@ -60,18 +60,19 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:         RequestTypeLDAP,
-		Fields:       []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:    []string{"timeout", PathParamPrefix},
-		TargetFields: []string{"timeout"},
-		Validate:     validateLDAPRequest,
-		Fetch:        fetchLDAP,
-		CheckTarget:  checkLDAPTarget,
-		Label:        ldapLabel,
-		Method:       func(*model.Collector, RequestOverrides) string { return ldapMethod },
-		Display:      ldapDisplay,
-		Stage:        "ldap",
-		CheckFiles:   checkLDAPFiles,
+		Name:               RequestTypeLDAP,
+		Fields:             []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Overrides:          []string{"timeout", PathParamPrefix},
+		TargetFields:       []string{"timeout", "bind_dn", "password_file", "tls"},
+		Validate:           validateLDAPRequest,
+		Fetch:              fetchLDAP,
+		CheckTarget:        checkLDAPTarget,
+		CheckTargetRequest: checkLDAPTargetRequest,
+		Label:              ldapLabel,
+		Method:             func(*model.Collector, RequestOverrides) string { return ldapMethod },
+		Display:            ldapDisplay,
+		Stage:              "ldap",
+		CheckFiles:         checkLDAPFiles,
 	})
 	templateEscapers["ldap_dn"] = ldapEscapeDNValue
 	templateEscapers["ldap_filter"] = func(value string) (string, error) { return ldapEscapeFilterValue(value), nil }
@@ -315,6 +316,51 @@ func (a ldapAddress) url(security ldapSecurity) string {
 	return scheme + "://" + a.hostPort(security)
 }
 
+// checkLDAPTargetRequest checks a static target's own account and tls
+// block, which replace its collector's for that target
+// (withTargetAccount), as the collector's are checked: a bind_dn with the
+// target's own password_file, since a DN without a password is an
+// unauthenticated bind and the collector's password is not another
+// account's, and a password_file alone only for a collector with a
+// bind_dn, the password being sent with the DN of its account. No value of
+// them takes a placeholder: a target's own values are used as written. An
+// ldap:// target, which asks for plaintext, with a tls block of its own and
+// no start_tls contradicts itself, as with the collector's.
+func checkLDAPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
+	r := &t.Request
+	for _, key := range []struct{ name, value string }{{"request.bind_dn", r.BindDN}, {"request.password_file", r.PasswordFile}} {
+		if strings.Contains(key.value, "{{") {
+			return fmt.Errorf("%s %q has a placeholder; a static target's account and credential files are used as they are written, with no probe to fill one, so write the value out", key.name, key.value)
+		}
+	}
+	if r.BindDN != "" {
+		if strings.TrimSpace(r.BindDN) == "" {
+			return errors.New("request.bind_dn is blanks alone; name the account's DN, or take the key out")
+		}
+		if err := checkLDAPDN(r.BindDN); err != nil {
+			return fmt.Errorf("request.bind_dn %q is not a DN: %w", r.BindDN, err)
+		}
+		if r.PasswordFile == "" {
+			return errors.New("sets request.bind_dn without request.password_file; a simple bind with a DN and no password is an unauthenticated bind, which a server takes without checking anything, so name the file of the account's password beside it")
+		}
+	}
+	if r.PasswordFile != "" {
+		if strings.TrimSpace(r.PasswordFile) == "" {
+			return errors.New("request.password_file is blanks alone; name the file of the password, or take the key out")
+		}
+		if r.BindDN == "" && c.Request.BindDN == "" {
+			return fmt.Errorf("sets request.password_file without request.bind_dn, and collector %q binds anonymously; a password is sent with the DN of its account, so name it in bind_dn beside it", c.Name)
+		}
+	}
+	if err := checkTargetTLS(t); err != nil {
+		return err
+	}
+	if a, err := parseLDAPTarget(t.Target); err == nil && a.scheme == "ldap" && r.TLS != nil && !c.Request.StartTLS {
+		return errors.New("target asks for plaintext with ldap://, but sets request.tls of its own; use ldaps://, a bare host:port, or set the collector's request.start_tls for StartTLS")
+	}
+	return nil
+}
+
 func checkLDAPTarget(c *model.Collector, target string, _ bool) error {
 	a, err := parseLDAPTarget(target)
 	if err != nil {
@@ -324,7 +370,8 @@ func checkLDAPTarget(c *model.Collector, target string, _ bool) error {
 	return err
 }
 
-func ldapLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+func ldapLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	c = withTargetAccount(c, overrides)
 	a, err := parseLDAPTarget(target)
 	if err != nil {
 		return "", err
@@ -399,6 +446,9 @@ func ldapCalls(c *model.Collector, params map[string]string) ([]ldapCall, error)
 // document of the searches.
 func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
+	// A static target's own account and tls block, in place of the
+	// collector's.
+	c = withTargetAccount(c, overrides)
 	address, err := parseLDAPTarget(target)
 	if err != nil {
 		return nil, err
@@ -722,25 +772,8 @@ func ldapFailure(ctx context.Context, err error) error {
 }
 
 // checkLDAPFiles reads the files a scrape reads, for --dry-run: the
-// password file, and the tls block's when the collector sets one.
+// password file, and the tls block's when the collector sets one, or those
+// a static target names of its own.
 func checkLDAPFiles(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil {
-		return nil
-	}
-	var warnings []string
-	if file := c.Request.PasswordFile; file != "" {
-		password, err := ReadCredentialFile(file)
-		switch {
-		case err != nil:
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
-		case password == "":
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file %s is empty; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, file))
-		}
-	}
-	if c.Request.TLS != (model.TLSConfig{}) {
-		if _, err := tlsConfig(c.Request.TLS); err != nil {
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each connection, so one put in place later is used then)", c.Name, err))
-		}
-	}
-	return warnings
+	return accountFileWarnings(c, t)
 }

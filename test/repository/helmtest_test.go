@@ -907,6 +907,22 @@ func chartCasesMissing(local, ci map[string]bool) []string {
 
 		// A monitor's port is a port's name, never its number.
 		"fails: " + template + `--set-json monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","port":"9115"}]`,
+
+		// The self-metrics at the static targets' status page.
+		"fails: " + template + "--set selfMetrics.path=/static-targets/status",
+		"fails: " + template + "--set staticTargets.path=/static --set selfMetrics.path=/static/status",
+	}
+	// An exporter exposed outside the cluster is refused without webAuth,
+	// and with webAuth beside a configuration that does not read its files,
+	// and renders with the opt-out or with a configuration that does.
+	for _, exposure := range []string{"ingress.enabled=true", "service.type=LoadBalancer", "service.type=NodePort"} {
+		const webAuth = "--set webAuth.enabled=true --set webAuth.secretName=s"
+		want = append(want,
+			"fails: "+template+"--set "+exposure,
+			"fails: "+template+"--set "+exposure+" "+webAuth,
+			"succeeds: "+template+"--set "+exposure+" --set exposure.allowWithoutWebAuth=true",
+			"succeeds: "+template+"--set "+exposure+" "+webAuth+` --set-file config.data.config\.yaml=testdata/chart/web-auth.yaml`,
+		)
 	}
 	for _, kind := range []string{"service", "pod"} {
 		want = append(want,
@@ -960,12 +976,16 @@ func chartCaseAdvice(check string, made map[string]bool) string {
 // out however they were given, and the refusals of a count past 2147483647,
 // of a monitor's auth without a type, of a monitor's port given as a number, of a
 // scrape timeout longer than its interval, of an Ingress without the Service,
-// of a mount at the configuration directory written with a trailing slash and
+// of a mount at the configuration directory written with a trailing slash,
 // of a garbage collector target that is off with no memory limit, 0 or beside
-// GOGC in env. The Go tests are skipped without helm, and neither `make
+// GOGC in env, of the self-metrics at the static targets' status page, and of
+// an Ingress or a LoadBalancer or NodePort Service without webAuth or with a
+// configuration that does not read its files, beside the renders with the
+// opt-out and with one that does. The Go tests are skipped without helm, and neither `make
 // helm-test` nor the chart steps of ci.yml are, so each case has to be in both
 // lists too, a render kept and looked at rather than piped, since a pipeline
-// hides helm failing. The garbage collector's cases were in neither list.
+// hides helm failing. The garbage collector's cases were in neither list, nor
+// were the exposure's and the status page's.
 func TestMakeHelmTestAndCICheckTheChartCasesTheGoTestsCover(t *testing.T) {
 	makefile, workflow := readHelmLists(t)
 	for _, finding := range chartCasesMissing(helmCheckLists(t, makefile, workflow)) {

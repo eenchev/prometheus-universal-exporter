@@ -357,8 +357,9 @@ such a group's members with a `count_only` search of the users whose
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of an `ldap` collector names the server
-as its `target`, which it requires, and may set under its `request` only
-`timeout`. The account, the TLS settings and the searches are the
+as its `target`, which it requires, and may set under its `request`
+`timeout` and its own account and TLS settings: `bind_dn` and
+`password_file`, and `tls`. `start_tls` and the searches are the
 collector's, and `params` fills its placeholders:
 
 ```yaml
@@ -372,7 +373,35 @@ targets:
     target: ldaps://ldap.example.org
     params:
       param_group: admins
+  - name: partner_directory
+    collector: openldap
+    target: ldaps://ldap.partner.example
+    request:
+      bind_dn: cn=monitoring,ou=services,dc=partner,dc=example
+      password_file: /etc/exporter/ldap/partner-password
+      tls:
+        ca_file: /etc/exporter/ldap/partner-ca.pem
 ```
+
+So one collector serves directories that each take an account of their own.
+A target's `password_file` replaces the collector's, and is the password of
+the collector's `bind_dn`, or of the target's own `bind_dn`, which replaces
+the collector's and needs the target's own `password_file`; a `bind_dn`
+without it, a `bind_dn` that is no DN, and a `password_file` alone for a
+collector that binds anonymously are refused when the file loads. A target
+that names neither binds with the collector's account. A target's `tls` replaces
+the collector's whole block, a key it leaves out not being taken from the
+collector's; written, even as `tls: {}`, it asks for TLS: from the start,
+or by StartTLS when the collector sets `start_tls`, and an `ldap://` target
+with it and no `start_tls` is refused when the file loads. A target cannot
+turn off the TLS its collector asks for. Its password and TLS files are read
+at each scrape, as the collector's are, and by
+[`--dry-run`](CONFIGURATION.md#dry-run), which warns of them under the
+target's name; the debug report shows its `BIND dn ***`. None of these keys
+holds a placeholder, and no probe parameter sets them: a probe always binds
+as the collector does. A target's account and block are part of its
+[cache key](CONFIGURATION.md#response-caching), so targets that bind
+differently never share an answer, nor a trip to the server.
 
 ## Limits
 

@@ -46,6 +46,36 @@ func checkHTTPTarget(c *model.Collector, target string, static bool) error {
 	return nil
 }
 
+// checkHTTPTargetTLS checks a static target's own tls block, which replaces
+// the collector's whole for every request of the target's trips
+// (withTargetTLS), as the collector's is checked (checkTargetTLS). Beside
+// it, the target's insecure_skip_verify, which overrides the block's, would
+// leave two answers to one question; the block's own key says it. A block
+// on an http:// target is taken, as the collector's is: it is used by the
+// https requests the trip makes, a redirect's or a login's.
+func checkHTTPTargetTLS(t *model.StaticTarget) error {
+	if err := checkTargetTLS(t); err != nil {
+		return err
+	}
+	if t.Request.TLS != nil && t.Request.InsecureSkipVerify != nil {
+		return errors.New("sets request.insecure_skip_verify beside a request.tls block of its own; write insecure_skip_verify in the tls block")
+	}
+	return nil
+}
+
+// checkHTTPFiles reads, for --dry-run, the files of the login, the
+// collector's or a static target's (checkLoginFiles), and those of a static
+// target's own tls block, as its first request would.
+func checkHTTPFiles(c *model.Collector, t *model.StaticTarget) []string {
+	warnings := checkLoginFiles(c, t)
+	if t != nil && t.Request.TLS != nil {
+		if _, err := tlsConfig(*t.Request.TLS); err != nil {
+			warnings = append(warnings, fmt.Sprintf("target %q: request.tls: %v; a scrape would fail on it now (the files are read at the first request and again when they change, so one put in place later is used then)", t.Name, err))
+		}
+	}
+	return warnings
+}
+
 // validateHTTPRequest holds the http type's rules. Nothing but type is
 // required: path may be empty, since the target URL can carry the whole path,
 // and method defaults to GET.

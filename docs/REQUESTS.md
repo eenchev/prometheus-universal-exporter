@@ -650,7 +650,10 @@ redirect to https://other.example/x refused: it would send the request body to o
 
 The collector's TLS client certificate, [`tls.cert_file` and
 `tls.key_file`](#tls), is a credential too, and every TLS connection the
-collector makes presents it. A redirect over `https` to a destination that is
+collector makes presents it; so is a static target's own, in the `tls` block
+that replaces the collector's for it, which every TLS connection of that
+target's requests presents, and whose refusal says `the static target's TLS
+client certificate`. A redirect over `https` to a destination that is
 not trusted is therefore refused before a connection is made there, and, like
 the refusal of a body, not retried:
 
@@ -917,7 +920,9 @@ TLS settings — the whole `tls` block: `ca_file`, `cert_file`, `key_file`,
 `insecure_skip_verify` and `server_name` — the same `enable_http2` and the same
 `allowed_targets` and `denied_targets` shares one connection pool; a scrape
 overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
-settings. Collectors with different target lists never share a connection,
+settings, and so does a static target with a `tls` block of its own, so no
+connection made with one client certificate carries a request that is to
+present another. Collectors with different target lists never share a connection,
 since a connection is checked against the lists once, when it is made.
 A certificate or key replaced on disk is picked up by the next request. An idle
 connection is closed after 90 seconds, and a pool nothing has used for five
@@ -1339,7 +1344,8 @@ The limit is kept for each origin — scheme, host and port — the collector's
 requests go to, a port left out being the scheme's own, so
 `http://legacy.example` and `http://legacy.example:80` share it. Each
 collector has its own: two collectors asking the same host are limited
-apart, and one collector's requests never wait on another's. Every request
+apart, and one collector's requests never wait on another's; for a limit
+they share, see [Rate limits per host](#rate-limits-per-host). Every request
 sent counts, where it is sent: each attempt of a [retry](#retries), each
 [page](#pagination), each hop of a [followed redirect](#redirects-and-http2),
 and each request of a [login](AUTHENTICATION.md#logging-in-to-a-target), the
@@ -1379,6 +1385,111 @@ hold nothing a new one would not, and at most 10,000 are kept, the least
 recently used forgotten first beyond that; a change of the limit starts it
 from a full bucket.
 
+### Rate limits per host
+
+`request.rate_limit` is a collector's own, so several collectors calling one
+API share nothing, and together may ask it faster than its quota allows.
+The top-level `rate_limits` list sets limits that every collector's requests
+to a host share:
+
+```yaml
+rate_limits:
+  - name: billing_api                 # required; the rule label of the self-metrics
+    hosts:
+      - api.billing.example           # exact, in any case
+      - "*.billing.example"           # its subdomains, not billing.example itself
+      - 10.20.0.15                    # an IP address
+    rate_limit:
+      requests_per_second: 5          # as request.rate_limit writes it
+      burst: 10
+```
+
+Every `http` and `graphite` request to one of an entry's hosts takes a turn
+from the entry's bucket — one bucket for the entry, whichever of its hosts a
+request goes to — whichever collector, probe or static target sends it,
+counted as `request.rate_limit` counts: each attempt of a retry, each page,
+each hop of a followed redirect that goes to the host, and each request of a
+login. It takes the turn in addition to the one it takes under its
+collector's own `rate_limit`, or its static target's, first that one and
+then the entry's; a request refused by one gives back the turn it took under
+the other, since it is not sent. Waiting is as for `request.rate_limit`: a
+request waits for its turn unless the turn would come at or past its
+deadline, and then fails at once, without a retry, naming the entry:
+
+```
+rate limit of 5 requests per second of rate_limits entry "billing_api" for api.billing.example would delay the request past its deadline: it would wait 1.2s for its turn, and 800ms is left; ask the entry's hosts less often, raise the entry's rate_limit, or the timeout
+```
+
+An entry's hosts are host names, matched in any case and with or without a
+final dot; IP addresses, matched however they are written, an IPv6 one with
+or without brackets; and wildcards `*.example.com`, which match every
+subdomain of `example.com` at any depth, `api.example.com` and
+`a.b.example.com`, but not `example.com` itself: list both for both. An IPv4
+address and the same address mapped into IPv6 are one host, which Go dials
+alike: `10.0.0.1` matches `http://[::ffff:10.0.0.1]/` and `::ffff:10.0.0.1`
+matches `http://10.0.0.1/`. An entry's IPv6 address has no zone, and is
+refused at load with one (`fe80::1%eth0`), since a zone names an interface
+of the exporter's machine rather than the host; a request's zone is ignored,
+so `fe80::1` matches `http://[fe80::1%25eth0]/` through every interface. An
+internationalised name is written in its `xn--` form,
+`xn--bcher-kva.example` for `bücher.example`, and matches that form in any
+case and with or without a final dot. A host with a character outside ASCII
+is refused at load, as in `allowed_targets`, and is not converted: a request
+whose host has one is [refused](#restricting-targets) before it is sent and
+takes no turn, so the `xn--` form is the only one a limited request names
+such a host in. A host is written alone, without a scheme, port or path: an
+entry applies to every port and scheme of its hosts, since a quota is kept
+for a host rather than for one of its ports. A request matches by the host
+of its URL, not by the address it resolves to, so a host reached by two
+names needs both listed. The first entry whose hosts match a request
+applies, in the order of the list, so an exact name listed before a wildcard
+over it takes its requests out of the wildcard's entry. A host may be listed
+once, in one entry, and the same host twice is refused when the
+configuration loads; so is a host that a wildcard of an earlier entry covers
+— `api.example.com` or `*.api.example.com` after an entry with
+`*.example.com` — since the earlier entry would always match it first and
+the later one never apply. The error names both entries; list the narrower
+entry first:
+
+```
+rate_limits entry "exact" lists "api.example.com", which rate_limits entry "wild"'s "*.example.com" covers already; the first entry that matches applies, so rate_limits entry "exact" would never apply to it: list the narrower entry before the broader one
+```
+
+Within one entry a host its own wildcard covers is let be, since the entry
+applies to it either way. Also refused are an entry without a `name`, two
+entries of one name, an entry without hosts and a `rate_limit` that
+`request.rate_limit` would refuse. `burst` is 1 when left out.
+
+An entry's bucket is kept by each exporter process, not shared between
+processes. Several replicas — behind the [target allocator](ALLOCATOR.md) or
+otherwise — each have a bucket of their own for an entry, so N replicas
+together may ask its hosts up to N × `requests_per_second`, with N × `burst`
+at once. Give each replica the host's quota divided by the number of
+replicas, or have the allocator keep the targets that ask the host on one
+replica: [static targets](ALLOCATOR.md#static-targets) of one `shard_key`
+land on one replica, and a [probe job](ALLOCATOR.md#probe-targets) with
+`shard_key: address` keeps every probe of one host and port on one. A probe
+Prometheus sends to another replica, which any replica answers, takes its
+turn there.
+
+Only `http` and `graphite` requests are limited, as with
+`request.rate_limit`: a `grpc`, `sql`, `redis` or other collector's requests
+take no turn, whatever host they go to. No probe parameter sets or changes
+an entry.
+
+A [debug probe](CONFIGURATION.md#debug-probes)'s requests take their turns as
+any other's, and are not counted; its report shows, under a request that
+waited, the entry it waited for. The requests an entry made wait are counted
+in `http_exporter_host_rate_limit_waits_total{rule="billing_api"}`, and those
+it refused in `http_exporter_host_rate_limit_refused_total`, by entry, with no
+collector label ([Self-metrics](SELF-METRICS.md#rate-limits-per-host)).
+
+A reload that leaves an entry as it was keeps its bucket, with the turns it
+has promised to requests waiting; one that changes it — its hosts or its
+`rate_limit` — starts it from a full bucket, as a changed `request.rate_limit`
+does. An entry's counts are kept while an entry of its name is in force, and
+forgotten when a reload removes it.
+
 ## TLS
 
 The collector can configure target TLS verification and trust material:
@@ -1417,6 +1528,13 @@ set or the target is a `rediss://` URL, a [`tcp`](TCP.md#tls) collector
 takes it whole too, and speaks TLS when it is set, and so does an
 [`ldap`](LDAP.md#tls) collector, with `ldaps://`, or after StartTLS with
 `start_tls`.
+
+A [static target](STATIC-TARGETS.md#credentials-and-tls-of-a-target) of an
+`http` or `graphite` collector may name a `tls` block of its own, which
+replaces the collector's whole for every request of that target: its pages,
+its redirects and its login. `tls: {}` there verifies with the system roots
+alone; the URL's scheme, not the block, decides whether TLS is spoken. No
+probe parameter sets it.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

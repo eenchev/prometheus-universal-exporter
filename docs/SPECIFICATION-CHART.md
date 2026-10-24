@@ -341,6 +341,38 @@ HTTP port. When disabled, the Service resource MUST NOT be rendered.
 schema MUST refuse `ExternalName`, a DNS alias with no endpoints through which
 nothing would reach the exporter.
 
+`/probe` sends requests on its caller's behalf to any target `allowed_targets`
+and `denied_targets` let through, so an exporter reachable from outside the
+cluster without authentication is an open proxy to its targets. Rendering
+MUST fail when `ingress.enabled` is true, or the Service is enabled with
+`service.type` `NodePort` or `LoadBalancer`, while `webAuth.enabled` is false
+and `exposure.allowWithoutWebAuth`, false by default, is false. The message
+MUST name the setting that exposes the exporter (`ingress.enabled`, or
+`service.type=NodePort` or `service.type=LoadBalancer`), say that it would be
+an open proxy to its targets, and name both ways out: enabling `webAuth`, and
+setting `exposure.allowWithoutWebAuth` when callers are authenticated
+elsewhere. `webAuth` is the only authentication the chart MUST treat as seen:
+a `web.basic_auth` in `config.data` or in an external ConfigMap, and
+authentication at an ingress controller, need the opt-out, and the chart
+documentation MUST say so. A `ClusterIP` Service MUST render without either.
+
+`webAuth` only mounts the Secret; the exporter authenticates with it only
+when the configuration's `web.basic_auth` reads its files. So with
+`webAuth.enabled`, the exporter exposed as above and
+`exposure.allowWithoutWebAuth` false, when the chart renders the
+configuration (`config.enabled`), rendering MUST fail unless
+`config.data."config.yaml"` holds `web.basic_auth` with `enabled: true` and a
+`password_file` that is `<webAuth.mountPath>/password`, both paths compared
+once cleaned (a trailing or doubled slash names the same file). The message
+MUST name the setting that exposes the exporter and that expected path, and
+the opt-out. The configuration MUST be read as YAML (`fromYaml`), not matched
+as text; a `config.yaml` that is not YAML MUST be left to the exporter, which
+refuses it. Only `config.yaml` MUST be looked at, since `web` is read from the
+main file alone and not from collector files among `config.data`'s other
+keys. With `config.enabled` false the chart cannot see the configuration and
+MUST NOT check it; the chart documentation MUST say that the operator then
+answers for `web.basic_auth` reading the files.
+
 The Service MUST be usable as the target of Prometheus Operator
 `ServiceMonitor` resources. The documentation MUST warn that the chart's
 generated ServiceMonitor and PodMonitor routing requires this Service.
@@ -1232,7 +1264,9 @@ are skipped and the text checks of the templates still run:
    be a key of `config.data` too, being in another ConfigMap. With
    `config.enabled: false` the static target ConfigMap MUST still render, so
    `staticTargets.data` MUST be required then too. `staticTargets.path` equal to
-   `selfMetrics.path` MUST fail rendering. `staticTargets.expandEnv` MUST add
+   `selfMetrics.path` MUST fail rendering, and so MUST `selfMetrics.path`
+   equal to `staticTargets.path` followed by `/status`, where the exporter
+   serves the static targets' status page. `staticTargets.expandEnv` MUST add
    `--static-targets.expand-env` with static targets enabled, and nothing
    without; `server.expandEnv` MUST NOT add it.
 9b. The static targets monitor: with `staticTargets.enabled` and
@@ -1418,7 +1452,19 @@ are skipped and the text checks of the templates still run:
    without an interval, and the timings of a disabled entry, of
    `selfMetrics` when disabled and of a static targets monitor that is not
    rendered MUST render. `ingress.enabled` MUST render an Ingress to the
-   Service and, with `service.enabled: false`, fail rendering.
+   Service and, with `service.enabled: false`, fail rendering. `ingress.enabled`,
+   and `service.type` `NodePort` and `LoadBalancer`, MUST fail rendering
+   without `webAuth.enabled` and `exposure.allowWithoutWebAuth`, the message
+   naming the setting, the open proxy, `webAuth` and the opt-out, and MUST
+   render with either; a `ClusterIP` Service MUST render with neither. With
+   `webAuth.enabled` each MUST fail rendering, naming the setting and
+   `<webAuth.mountPath>/password`, when the chart's `config.yaml` has no
+   `web`, a `web` that is not a mapping, `web.basic_auth` disabled, a
+   password written in place, or a `password_file` elsewhere or at another
+   `webAuth.mountPath`'s files; it MUST render when `password_file` is the
+   mounted file, at the default or another mount path written with a trailing
+   or doubled slash, with the opt-out, with `config.enabled: false`, with a
+   `config.yaml` that is not YAML, and with nothing exposed.
    `webAuth.mountPath` or `targetAuth.mountPath` at the configuration
    directory, with or without a trailing slash, the two at one path, an
    `extraVolumeMounts` entry at either or at the configuration directory
@@ -1889,7 +1935,11 @@ The Helm chart MUST support:
   failing rendering;
 - an optional Ingress resource with class, host, path, TLS, and annotations;
   it routes to the exporter's Service, so `ingress.enabled` with
-  `service.enabled: false` MUST fail rendering;
+  `service.enabled: false` MUST fail rendering, and it exposes the exporter,
+  so it MUST fail rendering without `webAuth.enabled` or
+  `exposure.allowWithoutWebAuth`, and with `webAuth.enabled` beside a
+  chart-rendered configuration whose `web.basic_auth` does not read its files
+  (§ 33.4);
 - optional NEG integration, implemented by a configurable Service annotation
   such as the GKE `cloud.google.com/neg` annotation.
 

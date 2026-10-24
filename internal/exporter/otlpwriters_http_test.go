@@ -122,11 +122,11 @@ func TestTwoProbesOfOneStreamAreExportedAsTheLater(t *testing.T) {
 // export. Only two answers under one resource make two writers.
 func TestOneProbesAnswerHasNoStreamTwice(t *testing.T) {
 	for name, body := range map[string]string{
-		"a series twice":                                       "# TYPE m gauge\nm 1\nm 2\n",
-		"a name of two types":                                  "# TYPE m gauge\nm{a=\"1\"} 1\n# TYPE m counter\nm{a=\"2\"} 2\n",
-		"a gauge named as its histogram's count":               "# TYPE h histogram\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 4\n# TYPE h_count gauge\nh_count{a=\"1\"} 4\n",
-		"a bucket twice":                                       "# TYPE h histogram\nh_bucket{le=\"1\"} 3\nh_bucket{le=\"1.0\"} 3\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 4\n",
-		"a gauge with the le of a bucket beside its histogram": "# TYPE h histogram\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 5\n# TYPE h_bucket gauge\nh_bucket{le=\"1\"} 4\n",
+		"a series twice":                           "# TYPE m gauge\nm 1\nm 2\n",
+		"a name of two types":                      "# TYPE m gauge\nm{a=\"1\"} 1\n# TYPE m counter\nm{a=\"2\"} 2\n",
+		"a gauge named as its histogram's count":   "# TYPE h histogram\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 4\n# TYPE h_count gauge\nh_count{a=\"1\"} 4\n",
+		"a bucket twice":                           "# TYPE h histogram\nh_bucket{le=\"1\"} 3\nh_bucket{le=\"1.0\"} 3\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 4\n",
+		"a gauge as a bucket beside its histogram": "# TYPE h histogram\nh_bucket{le=\"+Inf\"} 4\nh_sum 1\nh_count 5\n# TYPE h_bucket gauge\nh_bucket{le=\"1\"} 4\n",
 	} {
 		target := textTarget(t, body)
 		server := newStaticServer(t, &model.Config{Collectors: []model.Collector{passedOn()}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}, nil)

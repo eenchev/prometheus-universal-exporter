@@ -460,7 +460,7 @@ helm-test: helm-version
 			exit 1; \
 		fi; \
 	done
-	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do \
+	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true selfMetrics.path=/static-targets/status; do \
 		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
 			echo "helm template accepted $$bad" >&2; \
 			exit 1; \
@@ -499,6 +499,47 @@ helm-test: helm-version
 	fi
 	@if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set service.enabled=false >/dev/null 2>&1; then \
 		echo "helm template accepted an Ingress without the Service it routes to" >&2; \
+		exit 1; \
+	fi
+	@# An exporter reachable from outside the cluster, through an Ingress or a
+	@# LoadBalancer or NodePort Service, needs the exporter to authenticate its
+	@# callers: rendering fails without webAuth, and with webAuth beside a
+	@# configuration whose web.basic_auth does not read its files; webAuth with
+	@# one that does, or exposure.allowWithoutWebAuth, renders.
+	@if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true >/dev/null 2>&1; then \
+		echo "helm template accepted an Ingress without webAuth" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then \
+		echo "helm template accepted an Ingress with webAuth beside a configuration whose web.basic_auth does not read its files" >&2; \
+		exit 1; \
+	fi
+	helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set exposure.allowWithoutWebAuth=true >/dev/null
+	helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
+	@if helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer >/dev/null 2>&1; then \
+		echo "helm template accepted a LoadBalancer Service without webAuth" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then \
+		echo "helm template accepted a LoadBalancer Service with webAuth beside a configuration whose web.basic_auth does not read its files" >&2; \
+		exit 1; \
+	fi
+	helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set exposure.allowWithoutWebAuth=true >/dev/null
+	helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
+	@if helm template test charts/prometheus-universal-exporter --set service.type=NodePort >/dev/null 2>&1; then \
+		echo "helm template accepted a NodePort Service without webAuth" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then \
+		echo "helm template accepted a NodePort Service with webAuth beside a configuration whose web.basic_auth does not read its files" >&2; \
+		exit 1; \
+	fi
+	helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set exposure.allowWithoutWebAuth=true >/dev/null
+	helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
+	@# The static targets' status page is the static targets path followed by
+	@# /status, where the self-metrics cannot be served.
+	@if helm template test charts/prometheus-universal-exporter --set staticTargets.path=/static --set selfMetrics.path=/static/status >/dev/null 2>&1; then \
+		echo "helm template accepted selfMetrics.path at the static targets' status page" >&2; \
 		exit 1; \
 	fi
 	@# A garbage collector target of off with no Go memory limit in force, one

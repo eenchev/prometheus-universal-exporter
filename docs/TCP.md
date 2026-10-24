@@ -81,6 +81,12 @@ collectors:
       - name: memcached_evictions_total
         type: counter
         expression: '(?m)^STAT evictions (\d+)\r$'
+    derived:
+      - name: memcached_gets
+        hidden: true
+        sum: [memcached_get_hits_total, memcached_get_misses_total]
+      - name: memcached_get_hit_ratio
+        ratio: [memcached_get_hits_total, memcached_gets]
 ```
 
 ```text
@@ -89,6 +95,9 @@ collectors:
 
 memcached ends each line with `\r\n`, so a rule's `$` comes after a `\r`:
 with `(?m)`, `$` matches before a line feed alone.
+memcached counts hits and misses, not their ratio, so the ratio is
+[derived](CONFIGURATION.md#derived-series) from the two, over their hidden
+sum; a server that has had no get yet has no ratio.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -293,7 +302,7 @@ and `1` for any other:
 
 A [static target](STATIC-TARGETS.md) of a `tcp` collector names the service,
 `host:port`, as its `target`, which it requires, and may set under its
-`request` only `timeout`. What is sent and the terminator are the
+`request` `timeout` and `tls`. What is sent and the terminator are the
 collector's, and `params` fills its placeholders:
 
 ```yaml
@@ -307,7 +316,27 @@ targets:
     target: zk-0.zookeeper:2181
     request:
       timeout: 5s
+  - name: zookeeper_secure
+    collector: zookeeper
+    target: zk-secure.zookeeper:2281
+    request:
+      tls:
+        ca_file: /etc/exporter/zookeeper/ca.pem
+        cert_file: /etc/exporter/zookeeper/client.pem
+        key_file: /etc/exporter/zookeeper/client-key.pem
 ```
+
+A target's `tls` replaces the collector's whole block for that target, a key
+it leaves out not being taken from the collector's, and is checked when the
+file loads as the collector's is. Written, even as `tls: {}`, it makes the
+scrape speak TLS, so one collector reads services in plaintext and behind
+TLS, each with its own CA or client certificate; a target cannot turn off
+the TLS its collector asks for. Its files are read at each connection, and
+by [`--dry-run`](CONFIGURATION.md#dry-run), which warns of them under the
+target's name. They hold no placeholder, and no probe parameter sets them. A
+target's block is part of its [cache key](CONFIGURATION.md#response-caching),
+so targets with different blocks never share an answer, nor a trip to the
+service.
 
 ## Limits
 

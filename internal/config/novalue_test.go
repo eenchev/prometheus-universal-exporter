@@ -146,7 +146,7 @@ const (
 // places or in none, which is tested apart
 // (TestAKeyAnEntryOrAMappingValueWithNoValueIsRefused).
 func eachNoValueSite(doc *yaml.Node, t reflect.Type, visit func(noValueSite)) {
-	entries := map[string]string{"Collector": "a collector", "MetricRule": "a metric rule", "LabelRule": "a label", "StaticTarget": "a static target"}
+	entries := map[string]string{"Collector": "a collector", "MetricRule": "a metric rule", "LabelRule": "a label", "DerivedRule": "a derived entry", "StaticTarget": "a static target"}
 	here := func() *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: noValueHere} }
 	scalar := func(text string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: text} }
 	ofKey := func(key string) noValueSite {

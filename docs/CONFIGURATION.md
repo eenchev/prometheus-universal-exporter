@@ -4,8 +4,14 @@ The exporter reads one YAML document, named by `--config.file`, and any
 [collector files](#collector-files) it lists. It declares the
 collectors — how to call a target, how to read what comes back, and which
 metrics to publish — and, optionally, the exporter's own settings under `web`
-and `otlp`. Target URLs are deliberately not part of it: Prometheus supplies
-each one per scrape.
+and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
+limits per host that every collector's requests share. Target URLs are
+deliberately not part of it: Prometheus supplies each one per scrape.
+
+The top-level keys are `collectors`, `collector_files`, `rate_limits`, `otlp`
+and `web`. `rate_limits` is a key of its own rather than part of a
+collector's `limits`, which bound one collector's scrape: its entries belong
+to no collector, and bound the requests of all of them together.
 
 `configs/config.example.yaml` is a complete working document to
 start from. This page is the reference for what it may contain.
@@ -2258,6 +2264,137 @@ of each bucket. `--dry-run` checks the block as startup does, and a
 [debug probe](#debug-probes) counts each histogram as one series of its
 metric and shows it among the metrics as the probe answers it.
 
+### Derived series
+
+A target often counts what a dashboard wants as a ratio or a total: memcached
+counts the gets that found their item and those that did not, not its hit
+ratio; a queue lists its items by shard, where the depth of each queue is
+wanted. A collector's `derived` list computes series from the collector's
+own series once its transform made them, the same way under every
+transform — `regex`, `csv`, `xpath`, `css`, `jq`, `yq`, `python` and
+`prometheus` — so no Python script or recording rule is needed for it:
+
+```yaml
+- name: memcached
+  request:
+    type: tcp
+    send: "stats\r\n"
+    terminator: "END\r\n"
+  transform:
+    type: regex
+  metrics:
+    - name: memcached_get_hits_total
+      type: counter
+      expression: '(?m)^STAT get_hits (\d+)\r$'
+    - name: memcached_get_misses_total
+      type: counter
+      expression: '(?m)^STAT get_misses (\d+)\r$'
+  derived:
+    - name: memcached_gets_total
+      type: counter
+      hidden: true
+      sum: [memcached_get_hits_total, memcached_get_misses_total]
+    - name: memcached_get_hit_ratio
+      description: The share of gets that found their item
+      ratio: [memcached_get_hits_total, memcached_gets_total]
+```
+
+```text
+# HELP memcached_get_hit_ratio The share of gets that found their item
+# TYPE memcached_get_hit_ratio gauge
+memcached_get_hit_ratio 0.9
+```
+
+[examples/tcp/config.yaml](../examples/tcp/config.yaml) has it for a real
+memcached. Each entry has a `name`, an optional `description`, which is the
+help text, and a `type`, `gauge` (the default), `counter` or `untyped`, and
+sets exactly one operation, a list of the names of the families it reads:
+
+| Operation | Computes |
+| --- | --- |
+| `sum: [a, b, ...]` | `a + b + ...` of two families or more, series by series |
+| `difference: [a, b]` | `a - b`, series by series |
+| `ratio: [a, b]` | `a / b`, series by series |
+| `sum: [a]` with `by: [l, ...]` | the series of `a` added up into one for each set of values of the labels `l, ...`, the other labels dropped |
+| `sum: [a]` with `by: []` | every series of `a` added up into one series without labels |
+
+```yaml
+derived:
+  - name: queue_depth
+    sum: [queue_items]
+    by: [queue]
+```
+
+**Matching.** Series by series means as PromQL matches two vectors one to one
+without `on` or `ignoring`: a series of `a` is paired with the series of `b`
+that has exactly its labels, names and values, a label of an empty value
+being no label, and the result has those labels. A series with no partner
+in every other family makes no derived series, nor does a label set that two
+series of one family have, which has no one partner. To compute over
+families whose labels differ, add up the one with more labels `by` the
+labels of the other first, in a hidden entry, and read that.
+
+**Order and hidden entries.** The entries are computed in their order, and
+an entry may read an earlier one as it reads a rule. An entry with `hidden:
+true` is computed for the entries after it and not exported, as the sum of
+hits and misses above, which `memcached_commands_total{command="get"}`
+exports already; a hidden entry that no later entry reads is refused.
+
+**No number, no series.** A result that is NaN or infinite makes no series:
+a `ratio` over 0, such as the hit ratio of a server that has had no get yet,
+is left out rather than exported as NaN, which no query can use. That is no
+failure: the target answered every value it was asked for.
+
+**Where in the scrape.** The entries read the series as the rules made them:
+after each rule's `value_map`, `scale` and `time_format`, the label value
+maps and [truncation](#long-label-values), and before `transform.labels`,
+`remove_labels` and `rename_labels`, [`metrics_prefix`](#prefixing-a-collectors-metrics)
+and [`name_escaping`](#utf-8-names), which then apply to the derived series
+as to every other. So an operand is written as the rule's `name` is written,
+without the prefix, a label of `by` as the rule's label is named, before any
+rename, and a derived series gets the collector's static labels whatever its
+operands' labels were. A derived series has no timestamp, whatever its
+operands had. Each exported derived series counts against
+[`limits.max_metrics`](#memory), and a scrape whose rules and derived entries
+make more fails as one whose rules make too many does; a hidden entry's
+series are not counted. Derived series are cached, served to
+[static targets](STATIC-TARGETS.md) and exported to [OTLP](OTLP.md) like any
+other, and a [debug probe](#debug-probes) lists each family it got as
+`memcached_get_hit_ratio: 1 (derived: ratio of memcached_get_hits_total,
+memcached_gets_total)`, and the entries that got none apart from the rules.
+
+**Checked at load.** An entry's name may be no rule's of the collector and no
+other entry's, nor a `_bucket`, `_sum` or `_count` of a histogram or summary
+rule; it is held to the rules' name checks and to
+`limits.max_metric_name_length` as exported, and its `description` to
+`limits.max_help_length`. Each operand is the name of a rule of the
+collector or of an earlier entry, of a counter, a gauge or an untyped
+family: a histogram or a summary has no one value to compute with. `sum`
+reads two families or more, `difference` and `ratio` two, and `by` goes only
+with a `sum` of one, its labels each once. The series of a `python` script
+and of a `prometheus` pass-through are named at run time, so under those two
+an operand that no rule names is taken, and read from the series of that
+name each scrape makes; a family of that name that a scrape shows to be a
+histogram or a summary makes no series of the entry and is a failure of the
+entry under `error_mode: log`: [logged](#when-a-metric-cannot-be-extracted)
+once per failing target, counted in `http_exporter_rule_failures_total`
+under the entry's name, which every entry has from 0, and shown by a debug
+probe.
+
+**Names and operands a scrape shows.** Under those two transforms the target
+or the script may also export a family of an entry's own name, which no load
+check can see. The entry's series would then be duplicates of the target's,
+which fail the whole scrape, so the entry makes none and the scrape keeps the
+target's family as it came: that is a failure of the entry, logged, counted
+and shown as the histogram operand above is, and a later entry that reads it
+reads no series. An operand that the scrape has no series of — one the
+target leaves out while it has nothing to count, or a name no target ever
+exports — gives the entry no series and is no failure, since the absence can
+be what the target means; a debug probe lists the entry among those that got
+none with the operand that had none, as `requests_failed_ratio (operand
+requests_failed_total: no series)`, the operands of a hidden entry it reads
+among them.
+
 ### Conditional metrics and labels
 
 There is no `when` key: each transform already says in its own language which
@@ -2397,7 +2534,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
-| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin. See [Rate limiting](REQUESTS.md#rate-limiting). |
+| `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -2848,6 +2985,12 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   histogram` without the block is refused for every transform but
   `prometheus`, the error saying the block is the way to count the values in
   a histogram;
+- a [`derived`](#derived-series) entry has a name no rule of the collector
+  and no other entry has, the type `gauge`, `counter` or `untyped`, and
+  exactly one of `sum`, `difference` and `ratio`, each reading counters,
+  gauges or untyped families that are rules of the collector or earlier
+  entries; `by` is only beside a `sum` of one family, and a `hidden` entry is
+  read by a later one;
 - `transform.labels` and `rename_labels` must give label names, classic ones
   unless `name_escaping` escapes the others, and two renames may not target
   the same label. A key of `transform.labels` or a rule's label that
@@ -4771,6 +4914,156 @@ changed and changed back, or removed and brought back, while an earlier probe
 was at the target makes a trip of its own, and its result is cached and its
 failure logged as any probe's of a collector in force.
 
+## Metric lint
+
+The metric lint is advice about the series a collector makes: names that
+break Prometheus's [naming conventions](https://prometheus.io/docs/practices/naming/),
+labels whose values look unbounded, and one name that two collectors make in
+different ways. The [dry run](#dry-run) lists what the configuration alone
+shows, and the [debug report](#debug-probes) and the
+[debug page](#the-debug-page) add what the series of a run show. It is
+advice and never more: the dry run passes with it, exit status `0`, and a
+probe, a static target's scrape and a debug run answer what they answer
+without it. Nothing else reports it — not startup, a reload or a probe.
+
+Each finding names its collector, its rule by an id that stays the same, and
+the metric, by the name it is exported under, with the collector's
+`metrics_prefix`:
+
+```text
+[counter-total] metric "jobs_done": a counter whose name does not end in _total is written as jobs_done in the Prometheus text format and as jobs_done_total in OpenMetrics, so its name depends on the format a scraper asks for; name it jobs_done_total
+[unit-suffix] metric "poll_latency_ms": the unit ms is not a base unit; Prometheus names use seconds, bytes and ratios from 0 to 1: convert the value with scale: 0.001 and name it poll_latency_seconds
+```
+
+| Rule | Where | Says |
+| --- | --- | --- |
+| `counter-total` | dry run, debug | A counter whose name does not end in `_total`; a gauge whose name does. |
+| `unit-suffix` | dry run, debug | A unit that is not a base unit; a name that reads as a duration, a time or a size without its unit. |
+| `unbounded-label` | debug only | A label whose values in one run look like ids or times, or are more than 100. |
+| `name-clash` | dry run, debug | A metric name another collector makes with another type, help or labels. |
+
+The rules read the names the configuration gives — a rule's `name` and the
+`name` of a [derived entry](#derived-series) that is not `hidden`, with the
+collector's `metrics_prefix`, a derived entry of the `type` it is written
+with, `gauge` without one — and, in a debug run, the names of the series
+the run made, so that the names a `python` script makes or a `prometheus`
+rule without a `name` passes on are linted there too, though the dry run
+cannot know them. A finding both give is shown once.
+
+### counter-total
+
+The exporter does not add `_total` to a counter's name in the Prometheus
+text format: a counter named `jobs_done` is the series `jobs_done` there and
+`jobs_done_total` in [OpenMetrics](#openmetrics), which a scraper chooses.
+So a rule of `type: counter` whose name does not end in `_total` is
+reported, with the name to give it. A rule of `type: gauge` whose name ends
+in `_total` is reported too: the suffix says counter, and `rate()` over a
+gauge that goes down gives nonsense. A rule of `type: untyped`, and a
+`prometheus` rule without a `type`, which keeps the series' own, are not.
+
+### unit-suffix
+
+A name is read as its words, the parts between underscores, in any case.
+
+- **A unit that is not a base unit**, as the last word, or the last before a
+  counter's `_total`, is reported with the base unit's name and the
+  [`scale`](#mapping-text-to-values-and-scaling-them) that converts the
+  value:
+
+  | Words | Base unit | `scale` |
+  | --- | --- | --- |
+  | `ms`, `millis`, `milliseconds` | `seconds` | `0.001` |
+  | `us`, `microseconds` | `seconds` | `0.000001` |
+  | `ns`, `nanoseconds` | `seconds` | `0.000000001` |
+  | `minutes`, `hours`, `days` | `seconds` | `60`, `3600`, `86400` |
+  | `kb`, `kilobytes`, `mb`, `megabytes`, `gb`, `gigabytes` | `bytes` | `1000`, `1000000`, `1000000000` |
+  | `kib`, `mib`, `gib` | `bytes` | `1024`, `1048576`, `1073741824` |
+  | `percent`, `percentage` | `ratio` | `0.01` |
+
+  `us` and `ns` are a region or a namespace as often as a unit, so they are
+  read as one only in a name that also has a word of a duration (below):
+  `request_latency_us` is reported, `requests_us` is not.
+- **A duration or a time without `seconds`**: a name with one of the words
+  `duration`, `latency`, `elapsed`, `uptime`, `age`, `time` or `timestamp`
+  and without the word `seconds` (or `ratio`) is reported, with the name of
+  a duration in seconds, `request_duration_seconds`, and of a point in time,
+  a Unix time in seconds, `last_success_time_timestamp_seconds`; a name with
+  `timestamp` is given the second alone. `timeout` and `timeouts` are not
+  among the words, since they count timeouts more often than they measure
+  one, nor is `times`, which counts.
+- **A size without `bytes`**: a name with the word `memory` and without the
+  word `bytes` (or `ratio`) is reported, with the name in bytes. `size` is
+  not among the words: `queue_size`, `pool_size` and `batch_size` count
+  items.
+
+The lists are short on purpose: a word that is as often something else
+would make advice nobody reads.
+
+### unbounded-label
+
+Each value of a label is a series of its own, which Prometheus keeps for as
+long as it keeps the metric, so a label whose values keep changing — a
+request id, a user, a time — grows the series without bound. In a debug
+run, each label of each metric is reported, once, when among the run's
+series
+
+- it has more than 100 distinct values, or else
+- one of its values is a UUID (`5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48`), a
+  hexadecimal string of 16 or more digits, with or without `0x` (a hash or
+  an id), a number of 10 or more digits (an id or a Unix time), or a date
+  or an RFC 3339 time (`2026-10-24`, `2026-10-24T09:14:05Z`,
+  `2026-10-24 09:14:05.123+03:00`).
+
+The finding quotes the value, by its first 64 bytes. An address with its
+port, `10.0.0.7:9100`, is not reported: a target's address is the most
+common bounded label there is. Nor is the shape of a value held against a
+metric that has one series in the run, such as
+`build_info{revision="9fceb02d0ae598e95dc970b74767f19372d61af8"}`: one
+series cannot grow its metric's series within a scrape, and an info metric's
+one value changes only when what it describes does. Two series of such
+values are reported as any are. The dry run sees no values, so it gives
+none of this advice.
+
+### name-clash
+
+Prometheus keeps one type and one help text for a metric name, and a query
+over the series of two collectors that make one name mixes them. So each
+name a collector's rules make that a rule of another collector makes with
+
+- another type,
+- another help text, where both rules have a `description`, or
+- other label names — the rules' labels and `transform.labels`, as
+  `transform.remove_labels` and `transform.rename_labels` leave them, and a
+  derived `sum` `by` labels its `by` and `transform.labels` so left —
+
+is reported, for each of the two collectors, naming the other. What a side
+cannot know is not compared: the names a `python` script makes or a
+`prometheus` rule without a `name` passes on, the type a `prometheus` rule
+without a `type` keeps, the labels of a `prometheus` transform's series,
+which are the target's, and the labels of a derived entry's series by
+series operation, which are its operands' series'. The dry run compares every collector of the
+configuration; a debug run compares the collector it runs with the others
+in force, one written on the debug page with every configured collector of
+another name.
+
+### Silencing a rule
+
+A collector's `lint.ignore` lists the rules whose advice is not given for
+it, by their ids:
+
+```yaml
+collectors:
+  - name: legacy
+    lint:
+      ignore: [unit-suffix, name-clash]
+```
+
+An id that is no rule's fails the configuration, as any wrong value does,
+so a misspelt id silences nothing unnoticed. `name-clash` is silenced for
+the collector that lists it: the other collector of the pair still reports
+the clash, naming it. The debug report says which rules a collector
+silences.
+
 ## Debugging collectors
 
 When a collector does not give what it should, run it and read what
@@ -4804,7 +5097,8 @@ a visitor of the exporter's pages do.
 ### The debug page
 
 `/debug` runs one collector and shows the series a probe would answer, the
-stages, what was logged, the requests sent and the response read and,
+stages, the [metric lint](#metric-lint)'s advice, what was logged, the
+requests sent and the response read and,
 folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
 and, with *Run as you type* on, a moment after each edit, and never when it
 opens: the collector and the target its address names are filled in and
@@ -4888,8 +5182,9 @@ A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `request_from`, the
 collector to fetch through, and `params`, or `static_target`. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
-(Prometheus text), `requests`, `response`, `stages`, `notes` and `report`,
-the text report. A collector refused is answered `422` with `error`, a
+(Prometheus text), `requests`, `response`, `stages`, `notes`, `lint`, the
+[metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
+`metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`.
 
@@ -4930,6 +5225,9 @@ Transform
 Logs
   level=ERROR msg="probe failed" collector=app_json ...
 
+Lint
+  [counter-total] metric "jobs_done": a counter whose name does not end in _total is written as jobs_done in the Prometheus text format and as jobs_done_total in OpenMetrics, ...
+
 Metrics a probe would have served
   none
 ```
@@ -4958,7 +5256,10 @@ The report lists:
   A request that waited for its turn under
   [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line of how long
   and why: `sent after waiting 500ms for its turn under the rate limit of 2
-  requests per second for http://legacy.example:80`.
+  requests per second for http://legacy.example:80`, and so has one that
+  waited under an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host):
+  `sent after waiting 200ms for its turn under the rate limit of 5 requests
+  per second of rate_limits entry "billing_api" for api.billing.example`.
 - **Response:** the status, the headers — the first 100 of them, each value
   by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
@@ -4979,6 +5280,10 @@ The report lists:
   first 200.
 - **Logs:** everything the trip logged at any level, whatever `--log.level`
   is, including what a Python script printed.
+- **Lint:** the [metric lint](#metric-lint)'s advice on the collector and on
+  the series the run made, one finding a line, or `none`, and the rules the
+  collector's `lint.ignore` silences. It changes nothing of what a probe
+  answers.
 - **Metrics:** the exposition a probe would have served, and before the
   report, the status a probe would have answered. Where `cache.stale_if_error`
   would have answered with the last good result, the report says so.
@@ -5241,6 +5546,18 @@ prometheus-universal-exporter --dry-run \
 
 It checks everything startup checks, including that every expression compiles
 (see [Checked when the configuration loads](#checked-when-the-configuration-loads)).
+The [metric lint](#metric-lint)'s advice on the configuration is listed under
+`details.lint` of the `config` entry, each finding with its `collector`,
+`rule`, `metric` and `message`, and logged at WARN as `metric lint`, with the
+same as `collector`, `rule`, `metric` and `advice`; it never fails the check,
+so a configuration with advice exits `0`:
+
+```json
+"lint": [
+  {"collector": "legacy", "rule": "unit-suffix", "metric": "poll_latency_ms", "message": "the unit ms is not a base unit; ..."}
+]
+```
+
 A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under
@@ -5267,9 +5584,13 @@ under `details.warnings` of the `config` entry, or of the `static_targets`
 entry for a target's own files, and logged, without failing the check, since
 a file may be put in place after the exporter starts. So are the password,
 private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
-static target's own credential file, and the secret files of an `http` or
+static target's own credential and TLS files, the password and TLS files of
+a [`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
+collector and the TLS files of a [`tcp`](TCP.md#static-targets) or
+[`grpc`](GRPC.md#tls) one, and a static target's own, and the secret files of an `http` or
 `graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
-and of a static target's own.
+and of a static target's own, with the TLS files of an `http` or `graphite`
+static target's own `tls` block.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

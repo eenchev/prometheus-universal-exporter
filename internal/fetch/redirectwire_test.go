@@ -4,15 +4,9 @@ package fetch
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +18,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -398,38 +391,6 @@ func TestMessagesNameBothOriginsOfOneHost(t *testing.T) {
 			t.Errorf("%s: %d requests were sent, want the first alone", location, len(got))
 		}
 	}
-}
-
-// selfSigned makes a self-signed certificate for the names given and writes
-// it and its key to files.
-func selfSigned(t *testing.T, commonName string, names ...string) (certFile, keyFile string) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: commonName}, DNSNames: names,
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		IsCA: true, BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	for file, block := range map[string]*pem.Block{certFile: {Type: "CERTIFICATE", Bytes: der}, keyFile: {Type: "EC PRIVATE KEY", Bytes: keyDER}} {
-		if err := os.WriteFile(file, pem.EncodeToMemory(block), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return certFile, keyFile
 }
 
 // countingListener counts the connections made to a server.

@@ -26,6 +26,15 @@ const healthCollector = `collectors:
 
 var queueCollector = strings.Replace(healthCollector, "grpc.health.v1.Health/Check", "acme.queue.v1.QueueService/GetStats", 1)
 
+// tlsAt is where a row writes a key of a grpc target's own tls block.
+const tlsAt = "        # tls\n"
+
+// targetTLS is a target file of one grpc target whose own tls block holds
+// keys, and tlsAt.
+func targetTLS(keys string) string {
+	return "interval: 1m\ntargets:\n  - name: a\n    collector: demo\n    target: a.example:50051\n    request:\n      tls:\n" + keys + tlsAt
+}
+
 // grpcSchemaKeys are the keys of a grpc collector that a schema holds to
 // allowed values or a pattern. rpc is required, and written "" is as missing
 // as left out. descriptors is left out of a call of the health service, and
@@ -41,6 +50,13 @@ func grpcSchemaKeys() []schemaKey {
 		{key: "collectors[].request.descriptors", of: "of another service than health", document: queueCollector, at: request, setting: "      descriptors: %s\n", valid: "reflection", invalid: "files", absentWas: taken},
 		{key: "collectors[].request.method", of: "of a grpc collector", document: healthCollector, at: request, setting: "      method: %s\n", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.metadata{}", document: healthCollector, at: request, setting: "      metadata: {%s: one}\n", valid: "x-tenant", invalid: "X-Tenant", absent: true},
+		// A target's own tls block: a client certificate is both files
+		// or neither, "" a file left out, and no value holds a
+		// placeholder, being used as written.
+		{key: "targets[].request.tls.ca_file", file: inTargetFile, configuration: healthCollector, document: targetTLS("        server_name: a.example\n"), at: tlsAt, setting: "        ca_file: %s\n", valid: "/ca.pem", invalid: `"/{{param_ca}}"`, absent: true, empty: true},
+		{key: "targets[].request.tls.server_name", file: inTargetFile, configuration: healthCollector, document: targetTLS("        ca_file: /ca.pem\n"), at: tlsAt, setting: "        server_name: %s\n", valid: "a.example", invalid: `"{{param_host}}"`, absent: true, empty: true},
+		{key: "targets[].request.tls.cert_file", file: inTargetFile, configuration: healthCollector, document: targetTLS("        ca_file: /ca.pem\n"), at: tlsAt, setting: "        key_file: /k.pem\n        cert_file: %s\n", valid: "/c.pem", invalid: `"/{{param_c}}"`, absent: true},
+		{key: "targets[].request.tls.key_file", file: inTargetFile, configuration: healthCollector, document: targetTLS("        ca_file: /ca.pem\n"), at: tlsAt, setting: "        cert_file: /c.pem\n        key_file: %s\n", valid: "/k.pem", invalid: `"/{{param_k}}"`, absent: true},
 		{key: "targets[].request.metadata{}", file: inTargetFile, configuration: healthCollector, document: "interval: 1m\ntargets:\n  - name: a\n    collector: demo\n    target: a.example:50051\n    # target\n", at: "    # target\n", setting: "    request:\n      metadata: {%s: one}\n", valid: "x-tenant", invalid: "X-Tenant", absent: true},
 	}
 }

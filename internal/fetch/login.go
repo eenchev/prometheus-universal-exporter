@@ -388,6 +388,26 @@ func loginFingerprint(l *model.LoginConfig) string {
 	return string(b)
 }
 
+// loginTLS is the tls block a login of l for a request of c is made with:
+// the login's own, and otherwise the request's, which is a static target's
+// own block when it names one (withTargetTLS).
+func loginTLS(c *model.Collector, l *model.LoginConfig) model.TLSConfig {
+	if l.TLS != nil {
+		return *l.TLS
+	}
+	return c.Request.TLS
+}
+
+// loginTokenFingerprint is what keeps the tokens of l, for a request of c,
+// apart from those of other logins: the login block and the tls block it is
+// made with. Two static targets that log in with one block but with client
+// certificates or CAs of their own make two logins, so neither is sent a
+// token the other's certificate was given, nor one taken from a server its
+// own roots would not have trusted.
+func loginTokenFingerprint(c *model.Collector, l *model.LoginConfig) string {
+	return loginFingerprint(l) + "\x00" + fmt.Sprintf("%#v", loginTLS(c, l))
+}
+
 // LoginFingerprint identifies a static target's login, for its key in the
 // response cache: targets that log in differently share no answer.
 func LoginFingerprint(l *model.LoginConfig) string {
@@ -435,7 +455,7 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 		// An absolute login.url names the host it logs in at.
 		host = ""
 	}
-	fingerprint := loginFingerprint(l)
+	fingerprint := loginTokenFingerprint(c, l)
 	// The Host is part of the key: two virtual hosts on one address are
 	// two logins, and neither is sent the other's token.
 	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host
@@ -526,10 +546,7 @@ type loginToken struct {
 // logIn makes one login of l at u for a request of c, sent with the Host
 // host when it is not "".
 func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, host string) (loginToken, error) {
-	tlsSettings := c.Request.TLS
-	if l.TLS != nil {
-		tlsSettings = *l.TLS
-	}
+	tlsSettings := loginTLS(c, l)
 	// No redirect is followed: the login's secrets go where the
 	// configuration says and nowhere a redirect would take them.
 	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: c.Request.EnableHTTP2, policy: policyOf(c)}, false, 0)
@@ -540,7 +557,9 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		proxy = transport.Proxy
 	}
-	ctx, err = withTargetPolicy(ctx, c, u, proxy)
+	// A login follows no redirect, so whose certificate it presents is
+	// never a redirect's refusal to name.
+	ctx, err = withTargetPolicy(ctx, c, u, proxy, false)
 	if err != nil {
 		return loginToken{}, err
 	}
@@ -591,7 +610,7 @@ func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	traceLogin(req.Context(), req.Method, req.URL, req.Header, req.Host)
-	traceRateLimitWait(req.Context(), req.URL, waited, false)
+	traceRateLimitWait(req.Context(), waited, false)
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
 		traceOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())
@@ -1059,8 +1078,8 @@ func (c *loginCache) evictLocked() {
 }
 
 // follow drops the tokens of logins the configuration in force no longer
-// has — a collector removed, or its login, or a static target's, changed —
-// and the counts of the collectors it no longer has.
+// has — a collector removed, or its login, or a static target's, or the tls
+// block one is made with, changed — and the counts of the collectors it no longer has.
 func (c *loginCache) follow(collectors []model.Collector, targets []model.StaticTarget) {
 	wanted := map[string]map[string]bool{}
 	names := map[string]bool{}
@@ -1071,12 +1090,19 @@ func (c *loginCache) follow(collectors []model.Collector, targets []model.Static
 		byName[col.Name] = col
 		wanted[col.Name] = map[string]bool{}
 		if col.Request.Login != nil {
-			wanted[col.Name][loginFingerprint(col.Request.Login)] = true
+			wanted[col.Name][loginTokenFingerprint(col, col.Request.Login)] = true
 		}
 	}
+	// A static target logs in with its own login or the collector's, and
+	// with its own tls block or the collector's.
 	for i := range targets {
-		if col := byName[targets[i].Collector]; col != nil && targets[i].Request.Login != nil {
-			wanted[col.Name][loginFingerprint(targets[i].Request.Login)] = true
+		col := byName[targets[i].Collector]
+		if col == nil {
+			continue
+		}
+		overrides := RequestOverrides{Login: targets[i].Request.Login, TLS: targets[i].Request.TLS}
+		if l := loginOf(col, overrides); l != nil {
+			wanted[col.Name][loginTokenFingerprint(withTargetTLS(col, overrides), l)] = true
 		}
 	}
 	c.mu.Lock()

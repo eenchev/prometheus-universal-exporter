@@ -261,8 +261,14 @@ func onlyBlanks() map[string]any {
 // target's account and credential files may not be, a placeholder being
 // used as it is written there (fetch's checkSQLTargetRequest and
 // checkSSHTargetRequest).
+// placeholder is the rule of a value holding a {{param_...}} placeholder,
+// for a key a static target writes out in full.
+func placeholder() map[string]any {
+	return map[string]any{"type": "string", "pattern": `\{\{`}
+}
+
 func blanksOrPlaceholder() map[string]any {
-	return map[string]any{"anyOf": []any{onlyBlanks(), map[string]any{"type": "string", "pattern": `\{\{`}}}
+	return map[string]any{"anyOf": []any{onlyBlanks(), placeholder()}}
 }
 
 // headerNameChars are the characters of a header name, an HTTP token
@@ -464,9 +470,17 @@ func configSchemaRules() map[string]map[string]any {
 			},
 			"description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
 		},
-		"collectors":        {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
-		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
-		"collector_files[]": {"type": "string", "minLength": 1},
+		"collectors":               {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
+		"collector_files":          {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
+		"collector_files[]":        {"type": "string", "minLength": 1},
+		"rate_limits":              {"description": "Rate limits per host, shared by every collector: every http and graphite request to one of an entry's hosts, each attempt, page, followed redirect and login request counted, from any collector, probe or static target, takes a turn under the entry's rate_limit, as well as under its collector's own request.rate_limit. The first entry whose hosts match applies. Other request types are not limited. See docs/REQUESTS.md#rate-limits-per-host."},
+		"rate_limits[]":            {"required": []string{"name", "hosts", "rate_limit"}},
+		"rate_limits[].name":       {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name of the entry, the rule label of its self-metrics http_exporter_host_rate_limit_waits_total and http_exporter_host_rate_limit_refused_total."},
+		"rate_limits[].hosts":      {"minItems": 1, "description": "The hosts the entry limits, all ports and schemes of each together: host names, in any case, IP addresses, and *.example.com wildcards, which match every subdomain of example.com but not example.com itself. No scheme, port or path. A host may be listed in one entry only."},
+		"rate_limits[].hosts[]":    {"minLength": 1},
+		"rate_limits[].rate_limit": {"required": []string{"requests_per_second"}, "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once."},
+		"rate_limits[].rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
+		"rate_limits[].rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
 		// What a collector must have, and each of its rules a name.
 		"collectors[]":                                         collectorSchemaRule(),
 		"collectors[].name":                                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
@@ -477,6 +491,9 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].cache.revalidate":                        {"description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses."},
 		"collectors[].max_concurrent_probes":                   {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
 		"collectors[].coalesce":                                {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].lint":                                    {"description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint."},
+		"collectors[].lint.ignore":                             {"description": "The ids of the lint rules whose advice is not given for this collector."},
+		"collectors[].lint.ignore[]":                           {"enum": model.LintRules},
 		"collectors[].failure_backoff":                         {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
 		"collectors[].failure_backoff.after":                   {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
 		"collectors[].failure_backoff.initial":                 {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
@@ -642,6 +659,20 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].time_format":                  {"description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms."},
 		"collectors[].metrics[].time_zone":                    {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
 		"collectors[].metrics[]":                              metricRuleSchemaRule(),
+		"collectors[].derived":                                {"description": "Series computed from the collector's own series once its transform made them, in order, so an entry may read an earlier one: a sum, a difference or a ratio, such as a hit ratio of hits and misses. See docs/CONFIGURATION.md#derived-series."},
+		"collectors[].derived[]":                              derivedSchemaRule(),
+		"collectors[].derived[].name":                         {"type": "string", "not": onlyBlanks(), "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values."},
+		"collectors[].derived[].type":                         {"enum": optionalEnum([]string{string(model.GaugeMetricType), string(model.CounterMetricType), string(model.UntypedMetricType)}), "description": "gauge, the default, counter or untyped: a derived series is one number."},
+		"collectors[].derived[].description":                  {"description": "The help text of the derived metric."},
+		"collectors[].derived[].sum":                          {"minItems": 1, "description": "Adds up the series of the families listed, two or more, matched by their label sets; with by, the series of the one family listed. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].sum[]":                        derivedOperandRule(),
+		"collectors[].derived[].difference":                   {"minItems": 2, "maxItems": 2, "description": "[a, b]: a - b, of the series of a and b matched by their label sets. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].difference[]":                 derivedOperandRule(),
+		"collectors[].derived[].ratio":                        {"minItems": 2, "maxItems": 2, "description": "[a, b]: a / b, of the series of a and b matched by their label sets. A ratio over 0 makes no series. Each a rule's name, as written, or an earlier entry's."},
+		"collectors[].derived[].ratio[]":                      derivedOperandRule(),
+		"collectors[].derived[].by":                           {"uniqueItems": true, "description": "With a sum of one family: adds up its series into one for each set of values of these labels, as the rules name them, the others dropped; [] makes one series of them all."},
+		"collectors[].derived[].by[]":                         {"type": "string", "minLength": 1, "not": onlyBlanks()},
+		"collectors[].derived[].hidden":                       {"description": "Computes the entry for later entries to read, without exporting it. Defaults to false."},
 		"collectors[].metrics[].histogram": {
 			"required":    []string{"buckets"},
 			"description": "With type: histogram: counts the values the rule reads — every value its expression gives, or one per item, node, element, match or row — in a histogram, one for each set of label values, instead of making each a series. The values of this response alone: the histogram is made anew on every scrape. Not for the prometheus and python transforms.",
@@ -808,8 +839,9 @@ func metricRuleSchemaRule() map[string]any {
 // text key written "" is the key left out there as everywhere; required is
 // a boolean, written when it is there.
 //
-// A rule's name and the names of its labels are classic Prometheus names
-// unless the collector's name_escaping is underscores or values, under which
+// A rule's name, a derived entry's and the names of a rule's labels are
+// classic Prometheus names unless the collector's name_escaping is
+// underscores or values, under which
 // a scrape exports any name escaped and the exporter takes any written one
 // (transform.TakesLabelName): the patterns of the two keys hold where the
 // collector does not say one of those two. A label's name that the
@@ -867,9 +899,32 @@ func collectorSchemaRule() map[string]any {
 			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
 			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
+			map[string]any{"if": map[string]any{"not": escapesNames}, "then": map[string]any{"properties": map[string]any{"derived": map[string]any{"items": classicNames}}}},
 			map[string]any{"if": map[string]any{"not": map[string]any{"anyOf": []any{escapesNames, takesOffLabels}}}, "then": rules(classicLabelNames)},
 		},
 	}
+}
+
+// derivedSchemaRule is a derived entry's, as the exporter checks it
+// (transform.CheckDerived): a name, not "", and exactly one of sum, difference and
+// ratio; by only beside sum, which then reads one family, and without it a
+// sum reads two or more.
+func derivedSchemaRule() map[string]any {
+	required := func(key string) map[string]any { return map[string]any{"required": []string{key}} }
+	return map[string]any{
+		"required": []string{"name"},
+		"allOf":    []any{writtenKey("name")},
+		"oneOf":    []any{required("sum"), required("difference"), required("ratio")},
+		"if":       required("by"),
+		"then":     map[string]any{"required": []string{"sum"}, "properties": map[string]any{"sum": map[string]any{"maxItems": 1}}},
+		"else":     map[string]any{"properties": map[string]any{"sum": map[string]any{"minItems": 2}}},
+	}
+}
+
+// derivedOperandRule is an operand of a derived entry: the name of a family,
+// text that is not blanks alone.
+func derivedOperandRule() map[string]any {
+	return map[string]any{"type": "string", "minLength": 1, "not": onlyBlanks()}
 }
 
 // labelSchemaRule is a label's: a name, and exactly one of value and
@@ -1099,22 +1154,36 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
 			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
-		"targets[].export_via_otlp":                         {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
-		"targets[].request":                                 {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
-		"targets[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
-		"targets[].request.path":                            {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.timeout":                         {"description": "How long a scrape of this target may take. At most the target's interval."},
-		"targets[].request.targets":                         {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.from":                            {"description": "graphite: replaces the collector's request.from for this target."},
-		"targets[].request.until":                           {"description": "graphite: replaces the collector's request.until for this target."},
-		"targets[].request.message":                         {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.headers":                         {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
-		"targets[].request.metadata":                        {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
-		"targets[].request.basic_auth.username":             {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
-		"targets[].request.username":                        {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
+		"targets[].export_via_otlp":             {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
+		"targets[].request":                     {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
+		"targets[].request.method":              {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
+		"targets[].request.path":                {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.timeout":             {"description": "How long a scrape of this target may take. At most the target's interval."},
+		"targets[].request.targets":             {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.from":                {"description": "graphite: replaces the collector's request.from for this target."},
+		"targets[].request.until":               {"description": "graphite: replaces the collector's request.until for this target."},
+		"targets[].request.message":             {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.headers":             {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
+		"targets[].request.metadata":            {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.basic_auth.username": {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"targets[].request.username":            {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
+		"targets[].request.bind_dn":             {"not": blanksOrPlaceholder(), "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires."},
+		"targets[].request.tls": {
+			// A client certificate is both files or neither, "" being a
+			// file left out, as the exporter checks a target's block.
+			"allOf": []any{
+				map[string]any{"if": writtenKey("cert_file"), "then": writtenKey("key_file")},
+				map[string]any{"if": writtenKey("key_file"), "then": writtenKey("cert_file")},
+			},
+			"description": "redis, ldap, tcp, sql, grpc, http and graphite: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for; for http and graphite, whose URL's scheme decides, it is the block every https request of the target's trips is made with, its redirects' and its login's, and is not written beside the target's insecure_skip_verify. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+		},
+		"targets[].request.tls.ca_file":                     {"not": placeholder()},
+		"targets[].request.tls.cert_file":                   {"not": placeholder()},
+		"targets[].request.tls.key_file":                    {"not": placeholder()},
+		"targets[].request.tls.server_name":                 {"not": placeholder()},
 		"targets[].request.private_key_file":                {"not": blanksOrPlaceholder(), "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does."},
 		"targets[].request.passphrase_file":                 {"not": blanksOrPlaceholder(), "description": "sshfile, with the target's private_key_file: the file of its passphrase."},
-		"targets[].request.password_file":                   {"not": blanksOrPlaceholder(), "description": "sshfile and sql: the target's own password file; see private_key_file."},
+		"targets[].request.password_file":                   {"not": blanksOrPlaceholder(), "description": "sshfile and sql: the target's own password file; see private_key_file. redis and ldap: replaces the collector's password_file for this target: the password of the target's own username or bind_dn, or, without one, of the collector's."},
 		"targets[].request.connections":                     {"not": map[string]any{"required": []string{"max_targets"}}, "description": "sql: replaces, key by key, the collector's request.connections for this target; not max_targets, which is the collector's and refused here."},
 		"targets[].request.connections.max_per_target":      {"minimum": 0, "description": "sql: the most connections open to this target at once; 0 sets no limit."},
 		"targets[].request.connections.max_idle_per_target": {"minimum": 0, "description": "sql: how many connections to this target are kept idle; 0 keeps none."},

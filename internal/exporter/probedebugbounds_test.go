@@ -47,7 +47,7 @@ type debugTrip struct {
 const debugTripTook = 1500 * time.Millisecond
 
 func (d debugTrip) report() string {
-	return string(d.trace.report(d.probe, d.verdict, d.answer, debugTripTook))
+	return string(d.trace.report(d.probe, d.verdict, d.answer, debugTripTook, nil))
 }
 
 func (d debugTrip) old() string {
@@ -168,6 +168,10 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 			b.WriteString("\n")
 		}
 	}
+
+	// The Lint section came later, and has no line of a target's: a trip
+	// without advice has it as the writer writes it.
+	b.WriteString("\nLint\n  none\n")
 
 	if p.static != nil {
 		b.WriteString("\nMetrics the scrape would have published, without its health series\n")

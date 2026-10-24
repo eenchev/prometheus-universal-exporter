@@ -27076,6 +27076,137 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   wildcard, or covered by a wildcard of its own entry, loads
   (`TestAHostAnEarlierWildcardCoversIsRefused`).
 
+## 34.200 Lint of one series and of derived entries, and derived entries in a pass-through
+
+- A metric of one series in a run, `build_info{revision="<40-hex git sha>"}`,
+  gives no unbounded-label finding on the shape of its value, and two series
+  of such values give one; the test fails when the shape of a value is held
+  against a metric of one series (§ 30.1a).
+- The configuration lint, which `--dry-run` reports, gives counter-total on a
+  derived counter not named `_total`, unit-suffix on a derived `_percent`
+  of no type (a gauge), and name-clash between a derived counter and another
+  collector's gauge rule of its name, told to both collectors, and between a
+  derived `sum` `by: [pool]` and another collector's rule labelled `zone`;
+  a hidden entry is not linted and an element-wise entry's labels are not
+  compared. The test fails when the lint reads the rules alone (§ 30.1a).
+- Under a prometheus pass-through, a derived entry whose name the target
+  exports makes no series and is the entry's failure under log, the target's
+  family left as it came; an operand the target does not export gives no
+  series, no failure, and the rule report names it under the entry and
+  under the entry that reads a hidden one. The test fails when the entry's
+  series are added beside the target's, and when no absent operand is
+  reported (§ 18.1).
+- End to end, the probe of such a pass-through answers 200 with the target's
+  family, the entry's failure logged once and counted twice in
+  `http_exporter_rule_failures_total` over two probes, and the debug report
+  lists `failed_ratio (operand requests_failed_total: no series)` among the
+  entries that gave no series and does not mark the target's family as
+  derived; the test fails, the probe answering 502, without the run-time
+  check (§ 18.1).
+
+## 34.201 Every spelling of a rate-limited host
+
+- An entry of `rate_limits` matches every spelling of its host a request
+  may use: an IPv4 address mapped into IPv6 matches the entry of the IPv4
+  address and the other way round, written with or without brackets and in
+  any case; an IPv6 address with a zone matches the entry of the address,
+  and another address with that zone matches none; an `xn--` name matches
+  in any case and with a final dot, a wildcard over one its subdomains and
+  not itself (§ 5.1).
+- `rate_limits` is refused at load for a mapped address after its IPv4
+  form, plain or in brackets, as the same host listed twice, and for an
+  `xn--` name in capitals with a final dot under an earlier entry's
+  wildcard over its parent, naming both entries; for a name or wildcard
+  with a character outside ASCII, naming the character and the `xn--` form
+  to write; and for an IPv6 address with a zone, plain or in brackets,
+  naming the zone (§ 5.1).
+- A request whose host has a character outside ASCII, to the host of an
+  entry written in its `xn--` form, is refused by the target policy twice
+  in a row without waiting or being counted under the entry (§ 5.1,
+  § 26.1).
+
+## 34.202 The chart's exposure checks in make and CI, and webAuth read by the configuration
+
+- `TestChartRefusesToExposeTheExporterWhoseConfigurationIgnoresWebAuth`
+  (`test/repository/chartexposure_test.go`): with `webAuth.enabled`, an
+  Ingress, a `LoadBalancer` and a `NodePort` Service fail rendering when the
+  chart's `config.yaml` has no `web`, a `web` that is not a mapping,
+  `web.basic_auth` disabled, a password written in place, a `password_file`
+  elsewhere, or the default mount path's files beside another
+  `webAuth.mountPath`; the message names the setting, the expected
+  `<webAuth.mountPath>/password` and the opt-out.
+- `TestChartExposesTheExporterWhoseConfigurationReadsWebAuth`
+  (`test/repository/chartexposure_test.go`): an Ingress with `webAuth`
+  renders when `password_file` is the mounted file, at the default mount path
+  and at another written with a trailing and a doubled slash, and with the
+  opt-out, `config.enabled: false` (an external ConfigMap, not checked) or a
+  `config.yaml` that is not YAML; `webAuth` with a configuration that ignores
+  it renders when nothing is exposed.
+- `TestChartExposesTheExporterWithWebAuthOrTheOptOut`
+  (`test/repository/chartexposure_test.go`): the `webAuth` way out renders
+  with `testdata/chart/web-auth.yaml`, a configuration that reads its files.
+- `TestMakeHelmTestAndCICheckTheChartCasesTheGoTestsCover`
+  (`test/repository/helmtest_test.go`): both lists also refuse an Ingress, a
+  `LoadBalancer` and a `NodePort` Service without `webAuth` and with `webAuth`
+  beside the default configuration, render each with
+  `exposure.allowWithoutWebAuth=true` and with `webAuth` and
+  `testdata/chart/web-auth.yaml`, and refuse `selfMetrics.path` at the static
+  targets' status page, at the default and at another `staticTargets.path`.
+
+## 34.203 TLS of an http or graphite static target
+
+- `TestAnHTTPStaticTargetsOwnTLSBlockIsTheOneItsRequestIsMadeWith`
+  (`internal/fetch/targettls_http_test.go`): an `http` static target's own
+  `tls` block replaces the collector's whole: a server that verifies only
+  the target's client certificate answers the target and refuses the
+  collector's; a block without `ca_file` does not take the collector's CA;
+  `tls: {}` verifies with the system roots alone; and of two servers each
+  verified by a CA of its own, each target block reaches only the one its CA
+  verifies (§ 42.14).
+- `TestStaticTargetsWithTheirOwnCertificatesShareNoConnection`
+  (`internal/fetch/targettls_http_test.go`): two static targets of one
+  collector and one server, each with a client certificate of its own, are
+  answered on connections made with their own certificate over six
+  alternating requests, which make two connections, one per target
+  (§ 42.15b).
+- `TestStaticTargetsWithTheirOwnCertificatesShareNoLoginToken`
+  (`internal/fetch/targettls_http_test.go`): two static targets of one
+  collector logging in at one URL, each with a client certificate of its
+  own, make one login each and are never sent the other's token: the server
+  gives a token for the certificate its login was presented and refuses one
+  given to another certificate (§ 42.14).
+- `TestAStaticTargetsClientCertificateIsNotPresentedToAnUntrustedHost`
+  (`internal/fetch/targettls_http_test.go`): with a collector that has no
+  client certificate, a static target's own has a redirect over `https` to a
+  host that is not trusted refused before any connection is made there,
+  naming the static target's certificate; the same redirect without the
+  target's block is followed (§ 42.15c, rule 5a).
+- `TestAnHTTPStaticTargetsTLSIsChecked`
+  (`internal/fetch/targettls_http_test.go`): a block, `tls: {}` and a block
+  on an `http://` target are taken; half a client certificate, a
+  `server_name` that is no host, a placeholder and `insecure_skip_verify`
+  beside the block are refused; a `password_file` does not apply.
+- `TestAnHTTPStaticTargetsFilesAreReadByTheDryRun`
+  (`internal/fetch/targettls_http_test.go`): `--dry-run` warns, under the
+  target's name, of an `http` static target's own CA file that is not there,
+  and of nothing for `tls: {}` or a target without a block of its own.
+- `TestAGraphiteStaticTargetsOwnTLSBlockIsTheOneItsRequestIsMadeWith`
+  (`internal/fetch/targettls_graphite_test.go`): a render API that refuses
+  the collector's client certificate answers a `graphite` static target's
+  own; `tls: {}` is taken, and half a client certificate and
+  `insecure_skip_verify` beside the block are refused at load.
+- `TestAGraphiteStaticTargetsFilesAreReadByTheDryRun`
+  (`internal/fetch/targettls_graphite_test.go`): `--dry-run` warns, under
+  the target's name, of a `graphite` static target's own CA file that is not
+  there.
+- `TestHTTPStaticTargetsConnectWithTheirOwnTLSBlocks`
+  (`internal/exporter/targettls_http_test.go`): of three static targets of a
+  caching http collector without a client certificate, the one with its own
+  CA and certificate is up and its metric served, while the collector's and
+  the one with `tls: {}` are down, not answered from its cache entry; a
+  probe naming `tls`, `cert_file` and `key_file` parameters is not answered
+  with the certificate.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

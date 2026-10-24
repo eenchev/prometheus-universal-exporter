@@ -27029,6 +27029,28 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - In allocator mode the page says it shows the targets the allocator gave this replica, and the JSON has `allocator_mode` true.
 - The chart fails rendering with `selfMetrics.path` equal to `staticTargets.path` followed by `/status`, default or set, and renders with a path beside it.
 
+## 34.198 Status records forgotten with their targets, backoff skips and following in order
+
+- A static target whose scrape failed, removed by a new static target file and brought back by the next with its name, collector and address as they were, each file followed as a reload follows it and nothing reading the static targets endpoint between, is shown on the status page as not yet scraped, with no failures, no error and no last scrape; it fails while the removal leaves the failed scrape's record in place.
+- A static target exported over OTLP that a reload removes has its result, its last success and its status page record forgotten at the reload, nothing having read the static targets endpoint, and so does one a bundle from the allocator (`ReloadReplacing`) moves away; the other target's are kept.
+- A target that failure_backoff backs off from after two failed scrapes, scraped three more times, is shown as skipped by backoff and failing, with 2 consecutive failures, the HTTP status error of the failed scrape and that scrape's time, a later last scrape, and the backoff's own failure count; the target was sent two requests. It fails while a skipped scrape counts as a failure and replaces the error with the backoff's.
+- Two followings made close together, the earlier configuration's held after it is made and before the request types are told of it while the later is made and told, leave the later configuration's entries of rate_limits in force; it fails while the earlier following, told last, puts its own entries back.
+
+## 34.199 Linear lint, wildcard shadowing refused and per-process host limits
+
+- The lint of a debug run of 100,000 distinct metric names finds each
+  name's type in one pass over the series and ends within a bound a scan of
+  every series for each name far exceeds (`TestALintRunIsLinearInItsSeries`).
+- The lint of a configuration of 10,000 collectors works out each
+  collector's names once and ends within a bound that working them out
+  anew for each collector far exceeds (`TestAConfigurationLintIsLinearInItsCollectors`).
+- `rate_limits` is refused at load for a host that an earlier entry's
+  wildcard covers, an exact name or a narrower wildcard, at any depth,
+  naming both entries and saying to list the narrower first; the wildcard's
+  parent name is not covered, and a narrower host listed before the
+  wildcard, or covered by a wildcard of its own entry, loads
+  (`TestAHostAnEarlierWildcardCoversIsRefused`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

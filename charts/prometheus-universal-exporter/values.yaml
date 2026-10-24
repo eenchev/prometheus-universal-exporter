@@ -82,8 +82,12 @@ ingress:
 # collectors read. ingress.enabled, and service.type NodePort or LoadBalancer,
 # make it reachable from outside the cluster, so rendering fails with either
 # unless webAuth is enabled: without authentication the exporter would be an
-# open proxy to its targets. The chart cannot see authentication anywhere
-# else. Set allowWithoutWebAuth when callers are authenticated elsewhere, at
+# open proxy to its targets. webAuth only mounts the Secret, so with it the
+# configuration the chart renders (config.data's config.yaml) has to hold
+# web.basic_auth enabled with password_file at <webAuth.mountPath>/password,
+# or rendering fails too; with config.enabled false the chart cannot see the
+# configuration, and pointing it at the files is the operator's. The chart
+# cannot see authentication anywhere else. Set allowWithoutWebAuth when callers are authenticated elsewhere, at
 # the ingress controller or by a web.basic_auth written into the
 # configuration (an external ConfigMap's included), or when the exporter is to
 # be reachable without a credential on purpose.
@@ -641,6 +645,10 @@ targetAuth:
 #       enabled: true
 #       username_file: /var/run/prometheus-universal-exporter/web-auth/username
 #       password_file: /var/run/prometheus-universal-exporter/web-auth/password
+#
+# With the exporter exposed (see exposure), rendering fails when the
+# configuration the chart renders does not point password_file at the
+# mounted file.
 #
 # Every monitor the chart renders presents this Secret's credential by itself:
 # the self-metrics and static targets monitors, and each probing monitor

@@ -1,0 +1,19 @@
+# A configuration whose web.basic_auth reads the files webAuth mounts at its
+# default mountPath, for the chart's render checks of an exposed exporter.
+web:
+  basic_auth:
+    enabled: true
+    username_file: /var/run/prometheus-universal-exporter/web-auth/username
+    password_file: /var/run/prometheus-universal-exporter/web-auth/password
+collectors:
+  - name: example
+    request:
+      type: http
+      path: /status
+    transform:
+      type: regex
+    metrics:
+      - name: example_status
+        description: Example status value
+        type: gauge
+        expression: 'status:\s+(\d+(?:\.\d+)?)'

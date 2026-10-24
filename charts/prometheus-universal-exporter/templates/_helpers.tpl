@@ -381,6 +381,26 @@
 {{- if not (or $webAuth $allowed) }}
 {{- fail (printf "%s exposes the exporter outside the cluster, and webAuth is not enabled: /probe sends requests on its caller's behalf, so without authentication anyone who reaches it has an open proxy to every target allowed_targets and denied_targets let through, and reads what the collectors read. Enable webAuth and point the configuration's web.basic_auth at its files, or, when callers are authenticated elsewhere, at the ingress controller or by web.basic_auth written into the configuration, set exposure.allowWithoutWebAuth=true" $setting) }}
 {{- end }}
+{{- /* webAuth only mounts the Secret: the exporter authenticates with it
+       when the configuration's web.basic_auth reads its files, and a
+       configuration that never does serves /probe to anyone. When the chart
+       renders the configuration it can see that, in config.yaml, the one
+       file web: is read from; an external ConfigMap it cannot see, nor a
+       config.yaml that is not YAML, which the exporter refuses itself. */ -}}
+{{- if and $webAuth (not $allowed) $root.Values.config.enabled }}
+{{- $config := fromYaml (toString (index ($root.Values.config.data | default dict) "config.yaml" | default "")) -}}
+{{- if not (hasKey $config "Error") }}
+{{- $dir := clean $root.Values.webAuth.mountPath -}}
+{{- $want := printf "%s/password" $dir -}}
+{{- $web := get $config "web" -}}
+{{- $basic := ternary (get (ternary $web dict (kindIs "map" $web)) "basic_auth") dict (kindIs "map" $web) -}}
+{{- $basic = ternary $basic dict (kindIs "map" $basic) -}}
+{{- $file := toString (get $basic "password_file" | default "") -}}
+{{- if not (and (eq (toString (get $basic "enabled")) "true") $file (eq (clean $file) $want)) }}
+{{- fail (printf "%s exposes the exporter outside the cluster, and webAuth is enabled, but config.data.\"config.yaml\" does not authenticate with its files: webAuth only mounts the Secret, and without web.basic_auth enabled and its password_file at %s the exporter serves /probe to anyone who reaches it, an open proxy to every target allowed_targets and denied_targets let through. Write web.basic_auth with enabled: true, username_file: %s/username and password_file: %s, or, when callers are authenticated elsewhere, set exposure.allowWithoutWebAuth=true" $setting $want $dir $want) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /* Whether the chart renders the self-metrics monitor: with
        selfMetrics.enabled, when the chart renders another monitor, which

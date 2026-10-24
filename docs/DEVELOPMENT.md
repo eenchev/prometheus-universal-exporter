@@ -2007,8 +2007,13 @@ chart as a dependency of a parent chart, and the values that must be refused,
 among them a monitor's `auth` without a `type`, a monitor's `port` given as a
 number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
 Service, a mount at the configuration directory written with a trailing
-slash, and a `goGC.percent` that is `off` with no Go memory limit, `0`, or
-set beside a `GOGC` entry in `env`. The Go tests in `test/repository`
+slash, a `goGC.percent` that is `off` with no Go memory limit, `0`, or
+set beside a `GOGC` entry in `env`, a `selfMetrics.path` at the static
+targets' status page, and an Ingress or a `LoadBalancer` or `NodePort`
+Service without `webAuth`, or with `webAuth` beside a configuration whose
+`web.basic_auth` does not read its files (the renders with
+`exposure.allowWithoutWebAuth`, and with `testdata/chart/web-auth.yaml`,
+which does, beside them). The Go tests in `test/repository`
 check the same behaviour in more detail, but are skipped without helm, so a
 case worth keeping goes into these two lists as well. Write a case that looks
 at what is rendered so that it keeps the render first

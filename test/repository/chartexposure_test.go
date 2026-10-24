@@ -1,12 +1,36 @@
 package repository
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // webAuthArgs enable the exporter's own Basic Auth from a Secret.
 var webAuthArgs = []string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=exporter-auth"}
+
+// webAuthConfig is a configuration whose web.basic_auth reads the files
+// webAuth mounts at its default mountPath, which the make and CI checks render
+// too.
+const webAuthConfig = "testdata/chart/web-auth.yaml"
+
+// configFile writes content to a file and returns the options that render it
+// as config.yaml: written with --set, a comma would split the value.
+func configFile(t *testing.T, content string) []string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"--set-file", `config.data.config\.yaml=` + path}
+}
+
+// webAuthConfigArgs render webAuthConfig as config.yaml.
+var webAuthConfigArgs = []string{"--set-file", `config.data.config\.yaml=` + webAuthConfig}
+
+// withWebAuthConfig is webAuthArgs with config.yaml read from webAuthConfig.
+var withWebAuthConfig = append(append([]string{}, webAuthArgs...), webAuthConfigArgs...)
 
 // exposures are the values that make the exporter reachable from outside the
 // cluster, each with the setting the refusal names.
@@ -55,7 +79,7 @@ func TestChartExposesTheExporterWithWebAuthOrTheOptOut(t *testing.T) {
 	helm := requireHelm(t)
 	for what, c := range exposures {
 		for way, extra := range map[string][]string{
-			"webAuth":                      webAuthArgs,
+			"webAuth":                      withWebAuthConfig,
 			"exposure.allowWithoutWebAuth": {"--set", "exposure.allowWithoutWebAuth=true"},
 		} {
 			docs := manifests(t, helm, append(append([]string{}, c.args...), extra...)...)
@@ -72,5 +96,65 @@ func TestChartExposesTheExporterWithWebAuthOrTheOptOut(t *testing.T) {
 	}
 	if out, ok := helmTemplate(t, helm, chartDir, "--set", "ingress.enabled=true", "--set", "exposure.allowWithoutWebAuth=false"); ok {
 		t.Errorf("exposure.allowWithoutWebAuth=false let an Ingress render:\n%s", out)
+	}
+}
+
+// webAuth only mounts the Secret; a configuration whose web.basic_auth does
+// not read its files leaves /probe open all the same. When the chart renders
+// the configuration and the exporter is exposed, rendering fails unless
+// config.yaml's web.basic_auth is enabled with its password_file in
+// webAuth.mountPath, and the message names that path.
+func TestChartRefusesToExposeTheExporterWhoseConfigurationIgnoresWebAuth(t *testing.T) {
+	helm := requireHelm(t)
+	for name, extra := range map[string][]string{
+		"no web block":                   nil,
+		"web.basic_auth disabled":        configFile(t, `web: {basic_auth: {enabled: false, username_file: /var/run/prometheus-universal-exporter/web-auth/username, password_file: /var/run/prometheus-universal-exporter/web-auth/password}}`),
+		"a password written in place":    configFile(t, `web: {basic_auth: {enabled: true, username: u, password: p}}`),
+		"a password_file elsewhere":      configFile(t, `web: {basic_auth: {enabled: true, username_file: /secrets/username, password_file: /secrets/password}}`),
+		"the files at another mountPath": append([]string{"--set", "webAuth.mountPath=/secrets/web"}, webAuthConfigArgs...),
+		"web that is not a mapping":      configFile(t, `web: 3`),
+	} {
+		for what, c := range exposures {
+			out, ok := helmTemplate(t, helm, chartDir, append(append(append([]string{}, c.args...), webAuthArgs...), extra...)...)
+			if ok {
+				t.Errorf("%s, %s: rendered", what, name)
+				continue
+			}
+			want := c.setting + " exposes the exporter outside the cluster, and webAuth is enabled, but config.data.\"config.yaml\" does not authenticate with its files"
+			path := "/var/run/prometheus-universal-exporter/web-auth/password"
+			if name == "the files at another mountPath" {
+				path = "/secrets/web/password"
+			}
+			for _, want := range []string{want, "password_file at " + path, "set exposure.allowWithoutWebAuth=true"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s, %s: the refusal does not say %q:\n%s", what, name, want, out)
+				}
+			}
+		}
+	}
+}
+
+// The configuration that reads the mounted files renders, with the files at
+// another mountPath too and a path written with a trailing slash; nothing is
+// checked with the opt-out, with a configuration the chart does not render
+// (an external ConfigMap, which the operator answers for), with a config.yaml
+// that is not YAML, which the exporter refuses, or with nothing exposed.
+func TestChartExposesTheExporterWhoseConfigurationReadsWebAuth(t *testing.T) {
+	helm := requireHelm(t)
+	ingress := append([]string{"--set", "ingress.enabled=true"}, webAuthArgs...)
+	for name, args := range map[string][]string{
+		"the default mountPath": webAuthConfigArgs,
+		"another mountPath": append([]string{"--set", "webAuth.mountPath=/secrets/web/"},
+			configFile(t, "web: {basic_auth: {enabled: true, username_file: /secrets/web/username, password_file: /secrets/web//password}}\ncollectors: []\n")...),
+		"the opt-out":                    {"--set", "exposure.allowWithoutWebAuth=true"},
+		"an external ConfigMap":          {"--set", "config.enabled=false"},
+		"a config.yaml that is not YAML": configFile(t, "web: [\n"),
+	} {
+		if out, ok := helmTemplate(t, helm, chartDir, append(append([]string{}, ingress...), args...)...); !ok {
+			t.Errorf("an Ingress with webAuth and %s failed:\n%s", name, out)
+		}
+	}
+	if out, ok := helmTemplate(t, helm, chartDir, webAuthArgs...); !ok {
+		t.Errorf("webAuth with a configuration that ignores it, not exposed, failed:\n%s", out)
 	}
 }

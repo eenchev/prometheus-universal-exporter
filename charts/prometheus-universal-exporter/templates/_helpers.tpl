@@ -622,6 +622,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if eq $path .Values.selfMetrics.path -}}
 {{- fail (printf "staticTargets.path %q is also selfMetrics.path; the two endpoints need paths of their own" $path) -}}
 {{- end -}}
+{{- /* The exporter serves the static targets' status page at the static
+       targets path followed by /status, and refuses to start with the
+       self-metrics there. */ -}}
+{{- if eq (printf "%s/status" $path) .Values.selfMetrics.path -}}
+{{- fail (printf "selfMetrics.path %q is where the exporter serves the static targets' status page, staticTargets.path %q followed by /status; the two endpoints need paths of their own" .Values.selfMetrics.path $path) -}}
+{{- end -}}
 {{- $path -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateTargets" -}}

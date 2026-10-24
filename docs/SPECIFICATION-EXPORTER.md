@@ -7332,7 +7332,8 @@ Recommended behavior:
   and `PUT`, and no other. It MUST show when the last reload that put
   something in force did, and what it changed, as § 24.1a says it, and
   before the first that the exporter has not been reloaded since it
-  started. Only `/` itself MUST be
+  started. With static targets in force it MUST link the static targets'
+  status page (§ 42.14a), and without them MUST NOT. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -29058,6 +29059,49 @@ metrics with its labels, or its stale result, and its health result — at
   (§ 42).
 
 The endpoint MUST be served, empty, without a static target document.
+
+The exporter MUST serve a status page of the static targets at the static
+targets path followed by `/status`, `/static-targets/status` by default, for
+people who cannot ask Prometheus:
+
+- It MUST have one row per static target in force, with its name, its
+  collector, its target as its health series show it (with any credential
+  withheld, as in the logs), its labels, its interval and whether it sets
+  `export_via_otlp`; and, once it has been scraped, when its last scrape
+  began, how long ago, how long it took, and its result: `success`,
+  `failed`, `stale result served` (a failed scrape answered with the stale
+  result under `cache.stale_if_error`) or `skipped by backoff` (a scrape
+  `failure_backoff` kept from the target); and whether the response cache
+  answered it. A target not yet scraped MUST be shown as `not yet scraped`.
+  A target whose collector or address a reload changed MUST be shown as not
+  yet scraped until its own scrape.
+- Each row MUST show the consecutive failed scrapes, the error of the last
+  failed scrape, kept through later successes, with when that scrape began,
+  and, while `failure_backoff` keeps scrapes from the target, until when, or
+  that the try after the wait is in progress. The error MUST be the text the
+  log has, with every URL's credentials already withheld, masked again for
+  what reads as a credential, and cut to the bound of a failure's text
+  (§ 25); nothing else of a target's answer MAY be shown.
+- A summary line MUST give the number of targets, of those failing, and of
+  those not yet scraped; the failing targets MUST come first, each part in
+  name order.
+- Every value MUST be HTML-escaped, the page MUST NOT refresh itself or run
+  a script, and it MUST be served as the other pages are (no caching, the
+  pages' Content-Security-Policy).
+- `?format=json` MUST serve the same rows and summary as JSON; another
+  `format` MUST be answered `400`.
+- In allocator mode the page MUST say that it shows the targets the
+  allocator gave this replica.
+- Without a static target in force the page MUST answer `404`; a reload that
+  adds targets MUST make it served without a restart.
+- It MUST answer `GET` and `HEAD`, and `405` otherwise with `Allow: GET,
+  HEAD`, and MUST be protected by `web.basic_auth` like every endpoint but
+  `/health` and `/ready`.
+- What it keeps of a target MUST be one record replaced by each scrape, and
+  MUST be forgotten with the target.
+- A self-metrics path equal to the status page's path MUST make the exporter
+  exit with status 2, as a self-metrics path equal to the static targets
+  path does.
 
 Every replica of the exporter scrapes every static target; running static
 targets with more than one replica, or with autoscaling, contacts each target

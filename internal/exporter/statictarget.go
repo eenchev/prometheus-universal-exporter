@@ -93,6 +93,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// fetched is when the data in result came from the target: now for a
 	// trip just made, the cache entry's time for a cached or stale result.
 	var fetched time.Time
+	// status is what the status page shows of this scrape
+	// (statictargetstatus.go), filled in as the scrape goes.
+	status := staticScrapeStatus{started: start, collector: target.Collector, target: target.Target}
 	finish := func(up float64) {
 		// The scrape is counted once, even when what follows panics.
 		failedOnPanic = nil
@@ -105,7 +108,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		// changed or brought back since the scrape read them is another
 		// target's under the name: its outcome is not that target's, and its
 		// result would replace the one that target's own scrape published.
-		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, up == 1, time.Now())
+		status.duration = elapsed
+		status.ok = up == 1
+		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, status, time.Now())
 		if !stands {
 			s.logger.Debug("static target scrape ended after a reload removed or changed its target or its collector; its result is not published", "target", target.Name, "collector", c.Name, "superseded", true)
 			return
@@ -126,16 +131,18 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
 	var cacheKey string
-	// failed ends a scrape that failed, and was logged. With
+	// failed ends a scrape that failed with err, and was logged. With
 	// cache.stale_if_error the last good result is exported in place of
 	// nothing, marked stale; http_exporter_target_up still says the scrape
 	// failed.
-	failed := func() {
+	failed := func(err error) {
+		status.err = err
 		if model.StaleIfError(c) > 0 && cacheKey != "" {
 			now := time.Now()
 			if cached, cachedAt, ok := s.cache.GetStale(cacheKey, now); ok {
 				if answer, err := withFreshness(cached, c, true, cachedAt, now); err == nil {
 					fetched = cachedAt
+					status.stale = true
 					count(func(st *serverStats) {
 						st.staleServed++
 						st.emitted += uint64(len(cached.Metrics))
@@ -146,12 +153,12 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		}
 		finish(0)
 	}
-	failedOnPanic = failed
+	failedOnPanic = func() { failed(errScrapePanicked) }
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {
 		s.logCollectFailure(rec.read, log, "credentials", err)
-		failed()
+		failed(err)
 		return
 	}
 	if model.UsesCache(c) {
@@ -165,6 +172,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 				st.emitted += uint64(len(cached.Metrics))
 			})
 			fetched = cachedAt
+			status.cached = true
 			answer, _ := withFreshness(cached, c, false, cachedAt, time.Now())
 			result = withTargetLabels(answer, target.Labels)
 			finish(1)
@@ -185,6 +193,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	if c.FailureBackoff != nil && backoffKey == "" {
 		backoffKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
 	}
+	if c.FailureBackoff != nil {
+		status.backoffKey = backoffKey
+	}
 	turn := s.backoffs.admit(c, backoffKey, address)
 	defer turn.settle(rec.read, backoffUnknown)
 	var trip collected
@@ -204,7 +215,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			}
 			count(func(st *serverStats) { countRejection(st, err) })
 			s.logCollectFailure(rec.read, log, "concurrency", err)
-			failed()
+			failed(err)
 			return
 		}
 		defer s.trips.release(c.Name)
@@ -225,7 +236,8 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			// collector's target policy refused, gets no stale result.
 			cacheKey = ""
 		}
-		failed()
+		status.skipped = trip.skipped
+		failed(trip.err)
 		return
 	}
 	// Under error_handling log or ignore a failed stage leaves the target up

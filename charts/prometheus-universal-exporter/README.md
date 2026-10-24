@@ -1207,7 +1207,7 @@ staticTargets:
 | --- | --- | --- |
 | `staticTargets.enabled` | `false` | Render `data` into the ConfigMap `<fullname>-static-targets`, mount it at `/etc/prometheus-universal-exporter-static-targets` and pass it with `--static-targets-file`. |
 | `staticTargets.fileName` | `static-targets.yaml` | Its file name in `/etc/prometheus-universal-exporter-static-targets`, which is its key in that ConfigMap: letters, digits, `-`, `_` and `.`. The directory is not the configuration directory, so no `collector_files` pattern matches the document. |
-| `staticTargets.path` | `/static-targets` | Rendered as `--web.static-targets-path`, always: where the targets' latest results are served. It may not be `selfMetrics.path` or another endpoint's. |
+| `staticTargets.path` | `/static-targets` | Rendered as `--web.static-targets-path`, always: where the targets' latest results are served, and, followed by `/status`, their [status page](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/STATIC-TARGETS.md#status-page). It may not be `selfMetrics.path` or another endpoint's, and `selfMetrics.path` may not be the status page's; either fails rendering. |
 | `staticTargets.data` | `""` | The static target document, required with `enabled`, also with `config.enabled: false`. A change rolls the Deployment. |
 | `staticTargets.expandEnv` | `false` | Rendered as `--static-targets.expand-env` with `enabled`: expand `${NAME}` references in `data` from the container's environment. Independent of `server.expandEnv`. |
 | `staticTargets.monitor.enabled` | `true` | Render the monitor that scrapes the endpoint, when `staticTargets.enabled` is. It needs the Prometheus Operator's CRDs. |

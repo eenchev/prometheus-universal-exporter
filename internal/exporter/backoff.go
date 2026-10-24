@@ -326,6 +326,42 @@ func (b *failureBackoffs) describe(collector, key string) string {
 	return ""
 }
 
+// backoffState is what failure_backoff holds of one target, for the status
+// page: its consecutive failed trips, and whether its trips are kept from it
+// now, until when, or because the trip let through after the wait is in
+// progress.
+type backoffState struct {
+	failures   int
+	backingOff bool
+	until      time.Time
+	trial      bool
+}
+
+// state is what is held of the target key of the collector: the zero state
+// when nothing is, as for a target whose last trip succeeded.
+func (b *failureBackoffs) state(collector, key string) backoffState {
+	if key == "" {
+		return backoffState{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	targets := b.collectors[collector]
+	if targets == nil {
+		return backoffState{}
+	}
+	element := targets.targets[key]
+	if element == nil {
+		return backoffState{}
+	}
+	target := element.Value.(*backoffTarget)
+	return backoffState{
+		failures:   target.failures,
+		backingOff: target.trial || !target.until.IsZero() && b.now().Before(target.until),
+		until:      target.until,
+		trial:      target.trial,
+	}
+}
+
 // forgetLocked forgets the targets of the collectors named, under mu.
 func (b *failureBackoffs) forgetLocked(collectors map[string]bool) {
 	for name := range collectors {

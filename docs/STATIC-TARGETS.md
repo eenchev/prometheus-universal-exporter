@@ -614,6 +614,66 @@ combined with `targets` (`400`); below `--web.debug=full` it is `403`. The
 [debug page](CONFIGURATION.md#the-debug-page) makes the same scrape, and can
 run another collector on what it fetched.
 
+## Status page
+
+For people who have no Prometheus to ask, the exporter serves a page of the
+static targets at the static targets path followed by `/status`,
+`/static-targets/status` by default; the landing page links it. It has a row
+per target:
+
+- its name, collector, target and labels, its interval, and whether it is
+  exported over OTLP. The target is shown as its `target` label and the log
+  show it, with a credential in its URL withheld;
+- when its last scrape began, how long ago that was and how long it took;
+- the result: `success`, `failed`, `stale result served` (failed, and the
+  last good result served marked stale under `cache.stale_if_error`),
+  `skipped by backoff` (`failure_backoff` kept the scrape from the target), or
+  `not yet scraped`; and whether the response cache answered it;
+- the consecutive failed scrapes, and while `failure_backoff` keeps scrapes
+  from the target, until when, or that its next try is in progress;
+- the error of the last failed scrape and when that scrape began. It stays
+  shown after the target recovers, so a failure in the night can be read in
+  the morning. It is the error the log has, with every URL's credentials
+  withheld, anything else that reads as a credential masked, and cut to 2000
+  bytes.
+
+A summary line above says how many targets there are, how many are failing
+and how many have not been scraped yet; the failing targets come first. The
+page shows the moment it was served and does not refresh itself: reload it.
+
+`?format=json` serves the same as JSON, for a script:
+
+```sh
+curl 'http://exporter:8080/static-targets/status?format=json'
+```
+
+```json
+{"generated_at": "2026-10-24T09:00:00Z", "allocator_mode": false, "targets": 2, "failing": 1, "not_yet_scraped": 0,
+ "static_targets": [
+  {"name": "legacy_eu", "collector": "legacy", "target": "http://legacy-eu:8080", "labels": {"region": "eu"},
+   "interval": "1m0s", "export_via_otlp": false, "result": "skipped by backoff", "failing": true,
+   "last_scrape": "2026-10-24T08:59:41Z", "last_scrape_age_seconds": 19.2, "duration_seconds": 0.0001,
+   "cached": false, "stale": false, "consecutive_failures": 4,
+   "last_error": "http://legacy-eu:8080 is backing off after 3 consecutive failed scrapes; next try after 2026-10-24T09:02:00Z",
+   "last_error_at": "2026-10-24T08:59:41Z",
+   "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3},
+  {"name": "billing_eu", "...": "..."}
+ ]}
+```
+
+A field without a value is left out: the scrape fields of a target not yet
+scraped, `last_error` of one that never failed, `backoff` of one not backing
+off. `consecutive_failures` counts the target's failed scrapes of every kind,
+`backoff_failures` the failed trips `failure_backoff` counts (see
+[Backing off from failing targets](CONFIGURATION.md#backing-off-from-failing-targets)).
+
+The page shows nothing the endpoint's series and the log do not: it is
+protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
+only, and is not found (`404`) while no static target is configured. In
+allocator mode it shows the targets the allocator gave this replica, and says
+so: each replica has a page of its own. It moves with
+`--web.static-targets-path`, so a `--web.self-metrics-path` on it is refused.
+
 ## Exporting over OTLP
 
 A target with `export_via_otlp: true` is also delivered over

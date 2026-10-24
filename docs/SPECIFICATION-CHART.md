@@ -1247,7 +1247,9 @@ are skipped and the text checks of the templates still run:
    be a key of `config.data` too, being in another ConfigMap. With
    `config.enabled: false` the static target ConfigMap MUST still render, so
    `staticTargets.data` MUST be required then too. `staticTargets.path` equal to
-   `selfMetrics.path` MUST fail rendering. `staticTargets.expandEnv` MUST add
+   `selfMetrics.path` MUST fail rendering, and so MUST `selfMetrics.path`
+   equal to `staticTargets.path` followed by `/status`, where the exporter
+   serves the static targets' status page. `staticTargets.expandEnv` MUST add
    `--static-targets.expand-env` with static targets enabled, and nothing
    without; `server.expandEnv` MUST NOT add it.
 9b. The static targets monitor: with `staticTargets.enabled` and

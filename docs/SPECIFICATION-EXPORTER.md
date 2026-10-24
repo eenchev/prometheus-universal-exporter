@@ -26663,6 +26663,129 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   fails when the rows are written as that list
   (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`).
 
+## 34.192 Credentials and TLS of a static target
+
+- One caching `redis` collector logging in as `exporter` serves a stand-in
+  server that takes only `tenant`'s password through a static target's own
+  `username` and `password_file`, and a TLS stand-in that takes another
+  password for `exporter` through a target's own `password_file` and `tls`
+  block with its CA; a target with a wrong
+  password is refused rather than answered from the entry of the target
+  beside it, the collector's account is refused, a probe with `username`
+  and `password_file` parameters logs in as the collector, and the debug
+  report of a target shows `AUTH tenant ***` and not the password; the test
+  fails without the target keys
+  (`TestRedisStaticTargetsLogInWithTheirOwnAccounts`, § 42.14).
+- The same for an `ldap` collector binding as `cn=exporter`: a target's own
+  `bind_dn` and `password_file` bind, its own `tls` reaches an ldaps
+  stand-in, a wrong password is refused rather than served from the cache,
+  a probe naming `bind_dn` and `password_file` binds as the collector, and
+  the debug report masks the target's password
+  (`TestLDAPStaticTargetsBindWithTheirOwnAccounts`).
+- A plaintext `tcp` collector with a cache reads a TLS stand-in through a
+  target whose own `tls` names its CA; a target whose own block is
+  `tls: {}`, verified with the system roots, is refused by the handshake
+  rather than served the other's cache entry, the collector's plaintext
+  fails, and a probe's `tls` and `ca_file` parameters are not the probe's
+  to set (`TestTCPStaticTargetsSpeakTLSWithTheirOwnBlocks`).
+- Static targets that differ only in their password file, username,
+  `bind_dn`, or in any key of their own `tls` block, `tls: {}` and none
+  among them, get different response cache keys, which are also the keys
+  of a shared trip and of `failure_backoff`; it fails when the target's
+  `bind_dn` and `tls` are left out of the key
+  (`TestATargetsOwnAccountAndTLSAreInItsKey`).
+- A `redis` target's account and `tls` are checked at load: `username`
+  without its `password_file`, a name with a blank, a password file of
+  blanks, a placeholder in any of them or in the block, half a client
+  certificate, a `server_name` that is no host, `redis://` with the
+  target's own block and an ldap or ssh key are refused, and the label of a
+  target with its own block is `rediss://`
+  (`TestARedisStaticTargetsAccountAndTLSAreChecked`); an `ldap` target's
+  `bind_dn` without its own `password_file`, a `password_file` alone of a
+  target whose collector binds anonymously, a `bind_dn` that is no DN or
+  blanks, a placeholder, half a client certificate and `ldap://`
+  with its own block without the collector's `start_tls` are refused, and
+  its label is `ldaps://` (`TestAnLDAPStaticTargetsAccountAndTLSAreChecked`);
+  a `tcp` target's block is checked the same way and its label is `tls://`
+  (`TestATCPStaticTargetsTLSIsChecked`).
+- `--dry-run`'s file warnings of a `redis`, `ldap` and `tcp` static target
+  name the target and its own missing or empty password file and missing
+  CA file, and nothing for a target with none of its own
+  (`TestARedisStaticTargetsFilesAreReadByTheDryRun`,
+  `TestAnLDAPStaticTargetsFilesAreReadByTheDryRun`,
+  `TestATCPStaticTargetsFilesAreReadByTheDryRun`).
+- A static target file's `tls: {}` is read as a block that is set, the
+  scrape of the plaintext `redis` collector's target is then a TLS
+  handshake with a `rediss://` label, and the file is refused naming the
+  target for `redis://` with its own block, a `username` alone, and a
+  `bind_dn` (`TestAStaticTargetsOwnEmptyTLSBlockMakesARedisScrapeSpeakTLS`).
+- A plaintext `grpc` collector calls a TLS stand-in through a target whose
+  own `tls` names its CA, two targets with different blocks make two
+  connections, and their label is `grpcs://`
+  (`TestAGRPCStaticTargetCallsWithItsOwnTLS`); a target's block is checked
+  at load, `grpc://` with it refused, and `--dry-run` reads a target's own
+  CA and the collector's (`TestAGRPCStaticTargetsTLSIsChecked`).
+- A plaintext `sql` collector's targets with `tls: {}` and with their own
+  `server_name` each connect with TLS verified for their name, in pools of
+  their own, and the target with no block of its own in plaintext
+  (`TestASQLStaticTargetConnectsWithItsOwnTLS`); a target's block is held
+  to the collector's `sslmode` (`disable` refuses it, `require` refuses a
+  `ca_file`), and `--dry-run` reads its CA under the target's name
+  (`TestASQLStaticTargetsTLSIsChecked`).
+
+## 34.193 Rate limits per host
+
+- An entry of `rate_limits` matches its hosts in any case, with or without a
+  final dot and on every port and scheme, an IP address however it is
+  written, and a `*.example.com` wildcard every subdomain at any depth but
+  not `example.com` itself; the first entry that matches applies
+  (`TestHostRateLimitsMatchTheirHosts`).
+- A request takes its turn under the entry its host matches after the one
+  under its collector's own `rate_limit`; one the entry refuses gives back
+  its collector's turn and names the entry and the host; a collector without
+  a limit of its own waits on the entry; a request of a trip that is not
+  `http` or `graphite` takes no turn (`TestHostRateLimitsAreTakenWithTheCollectorsOwn`).
+- A reload that leaves an entry as it was keeps its bucket, one that changes
+  its rate, burst or hosts starts it from a full one, keeping its counts;
+  one that removes it forgets its bucket and counts, and an entry brought
+  back counts from zero since the reload; the shutdown forgets every bucket
+  (`TestHostRateLimitsFollowAReload`).
+- `rate_limits` is refused at load for an entry without a name, with an
+  invalid or a repeated one, without hosts, with a host that has a port, a
+  scheme, a misplaced `*`, a wildcard over an address, is empty or is a
+  bracketed name, a host listed twice in one entry or two, and a
+  `rate_limit` that `request.rate_limit` would refuse, every mistake
+  reported; `burst` is filled in as 1 (`TestHostRateLimitsAreCheckedWhenTheyLoad`).
+- Two `http` collectors without limits of their own asking one host share
+  its entry's bucket: the second is refused past its deadline, naming the
+  entry, or waits for its turn; a debug run waits and is not counted, and its
+  trace names the entry (`TestHostRateLimitIsSharedByEveryCollector`).
+- A collector's own `rate_limit` applies beside an entry that has turns to
+  spare (`TestTheCollectorsRateLimitAppliesBesideTheHosts`).
+- A followed redirect hop to an entry's host takes a turn under it while the
+  request it follows, to another host, takes none, and a login request takes
+  one as the request it logs in for does (`TestHostRateLimitCountsRedirectsAndLogins`).
+- `rate_limits` loads from the top of the configuration file, its mistakes
+  reported with the configuration's (`TestRateLimitsLoadWithTheConfiguration`).
+- A probe of a second collector to a host the first used up the entry's
+  turns of is refused and counted in
+  `http_exporter_host_rate_limit_refused_total{rule}`; a reload that leaves the
+  entry as it was keeps its bucket, one that changes it starts it full and
+  keeps its counts, and one that removes it ends its series
+  (`TestHostRateLimitsAreSharedAndFollowReloads`).
+
+## 34.194 The chart refuses to expose the exporter without its authentication
+
+- An Ingress, a `LoadBalancer` Service and a `NodePort` Service each fail
+  rendering without `webAuth.enabled` and `exposure.allowWithoutWebAuth`, the
+  message naming the setting that exposes the exporter, the open proxy to the
+  targets `allowed_targets` and `denied_targets` let through, enabling
+  `webAuth` and setting `exposure.allowWithoutWebAuth` (CHART § 33.4).
+- Each of the three renders its Ingress or Service with `webAuth` enabled,
+  and with `exposure.allowWithoutWebAuth: true`; a `ClusterIP` Service and a
+  `LoadBalancer` type on a Service that is not rendered render with neither,
+  and `exposure.allowWithoutWebAuth: false` lets no Ingress render.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

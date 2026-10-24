@@ -27262,6 +27262,74 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   exporter's side, each package once; the single exporter step of before
   fails the test (TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn).
 
+## 34.205 make run of an example
+
+- `make run` is a `.PHONY` target that runs `$(MAKE) --no-print-directory
+  build OPT_IN_REQUEST_TYPES=…` and then `tools/run-example.sh run
+  '$(EXAMPLE)' '$(HOST)' '$(PORT)' $(ARGS)`, `make ci` does not reach it,
+  and the Makefile sets `EXAMPLE`, `HOST = 127.0.0.1`, `PORT = 8080` and
+  `ARGS` with `=` (§ 35).
+- Every example configuration of the tree is named, by its directory under
+  `examples/` or by `<name>` of `examples/config.<name>.*.yaml`, with no
+  name shared, and `tools/run-example.sh files <name>` gives its
+  configuration and, for a directory with one, its static target file;
+  open-meteo, metar, tcp and ecb are among the names, and an unknown name
+  fails, listing the names.
+- `make run` without `EXAMPLE` fails with a usage line and lists every
+  example's name and files, building nothing.
+- For every example, the opt-in types `tools/run-example.sh opt-in-types`
+  adds are exactly the opt-in types of the tree its collectors' requests
+  name; tcp with `redis,tcp` given gives `redis,tcp`; `make -n run
+  EXAMPLE=tcp` builds with `request-type-tags.sh '' '' 'tcp'`; and `make -n
+  run` with an unknown example fails before any `go build`.
+- `tools/run-example.sh run`, in a copy of the tree with a `bin/` binary
+  that prints its arguments, prints the landing page's URL and, for
+  open-meteo, the static targets' status page's, then runs the binary with
+  `--config.file`, `--web.listen-address=127.0.0.1:9115`, the static target
+  file for open-meteo alone, and the extra flag.
+- `make build` runs `tools/run-example.sh check-root-binaries $(APP)
+  $(ALLOCATOR)`, which warns of a `./prometheus-universal-exporter` in the
+  directory and of no binary that is not there, and `.gitignore` ignores
+  `/prometheus-universal-exporter` and `/pue-allocator`.
+- README.md has a "Try it" section giving `make run EXAMPLE=open-meteo
+  PORT=9115`, the status page's URL and `bin/prometheus-universal-exporter`,
+  and docs/DEVELOPMENT.md lists `make run`.
+- The reader of the files the repository tests read leaves out `bin/`, make's
+  build output, as it does `.git` and `vendor`, so a test naming `bin` for
+  a directory of its own does not make a built binary a file the go filter
+  must match.
+
+## 34.206 Recent probes on the status page
+
+- Probes of eight collectors and targets are answered success, failed with
+  the target's 500, refused by `allowed_targets` (`403`), rejected by
+  `max_concurrent_probes` (`503`), success then `cached`, success then
+  `stale result served`, and failed then `backing off`: the status page's
+  JSON has a row for each with its result, the status answered, its series,
+  its probes oldest first and its error, the failing rows first in order of
+  collector and target, under a summary of 8 rows and 5 failing; the HTML has
+  the section, the summary and each mark of the strip (§ 42.14a).
+- Two identical probes share one trip: both are recorded, one marked shared.
+- A key probed 15 times keeps its last 10 probes; with 500 keys kept, a new
+  key forgets the one probed least recently, not the one probed again.
+- A probe whose target holds a user, a password and a token in its query,
+  and one whose parameters hold markup over 300 bytes and a `param_token`:
+  no credential is shown in the HTML or the JSON, the parameter is cut, the
+  token's value withheld, the error quoting the target's markup is shown, and
+  every value is escaped on the page.
+- A debug probe, a probe of an unknown collector and one with a malformed
+  `timeout` record nothing.
+- A reload that removes one collector and changes another leaves the recent
+  probes of the third alone, and a probe of the removed collector that read
+  the configuration before the reload, recording after it, records nothing.
+- Without static targets the status page is served, saying none are
+  configured and that no probe has been answered, its JSON has empty
+  `static_targets` and `probes` arrays, and the landing page links it.
+- The JSON has `probe_keys`, `failing_probe_keys` and `probes`, each row
+  with `collector`, `target`, `result`, `failing`, `shared`, `last_probe`,
+  `last_probe_age_seconds`, `duration_seconds`, `status`, `series` and its
+  `probes`, each with `at`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

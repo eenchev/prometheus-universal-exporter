@@ -13,8 +13,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// lintBody is what lintCollector reads: a session with a UUID, and a count.
-const lintBody = `{"sessions":[{"id":"5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48","n":2}],"jobs":7}`
+// lintBody is what lintCollector reads: two sessions with UUIDs, and a count.
+// Two, as the shape of a value is not held against a metric of one series.
+const lintBody = `{"sessions":[{"id":"5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48","n":2},{"id":"0b3e2a4d-6c1f-4e8a-9b7d-5a2c4e6f8b0d","n":1}],"jobs":7}`
 
 // lintCollector makes a counter not named _total and a gauge labelled by
 // session ids; lintOther makes the counter's name as a gauge.
@@ -71,7 +72,7 @@ func TestADebugProbeReportsTheMetricLint(t *testing.T) {
 	if !strings.HasSuffix(body, "\nMetrics a probe would have served\n"+plain.Body.String()) {
 		t.Fatalf("the report's metrics differ from the probe's answer %q:\n%s", plain.Body, body)
 	}
-	if !strings.Contains(body, "A probe would have answered 200 with 2 series.") {
+	if !strings.Contains(body, "A probe would have answered 200 with 3 series.") {
 		t.Fatalf("the verdict changed:\n%s", body)
 	}
 

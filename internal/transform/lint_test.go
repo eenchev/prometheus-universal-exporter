@@ -199,8 +199,14 @@ func TestLintUnboundedLabel(t *testing.T) {
 		{"a UUID's prefix", []string{"5f0c6c2e-8a5b"}, ""},
 		{"a time of day", []string{"09:14:05"}, ""},
 	} {
+		// A second series of a plain value, as the shape of a value is not
+		// held against a metric of one series.
+		values := test.values
+		if len(values) == 1 {
+			values = append(values, "plain")
+		}
 		c := lintCollectorOf("app", "sessions:gauge")
-		findings := LintRun(&c, nil, lintSeriesWith("sessions", "user", test.values...))
+		findings := LintRun(&c, nil, lintSeriesWith("sessions", "user", values...))
 		var advice []string
 		for _, f := range findings {
 			if f.Rule == model.LintUnboundedLabel {
@@ -221,11 +227,28 @@ func TestLintUnboundedLabel(t *testing.T) {
 	}
 }
 
+// A metric of one series, as an info metric's revision label of a git sha
+// is, gives no advice on the shape of its values: one series cannot grow its
+// metric's series within a scrape. Two series of such values still do, and
+// so do more than MaxLintLabelValues values, which a metric of one series
+// cannot have.
+func TestLintUnboundedLabelSparesAMetricOfOneSeries(t *testing.T) {
+	c := lintCollectorOf("app", "build_info:gauge")
+	sha := "9fceb02d0ae598e95dc970b74767f19372d61af8"
+	if findings := LintRun(&c, nil, lintSeriesWith("build_info", "revision", sha)); len(findings) != 0 {
+		t.Fatalf("one series: %v", findings)
+	}
+	findings := LintRun(&c, nil, lintSeriesWith("build_info", "revision", sha, "0d1e5f0c3a7b9e2d4c6a8b0e1f3d5c7a9b2e4f60"))
+	if len(findings) != 1 || findings[0].Rule != model.LintUnboundedLabel || !strings.Contains(findings[0].Message, "the label revision has a value shaped as an id or a time") {
+		t.Fatalf("two series: %v", findings)
+	}
+}
+
 // A value quoted is cut at 64 bytes, between two characters.
 func TestLintUnboundedLabelQuotesAValueByItsStart(t *testing.T) {
 	c := lintCollectorOf("app", "sessions:gauge")
 	long := strings.Repeat("7", 100)
-	findings := LintRun(&c, nil, lintSeriesWith("sessions", "user", long))
+	findings := LintRun(&c, nil, lintSeriesWith("sessions", "user", long, "plain"))
 	if len(findings) != 1 || !strings.Contains(findings[0].Message, `"`+strings.Repeat("7", 64)+`..." is a number`) {
 		t.Fatalf("%v", findings)
 	}
@@ -301,7 +324,7 @@ func TestLintNameClash(t *testing.T) {
 func TestLintIgnoreSilencesItsRules(t *testing.T) {
 	a := lintCollectorOf("a", "jobs_ms:counter", "queue_depth:gauge")
 	b := lintCollectorOf("b", "queue_depth:counter")
-	set := lintSeriesWith("queue_depth", "session", "5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48")
+	set := lintSeriesWith("queue_depth", "session", "5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48", "plain")
 	conf := &model.Config{Collectors: []model.Collector{a, b}}
 	// Every rule fires here, which keeps each id of model.LintRules a rule
 	// this package applies.
@@ -392,5 +415,55 @@ func TestAConfigurationLintIsLinearInItsCollectors(t *testing.T) {
 	}
 	if elapsed > 10*time.Second {
 		t.Errorf("%d collectors took %s to lint, more than 10s: the lint of a configuration is not linear in its collectors", lintManyCollectors, elapsed)
+	}
+}
+
+// The configuration lint, and so --dry-run, lints the names a collector's
+// derived entries make as it does its rules': a derived counter not named
+// _total, a derived percentage, and a derived name another collector's rule
+// makes with another type. A hidden entry is not exported and is not linted;
+// the labels of a sum by labels are compared, and those of an element-wise
+// operation, which its operands' series give, are not.
+func TestTheConfigurationLintLintsDerivedEntries(t *testing.T) {
+	derived := lintCollectorOf("app", "hits_total:counter", "misses_total:counter")
+	derived.Derived = []model.DerivedRule{
+		{Name: "gets", Type: model.CounterMetricType, Sum: []string{"hits_total", "misses_total"}},
+		{Name: "gets_hidden", Type: model.CounterMetricType, Hidden: true, Sum: []string{"hits_total", "misses_total"}},
+		{Name: "hit_percent", Ratio: []string{"hits_total", "gets"}},
+		{Name: "queue_depth", Type: model.CounterMetricType, Sum: []string{"hits_total", "misses_total"}},
+		{Name: "pool_hits", Type: model.GaugeMetricType, Sum: []string{"hits_total"}, By: by("pool")},
+	}
+	pools := lintCollectorOf("pools", "pool_hits:gauge")
+	pools.Metrics[0].Labels = []model.LabelRule{{Name: "zone", Expression: ".zone"}}
+	conf := &model.Config{Collectors: []model.Collector{derived, lintCollectorOf("queues", "queue_depth:gauge", "hit_percent:gauge", "gets_hidden:gauge"), pools}}
+	findings := LintConfiguration(conf)
+	for _, want := range []struct{ metric, rule, text string }{
+		{"gets", model.LintCounterTotal, "name it gets_total"},
+		{"hit_percent", model.LintUnitSuffix, "the unit percent is not a base unit"},
+		{"queue_depth", model.LintCounterTotal, "name it queue_depth_total"},
+		{"queue_depth", model.LintNameClash, `collector "queues" makes it too, as a gauge, where this collector makes a counter`},
+		{"pool_hits", model.LintNameClash, "with the labels [zone], where this collector's are [pool]"},
+	} {
+		if !slices.ContainsFunc(findings, func(f LintFinding) bool {
+			return f.Collector == "app" && f.Metric == want.metric && f.Rule == want.rule && strings.Contains(f.Message, want.text)
+		}) {
+			t.Errorf("no %s finding about %s with %q among\n%v", want.rule, want.metric, want.text, findings)
+		}
+	}
+	for _, f := range findings {
+		if f.Metric == "gets_hidden" {
+			t.Errorf("the hidden entry is linted: %v", f)
+		}
+		// The ratio is a gauge, as one without a type is, and its labels
+		// are those of its operands, not known here.
+		if f.Metric == "hit_percent" && f.Rule == model.LintNameClash {
+			t.Errorf("the element-wise entry clashes: %v", f)
+		}
+	}
+	// The other collector is told of the derived name too.
+	if !slices.ContainsFunc(findings, func(f LintFinding) bool {
+		return f.Collector == "queues" && f.Metric == "queue_depth" && f.Rule == model.LintNameClash
+	}) {
+		t.Errorf("the other collector is not told of the derived name:\n%v", findings)
 	}
 }

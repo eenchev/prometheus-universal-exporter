@@ -429,6 +429,36 @@ type RuleReport struct {
 	// invalid UTF-8, and utf8First names the first metric repaired.
 	utf8Repaired uint64
 	utf8First    string
+	// derivedAbsent are the operands of each derived entry, by its name,
+	// that had no series in the scrape (derivedAbsent).
+	derivedAbsent map[string][]string
+}
+
+func (r *RuleReport) addDerivedAbsent(entry string, operands []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.derivedAbsent == nil {
+		r.derivedAbsent = map[string][]string{}
+	}
+	for _, operand := range operands {
+		if !slices.Contains(r.derivedAbsent[entry], operand) {
+			r.derivedAbsent[entry] = append(r.derivedAbsent[entry], operand)
+		}
+	}
+}
+
+// DerivedAbsent returns the operands of each derived entry, by the entry's
+// name as it is written, that had no series in the scrapes the Transforms
+// made, in the order the entry reads them, an entry read counting those of
+// its own. Such an entry gives no series, and does not fail for it.
+func (r *RuleReport) DerivedAbsent() map[string][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string][]string, len(r.derivedAbsent))
+	for entry, operands := range r.derivedAbsent {
+		out[entry] = slices.Clone(operands)
+	}
+	return out
 }
 
 func (r *RuleReport) addUTF8(changed uint64, first string) {

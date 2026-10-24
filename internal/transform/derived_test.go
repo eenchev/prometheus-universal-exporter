@@ -382,3 +382,42 @@ func TestCheckDerivedRefusesWhatCannotBeComputed(t *testing.T) {
 		t.Errorf("two bad entries: %v", err)
 	}
 }
+
+// A derived entry named as a family a pass-through's target exports fails as
+// an entry and makes no series, the target's family left as it came; an
+// operand the scrape has no series of is no failure, and the rule report
+// names it under each entry it gave no series, through an entry read.
+func TestADerivedEntryOfAPassThroughNamedOrReadingWhatTheTargetHasNot(t *testing.T) {
+	c := model.Collector{
+		Name: "node", Decoder: model.DecoderConfig{Type: "prometheus"}, Transform: model.TransformConfig{Type: "prometheus"},
+		Derived: []model.DerivedRule{
+			{Name: "requests_ratio", Type: model.GaugeMetricType, Ratio: []string{"requests_total", "requests_total"}},
+			{Name: "failed_all", Type: model.GaugeMetricType, Hidden: true, Sum: []string{"requests_failed_total", "requests_total"}},
+			{Name: "failed_ratio", Type: model.GaugeMetricType, Ratio: []string{"failed_all", "requests_total"}},
+		},
+	}
+	body := "# TYPE requests_total counter\nrequests_total 10\n# TYPE requests_ratio gauge\nrequests_ratio 0.5\n"
+	r := &fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}
+	c.Request.Type = fetch.RequestTypeHTTP
+	d, err := decode.Decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, report := WithRuleReport(context.Background())
+	ctx = WithRuleLogger(ctx, slog.New(slog.DiscardHandler))
+	set, err := Transform(ctx, d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seriesLines(set); !slices.Equal(got, []string{"requests_total{} 10", "requests_ratio{} 0.5"}) {
+		t.Fatalf("series %v", got)
+	}
+	failures := report.Failures()
+	if len(failures) != 1 || failures[0].Metric != "requests_ratio" || !failures[0].Logged || !strings.Contains(failures[0].First.Error(), "is the name of a family the scrape's series have already") {
+		t.Fatalf("failures %+v", failures)
+	}
+	want := map[string][]string{"failed_all": {"requests_failed_total"}, "failed_ratio": {"requests_failed_total"}}
+	if got := report.DerivedAbsent(); len(got) != len(want) || !slices.Equal(got["failed_all"], want["failed_all"]) || !slices.Equal(got["failed_ratio"], want["failed_ratio"]) {
+		t.Fatalf("absent operands %v", got)
+	}
+}

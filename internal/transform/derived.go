@@ -284,12 +284,19 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 		return nil
 	}
 	// Only the families the entries read are gathered, each in the order
-	// its series came.
+	// its series came; and the names of the entries exported are looked
+	// for among the series in the same pass, since a pass-through's target
+	// or a python script may make a family of one (derivedTaken).
 	families := map[string][]model.Metric{}
+	taken := map[string]bool{}
 	for i := range c.Derived {
-		_, operands := derivedOperation(&c.Derived[i])
+		d := &c.Derived[i]
+		_, operands := derivedOperation(d)
 		for _, name := range operands {
 			families[name] = nil
+		}
+		if !d.Hidden {
+			taken[d.Name] = false
 		}
 	}
 	for i := range set.Metrics {
@@ -297,15 +304,34 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 		if family, wanted := families[m.Name]; wanted {
 			families[m.Name] = append(family, *m)
 		}
+		if seen, exported := taken[m.Name]; exported && !seen {
+			taken[m.Name] = true
+		}
 	}
+	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
+	// absent are the operands of each entry computed so far that are
+	// families of the scrape with no series in it, an entry read counting
+	// those of its own.
+	absent := map[string][]string{}
 	var out []model.Metric
 	for i := range c.Derived {
 		d := &c.Derived[i]
-		series, err := deriveEntry(d, families)
+		absent[d.Name] = derivedAbsent(c, i, families, absent)
+		if report != nil && len(absent[d.Name]) > 0 {
+			report.addDerivedAbsent(d.Name, absent[d.Name])
+		}
+		var series []model.Metric
+		var err error
+		if taken[d.Name] {
+			err = derivedTaken(d)
+		} else {
+			series, err = deriveEntry(d, families)
+		}
 		if err != nil {
-			// A histogram or a summary only a scrape shows (CheckDerived):
-			// the entry carries on without series, as a rule under log
-			// does, and is reported so. Only a context that is done stops
+			// A histogram or a summary only a scrape shows (CheckDerived),
+			// or a name the scrape's series have (derivedTaken): the entry
+			// carries on without series, as a rule under log does, and is
+			// reported so. Only a context that is done stops
 			// it, as it stops every rule (handleMetricError).
 			rule := derivedRule(d)
 			if !handleMetricError(ctx, c, rule, err) {
@@ -329,6 +355,43 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 		set.Metrics = append(slices.Clip(set.Metrics), out...)
 	}
 	return nil
+}
+
+// derivedTaken is the failure of an entry exported under a name the series
+// of the scrape have, which only a prometheus pass-through's target and a
+// python script can give them, since CheckDerived refuses the name of a rule.
+// Its series would be series of a family the target made, of another type
+// and help, and those of the same labels duplicates, which fail the whole
+// scrape: the entry makes none, and the target's family is answered as it
+// came.
+func derivedTaken(d *model.DerivedRule) error {
+	return fmt.Errorf("derived %q is the name of a family the scrape's series have already, so its series would be duplicates of them; give the entry a name the target does not export", d.Name)
+}
+
+// derivedAbsent are the operands of the entry at index that have no series in
+// the scrape, families gathered: each operand that is a family of the scrape
+// and has none, and those an earlier entry it reads had, from absent. An
+// absent operand is no failure, as a family a target leaves out while it has
+// nothing to count is not, and is only shown in a debug probe's report.
+func derivedAbsent(c *model.Collector, index int, families map[string][]model.Metric, absent map[string][]string) []string {
+	_, operands := derivedOperation(&c.Derived[index])
+	var out []string
+	add := func(name string) {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	for _, name := range operands {
+		switch {
+		case slices.ContainsFunc(c.Derived[:index], func(e model.DerivedRule) bool { return e.Name == name }):
+			for _, of := range absent[name] {
+				add(of)
+			}
+		case len(families[name]) == 0:
+			add(name)
+		}
+	}
+	return out
 }
 
 // deriveEntry computes one entry's series from the families gathered.

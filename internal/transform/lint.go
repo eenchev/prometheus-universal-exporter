@@ -43,8 +43,8 @@ func (f LintFinding) String() string {
 const MaxLintLabelValues = 100
 
 // LintConfiguration is the advice the configuration alone gives, for every collector
-// in its order: the name rules on the names its rules make, and the names
-// another collector makes in another way. The series a run makes are not
+// in its order: the name rules on the names its rules and its derived
+// entries make, and the names another collector makes in another way. The series a run makes are not
 // known here, so unbounded-label gives none.
 func LintConfiguration(conf *model.Config) []LintFinding {
 	families, index := lintIndexOf(conf)
@@ -56,7 +56,7 @@ func LintConfiguration(conf *model.Config) []LintFinding {
 }
 
 // LintCollector is the advice the configuration gives about c: the name rules on
-// the names its rules make, and the names a collector of conf other than c,
+// the names its rules and its derived entries make, and the names a collector of conf other than c,
 // or one of c's name, makes in another way. c need not be one of conf's: a
 // collector written on the debug page is compared with those in force.
 func LintCollector(c *model.Collector, conf *model.Config) []LintFinding {
@@ -141,7 +141,8 @@ func lintSilenced(c *model.Collector, findings []LintFinding) []LintFinding {
 // lintFamily is a metric name a collector's rules make, as statically known:
 // its type, "" where the series keep their own; its help, "" where none is
 // written; and its label names, nil where the series keep labels of their
-// own that cannot be known (a prometheus transform).
+// own that cannot be known (a prometheus transform, a derived entry's
+// element-wise operation).
 type lintFamily struct {
 	name   string
 	typ    model.MetricType
@@ -150,12 +151,13 @@ type lintFamily struct {
 }
 
 // lintStaticFamilies are the metric names c's rules make, as exported, in the
-// order of their first rule. A python transform's rules make no series and a
-// prometheus rule without a name keeps the names of the series it passes
-// on, so neither has a name known before a run.
+// order of their first rule, and then those of its derived entries that are
+// not hidden (lintDerivedFamilies). A python transform's rules make no series
+// and a prometheus rule without a name keeps the names of the series it
+// passes on, so neither has a name known before a run.
 func lintStaticFamilies(c *model.Collector) []*lintFamily {
 	if c.Transform.Type == "python" {
-		return nil
+		return lintDerivedFamilies(c, nil)
 	}
 	var out []*lintFamily
 	byName := map[string]*lintFamily{}
@@ -191,6 +193,37 @@ func lintStaticFamilies(c *model.Collector) []*lintFamily {
 		if f.labels != nil {
 			f.labels = lintExportedLabels(c, f.labels)
 		}
+	}
+	return lintDerivedFamilies(c, out)
+}
+
+// lintDerivedFamilies are out and then the names c's derived entries make, as
+// exported, in their order, each of the type and help it is written with: a
+// hidden entry is not exported, and makes none. A derived name is a family of
+// its own (CheckDerived), so none is one of out's. Its labels are known only
+// for a sum by labels, as transform.labels and the labels of by, as the
+// renames and removals leave them; the series of an element-wise operation
+// have the labels of its operands' series, which a prometheus pass-through's
+// and a python script's are named by, so its labels are not compared.
+func lintDerivedFamilies(c *model.Collector, out []*lintFamily) []*lintFamily {
+	for i := range c.Derived {
+		d := &c.Derived[i]
+		if d.Hidden || d.Name == "" {
+			continue
+		}
+		f := &lintFamily{name: ExportedMetricName(c, d.Name), typ: d.Type, help: d.Description}
+		if f.typ == "" {
+			// The type CheckDerived gives an entry without one.
+			f.typ = model.GaugeMetricType
+		}
+		if d.By != nil {
+			labels := lintCollectorLabels(c)
+			for _, label := range *d.By {
+				labels[label] = true
+			}
+			f.labels = lintExportedLabels(c, labels)
+		}
+		out = append(out, f)
 	}
 	return out
 }
@@ -369,13 +402,21 @@ const lintMaxShownValue = 64
 
 // lintUnboundedLabels is unbounded-label's advice on the series of a run: each
 // label of a metric with more than MaxLintLabelValues distinct values among
-// them, or else with a value shaped as an id or a time.
+// them, or else with a value shaped as an id or a time, where the metric has
+// more than one series in the run.
+//
+// The shape of a value is not held against a metric of one series: one
+// series cannot grow its metric's series within a scrape, and such a metric
+// is most often an info metric, as build_info{revision="<git sha>"} is, whose
+// one value changes only when what it describes does.
 func lintUnboundedLabels(c *model.Collector, set *model.MetricSet) []LintFinding {
 	type key struct{ metric, label string }
 	values := map[key]map[string]bool{}
 	shaped := map[key]string{}
+	series := map[string]int{}
 	var order []key
 	for _, m := range set.Metrics {
+		series[m.Name]++
 		for _, label := range model.SortedKeys(m.Labels) {
 			k := key{m.Name, label}
 			if values[k] == nil {
@@ -397,7 +438,7 @@ func lintUnboundedLabels(c *model.Collector, set *model.MetricSet) []LintFinding
 		switch n := len(values[k]); {
 		case n > MaxLintLabelValues:
 			message = fmt.Sprintf("the label %s has %d distinct values in this run, more than %d", k.label, n, MaxLintLabelValues)
-		case shaped[k] != "":
+		case shaped[k] != "" && series[k.metric] > 1:
 			message = fmt.Sprintf("the label %s has a value shaped as an id or a time: %s", k.label, shaped[k])
 		default:
 			continue
@@ -425,8 +466,9 @@ func lintUTF8Start(b byte) bool { return b&0xC0 != 0x80 }
 // a rule of another collector of conf makes with another type, another help
 // text or other label names. What a side does not know is not compared: a
 // type a prometheus rule leaves to the series, a help a rule does not write,
-// the labels of a prometheus transform's series, and the names a python
-// script or a prometheus rule without a name make.
+// the labels of a prometheus transform's series and of a derived entry's
+// element-wise operation, and the names a python script or a prometheus rule
+// without a name make.
 func lintClashes(c *model.Collector, mine []*lintFamily, conf *model.Config, index map[string][]lintOwner) []LintFinding {
 	type clash struct {
 		collector int

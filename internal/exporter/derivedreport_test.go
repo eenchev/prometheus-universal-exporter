@@ -24,7 +24,7 @@ func TestTheDebugReportMarksDerivedSeries(t *testing.T) {
 	}
 	set := &model.MetricSet{Metrics: []model.Metric{{Name: "mc_hits_total"}, {Name: "mc_misses_total"}, {Name: "mc_hit_ratio"}}}
 	var b bytes.Buffer
-	writeTransform(&b, c, set, nil, "")
+	writeTransform(&b, c, set, nil, nil, "")
 	report := b.String()
 	for _, want := range []string{
 		"    mc_hits_total: 1\n",

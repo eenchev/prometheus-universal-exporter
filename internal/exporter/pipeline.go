@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -513,7 +514,19 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 	var repaired utf8Repairs
 	repaired.count, repaired.first = report.UTF8Repairs()
 	failures := report.Failures()
-	probeTraceFrom(ctx).record(func(t *probeTrace) { t.failures = append(t.failures, failures...) })
+	probeTraceFrom(ctx).record(func(t *probeTrace) {
+		t.failures = append(t.failures, failures...)
+		for entry, operands := range report.DerivedAbsent() {
+			if t.derivedAbsent == nil {
+				t.derivedAbsent = map[string][]string{}
+			}
+			for _, operand := range operands {
+				if !slices.Contains(t.derivedAbsent[entry], operand) {
+					t.derivedAbsent[entry] = append(t.derivedAbsent[entry], operand)
+				}
+			}
+		}
+	})
 	s.logRuleFailures(ctx, rec.read, c, failures, l, err == nil)
 	if len(failures) == 0 {
 		return set, repaired, err

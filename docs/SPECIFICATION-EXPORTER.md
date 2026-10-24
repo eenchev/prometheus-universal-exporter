@@ -6003,9 +6003,18 @@ and read from the series of that name each scrape makes; a family of it a
 scrape shows to be a histogram or a summary MUST make no series of the entry
 and MUST be a failure of the entry under `error_mode: log`, logged and
 counted in `http_exporter_rule_failures_total` under the entry's name, a
-series every entry MUST have from 0. A debug probe's report MUST mark each
-derived family it lists as derived, with its operation and operands, and
-MUST list the exported entries that gave no series apart from the rules.
+series every entry MUST have from 0. Under those two, an exported entry
+whose name is a family of the series the scrape made MUST make no series,
+MUST leave that family as the scrape made it, MUST NOT fail the scrape on
+the duplicate series its own would have been, and MUST be a failure of the
+entry as a histogram operand is; a later entry that reads it MUST read no
+series. An operand the scrape has no series of MUST give the entry no
+series and MUST NOT be a failure. A debug probe's report MUST mark each
+derived family it lists as derived, with its operation and operands, MUST
+NOT mark so a family of an entry that failed for its name, and MUST list
+the exported entries that gave no series apart from the rules, each with
+the operands that had no series in the scrape, `operand x: no series`,
+those of an entry it reads among them.
 
 ## 18.2 Metrics per item
 
@@ -9362,18 +9371,26 @@ rules and their ids MUST be:
   than 100 distinct values among the run's series, or else with a value
   that is a UUID, a hexadecimal string of 16 or more digits, a number of 10
   or more digits, or a date or an RFC 3339 time, quoted by its first 64
-  bytes; once per label of a metric.
-- `name-clash`: a metric name a collector's rules make that a rule of
-  another collector makes with another type, another help where both have
-  a `description`, or other label names, the rules' and `transform.labels`
-  as `transform.remove_labels` and `transform.rename_labels` leave them;
-  reported for each of the two, naming the other. A side that cannot know
-  one of these MUST NOT be compared by it: the names of a `python` script
-  and of a `prometheus` rule without a `name`, the type of a `prometheus`
-  rule without a `type`, and the labels of a `prometheus` transform.
+  bytes; once per label of a metric. The shape of a value MUST NOT be held
+  against a metric of one series in the run, since one series cannot grow
+  its metric's series within a scrape (an info metric's
+  `revision="<git sha>"` is such a value); the count of distinct values
+  MUST be.
+- `name-clash`: a metric name a collector's rules or derived entries make
+  that a rule or a derived entry of another collector makes with another
+  type, another help where both have a `description`, or other label names,
+  the rules' and `transform.labels` as `transform.remove_labels` and
+  `transform.rename_labels` leave them, and for a derived `sum` with `by`
+  the labels of `by` and `transform.labels` so left; reported for each of
+  the two, naming the other. A side that cannot know one of these MUST NOT
+  be compared by it: the names of a `python` script and of a `prometheus`
+  rule without a `name`, the type of a `prometheus` rule without a `type`,
+  the labels of a `prometheus` transform, and the labels of a derived
+  entry's series by series operation (§ 18.1).
 
 `--dry-run` MUST apply the rules to the names the configuration gives, a
-rule's `name`, and a debug run MUST apply them to those of its collector and
+rule's `name` and the `name` of each derived entry that is not `hidden`
+(§ 18.1), of the `type` it is written with, `gauge` without one; and a debug run MUST apply them to those of its collector and
 to the names of the series the run made too, showing a finding once.
 
 A collector's `lint.ignore` MUST silence the rules it lists for that

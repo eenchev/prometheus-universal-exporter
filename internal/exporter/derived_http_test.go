@@ -143,3 +143,78 @@ func TestADerivedEntryFailureIsLoggedAndRecovers(t *testing.T) {
 		t.Fatalf("%d failures and %d recoveries logged, want 1 and 1:\n%s", failed, recovered, out.String())
 	}
 }
+
+// In a pass-through, a derived entry named as a family the target exports
+// fails as an entry, logged once and counted, and makes no series: the
+// target's family is answered as it came, and the scrape does not fail on
+// duplicate series. An operand the target does not export gives the entry no
+// series and is no failure, and a debug probe's report says which operand
+// had none, also through a hidden entry the exported one reads.
+func TestADerivedEntryOfAPassThroughNamedOrReadingWhatTheTargetHasNot(t *testing.T) {
+	out := testutil.CaptureLogs(t)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte("# TYPE requests_total counter\nrequests_total 10\n# TYPE requests_ratio gauge\nrequests_ratio 0.5\n"))
+	}))
+	t.Cleanup(target.Close)
+	document := `collectors:
+  - name: node
+    request:
+      type: http
+    transform:
+      type: prometheus
+    derived:
+      - name: requests_ratio
+        ratio: [requests_total, requests_total]
+      - name: failed_all
+        hidden: true
+        sum: [requests_failed_total, requests_total]
+      - name: failed_ratio
+        ratio: [failed_all, requests_total]
+`
+	path := testutil.WriteFile(t, "config.yaml", document)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, path, slog.Default()), "python3", slog.Default())
+	for range 2 {
+		answer := probe(t, server, target.URL, "node")
+		if answer.Code != http.StatusOK || !strings.Contains(answer.Body.String(), "requests_ratio 0.5\n") || strings.Contains(answer.Body.String(), "requests_ratio 1\n") {
+			t.Fatalf("the probe answered %d:\n%s", answer.Code, answer.Body)
+		}
+	}
+	failed := 0
+	for _, record := range logRecords(t, out) {
+		if record["msg"] == "metric extraction failed" {
+			if record["metric"] != "requests_ratio" {
+				t.Errorf("a failure of another entry: %v", record)
+			}
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("%d failures logged, want 1:\n%s", failed, out.String())
+	}
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/self-metrics", nil))
+	self := recorder.Body.String()
+	for _, want := range []string{
+		`http_exporter_rule_failures_total{collector="node",metric="requests_ratio"} 2`,
+		`http_exporter_rule_failures_total{collector="node",metric="failed_ratio"} 0`,
+	} {
+		if !strings.Contains(self, want+"\n") {
+			t.Errorf("no %q in\n%s", want, self)
+		}
+	}
+	server.SetDebug(DebugFull)
+	report := debugProbeGet(t, server, "collector=node&debug=true&target="+url.QueryEscape(target.URL)).Body.String()
+	assertContains(t, report,
+		"    requests_ratio: 1\n",
+		"  Derived entries that gave no series: failed_ratio (operand requests_failed_total: no series)\n",
+		"    requests_ratio: 1 failed; first: derived \"requests_ratio\" is the name of a family the scrape's series have already",
+	)
+	if strings.Contains(report, "requests_ratio: 1 (derived") {
+		t.Errorf("the target's family is marked as derived:\n%s", report)
+	}
+}

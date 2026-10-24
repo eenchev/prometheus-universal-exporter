@@ -151,6 +151,9 @@ type probeTrace struct {
 	decoded       string
 	transform     *model.MetricSet
 	failures      []transform.RuleFailure
+	// derivedAbsent are the operands of each derived entry that had no
+	// series (transform.RuleReport.DerivedAbsent).
+	derivedAbsent map[string][]string
 }
 
 // sentResponse is a copy of a response as it was fetched, for a report to
@@ -816,7 +819,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 
 	if t.transform != nil || len(t.failures) > 0 {
 		b.WriteString("\nTransform\n")
-		writeTransform(&b, c, t.transform, t.failures, t.decoded)
+		writeTransform(&b, c, t.transform, t.failures, t.derivedAbsent, t.decoded)
 	}
 
 	b.WriteString("\nLogs\n")
@@ -1078,12 +1081,13 @@ func shownBody(body []byte, convertedFrom string) debugBody {
 }
 
 // writeTransform renders the series each metric got, a derived one marked
-// with what it computes, the rules and derived entries that got none, and
+// with what it computes, the rules and derived entries that got none, a
+// derived entry with the operands of it that had no series (absent), and
 // the rules that carried on without some: each rule by itself,
 // under its metric name, and with its expression, and its items when it has
 // any, where several of the collector's rules export the name
 // (sharedRuleNames). A prometheus rule without a name is shown as that.
-func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, failures []transform.RuleFailure, decoded string) {
+func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, failures []transform.RuleFailure, absent map[string][]string, decoded string) {
 	if decoded != "" {
 		fmt.Fprintf(b, "  %s transform of a %s response\n", c.Transform.Type, decoded)
 	}
@@ -1099,14 +1103,27 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 	}
 	// A derived family is marked as one, with what it computes, so it is
 	// not looked for among the rules (transform/derived.go).
+	// An entry whose name the target's own series have failed and made
+	// none, so the series of that name are not marked as its.
 	derived := map[string]string{}
 	var derivedNone []string
 	for i := range c.Derived {
 		if d := &c.Derived[i]; !d.Hidden {
 			name := transform.ExportedMetricName(c, d.Name)
-			derived[name] = transform.DescribeDerived(d)
+			failed := slices.ContainsFunc(failures, func(f transform.RuleFailure) bool { return f.Metric == d.Name })
+			if !failed || counts[name] == 0 {
+				derived[name] = transform.DescribeDerived(d)
+			}
 			if counts[name] == 0 {
-				derivedNone = append(derivedNone, name)
+				none := name
+				if operands := absent[d.Name]; len(operands) > 0 {
+					parts := make([]string, len(operands))
+					for j, operand := range operands {
+						parts[j] = "operand " + operand + ": no series"
+					}
+					none += " (" + strings.Join(parts, "; ") + ")"
+				}
+				derivedNone = append(derivedNone, none)
 			}
 		}
 	}

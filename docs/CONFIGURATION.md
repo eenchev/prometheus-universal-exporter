@@ -2381,6 +2381,20 @@ once per failing target, counted in `http_exporter_rule_failures_total`
 under the entry's name, which every entry has from 0, and shown by a debug
 probe.
 
+**Names and operands a scrape shows.** Under those two transforms the target
+or the script may also export a family of an entry's own name, which no load
+check can see. The entry's series would then be duplicates of the target's,
+which fail the whole scrape, so the entry makes none and the scrape keeps the
+target's family as it came: that is a failure of the entry, logged, counted
+and shown as the histogram operand above is, and a later entry that reads it
+reads no series. An operand that the scrape has no series of — one the
+target leaves out while it has nothing to count, or a name no target ever
+exports — gives the entry no series and is no failure, since the absence can
+be what the target means; a debug probe lists the entry among those that got
+none with the operand that had none, as `requests_failed_ratio (operand
+requests_failed_total: no series)`, the operands of a hidden entry it reads
+among them.
+
 ### Conditional metrics and labels
 
 There is no `when` key: each transform already says in its own language which
@@ -4928,8 +4942,10 @@ the metric, by the name it is exported under, with the collector's
 | `unbounded-label` | debug only | A label whose values in one run look like ids or times, or are more than 100. |
 | `name-clash` | dry run, debug | A metric name another collector makes with another type, help or labels. |
 
-The rules read the names the configuration gives — a rule's `name`, with the
-collector's `metrics_prefix` — and, in a debug run, the names of the series
+The rules read the names the configuration gives — a rule's `name` and the
+`name` of a [derived entry](#derived-series) that is not `hidden`, with the
+collector's `metrics_prefix`, a derived entry of the `type` it is written
+with, `gauge` without one — and, in a debug run, the names of the series
 the run made, so that the names a `python` script makes or a `prometheus`
 rule without a `name` passes on are linted there too, though the dry run
 cannot know them. A finding both give is shown once.
@@ -5000,7 +5016,12 @@ series
 
 The finding quotes the value, by its first 64 bytes. An address with its
 port, `10.0.0.7:9100`, is not reported: a target's address is the most
-common bounded label there is. The dry run sees no values, so it gives
+common bounded label there is. Nor is the shape of a value held against a
+metric that has one series in the run, such as
+`build_info{revision="9fceb02d0ae598e95dc970b74767f19372d61af8"}`: one
+series cannot grow its metric's series within a scrape, and an info metric's
+one value changes only when what it describes does. Two series of such
+values are reported as any are. The dry run sees no values, so it gives
 none of this advice.
 
 ### name-clash
@@ -5012,13 +5033,15 @@ name a collector's rules make that a rule of another collector makes with
 - another type,
 - another help text, where both rules have a `description`, or
 - other label names — the rules' labels and `transform.labels`, as
-  `transform.remove_labels` and `transform.rename_labels` leave them —
+  `transform.remove_labels` and `transform.rename_labels` leave them, and a
+  derived `sum` `by` labels its `by` and `transform.labels` so left —
 
 is reported, for each of the two collectors, naming the other. What a side
 cannot know is not compared: the names a `python` script makes or a
 `prometheus` rule without a `name` passes on, the type a `prometheus` rule
-without a `type` keeps, and the labels of a `prometheus` transform's series,
-which are the target's. The dry run compares every collector of the
+without a `type` keeps, the labels of a `prometheus` transform's series,
+which are the target's, and the labels of a derived entry's series by
+series operation, which are its operands' series'. The dry run compares every collector of the
 configuration; a debug run compares the collector it runs with the others
 in force, one written on the debug page with every configured collector of
 another name.

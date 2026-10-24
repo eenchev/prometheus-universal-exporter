@@ -9216,7 +9216,11 @@ The steps MUST be:
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);
   deprecated spellings accepted during validation are listed under
-  `details.deprecations` and logged, and do not fail the check;
+  `details.deprecations` and logged, and do not fail the check; the metric
+  lint's findings on the configuration (§ 30.1a) are listed under
+  `details.lint`, each an object of `collector`, `rule`, `metric` and
+  `message`, and each logged at WARN as `metric lint`, and do not fail the
+  check;
 - `python_scripts` — every Python script compiles and every pre-script produces
   `data` (§ 16), with each faulty script reported as its own error. A
   configuration without Python MUST pass without needing an interpreter;
@@ -9256,6 +9260,52 @@ such a command line, at a start as with `--dry-run`: the exporter takes none,
 and the flags after one would be left unread, so it MUST exit `2` with
 `unexpected argument "<argument>"; flags take --name=value` rather than run
 with half its flags.
+
+### 30.1a Metric lint
+
+The metric lint MUST be advice about the series a collector makes, given by
+`--dry-run` (§ 30.1) and by every debug run (§ 42.17), and nowhere else. It
+MUST NOT change `--dry-run`'s exit status or a check's status, nor what a
+probe, a static target's scrape or a debug run answers, caches, counts or
+exports. Each finding MUST name the collector, its rule by its id and the
+metric by its exported name, with the collector's `metrics_prefix`. The
+rules and their ids MUST be:
+
+- `counter-total`: a rule of type `counter` whose name does not end in
+  `_total`, since the exporter writes it without the suffix in the text
+  format and with it in OpenMetrics (§ 21); and a rule of type `gauge`
+  whose name ends in `_total`.
+- `unit-suffix`: a name whose last word, or last before a counter's
+  `_total`, is `ms`, `millis`, `milliseconds`, `us`, `microseconds`, `ns`,
+  `nanoseconds`, `minutes`, `hours`, `days`, `kb`, `kilobytes`, `kib`,
+  `mb`, `megabytes`, `mib`, `gb`, `gigabytes`, `gib`, `percent` or
+  `percentage`, with the base unit and the scale that converts to it — `us`
+  and `ns` only in a name with a duration word; else a name with one of the
+  words `duration`, `latency`, `elapsed`, `uptime`, `age`, `time` or
+  `timestamp` and neither `seconds` nor `ratio`; else a name with the word
+  `memory` and neither `bytes` nor `ratio`. A name's words are its parts
+  between underscores, in any case. No other word MAY make it fire.
+- `unbounded-label`, in a debug run only: a label of a metric with more
+  than 100 distinct values among the run's series, or else with a value
+  that is a UUID, a hexadecimal string of 16 or more digits, a number of 10
+  or more digits, or a date or an RFC 3339 time, quoted by its first 64
+  bytes; once per label of a metric.
+- `name-clash`: a metric name a collector's rules make that a rule of
+  another collector makes with another type, another help where both have
+  a `description`, or other label names, the rules' and `transform.labels`
+  as `transform.remove_labels` and `transform.rename_labels` leave them;
+  reported for each of the two, naming the other. A side that cannot know
+  one of these MUST NOT be compared by it: the names of a `python` script
+  and of a `prometheus` rule without a `name`, the type of a `prometheus`
+  rule without a `type`, and the labels of a `prometheus` transform.
+
+`--dry-run` MUST apply the rules to the names the configuration gives, a
+rule's `name`, and a debug run MUST apply them to those of its collector and
+to the names of the series the run made too, showing a finding once.
+
+A collector's `lint.ignore` MUST silence the rules it lists for that
+collector, and MUST take the ids above only: another fails the
+configuration, as any wrong value does.
 
 ---
 
@@ -29937,6 +29987,11 @@ and MUST answer `200` with a `text/plain` report of it, with
   empty name;
 - every line the trip logged, at every level whatever `--log.level` is,
   including rule failures and what a Python script printed;
+- a `Lint` section, after the logs, with the metric lint's findings on the
+  collector, against the configuration in force, and on the series the run
+  made (§ 30.1a), one a line as `[<rule>] metric "<name>": <message>`, or
+  `none`, and the rules the collector's `lint.ignore` silences; the same
+  for a debug scrape and a run of the page;
 - the exposition a probe would have served.
 
 What a report shows is the target's, the scraper's or a script's to make as
@@ -30154,7 +30209,9 @@ report says it; `series`, the exposition a probe would have served, to the
 byte; `requests` and `response`, what was sent and read, redacted and
 bounded as the text report redacts and bounds them; `stages` and `notes`,
 the stages and the warnings the load would give with every line the run
-logged; and `report`, the text report of a debug probe, whose first line names it a
+logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
+`collector`, `rule`, `metric` and `message`, which the page MUST show; and
+`report`, the text report of a debug probe, whose first line names it a
 debug run, the collector, whether it was written on the page, and what it
 read.
 

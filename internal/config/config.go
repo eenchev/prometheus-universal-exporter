@@ -148,6 +148,11 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := validateFailureBackoff(x); err != nil {
 		return err
 	}
+	for _, id := range x.Lint.Ignore {
+		if !slices.Contains(model.LintRules, id) {
+			return fmt.Errorf("collector %q lint.ignore has unknown rule %q; want one of %s", x.Name, id, strings.Join(model.LintRules, ", "))
+		}
+	}
 	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
 		return err

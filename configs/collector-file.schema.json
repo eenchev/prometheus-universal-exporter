@@ -538,6 +538,26 @@
             },
             "type": "object"
           },
+          "lint": {
+            "additionalProperties": false,
+            "description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint.",
+            "properties": {
+              "ignore": {
+                "description": "The ids of the lint rules whose advice is not given for this collector.",
+                "items": {
+                  "enum": [
+                    "counter-total",
+                    "unit-suffix",
+                    "unbounded-label",
+                    "name-clash"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
           "max_concurrent_probes": {
             "description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32.",
             "minimum": 0,

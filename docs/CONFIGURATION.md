@@ -4777,6 +4777,147 @@ changed and changed back, or removed and brought back, while an earlier probe
 was at the target makes a trip of its own, and its result is cached and its
 failure logged as any probe's of a collector in force.
 
+## Metric lint
+
+The metric lint is advice about the series a collector makes: names that
+break Prometheus's [naming conventions](https://prometheus.io/docs/practices/naming/),
+labels whose values look unbounded, and one name that two collectors make in
+different ways. The [dry run](#dry-run) lists what the configuration alone
+shows, and the [debug report](#debug-probes) and the
+[debug page](#the-debug-page) add what the series of a run show. It is
+advice and never more: the dry run passes with it, exit status `0`, and a
+probe, a static target's scrape and a debug run answer what they answer
+without it. Nothing else reports it — not startup, a reload or a probe.
+
+Each finding names its collector, its rule by an id that stays the same, and
+the metric, by the name it is exported under, with the collector's
+`metrics_prefix`:
+
+```text
+[counter-total] metric "jobs_done": a counter whose name does not end in _total is written as jobs_done in the Prometheus text format and as jobs_done_total in OpenMetrics, so its name depends on the format a scraper asks for; name it jobs_done_total
+[unit-suffix] metric "poll_latency_ms": the unit ms is not a base unit; Prometheus names use seconds, bytes and ratios from 0 to 1: convert the value with scale: 0.001 and name it poll_latency_seconds
+```
+
+| Rule | Where | Says |
+| --- | --- | --- |
+| `counter-total` | dry run, debug | A counter whose name does not end in `_total`; a gauge whose name does. |
+| `unit-suffix` | dry run, debug | A unit that is not a base unit; a name that reads as a duration, a time or a size without its unit. |
+| `unbounded-label` | debug only | A label whose values in one run look like ids or times, or are more than 100. |
+| `name-clash` | dry run, debug | A metric name another collector makes with another type, help or labels. |
+
+The rules read the names the configuration gives — a rule's `name`, with the
+collector's `metrics_prefix` — and, in a debug run, the names of the series
+the run made, so that the names a `python` script makes or a `prometheus`
+rule without a `name` passes on are linted there too, though the dry run
+cannot know them. A finding both give is shown once.
+
+### counter-total
+
+The exporter does not add `_total` to a counter's name in the Prometheus
+text format: a counter named `jobs_done` is the series `jobs_done` there and
+`jobs_done_total` in [OpenMetrics](#openmetrics), which a scraper chooses.
+So a rule of `type: counter` whose name does not end in `_total` is
+reported, with the name to give it. A rule of `type: gauge` whose name ends
+in `_total` is reported too: the suffix says counter, and `rate()` over a
+gauge that goes down gives nonsense. A rule of `type: untyped`, and a
+`prometheus` rule without a `type`, which keeps the series' own, are not.
+
+### unit-suffix
+
+A name is read as its words, the parts between underscores, in any case.
+
+- **A unit that is not a base unit**, as the last word, or the last before a
+  counter's `_total`, is reported with the base unit's name and the
+  [`scale`](#mapping-text-to-values-and-scaling-them) that converts the
+  value:
+
+  | Words | Base unit | `scale` |
+  | --- | --- | --- |
+  | `ms`, `millis`, `milliseconds` | `seconds` | `0.001` |
+  | `us`, `microseconds` | `seconds` | `0.000001` |
+  | `ns`, `nanoseconds` | `seconds` | `0.000000001` |
+  | `minutes`, `hours`, `days` | `seconds` | `60`, `3600`, `86400` |
+  | `kb`, `kilobytes`, `mb`, `megabytes`, `gb`, `gigabytes` | `bytes` | `1000`, `1000000`, `1000000000` |
+  | `kib`, `mib`, `gib` | `bytes` | `1024`, `1048576`, `1073741824` |
+  | `percent`, `percentage` | `ratio` | `0.01` |
+
+  `us` and `ns` are a region or a namespace as often as a unit, so they are
+  read as one only in a name that also has a word of a duration (below):
+  `request_latency_us` is reported, `requests_us` is not.
+- **A duration or a time without `seconds`**: a name with one of the words
+  `duration`, `latency`, `elapsed`, `uptime`, `age`, `time` or `timestamp`
+  and without the word `seconds` (or `ratio`) is reported, with the name of
+  a duration in seconds, `request_duration_seconds`, and of a point in time,
+  a Unix time in seconds, `last_success_time_timestamp_seconds`; a name with
+  `timestamp` is given the second alone. `timeout` and `timeouts` are not
+  among the words, since they count timeouts more often than they measure
+  one, nor is `times`, which counts.
+- **A size without `bytes`**: a name with the word `memory` and without the
+  word `bytes` (or `ratio`) is reported, with the name in bytes. `size` is
+  not among the words: `queue_size`, `pool_size` and `batch_size` count
+  items.
+
+The lists are short on purpose: a word that is as often something else
+would make advice nobody reads.
+
+### unbounded-label
+
+Each value of a label is a series of its own, which Prometheus keeps for as
+long as it keeps the metric, so a label whose values keep changing — a
+request id, a user, a time — grows the series without bound. In a debug
+run, each label of each metric is reported, once, when among the run's
+series
+
+- it has more than 100 distinct values, or else
+- one of its values is a UUID (`5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48`), a
+  hexadecimal string of 16 or more digits, with or without `0x` (a hash or
+  an id), a number of 10 or more digits (an id or a Unix time), or a date
+  or an RFC 3339 time (`2026-10-24`, `2026-10-24T09:14:05Z`,
+  `2026-10-24 09:14:05.123+03:00`).
+
+The finding quotes the value, by its first 64 bytes. An address with its
+port, `10.0.0.7:9100`, is not reported: a target's address is the most
+common bounded label there is. The dry run sees no values, so it gives
+none of this advice.
+
+### name-clash
+
+Prometheus keeps one type and one help text for a metric name, and a query
+over the series of two collectors that make one name mixes them. So each
+name a collector's rules make that a rule of another collector makes with
+
+- another type,
+- another help text, where both rules have a `description`, or
+- other label names — the rules' labels and `transform.labels`, as
+  `transform.remove_labels` and `transform.rename_labels` leave them —
+
+is reported, for each of the two collectors, naming the other. What a side
+cannot know is not compared: the names a `python` script makes or a
+`prometheus` rule without a `name` passes on, the type a `prometheus` rule
+without a `type` keeps, and the labels of a `prometheus` transform's series,
+which are the target's. The dry run compares every collector of the
+configuration; a debug run compares the collector it runs with the others
+in force, one written on the debug page with every configured collector of
+another name.
+
+### Silencing a rule
+
+A collector's `lint.ignore` lists the rules whose advice is not given for
+it, by their ids:
+
+```yaml
+collectors:
+  - name: legacy
+    lint:
+      ignore: [unit-suffix, name-clash]
+```
+
+An id that is no rule's fails the configuration, as any wrong value does,
+so a misspelt id silences nothing unnoticed. `name-clash` is silenced for
+the collector that lists it: the other collector of the pair still reports
+the clash, naming it. The debug report says which rules a collector
+silences.
+
 ## Debugging collectors
 
 When a collector does not give what it should, run it and read what
@@ -4810,7 +4951,8 @@ a visitor of the exporter's pages do.
 ### The debug page
 
 `/debug` runs one collector and shows the series a probe would answer, the
-stages, what was logged, the requests sent and the response read and,
+stages, the [metric lint](#metric-lint)'s advice, what was logged, the
+requests sent and the response read and,
 folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
 and, with *Run as you type* on, a moment after each edit, and never when it
 opens: the collector and the target its address names are filled in and
@@ -4894,8 +5036,9 @@ A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `request_from`, the
 collector to fetch through, and `params`, or `static_target`. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
-(Prometheus text), `requests`, `response`, `stages`, `notes` and `report`,
-the text report. A collector refused is answered `422` with `error`, a
+(Prometheus text), `requests`, `response`, `stages`, `notes`, `lint`, the
+[metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
+`metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`.
 
@@ -4935,6 +5078,9 @@ Transform
 
 Logs
   level=ERROR msg="probe failed" collector=app_json ...
+
+Lint
+  [counter-total] metric "jobs_done": a counter whose name does not end in _total is written as jobs_done in the Prometheus text format and as jobs_done_total in OpenMetrics, ...
 
 Metrics a probe would have served
   none
@@ -4988,6 +5134,10 @@ The report lists:
   first 200.
 - **Logs:** everything the trip logged at any level, whatever `--log.level`
   is, including what a Python script printed.
+- **Lint:** the [metric lint](#metric-lint)'s advice on the collector and on
+  the series the run made, one finding a line, or `none`, and the rules the
+  collector's `lint.ignore` silences. It changes nothing of what a probe
+  answers.
 - **Metrics:** the exposition a probe would have served, and before the
   report, the status a probe would have answered. Where `cache.stale_if_error`
   would have answered with the last good result, the report says so.
@@ -5250,6 +5400,18 @@ prometheus-universal-exporter --dry-run \
 
 It checks everything startup checks, including that every expression compiles
 (see [Checked when the configuration loads](#checked-when-the-configuration-loads)).
+The [metric lint](#metric-lint)'s advice on the configuration is listed under
+`details.lint` of the `config` entry, each finding with its `collector`,
+`rule`, `metric` and `message`, and logged at WARN as `metric lint`, with the
+same as `collector`, `rule`, `metric` and `advice`; it never fails the check,
+so a configuration with advice exits `0`:
+
+```json
+"lint": [
+  {"collector": "legacy", "rule": "unit-suffix", "metric": "poll_latency_ms", "message": "the unit ms is not a base unit; ..."}
+]
+```
+
 A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under

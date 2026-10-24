@@ -145,6 +145,10 @@ type Collector struct {
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
+	// Lint says which rules of the metric lint (transform/lint.go) are not
+	// applied to the collector's series: advice --dry-run and the debug
+	// report give, which never fails anything.
+	Lint LintConfig `yaml:"lint"`
 	// LabelParams is what the collector's label values hold of
 	// {{param_...}} placeholders, read once when the configuration loads
 	// (labelparams.go); nil when they hold none, as nearly every
@@ -855,6 +859,27 @@ type LabelRule struct {
 // Static reports whether the label has a static value rather than an
 // expression.
 func (l LabelRule) Static() bool { return l.Expression == "" }
+
+// LintConfig is a collector's lint block.
+type LintConfig struct {
+	// Ignore lists the ids of the lint rules (LintRules) whose advice is
+	// not given for the collector.
+	Ignore []string `yaml:"ignore"`
+}
+
+// The ids of the metric lint's rules, as a finding names its rule and
+// lint.ignore lists the rules it silences. Validation and the JSON Schema
+// both read LintRules, and a test keeps the transform package applying
+// every rule in it (transform/lint.go).
+const (
+	LintCounterTotal   = "counter-total"
+	LintUnitSuffix     = "unit-suffix"
+	LintUnboundedLabel = "unbounded-label"
+	LintNameClash      = "name-clash"
+)
+
+// LintRules are the ids of the metric lint's rules.
+var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, LintNameClash}
 
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both

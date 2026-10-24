@@ -593,9 +593,10 @@ With `--web.debug=full` (the chart's `server.debug: full`),
 schedule would — with its own request settings and credential, within its
 interval — and answers with the same plain-text report as a
 [debug probe](CONFIGURATION.md#debug-probes): the requests, the response,
-each stage, the logs, and the series the scrape would have published, with
-the target's labels and `static_target`, and whether `http_exporter_target_up`
-would have been `1` or `0`. The report is bounded as a debug probe's is: a
+each stage, the logs, the [metric lint](CONFIGURATION.md#metric-lint)'s
+advice on the target's collector and on the series, and the series the
+scrape would have published, with the target's labels and `static_target`,
+and whether `http_exporter_target_up` would have been `1` or `0`. The report is bounded as a debug probe's is: a
 long line, URL, header value or metric name is shown by its start and its
 length, and where a line of the series is cut the report says that the
 endpoint serves it whole.

@@ -396,11 +396,14 @@ type debugReport struct {
 	// and none carried on.
 	ok   bool
 	took time.Duration
+	// lint is the metric lint's advice on the collector and the series
+	// the run made (transform.LintRun).
+	lint []transform.LintFinding
 }
 
 // text is the report as plain text.
 func (r *debugReport) text() []byte {
-	return r.trace.report(r.probe, r.verdict, r.answer, r.took)
+	return r.trace.report(r.probe, r.verdict, r.answer, r.took, r.lint)
 }
 
 // runDebug makes a run's trip, with its trace, and reports it. The caller
@@ -438,7 +441,25 @@ func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 		report.verdict, report.answer, report.ok = s.debugTrip(ctx, trace, p)
 	}
 	report.took = time.Since(start)
+	report.lint = s.runLint(p, report.answer, trace)
 	return report
+}
+
+// runLint is the metric lint's advice on a run: on its collector, against
+// the configuration in force, and on the series a probe would have served,
+// or, where it would have served none, those the transform made.
+func (s *Server) runLint(p debugProbe, answer *model.MetricSet, trace *probeTrace) []transform.LintFinding {
+	var conf *model.Config
+	if followed := s.followed.Load(); followed != nil {
+		conf = followed.config
+	}
+	set := answer
+	if set == nil {
+		trace.mu.Lock()
+		set = trace.transform
+		trace.mu.Unlock()
+	}
+	return transform.LintRun(p.collector, conf, set)
 }
 
 // serveDebugProbe makes the trip of a debug probe or a debug scrape, counts
@@ -700,7 +721,7 @@ func staticDebugTarget(followed *followedConfig, name string) (*model.StaticTarg
 // report renders the trace. Its lines are cut where they are longer than a
 // line may be (cutLongLines), but for the body's: those before the body
 // when the body is to be written, and those after it at the end.
-func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSet, took time.Duration) []byte {
+func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSet, took time.Duration, findings []transform.LintFinding) []byte {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var b bytes.Buffer
@@ -810,6 +831,8 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		}
 	}
 
+	writeLint(&b, c, findings)
+
 	if p.static != nil {
 		b.WriteString("\nMetrics the scrape would have published, without its health series\n")
 	} else {
@@ -840,6 +863,23 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		appendCutLines(&b, exposition)
 	}
 	return b.Bytes()
+}
+
+// writeLint writes the Lint section: the metric lint's advice, one finding
+// a line, and the rules lint.ignore silences.
+func writeLint(b *bytes.Buffer, c *model.Collector, findings []transform.LintFinding) {
+	b.WriteString("\nLint\n")
+	if len(findings) == 0 {
+		b.WriteString("  none\n")
+	}
+	for _, f := range findings {
+		b.WriteString("  ")
+		b.WriteString(f.String())
+		b.WriteString("\n")
+	}
+	if len(c.Lint.Ignore) > 0 {
+		fmt.Fprintf(b, "  Not applied, as lint.ignore asks: %s\n", strings.Join(c.Lint.Ignore, ", "))
+	}
 }
 
 // cutLongLines cuts the lines of the report from the byte uncut on that are

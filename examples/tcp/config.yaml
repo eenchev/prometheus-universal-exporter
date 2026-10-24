@@ -96,6 +96,18 @@ collectors:
         type: counter
         description: Bytes the server has written to its clients
         expression: '(?m)^STAT bytes_written (\d+)\r$'
+    # memcached counts hits and misses, not their ratio, so the ratio is
+    # derived from the two (docs/CONFIGURATION.md#derived-series): the gets
+    # are their sum, kept hidden since memcached_commands_total{command="get"}
+    # counts them already, and the ratio the hits over the gets. A server
+    # that has had no get yet has no ratio, rather than one of 0/0.
+    derived:
+      - name: memcached_gets
+        hidden: true
+        sum: [memcached_get_hits_total, memcached_get_misses_total]
+      - name: memcached_get_hit_ratio
+        description: The share of gets that found their item, since the server started
+        ratio: [memcached_get_hits_total, memcached_gets]
 
   # ZooKeeper answers the four-letter word mntr, which its
   # 4lw.commands.whitelist must name, with a line of a name, a tab and a

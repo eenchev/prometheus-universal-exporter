@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // The debug page, /debug with --web.debug at edit or full (debuglevel.go),
@@ -166,18 +167,19 @@ func (req debugRunRequest) sources() (debugSource, int) {
 // alone is a run refused before it ran; otherwise Series is what a probe
 // would have served, as Prometheus text, Verdict what it would have
 // answered, Requests and Response what was sent and what came back, Stages
-// and Notes the stages and what was logged, and Report the whole report as
-// /probe?debug=true writes it.
+// and Notes the stages and what was logged, Lint the metric lint's advice,
+// and Report the whole report as /probe?debug=true writes it.
 type debugAnswer struct {
-	OK       bool                `json:"ok"`
-	Verdict  string              `json:"verdict,omitempty"`
-	Series   string              `json:"series"`
-	Requests []debugShownRequest `json:"requests,omitempty"`
-	Response *debugShownResponse `json:"response,omitempty"`
-	Stages   []debugStage        `json:"stages,omitempty"`
-	Notes    []string            `json:"notes,omitempty"`
-	Report   string              `json:"report,omitempty"`
-	Error    string              `json:"error,omitempty"`
+	OK       bool                    `json:"ok"`
+	Verdict  string                  `json:"verdict,omitempty"`
+	Series   string                  `json:"series"`
+	Requests []debugShownRequest     `json:"requests,omitempty"`
+	Response *debugShownResponse     `json:"response,omitempty"`
+	Stages   []debugStage            `json:"stages,omitempty"`
+	Notes    []string                `json:"notes,omitempty"`
+	Lint     []transform.LintFinding `json:"lint,omitempty"`
+	Report   string                  `json:"report,omitempty"`
+	Error    string                  `json:"error,omitempty"`
 }
 
 type debugStage struct {
@@ -217,7 +219,7 @@ type debugShownResponse struct {
 
 // debugAnswerOf writes report as the page's JSON.
 func debugAnswerOf(report *debugReport) debugAnswer {
-	out := debugAnswer{OK: report.ok, Verdict: report.verdict, Report: string(report.text())}
+	out := debugAnswer{OK: report.ok, Verdict: report.verdict, Lint: report.lint, Report: string(report.text())}
 	if report.answer != nil {
 		out.Series = string(appendMetricSet(nil, report.answer))
 	}

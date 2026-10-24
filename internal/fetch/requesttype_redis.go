@@ -66,18 +66,19 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:         RequestTypeRedis,
-		Fields:       []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:    []string{"timeout", PathParamPrefix},
-		TargetFields: []string{"timeout"},
-		Validate:     validateRedisRequest,
-		Fetch:        fetchRedis,
-		CheckTarget:  checkRedisTarget,
-		Label:        redisLabel,
-		Method:       redisMethod,
-		Display:      redisDisplay,
-		Stage:        "redis",
-		CheckFiles:   checkRedisFiles,
+		Name:               RequestTypeRedis,
+		Fields:             []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Overrides:          []string{"timeout", PathParamPrefix},
+		TargetFields:       []string{"timeout", "username", "password_file", "tls"},
+		Validate:           validateRedisRequest,
+		Fetch:              fetchRedis,
+		CheckTarget:        checkRedisTarget,
+		CheckTargetRequest: checkRedisTargetRequest,
+		Label:              redisLabel,
+		Method:             redisMethod,
+		Display:            redisDisplay,
+		Stage:              "redis",
+		CheckFiles:         checkRedisFiles,
 	})
 }
 
@@ -190,8 +191,8 @@ func validateRedisRequest(x *model.Collector) error {
 		}
 	}
 	if r.Username != "" {
-		if strings.TrimSpace(r.Username) == "" || strings.ContainsFunc(r.Username, func(c rune) bool { return c <= ' ' || c == 0x7f }) {
-			return fmt.Errorf("collector %q request.username %q is not an ACL user's name, which holds no blank or control character", x.Name, r.Username)
+		if err := checkRedisUsername(r.Username); err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 		if HasPathParams(r.Username) {
 			return fmt.Errorf("collector %q request.username %q has a placeholder; the account is used as it is written", x.Name, r.Username)
@@ -221,6 +222,50 @@ func validateRedisRequest(x *model.Collector) error {
 		if err := checkRedisCommand(&r.Commands[i], i, names); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
+	}
+	return nil
+}
+
+// checkRedisUsername refuses a request.username that is no ACL user's name.
+func checkRedisUsername(name string) error {
+	if strings.TrimSpace(name) == "" || strings.ContainsFunc(name, func(c rune) bool { return c <= ' ' || c == 0x7f }) {
+		return fmt.Errorf("request.username %q is not an ACL user's name, which holds no blank or control character", name)
+	}
+	return nil
+}
+
+// checkRedisTargetRequest checks a static target's own account and tls
+// block, which replace its collector's for that target
+// (withTargetAccount), as the collector's are checked: a username comes
+// with the password_file of its password, here the target's own, since the
+// collector's password is not another user's, and a password_file alone is
+// the password of the collector's user. No value of them takes a
+// placeholder: a target's own values are used as written. A redis://
+// target, which asks for plaintext, with a tls block of its own contradicts
+// itself, as with the collector's.
+func checkRedisTargetRequest(_ *model.Collector, t *model.StaticTarget) error {
+	r := &t.Request
+	for _, key := range []struct{ name, value string }{{"request.username", r.Username}, {"request.password_file", r.PasswordFile}} {
+		if strings.Contains(key.value, "{{") {
+			return fmt.Errorf("%s %q has a placeholder; a static target's account and credential files are used as they are written, with no probe to fill one, so write the value out", key.name, key.value)
+		}
+	}
+	if r.Username != "" {
+		if err := checkRedisUsername(r.Username); err != nil {
+			return err
+		}
+		if r.PasswordFile == "" {
+			return errors.New("sets request.username without request.password_file; a target's own user logs in with its own password, so name the file of the password beside it")
+		}
+	}
+	if r.PasswordFile != "" && strings.TrimSpace(r.PasswordFile) == "" {
+		return errors.New("request.password_file is blanks alone; name the file of the password, or take the key out")
+	}
+	if err := checkTargetTLS(t); err != nil {
+		return err
+	}
+	if a, err := parseRedisTarget(t.Target); err == nil && a.plain && r.TLS != nil {
+		return errors.New("target asks for plaintext with redis://, but sets request.tls of its own; use rediss:// or a bare host:port")
 	}
 	return nil
 }
@@ -350,7 +395,8 @@ func checkRedisTarget(c *model.Collector, target string, _ bool) error {
 
 // redisLabel is the url label of a scrape: redis://host:port/db, or
 // rediss:// over TLS.
-func redisLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+func redisLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	c = withTargetAccount(c, overrides)
 	a, err := parseRedisTarget(target)
 	if err != nil {
 		return "", err
@@ -455,9 +501,11 @@ func redisShownCommand(args []string) string {
 }
 
 // fetchRedis makes a scrape's connection, logs in, selects the database and
-// answers the document of INFO and the commands.
+// answers the document of INFO and the commands, with a static target's own
+// account and tls block in place of the collector's.
 func fetchRedis(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
+	c = withTargetAccount(c, overrides)
 	address, err := parseRedisTarget(target)
 	if err != nil {
 		return nil, err
@@ -636,27 +684,9 @@ func redisFailure(ctx context.Context, err error) error {
 }
 
 // checkRedisFiles reads the files a scrape reads, for --dry-run: the
-// password file, and the tls block's when the collector sets one. Loading
-// the configuration reads none of them, since a file may be mounted after
-// the exporter starts.
+// password file, and the tls block's when the collector sets one, or those
+// a static target names of its own. Loading the configuration reads none of
+// them, since a file may be mounted after the exporter starts.
 func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil {
-		return nil
-	}
-	var warnings []string
-	if file := c.Request.PasswordFile; file != "" {
-		password, err := ReadCredentialFile(file)
-		switch {
-		case err != nil:
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
-		case password == "":
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.password_file %s is empty; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, file))
-		}
-	}
-	if c.Request.TLS != (model.TLSConfig{}) {
-		if _, err := tlsConfig(c.Request.TLS); err != nil {
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each connection, so one put in place later is used then)", c.Name, err))
-		}
-	}
-	return warnings
+	return accountFileWarnings(c, t)
 }

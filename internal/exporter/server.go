@@ -40,6 +40,9 @@ type Server struct {
 	staticResults     map[string]model.MetricSet
 	staticFetched     map[string]time.Time
 	staticLastSuccess map[string]time.Time
+	// staticStatus is how each target's last scrape went, by name, for the
+	// status page (statictargetstatus.go), under staticMu.
+	staticStatus map[string]*staticTargetStatus
 	// staticGeneration counts the results published, under staticMu, and
 	// staticView is the endpoint's merge of them, rebuilt when a result is
 	// published or the targets change (statictargetsendpoint.go).
@@ -104,6 +107,11 @@ type Server struct {
 	// generation (reconcile.go). It is replaced under statsMu, together with
 	// the state it describes, and under staticMu.
 	followed atomic.Pointer[followedConfig]
+	// appliedGeneration is the generation of the last configuration whose
+	// connections and rate limits the request types follow (applyFollowed),
+	// under appliedMu.
+	appliedMu         sync.Mutex
+	appliedGeneration uint64
 	// since says, for each collector of the followed configuration, the
 	// generation it has been there from, under statsMu: the statistics kept
 	// for it are those of that stay, and no others' (statsSince).
@@ -132,6 +140,13 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 		}
 	}
 	s.statsMu.Unlock()
+	// The entries of rate_limits are in force from the start, counting
+	// since it; a reload's are followed with its collectors (reconcile).
+	var hostRateLimits []model.HostRateLimit
+	if cfg != nil {
+		hostRateLimits = cfg.RateLimits
+	}
+	fetch.FollowHostRateLimits(hostRateLimits)
 	// The state kept per collector follows a reload when it is made
 	// (reconcile.go), and what following it needs that takes long is worked
 	// out before the reload puts its configuration in force (prepareReload).
@@ -249,7 +264,7 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
-// targets path, /health, /ready and /-/reload, and with --web.debug on
+// targets path and its status page, /health, /ready and /-/reload, and with --web.debug on
 // /debug and /debug/run. Whatever answers, its client has
 // AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
@@ -265,6 +280,7 @@ func (s *Server) Handler() http.Handler {
 	// The answers Prometheus scrapes are gzipped when it asks (middleware.go).
 	mux.HandleFunc(s.selfMetricsEndpoint(), compressed(protected(s.metricsHandler)))
 	mux.HandleFunc(s.staticTargetsEndpoint(), compressed(protected(s.staticTargetsHandler)))
+	mux.HandleFunc(s.staticTargetsStatusEndpoint(), protected(s.staticTargetsStatusHandler))
 	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	// Only / itself: any other unknown path is still a 404.

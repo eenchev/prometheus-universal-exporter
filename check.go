@@ -255,8 +255,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	return out
 }
 
-// configDetails summarises a configuration that loaded. A deprecated spelling
-// or a warning still passes, so the check stays ok; the report lists them so
+// configDetails summarises a configuration that loaded. A deprecated spelling,
+// a warning or the metric lint's advice still passes, so the check stays ok; the report lists them so
 // the operator knows what to change before a deprecated spelling is removed.
 // The warnings are the configuration's, and what reading the files a request
 // reads, which loading leaves to the request, finds wrong with them now
@@ -287,6 +287,12 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	if len(warnings) > 0 {
 		details["warnings"] = warnings
 	}
+	// The metric lint is advice, not a fault: it is listed apart from the
+	// warnings, each finding by collector and rule so that a pipeline can
+	// pick out what it cares about, and never fails the check.
+	if findings := transform.LintConfiguration(conf); len(findings) > 0 {
+		details["lint"] = findings
+	}
 	return details
 }
 
@@ -301,6 +307,11 @@ func logNotices(logger *slog.Logger, result checkResult) {
 	if warnings, ok := result.Details["warnings"].([]string); ok {
 		for _, message := range warnings {
 			logger.Warn("configuration warning", "file", result.File, "warning", message)
+		}
+	}
+	if findings, ok := result.Details["lint"].([]transform.LintFinding); ok {
+		for _, f := range findings {
+			logger.Warn("metric lint", "file", result.File, "collector", f.Collector, "rule", f.Rule, "metric", f.Metric, "advice", f.Message)
 		}
 	}
 }

@@ -39,7 +39,8 @@ import (
 const DefaultStaticTargetsPath = "/static-targets"
 
 // StaticTargetsPath checks --web.static-targets-path as SelfMetricsPath checks
-// its path, and that it is not the self-metrics path, selfMetricsPath.
+// its path, and that neither it nor the status page's path beside it
+// (staticTargetsStatusEndpoint) is the self-metrics path, selfMetricsPath.
 func StaticTargetsPath(path, selfMetricsPath string) (string, error) {
 	path, err := endpointPath("--web.static-targets-path", path, "/static-targets")
 	if err != nil {
@@ -47,6 +48,10 @@ func StaticTargetsPath(path, selfMetricsPath string) (string, error) {
 	}
 	if path == selfMetricsPath {
 		return "", fmt.Errorf("--web.static-targets-path %q is also --web.self-metrics-path; the two endpoints need paths of their own", path)
+	}
+	// The status page is served beside the endpoint (statictargetstatus.go).
+	if status := path + staticTargetsStatusSuffix; status == selfMetricsPath {
+		return "", fmt.Errorf("--web.self-metrics-path %q is where the static targets' status page is served with --web.static-targets-path %q; the two endpoints need paths of their own", status, path)
 	}
 	return path, nil
 }
@@ -216,6 +221,11 @@ func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time
 		for name := range s.staticLastSuccess {
 			if !current[name] {
 				delete(s.staticLastSuccess, name)
+			}
+		}
+		for name := range s.staticStatus {
+			if !current[name] {
+				delete(s.staticStatus, name)
 			}
 		}
 	}
@@ -573,13 +583,14 @@ func (s *Server) staticTargetCountMetrics() []model.Metric {
 	}
 }
 
-// recordStaticTargetOutcome notes a scrape of target, at now, and returns when
-// the target last succeeded: now for a success, else the earlier success,
-// zero if there was none. stands is whether the target and its collector are
-// still those the scrape read, as read says (targetStands); when they are
-// not, nothing is noted: the scrape is not one of the target now under the
-// name.
-func (s *Server) recordStaticTargetOutcome(read configRead, target model.StaticTarget, ok bool, now time.Time) (lastSuccess time.Time, stands bool) {
+// recordStaticTargetOutcome notes a scrape of target, at now, as status
+// says it went, and returns when the target last succeeded: now for a
+// success, else the earlier success, zero if there was none. stands is
+// whether the target and its collector are still those the scrape read, as
+// read says (targetStands); when they are not, nothing is noted: the scrape
+// is not one of the target now under the name.
+func (s *Server) recordStaticTargetOutcome(read configRead, target model.StaticTarget, status staticScrapeStatus, now time.Time) (lastSuccess time.Time, stands bool) {
+	ok := status.ok
 	s.staticMu.Lock()
 	defer s.staticMu.Unlock()
 	if !read.targetStands(target.Collector, target.Name) {
@@ -591,6 +602,7 @@ func (s *Server) recordStaticTargetOutcome(read configRead, target model.StaticT
 	if ok {
 		s.staticLastSuccess[target.Name] = now
 	}
+	s.noteStaticStatusLocked(target.Name, status)
 	return s.staticLastSuccess[target.Name], true
 }
 

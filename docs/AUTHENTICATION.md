@@ -275,16 +275,19 @@ target. It follows no redirect, whatever `follow_redirects` says, so the
 secrets go only where `url` says; a login answered with a redirect fails,
 saying `login.url` must be the URL that answers the login itself. It is
 made with `login.tls`, a [tls block](REQUESTS.md#tls) of its own for a login
-server the target's settings do not fit, or else the collector's
-`request.tls`, and never with the `insecure_skip_verify` a probe parameter or
+server the target's settings do not fit, or else the request's `tls`: a
+[static target's own block](STATIC-TARGETS.md#credentials-and-tls-of-a-target)
+when it names one, the collector's `request.tls` otherwise; and never with the `insecure_skip_verify` a probe parameter or
 a static target sets for the target. The `login` block is written whole:
 `url` holds no `{{param_...}}` placeholder, no credentials and no fragment.
 
 ### How long a token is kept
 
-A token is kept, by the collector, the login, the URL the login went to and
-the `Host` it was sent with, so two virtual hosts on one address keep a token
-each and neither is sent the other's, and sent on every request until shortly before it expires. Its lifetime is
+A token is kept, by the collector, the login, the `tls` block the login was
+made with, the URL the login went to and the `Host` it was sent with, so two
+virtual hosts on one address keep a token each and neither is sent the
+other's, nor are two static targets that log in with client certificates or
+CAs of their own, and sent on every request until shortly before it expires. Its lifetime is
 `expires_in` for a `json` login, the answer's `expires_in` for `oauth2`, the
 cookie's `Max-Age` or `Expires` for `token_cookie`, and, where the answer
 says none, `ttl`, such as `15m`; with neither, the token is kept until the
@@ -311,7 +314,8 @@ led without the token, such as another origin, which is not sent it: that
 `401` is the probe's answer, and no new login is made.
 
 At most 1000 tokens are kept, across collectors, the one used longest ago
-dropped first; a reload drops the tokens of a login it changes or removes.
+dropped first; a reload drops the tokens of a login it changes or removes,
+or whose `tls` block it changes.
 A secret file is read at each login, so a rotated secret is used at the
 next login; the token kept is used until then.
 

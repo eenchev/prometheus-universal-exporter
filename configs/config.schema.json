@@ -254,6 +254,37 @@
           {
             "if": {
               "not": {
+                "properties": {
+                  "name_escaping": {
+                    "enum": [
+                      "underscores",
+                      "values"
+                    ]
+                  }
+                },
+                "required": [
+                  "name_escaping"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "derived": {
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
                 "anyOf": [
                   {
                     "properties": {
@@ -399,6 +430,156 @@
               }
             },
             "type": "object"
+          },
+          "derived": {
+            "description": "Series computed from the collector's own series once its transform made them, in order, so an entry may read an earlier one: a sum, a difference or a ratio, such as a hit ratio of hits and misses. See docs/CONFIGURATION.md#derived-series.",
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "properties": {
+                    "name": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              ],
+              "else": {
+                "properties": {
+                  "sum": {
+                    "minItems": 2
+                  }
+                }
+              },
+              "if": {
+                "required": [
+                  "by"
+                ]
+              },
+              "oneOf": [
+                {
+                  "required": [
+                    "sum"
+                  ]
+                },
+                {
+                  "required": [
+                    "difference"
+                  ]
+                },
+                {
+                  "required": [
+                    "ratio"
+                  ]
+                }
+              ],
+              "properties": {
+                "by": {
+                  "description": "With a sum of one family: adds up its series into one for each set of values of these labels, as the rules name them, the others dropped; [] makes one series of them all.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "description": {
+                  "description": "The help text of the derived metric.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "difference": {
+                  "description": "[a, b]: a - b, of the series of a and b matched by their label sets. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "hidden": {
+                  "description": "Computes the entry for later entries to read, without exporting it. Defaults to false.",
+                  "type": "boolean"
+                },
+                "name": {
+                  "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values.",
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                    "type": "string"
+                  },
+                  "type": "string"
+                },
+                "ratio": {
+                  "description": "[a, b]: a / b, of the series of a and b matched by their label sets. A ratio over 0 makes no series. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "sum": {
+                  "description": "Adds up the series of the families listed, two or more, matched by their label sets; with by, the series of the one family listed. Each a rule's name, as written, or an earlier entry's.",
+                  "items": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": {
+                  "description": "gauge, the default, counter or untyped: a derived series is one number.",
+                  "enum": [
+                    "gauge",
+                    "counter",
+                    "untyped",
+                    ""
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "then": {
+                "properties": {
+                  "sum": {
+                    "maxItems": 1
+                  }
+                },
+                "required": [
+                  "sum"
+                ]
+              },
+              "type": "object"
+            },
+            "type": "array"
           },
           "error_handling": {
             "additionalProperties": false,
@@ -564,6 +745,26 @@
                   "string",
                   "integer"
                 ]
+              }
+            },
+            "type": "object"
+          },
+          "lint": {
+            "additionalProperties": false,
+            "description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint.",
+            "properties": {
+              "ignore": {
+                "description": "The ids of the lint rules whose advice is not given for this collector.",
+                "items": {
+                  "enum": [
+                    "counter-total",
+                    "unit-suffix",
+                    "unbounded-label",
+                    "name-clash"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -3464,6 +3665,59 @@
         }
       },
       "type": "object"
+    },
+    "rate_limits": {
+      "description": "Rate limits per host, shared by every collector: every http and graphite request to one of an entry's hosts, each attempt, page, followed redirect and login request counted, from any collector, probe or static target, takes a turn under the entry's rate_limit, as well as under its collector's own request.rate_limit. The first entry whose hosts match applies. Other request types are not limited. See docs/REQUESTS.md#rate-limits-per-host.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "hosts": {
+            "description": "The hosts the entry limits, all ports and schemes of each together: host names, in any case, IP addresses, and *.example.com wildcards, which match every subdomain of example.com but not example.com itself. No scheme, port or path. A host may be listed in one entry only.",
+            "items": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "name": {
+            "description": "Unique name of the entry, the rule label of its self-metrics http_exporter_host_rate_limit_waits_total and http_exporter_host_rate_limit_refused_total.",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "rate_limit": {
+            "additionalProperties": false,
+            "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once.",
+            "properties": {
+              "burst": {
+                "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "requests_per_second": {
+                "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds.",
+                "exclusiveMinimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "requests_per_second"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "hosts",
+          "rate_limit"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "web": {
       "additionalProperties": false,

@@ -112,7 +112,11 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 	if t.Request.AcceptCodes != nil {
 		out.AcceptCodes = append([]string{}, t.Request.AcceptCodes...)
 	}
-	out.SSHUsername, out.SSHPrivateKeyFile, out.SSHPassphraseFile, out.SSHPasswordFile = t.Request.Username, t.Request.PrivateKeyFile, t.Request.PassphraseFile, t.Request.PasswordFile
+	out.Username, out.BindDN, out.PrivateKeyFile, out.PassphraseFile, out.PasswordFile = t.Request.Username, t.Request.BindDN, t.Request.PrivateKeyFile, t.Request.PassphraseFile, t.Request.PasswordFile
+	if t.Request.TLS != nil {
+		settings := *t.Request.TLS
+		out.TLS = &settings
+	}
 	out.SQLConnections = t.Request.Connections
 	out.Login = t.Request.Login
 	out.RateLimit = t.Request.RateLimit

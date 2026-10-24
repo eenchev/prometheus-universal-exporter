@@ -809,7 +809,7 @@ func TestTheRedirectRuleRidesWithTheRequest(t *testing.T) {
 		go func() {
 			defer group.Done()
 			u, _ := url.Parse(server.URL + path)
-			ctx, err := withTargetPolicy(context.Background(), c, u, nil)
+			ctx, err := withTargetPolicy(context.Background(), c, u, nil, false)
 			if err != nil {
 				t.Error(err)
 				return

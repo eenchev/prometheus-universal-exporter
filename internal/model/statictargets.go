@@ -93,12 +93,21 @@ type TargetRequestConfig struct {
 	// request.accept_status and accept_codes for this target.
 	AcceptStatus []string `yaml:"accept_status"`
 	AcceptCodes  []string `yaml:"accept_codes"`
-	// Username and the credential files replace an sshfile or a sql
-	// collector's for this target: the account it reads as.
+	// Username and the credential files replace an sshfile, sql or redis
+	// collector's for this target, and BindDN and PasswordFile an ldap
+	// collector's: the account it reads as.
 	Username       string `yaml:"username"`
+	BindDN         string `yaml:"bind_dn"`
 	PrivateKeyFile string `yaml:"private_key_file"`
 	PassphraseFile string `yaml:"passphrase_file"`
 	PasswordFile   string `yaml:"password_file"`
+	// TLS replaces, as a whole block, a redis, ldap, tcp, sql, grpc, http
+	// or graphite collector's request.tls for this target; nil keeps the
+	// collector's. Written, even as tls: {}, it asks for TLS
+	// (TLSConfig.Set), so a target can ask for TLS its collector does not,
+	// but not leave out TLS its collector asks for; for http and graphite
+	// the URL's scheme decides, and tls: {} verifies with the system roots.
+	TLS *TLSConfig `yaml:"tls,omitempty"`
 	// Connections replaces, key by key, a sql collector's
 	// request.connections for this target.
 	Connections *SQLConnections `yaml:"connections,omitempty"`

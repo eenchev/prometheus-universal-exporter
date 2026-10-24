@@ -48,6 +48,10 @@ type Config struct {
 	CollectorFiles []string   `yaml:"collector_files"`
 	OTLP           OTLPConfig `yaml:"otlp"`
 	Web            WebConfig  `yaml:"web"`
+	// RateLimits bounds how fast the http and graphite requests of every
+	// collector together ask a host, for an API whose quota is the host's
+	// rather than one collector's (fetch/hostratelimit.go).
+	RateLimits []HostRateLimit `yaml:"rate_limits"`
 	// CollectorSources records the file each collector was defined in, and
 	// LoadedCollectorFiles the collector files read, in order. Neither is read
 	// from the document.
@@ -121,8 +125,11 @@ type Collector struct {
 	Decoder       DecoderConfig   `yaml:"decoder"`
 	Transform     TransformConfig `yaml:"transform"`
 	Metrics       []MetricRule    `yaml:"metrics"`
-	ErrorHandling ErrorHandling   `yaml:"error_handling"`
-	Limits        Limits          `yaml:"limits"`
+	// Derived computes series from the collector's own series once its
+	// transform made them; see transform/derived.go.
+	Derived       []DerivedRule `yaml:"derived,omitempty"`
+	ErrorHandling ErrorHandling `yaml:"error_handling"`
+	Limits        Limits        `yaml:"limits"`
 	// Cache answers repeats of a probe from memory, and can stand in for a
 	// trip that fails; see exporter/cache.go.
 	Cache CacheConfig `yaml:"cache"`
@@ -141,6 +148,10 @@ type Collector struct {
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
+	// Lint says which rules of the metric lint (transform/lint.go) are not
+	// applied to the collector's series: advice --dry-run and the debug
+	// report give, which never fails anything.
+	Lint LintConfig `yaml:"lint"`
 	// LabelParams is what the collector's label values hold of
 	// {{param_...}} placeholders, read once when the configuration loads
 	// (labelparams.go); nil when they hold none, as nearly every
@@ -350,6 +361,16 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
 	// Burst is nil until the load fills in its default, 1.
 	Burst *int `yaml:"burst" json:"burst,omitempty"`
+}
+
+// HostRateLimit is an entry of rate_limits: a rate limit, as
+// request.rate_limit writes one, that every http and graphite request to one
+// of Hosts takes a turn under, whichever collector, probe or static target
+// sends it. Name labels its self-metrics.
+type HostRateLimit struct {
+	Name      string          `yaml:"name"`
+	Hosts     []string        `yaml:"hosts"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
 // LoginConfig is request.login: how the exporter logs in to get the token
@@ -790,6 +811,25 @@ type MetricRule struct {
 	Histogram *HistogramRule `yaml:"histogram"`
 }
 
+// DerivedRule is one entry of a collector's derived list: a metric family
+// computed from families the collector's rules, or earlier entries, make. It
+// sets exactly one of Sum, Difference and Ratio, each a list of the names
+// of the families it reads, as the rules name them. By, which only Sum
+// takes, makes Sum add up the series of its one family into one series for
+// each set of values of the labels By keeps; written as [], into one series.
+// Hidden computes the family for later entries to read without exporting
+// it.
+type DerivedRule struct {
+	Name        string     `yaml:"name"`
+	Type        MetricType `yaml:"type"`
+	Description string     `yaml:"description"`
+	Sum         []string   `yaml:"sum"`
+	By          *[]string  `yaml:"by"`
+	Difference  []string   `yaml:"difference"`
+	Ratio       []string   `yaml:"ratio"`
+	Hidden      bool       `yaml:"hidden"`
+}
+
 // HistogramRule is a metric rule's histogram block: the upper bounds of the
 // buckets the rule's values are counted in, in increasing order, without
 // +Inf, whose bucket every histogram has.
@@ -841,6 +881,27 @@ type LabelRule struct {
 // Static reports whether the label has a static value rather than an
 // expression.
 func (l LabelRule) Static() bool { return l.Expression == "" }
+
+// LintConfig is a collector's lint block.
+type LintConfig struct {
+	// Ignore lists the ids of the lint rules (LintRules) whose advice is
+	// not given for the collector.
+	Ignore []string `yaml:"ignore"`
+}
+
+// The ids of the metric lint's rules, as a finding names its rule and
+// lint.ignore lists the rules it silences. Validation and the JSON Schema
+// both read LintRules, and a test keeps the transform package applying
+// every rule in it (transform/lint.go).
+const (
+	LintCounterTotal   = "counter-total"
+	LintUnitSuffix     = "unit-suffix"
+	LintUnboundedLabel = "unbounded-label"
+	LintNameClash      = "name-clash"
+)
+
+// LintRules are the ids of the metric lint's rules.
+var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, LintNameClash}
 
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both

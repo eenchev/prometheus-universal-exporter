@@ -1,4 +1,9 @@
 {{- if .Values.service.enabled }}
+{{- /* NodePort and LoadBalancer open the exporter to whoever reaches a node's
+       port or the load balancer's address. */}}
+{{- if has .Values.service.type (list "NodePort" "LoadBalancer") }}
+{{- include "prometheus-universal-exporter.requireAuthForExposure" (list . (printf "service.type=%s" .Values.service.type)) }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

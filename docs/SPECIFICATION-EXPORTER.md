@@ -457,6 +457,7 @@ The exporter MUST expose HTTP response status and request duration in its self-m
 Recommended top-level structure:
 
 ```yaml
+rate_limits: []   # optional; rate limits per host for every collector (§ 5.1, http)
 collectors:
   - name: example
     metrics_prefix: example   # optional
@@ -951,6 +952,74 @@ not apply to its type. Its keys:
   the buckets of the collectors it removed, and the exporter's shutdown
   every bucket.
 
+###### Rate limits per host
+
+The top-level `rate_limits` list MUST bound how fast the `http` and
+`graphite` requests of every collector together ask a host. Each entry has:
+
+- `name`, **required**: a name as a collector's is (§ 5), unique among the
+  entries; an entry without one, with an invalid one, or with the name of
+  another MUST be refused at load.
+- `hosts`, **required**, at least one: host names, matched in any case and
+  without a final dot; IP addresses, matched in canonical form, an IPv6 one
+  with or without brackets; and `*.example.com` wildcards, which MUST match
+  every subdomain of `example.com`, at any depth, and MUST NOT match
+  `example.com` itself. An IPv4 address mapped into IPv6 MUST be matched, in
+  an entry and in a request's URL, as the IPv4 address. A request's IPv6 zone
+  MUST be ignored. An internationalised name MUST be matched in its `xn--`
+  form, the only form a request that takes a turn names it in, since a
+  request whose host has a character outside ASCII is refused before it is
+  sent (§ 26.1). A host with a scheme, a port, a path, a `*` anywhere but a
+  leading `*.`, a wildcard over an IP address, an IPv6 zone, or a character
+  outside ASCII, the last refused naming the character and saying to write
+  the `xn--` form, MUST be refused at load. A host, in canonical form —
+  `::ffff:10.0.0.1` and `10.0.0.1` one host, as `XN--BCHER-KVA.example.` and
+  `xn--bcher-kva.example` are — MUST be listed once across every entry;
+  listed twice it MUST be refused at load, naming both entries. A host that a
+  wildcard of an earlier entry matches — an exact name or a narrower wildcard
+  under it — MUST be refused at load, naming both entries and saying to list
+  the narrower entry first, since the later entry could never apply to it;
+  listed before the broader wildcard it MUST be accepted. A host that a
+  wildcard of its own entry matches MUST be accepted.
+- `rate_limit`, **required**: the keys of `request.rate_limit`, checked as
+  they are and refused at load as they would be, naming the entry, `burst`
+  filled in as 1 when left out.
+
+- An entry MUST match a request by the host of its URL alone, on every port
+  and scheme. The first entry, in the list's order, whose hosts match MUST
+  apply; a request MUST take a turn under at most one entry.
+- Every `http` and `graphite` request that `request.rate_limit` counts — each
+  attempt, page, followed redirect hop, against the host it goes to, and
+  login request — MUST take a turn from the bucket of the entry its host
+  matches, one bucket for each entry whichever of its hosts a request goes
+  to, from any collector, probe or static target, in addition to the turn
+  it takes under its collector's or static target's own `rate_limit`, after
+  it. The turn MUST be taken, waited for and refused as under
+  `request.rate_limit`, with an error naming the entry and the host:
+  `rate limit of 5 requests per second of rate_limits entry "billing_api"
+  for api.billing.example would delay the request past its deadline: ...`.
+  A request refused under one limit MUST give back the turn it took under
+  the other.
+- Requests of every other type MUST NOT take a turn under an entry.
+- A debug run's requests MUST take their turns, and MUST NOT be counted in
+  the entries' self-metrics (§ 22).
+- A reload MUST keep the bucket of an entry it leaves as it was, its name,
+  hosts and `rate_limit` alike, and MUST start an entry it changes from a
+  full bucket. It MUST forget the bucket and the counts of an entry it
+  removes, and the exporter's shutdown every bucket and count.
+- The entries in force MUST be those of the latest configuration in force:
+  of two reloads close together, the entries of the earlier MUST NOT be put
+  in force after those of the later, however the two followings interleave.
+  So MUST the collectors and static targets in force that the request types
+  keeping connections across scrapes, and the collectors' own
+  `request.rate_limit`, follow.
+- An entry's bucket MAY be kept by each exporter process alone: several
+  replicas, behind the allocator (§ 42.14d) or otherwise, MAY together ask
+  an entry's hosts up to their number times its `requests_per_second`.
+  NOTE: per-process buckets are intended, as they need no state shared
+  between replicas; the documentation MUST say so and how to keep within a
+  quota.
+
 #### `localfile`
 
 A `localfile` collector reads a file from the exporter's own filesystem. It
@@ -1308,7 +1377,9 @@ keys:
   all of them, a reserved name left out.
 - Connections MUST be kept per target and TLS settings and reused, closed
   after 5 minutes unused, and made again when a TLS file changes on disk,
-  without cancelling a call still using the old one. A connection MUST be
+  without cancelling a call still using the old one. `--dry-run` MUST read
+  the `tls` block's files of a collector, and of a static target's own
+  block, and warn of one a connection would fail on. A connection MUST be
   closed by a timer once no call or reflection question has held it for 5
   minutes, whether or not another call comes, since grpc-go goes on
   reconnecting a connection whose server is gone. At most 1000 connections
@@ -1344,7 +1415,9 @@ keys:
   `message`, which replaces `request.message`, placeholders and all; a
   parameter only another type accepts MUST be answered `400`. A static target
   MAY set `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`,
-  `accept_codes` and the basic and bearer credential keys; its message and
+  `accept_codes`, the basic and bearer credential keys and its own `tls`
+  block (§ 42.14), which a `grpc://` target MUST be refused with at load;
+  its message and
   metadata MUST NOT
   hold placeholders, its message MUST be JSON, and with descriptors read at
   load fit the input type. Its message MUST enter its cache key as the probe
@@ -1656,8 +1729,8 @@ of objects, one a row, of its columns by name. Its keys:
   then used again, so that the driver keeps no more names than connections
   were made at once. No inline password MUST be offered, and `passphrase_file` MUST be refused as a key of another
   type. `--dry-run` MUST read those files, and the TLS files, of every `sql`
-  collector, and a static target's own credential file, and warn of what a
-  scrape would fail on, as for `sshfile`.
+  collector, and a static target's own credential file and TLS files, and
+  warn of what a scrape would fail on, as for `sshfile`.
 - **Options and TLS.** Each driver MUST take only its own options, refusing
   any other naming the ones it takes, and only the listed values of an
   option that has them: `postgres` `sslmode` (`disable`, `require`,
@@ -1865,11 +1938,14 @@ of objects, one a row, of its columns by name. Its keys:
   be closed, not given back, unless its driver's connection both resets its
   session and says whether it is valid.
 - **Static targets** MAY set `timeout`, `username`, `password_file`,
-  `private_key_file` (either credential file replacing the collector's) and
-  `connections`; `params` fills the placeholders of `args` and `database`. A
+  `private_key_file` (either credential file replacing the collector's),
+  `tls` and `connections`; `params` fills the placeholders of `args` and
+  `database`. A
   `{{` in a static target's `username`, `password_file` or
   `private_key_file` MUST be refused at load, by the loader and the schema,
-  as `sshfile`'s are.
+  as `sshfile`'s are. A target's `tls` (§ 42.14) MUST be held at load to
+  what the driver honours with the collector's `options`, as the
+  collector's is, and MUST be part of the key of the target's pool.
 - A driver's own log (`vertica`'s and `snowflake`'s) MUST go into the
   exporter's log at its level, with `sql_driver` naming the driver, never to
   stdout, stderr or a file of the driver's own unless gosnowflake's client
@@ -2286,8 +2362,13 @@ carries it. Its keys:
 - The document MUST be held to the response limit as the replies are: one
   whose JSON is larger than the limit MUST fail the scrape as a limit
   exceeded, saying the document's size.
-- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
-  `param_<name>`.
+- A static target MAY set `timeout`, its own account, `username` and
+  `password_file`, and its own `tls` block (§ 42.14); a probe MAY set
+  `timeout` and `param_<name>`. A target's `password_file` MUST replace the
+  collector's, as the password of the collector's `username`, or of the
+  target's own, which MUST replace the collector's; a target's `username`
+  without its own `password_file`, and a `redis://` target with its own
+  `tls` block, MUST be refused at load.
 
 #### `tcp`
 
@@ -2357,6 +2438,8 @@ types at build time): only a build asked for it carries it. Its keys:
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and
   list what a scrape would fail on as warnings of the `config` check.
+- A static target MAY set `timeout` and its own `tls` block (§ 42.14); a
+  probe MAY set `timeout` and `param_<name>`.
 
 #### `ldap`
 
@@ -2470,8 +2553,14 @@ asked for it carries it. Its keys:
   search's name, base, scope, filter and attributes, and how each ended as
   its outcome. The verbose `url` label MUST be `ldap://host:port` or
   `ldaps://host:port`, and `http_method` MUST be `SEARCH`.
-- A static target MAY set `timeout` alone; a probe MAY set `timeout` and
-  `param_<name>`.
+- A static target MAY set `timeout`, its own account, `bind_dn` and
+  `password_file`, and its own `tls` block (§ 42.14); a probe MAY set
+  `timeout` and `param_<name>`. A target's `password_file` MUST replace the
+  collector's, as the password of the collector's `bind_dn`, or of the
+  target's own, which MUST replace the collector's; a target's `bind_dn`
+  without its own `password_file`, a `password_file` alone of a target
+  whose collector binds anonymously, and an `ldap://` target with its own
+  `tls` block and no `start_tls` on its collector MUST be refused at load.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -5871,6 +5960,70 @@ of any other, MUST get from the load the verdict, the error and the defaults
 it got before them. PYTHON.md MUST say, in one place, what a rule of a
 `python` collector is for and what it does not take.
 
+A collector MAY set `derived`, a list of entries each computing a metric
+family from the collector's own series, the same way under every transform.
+An entry MUST have a `name` and MAY have a `description`, its help text, and
+a `type`, `gauge`, `counter` or `untyped`, defaulting to `gauge`; any other
+type MUST be rejected at load. It MUST set exactly one of `sum`,
+`difference` and `ratio`, each a list of the names of the families it reads:
+`sum` of two families or more MUST add up their series, `difference: [a, b]`
+MUST be `a - b` and `ratio: [a, b]` `a / b`, each of the series of the
+operands matched one to one as PromQL matches them without `on` or
+`ignoring`, by identical label sets, a label of an empty value being no
+label; the result MUST have those labels. A series with no partner in every
+other operand, and a label set two series of one operand have, MUST make no
+derived series. `by` MUST be taken only beside a `sum` of exactly one
+family, whose series it MUST add up into one series for each set of values
+of the labels it lists, with those labels only, a label of an empty value
+being absent; `by: []` MUST give one series without labels. A result that is
+NaN or infinite, a ratio over 0 among them, MUST make no series and MUST NOT
+be a failure. A derived series MUST have no timestamp and no created
+timestamp.
+
+The entries MUST be computed in their order, and an entry MAY read an
+earlier one; `hidden: true` MUST compute an entry for the later ones without
+exporting it. Derivation MUST read the series as the rules made them —
+after the rules' `value_map`, `scale` and `time_format`, the label value
+maps and truncation — and MUST come before `transform.labels`,
+`remove_labels`, `rename_labels`, `metrics_prefix` and name escaping, which
+MUST apply to derived series as to every other: operands and `by` labels are
+written as the rules write their names. Each exported derived series MUST
+count against `limits.max_metrics`, a scrape past it failing as one whose
+rules make too many does; a hidden entry's series MUST NOT be counted. The
+derived series of a prometheus pass-through MUST be added without writing
+to the decoded series.
+
+At load the exporter MUST reject, naming the collector and the entry (by its
+place, counted from 1, when it has no name): an entry without a name; a
+name that is no valid metric name under the collector's `name_escaping`,
+that is exported longer than `limits.max_metric_name_length`, that is a
+rule's name, a `_bucket`, `_sum` or `_count` of a histogram or summary rule,
+or another entry's; a `description` longer than `limits.max_help_length`;
+no operation or more than one; a `sum` of fewer than two families without
+`by`, a `difference` or `ratio` of other than two; `by` beside another
+operation or a `sum` of other than one family, and a `by` label that is no
+label name or is listed twice; an operand that is empty, the entry itself, a
+later entry, a histogram or summary rule, or, under every transform but
+`python` and `prometheus`, neither a rule's name nor an earlier entry's; and
+a hidden entry that no later entry reads. Under `python` and `prometheus`,
+whose series are named at run time, an operand no rule names MUST be taken
+and read from the series of that name each scrape makes; a family of it a
+scrape shows to be a histogram or a summary MUST make no series of the entry
+and MUST be a failure of the entry under `error_mode: log`, logged and
+counted in `http_exporter_rule_failures_total` under the entry's name, a
+series every entry MUST have from 0. Under those two, an exported entry
+whose name is a family of the series the scrape made MUST make no series,
+MUST leave that family as the scrape made it, MUST NOT fail the scrape on
+the duplicate series its own would have been, and MUST be a failure of the
+entry as a histogram operand is; a later entry that reads it MUST read no
+series. An operand the scrape has no series of MUST give the entry no
+series and MUST NOT be a failure. A debug probe's report MUST mark each
+derived family it lists as derived, with its operation and operands, MUST
+NOT mark so a family of an entry that failed for its name, and MUST list
+the exported entries that gave no series apart from the rules, each with
+the operands that had no series in the scrape, `operand x: no series`,
+those of an entry it reads among them.
+
 ## 18.2 Metrics per item
 
 For the `jq`, `yq` and `css` transforms a metric MAY set `items`. For `jq` and
@@ -6602,6 +6755,8 @@ http_exporter_login_failures_total
 
 http_exporter_rate_limit_waits_total
 http_exporter_rate_limit_refused_total
+http_exporter_host_rate_limit_waits_total
+http_exporter_host_rate_limit_refused_total
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -6716,6 +6871,18 @@ origin: the requests the collector's rate limit, or a static target's own,
 made wait for their turn, and those it refused for a turn past their
 deadline (§ 5.1, `http`). The counts MUST start at 0 at the exporter's
 shutdown and be forgotten with a collector a reload removes.
+`http_exporter_host_rate_limit_waits_total` and
+`http_exporter_host_rate_limit_refused_total`, counters, MUST be
+exporter-wide, labelled `rule` with the name of an entry of `rate_limits`
+and no `collector` label, a series of each for every entry in force from 0:
+the requests of every collector that the entry made wait for their turn,
+and those it refused for a turn past their deadline, a debug run's not
+counted (§ 5.1, `http`, Rate limits per host). They MUST be exported over
+OTLP as every other self-metric. An entry's counts MUST be kept across a
+reload that keeps an entry of its name, changed or not, forgotten with an
+entry a reload removes, and start at 0 at the exporter's shutdown; their
+created time MUST be the exporter's start for an entry it started with, and
+when the reload put it in force for one a reload added.
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,
@@ -7199,7 +7366,8 @@ Recommended behavior:
   and `PUT`, and no other. It MUST show when the last reload that put
   something in force did, and what it changed, as § 24.1a says it, and
   before the first that the exporter has not been reloaded since it
-  started. Only `/` itself MUST be
+  started. With static targets in force it MUST link the static targets'
+  status page (§ 42.14a), and without them MUST NOT. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -9138,7 +9306,11 @@ The steps MUST be:
   `fields` and `endpoint_params` whose names read as credentials' withheld
   (§ 42.6a);
   deprecated spellings accepted during validation are listed under
-  `details.deprecations` and logged, and do not fail the check;
+  `details.deprecations` and logged, and do not fail the check; the metric
+  lint's findings on the configuration (§ 30.1a) are listed under
+  `details.lint`, each an object of `collector`, `rule`, `metric` and
+  `message`, and each logged at WARN as `metric lint`, and do not fail the
+  check;
 - `python_scripts` — every Python script compiles and every pre-script produces
   `data` (§ 16), with each faulty script reported as its own error. A
   configuration without Python MUST pass without needing an interpreter;
@@ -9178,6 +9350,60 @@ such a command line, at a start as with `--dry-run`: the exporter takes none,
 and the flags after one would be left unread, so it MUST exit `2` with
 `unexpected argument "<argument>"; flags take --name=value` rather than run
 with half its flags.
+
+### 30.1a Metric lint
+
+The metric lint MUST be advice about the series a collector makes, given by
+`--dry-run` (§ 30.1) and by every debug run (§ 42.17), and nowhere else. It
+MUST NOT change `--dry-run`'s exit status or a check's status, nor what a
+probe, a static target's scrape or a debug run answers, caches, counts or
+exports. Each finding MUST name the collector, its rule by its id and the
+metric by its exported name, with the collector's `metrics_prefix`. The
+rules and their ids MUST be:
+
+- `counter-total`: a rule of type `counter` whose name does not end in
+  `_total`, since the exporter writes it without the suffix in the text
+  format and with it in OpenMetrics (§ 21); and a rule of type `gauge`
+  whose name ends in `_total`.
+- `unit-suffix`: a name whose last word, or last before a counter's
+  `_total`, is `ms`, `millis`, `milliseconds`, `us`, `microseconds`, `ns`,
+  `nanoseconds`, `minutes`, `hours`, `days`, `kb`, `kilobytes`, `kib`,
+  `mb`, `megabytes`, `mib`, `gb`, `gigabytes`, `gib`, `percent` or
+  `percentage`, with the base unit and the scale that converts to it — `us`
+  and `ns` only in a name with a duration word; else a name with one of the
+  words `duration`, `latency`, `elapsed`, `uptime`, `age`, `time` or
+  `timestamp` and neither `seconds` nor `ratio`; else a name with the word
+  `memory` and neither `bytes` nor `ratio`. A name's words are its parts
+  between underscores, in any case. No other word MAY make it fire.
+- `unbounded-label`, in a debug run only: a label of a metric with more
+  than 100 distinct values among the run's series, or else with a value
+  that is a UUID, a hexadecimal string of 16 or more digits, a number of 10
+  or more digits, or a date or an RFC 3339 time, quoted by its first 64
+  bytes; once per label of a metric. The shape of a value MUST NOT be held
+  against a metric of one series in the run, since one series cannot grow
+  its metric's series within a scrape (an info metric's
+  `revision="<git sha>"` is such a value); the count of distinct values
+  MUST be.
+- `name-clash`: a metric name a collector's rules or derived entries make
+  that a rule or a derived entry of another collector makes with another
+  type, another help where both have a `description`, or other label names,
+  the rules' and `transform.labels` as `transform.remove_labels` and
+  `transform.rename_labels` leave them, and for a derived `sum` with `by`
+  the labels of `by` and `transform.labels` so left; reported for each of
+  the two, naming the other. A side that cannot know one of these MUST NOT
+  be compared by it: the names of a `python` script and of a `prometheus`
+  rule without a `name`, the type of a `prometheus` rule without a `type`,
+  the labels of a `prometheus` transform, and the labels of a derived
+  entry's series by series operation (§ 18.1).
+
+`--dry-run` MUST apply the rules to the names the configuration gives, a
+rule's `name` and the `name` of each derived entry that is not `hidden`
+(§ 18.1), of the `type` it is written with, `gauge` without one; and a debug run MUST apply them to those of its collector and
+to the names of the series the run made too, showing a finding once.
+
+A collector's `lint.ignore` MUST silence the rules it lists for that
+collector, and MUST take the ids above only: another fails the
+configuration, as any wrong value does.
 
 ---
 
@@ -26585,6 +26811,402 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   fails when the rows are written as that list
   (`TestAScriptIsHandedCSVRowsAsLongAsTheirBody`).
 
+## 34.192 Credentials and TLS of a static target
+
+- One caching `redis` collector logging in as `exporter` serves a stand-in
+  server that takes only `tenant`'s password through a static target's own
+  `username` and `password_file`, and a TLS stand-in that takes another
+  password for `exporter` through a target's own `password_file` and `tls`
+  block with its CA; a target with a wrong
+  password is refused rather than answered from the entry of the target
+  beside it, the collector's account is refused, a probe with `username`
+  and `password_file` parameters logs in as the collector, and the debug
+  report of a target shows `AUTH tenant ***` and not the password; the test
+  fails without the target keys
+  (`TestRedisStaticTargetsLogInWithTheirOwnAccounts`, § 42.14).
+- The same for an `ldap` collector binding as `cn=exporter`: a target's own
+  `bind_dn` and `password_file` bind, its own `tls` reaches an ldaps
+  stand-in, a wrong password is refused rather than served from the cache,
+  a probe naming `bind_dn` and `password_file` binds as the collector, and
+  the debug report masks the target's password
+  (`TestLDAPStaticTargetsBindWithTheirOwnAccounts`).
+- A plaintext `tcp` collector with a cache reads a TLS stand-in through a
+  target whose own `tls` names its CA; a target whose own block is
+  `tls: {}`, verified with the system roots, is refused by the handshake
+  rather than served the other's cache entry, the collector's plaintext
+  fails, and a probe's `tls` and `ca_file` parameters are not the probe's
+  to set (`TestTCPStaticTargetsSpeakTLSWithTheirOwnBlocks`).
+- Static targets that differ only in their password file, username,
+  `bind_dn`, or in any key of their own `tls` block, `tls: {}` and none
+  among them, get different response cache keys, which are also the keys
+  of a shared trip and of `failure_backoff`; it fails when the target's
+  `bind_dn` and `tls` are left out of the key
+  (`TestATargetsOwnAccountAndTLSAreInItsKey`).
+- A `redis` target's account and `tls` are checked at load: `username`
+  without its `password_file`, a name with a blank, a password file of
+  blanks, a placeholder in any of them or in the block, half a client
+  certificate, a `server_name` that is no host, `redis://` with the
+  target's own block and an ldap or ssh key are refused, and the label of a
+  target with its own block is `rediss://`
+  (`TestARedisStaticTargetsAccountAndTLSAreChecked`); an `ldap` target's
+  `bind_dn` without its own `password_file`, a `password_file` alone of a
+  target whose collector binds anonymously, a `bind_dn` that is no DN or
+  blanks, a placeholder, half a client certificate and `ldap://`
+  with its own block without the collector's `start_tls` are refused, and
+  its label is `ldaps://` (`TestAnLDAPStaticTargetsAccountAndTLSAreChecked`);
+  a `tcp` target's block is checked the same way and its label is `tls://`
+  (`TestATCPStaticTargetsTLSIsChecked`).
+- `--dry-run`'s file warnings of a `redis`, `ldap` and `tcp` static target
+  name the target and its own missing or empty password file and missing
+  CA file, and nothing for a target with none of its own
+  (`TestARedisStaticTargetsFilesAreReadByTheDryRun`,
+  `TestAnLDAPStaticTargetsFilesAreReadByTheDryRun`,
+  `TestATCPStaticTargetsFilesAreReadByTheDryRun`).
+- A static target file's `tls: {}` is read as a block that is set, the
+  scrape of the plaintext `redis` collector's target is then a TLS
+  handshake with a `rediss://` label, and the file is refused naming the
+  target for `redis://` with its own block, a `username` alone, and a
+  `bind_dn` (`TestAStaticTargetsOwnEmptyTLSBlockMakesARedisScrapeSpeakTLS`).
+- A plaintext `grpc` collector calls a TLS stand-in through a target whose
+  own `tls` names its CA, two targets with different blocks make two
+  connections, and their label is `grpcs://`
+  (`TestAGRPCStaticTargetCallsWithItsOwnTLS`); a target's block is checked
+  at load, `grpc://` with it refused, and `--dry-run` reads a target's own
+  CA and the collector's (`TestAGRPCStaticTargetsTLSIsChecked`).
+- A plaintext `sql` collector's targets with `tls: {}` and with their own
+  `server_name` each connect with TLS verified for their name, in pools of
+  their own, and the target with no block of its own in plaintext
+  (`TestASQLStaticTargetConnectsWithItsOwnTLS`); a target's block is held
+  to the collector's `sslmode` (`disable` refuses it, `require` refuses a
+  `ca_file`), and `--dry-run` reads its CA under the target's name
+  (`TestASQLStaticTargetsTLSIsChecked`).
+
+## 34.193 Rate limits per host
+
+- An entry of `rate_limits` matches its hosts in any case, with or without a
+  final dot and on every port and scheme, an IP address however it is
+  written, and a `*.example.com` wildcard every subdomain at any depth but
+  not `example.com` itself; the first entry that matches applies
+  (`TestHostRateLimitsMatchTheirHosts`).
+- A request takes its turn under the entry its host matches after the one
+  under its collector's own `rate_limit`; one the entry refuses gives back
+  its collector's turn and names the entry and the host; a collector without
+  a limit of its own waits on the entry; a request of a trip that is not
+  `http` or `graphite` takes no turn (`TestHostRateLimitsAreTakenWithTheCollectorsOwn`).
+- A reload that leaves an entry as it was keeps its bucket, one that changes
+  its rate, burst or hosts starts it from a full one, keeping its counts;
+  one that removes it forgets its bucket and counts, and an entry brought
+  back counts from zero since the reload; the shutdown forgets every bucket
+  (`TestHostRateLimitsFollowAReload`).
+- `rate_limits` is refused at load for an entry without a name, with an
+  invalid or a repeated one, without hosts, with a host that has a port, a
+  scheme, a misplaced `*`, a wildcard over an address, is empty or is a
+  bracketed name, a host listed twice in one entry or two, and a
+  `rate_limit` that `request.rate_limit` would refuse, every mistake
+  reported; `burst` is filled in as 1 (`TestHostRateLimitsAreCheckedWhenTheyLoad`).
+- Two `http` collectors without limits of their own asking one host share
+  its entry's bucket: the second is refused past its deadline, naming the
+  entry, or waits for its turn; a debug run waits and is not counted, and its
+  trace names the entry (`TestHostRateLimitIsSharedByEveryCollector`).
+- A collector's own `rate_limit` applies beside an entry that has turns to
+  spare (`TestTheCollectorsRateLimitAppliesBesideTheHosts`).
+- A followed redirect hop to an entry's host takes a turn under it while the
+  request it follows, to another host, takes none, and a login request takes
+  one as the request it logs in for does (`TestHostRateLimitCountsRedirectsAndLogins`).
+- `rate_limits` loads from the top of the configuration file, its mistakes
+  reported with the configuration's (`TestRateLimitsLoadWithTheConfiguration`).
+- A probe of a second collector to a host the first used up the entry's
+  turns of is refused and counted in
+  `http_exporter_host_rate_limit_refused_total{rule}`; a reload that leaves the
+  entry as it was keeps its bucket, one that changes it starts it full and
+  keeps its counts, and one that removes it ends its series
+  (`TestHostRateLimitsAreSharedAndFollowReloads`).
+
+## 34.194 The chart refuses to expose the exporter without its authentication
+
+- An Ingress, a `LoadBalancer` Service and a `NodePort` Service each fail
+  rendering without `webAuth.enabled` and `exposure.allowWithoutWebAuth`, the
+  message naming the setting that exposes the exporter, the open proxy to the
+  targets `allowed_targets` and `denied_targets` let through, enabling
+  `webAuth` and setting `exposure.allowWithoutWebAuth` (CHART § 33.4).
+- Each of the three renders its Ingress or Service with `webAuth` enabled,
+  and with `exposure.allowWithoutWebAuth: true`; a `ClusterIP` Service and a
+  `LoadBalancer` type on a Service that is not rendered render with neither,
+  and `exposure.allowWithoutWebAuth: false` lets no Ingress render.
+
+## 34.195 Metric lint
+
+- `counter-total` fires on a counter not named `_total`, whose message
+  names it as the text format and OpenMetrics write it and the name to give
+  it, on a counter named `_totals` and on a gauge named `_total`, and not on
+  a counter named `_total`, a gauge named `_totals` or an untyped rule of
+  either name (§ 30.1a).
+- `unit-suffix` gives the base unit's name and the `scale` for each unit
+  that is not a base unit at a name's end or before a counter's `_total`,
+  and the `seconds`, `timestamp_seconds` or `bytes` name for a duration,
+  time or memory word without its unit; it gives nothing for names with
+  `seconds`, `bytes` or `ratio`, for `timeout`, `timeouts`, `size`, `page`,
+  `storage` and `runtime`, for `ms` not at the end, for `us` and `ns`
+  without a duration word, and for `kbytes` (§ 30.1a).
+- The names of a `python` collector's rules and of a `prometheus` rule
+  without a name, and the type of one without a type, are not linted from
+  the configuration, and a run's series of a script are (§ 30.1a).
+- The name linted and named is the exported one, with `metrics_prefix`
+  (§ 30.1a).
+- `unbounded-label` fires on a label of 101 distinct values in a run, on a
+  UUID, 16 hex digits with or without `0x`, 10 digits, an RFC 3339 time, a
+  time with an offset and a date, and not on 100 values, 15 hex digits, 16
+  letters past `f`, 9 digits, a dotted version, an address with its port, a
+  UUID's start or a time of day; the configuration alone gives none of it,
+  and a value quoted is cut at 64 bytes between two characters (§ 30.1a).
+- `name-clash` reports a name two collectors make with another type, help or
+  labels, once for each, naming the other; not where a rule has no
+  description, not after `transform.rename_labels` and `remove_labels` make
+  the labels alike, not for alike rules, a `python` collector's or an
+  untyped `prometheus` rule's names, nor by the labels of a typed
+  `prometheus` rule, and not against a collector of the same name (§ 30.1a).
+- `lint.ignore` silences each rule it lists for its collector alone, the
+  other collector of a clash still reporting it, and every id of
+  `model.LintRules` fires in the test, so each is a rule applied (§ 30.1a).
+- A finding the configuration and a run's series both give is shown once
+  (§ 30.1a).
+- `lint.ignore` loads every rule id, and `lint: {}`, and refuses an unknown
+  id naming the collector, the id and the ids it takes, and an unknown key
+  of `lint` (§ 30.1a).
+- `--dry-run` lists the findings under `details.lint` of the `config` check,
+  by collector, rule, metric and message, logs each at WARN as `metric
+  lint`, and exits `0` with status `ok`; `lint.ignore` takes them out of the
+  list, a configuration without advice has no `details.lint`, and a failing
+  configuration with advice still exits `1` (§ 30.1).
+- A debug probe's report has a `Lint` section after the logs and before the
+  metrics with the `counter-total`, `name-clash` and `unbounded-label`
+  findings of the run, its verdict and metrics are those of the probe
+  without debug, and with the three rules ignored it shows `none` and the
+  rules ignored (§ 42.17).
+- The debug page answers a written collector's findings, against the
+  configured collectors, under `lint` with collector, rule, metric and
+  message, has them in its text report, and the page shows them (§ 42.17).
+- `lint.ignore[]` is in the schema table: `unit-suffix` taken and
+  `unit_suffix` refused by both the schemas and the exporter, the key
+  absent taken (§ 24.3).
+
+## 34.196 Derived series
+
+- A regex collector's derived entries compute each operation: a sum and a
+  difference of two counters and a ratio, series by series of the same
+  labels; a sum `by: [queue]` and a sum `by: []` of one family; and a ratio
+  over a hidden sum, the hit ratio of hits / (hits + misses), the sum not
+  exported; a ratio over 0 of one label set makes no series, and an entry
+  gets its type and help (§ 18.1).
+- A series without a partner of identical labels in the other operand makes
+  no derived series, and one that has one does (§ 18.1).
+- A ratio over 0, 0 / 0, and a sum with an infinite operand make no series
+  and no failure, while a difference beside them does (§ 18.1).
+- A csv collector derives a difference, a ratio and a `by: []` sum from its
+  columns' series, row by row (§ 18.1).
+- A jq collector's derived series get `transform.labels`, `rename_labels`,
+  `metrics_prefix` and `name_escaping`, the entry reading the rule's name and
+  its label as the rule writes them (§ 18.1).
+- Exported derived series count against `limits.max_metrics`, a scrape over
+  it failing with the count error, and a hidden entry's series are not
+  counted (§ 18.1).
+- Under a prometheus pass-through an operand no rule names is read from the
+  target's series; one that is a histogram makes no series and is reported
+  as the entry's failure under log; the derived series are added without
+  writing past the decoded series' end (§ 18.1).
+- Entries chain: a later entry reads an earlier, hidden or not, which reads
+  the rules' series after `scale` and `value_map` (§ 18.1).
+- `CheckDerived` refuses, in words naming the entry and what to write: no
+  name, an invalid name, a rule's name, a histogram's `_bucket`, a name
+  twice, a histogram type, no operation, two, a sum of one without `by`, a
+  ratio of three, `by` on a ratio, `by` on a sum of two, a `by` label twice
+  or invalid, an unknown operand, a later entry, the entry itself, a
+  histogram rule, a hidden entry nothing reads, and a name too long once
+  prefixed; it reports every bad entry, gives an entry without a type
+  gauge, and takes an unknown operand under prometheus and python (§ 18.1).
+- A configuration with `derived` loads: `by: []` is kept apart from `by`
+  left out, a type defaults to gauge; an unknown operand, a number as an
+  operand and an unknown key `on` are refused at load, and a python
+  collector's operand that no rule names loads (§ 18.1, § 24.3).
+- A debug probe's report marks a derived family with its operation and
+  operands under its exported name, lists the entries that gave no series,
+  and shows nothing of a hidden entry (§ 18.1).
+- Through `/probe`, a derived ratio is exported with its HELP, TYPE,
+  `transform.labels` and prefix, its hidden operand is not, and
+  `/self-metrics` has `http_exporter_rule_failures_total` of each entry, 1
+  for an entry whose pass-through operand was a histogram (§ 18.1).
+- examples/tcp's memcached collector exports `memcached_get_hit_ratio 0.9`
+  from 90 hits and 10 misses, and not its hidden sum (built with
+  `request_type_tcp`).
+- A derived entry whose pass-through operand is a histogram is logged as
+  failed once for its target, and as recovered once the operand is a gauge
+  and the entry makes its series again (§ 18.1).
+
+## 34.197 The static targets' status page
+
+- The static targets' status page has a row per target saying how its last scrape went: success, failed with the error of the HTTP status, skipped by backoff with the time the backoff ends and the failures it counts, stale result served with `stale` set, and not yet scraped without any scrape field; the summary counts 7 targets, 5 failing, 1 not yet scraped, and the failing targets come first, each part in name order.
+- A second scrape of a cached target is shown as answered from the cache, in the JSON and on the page, and the first is not.
+- The HTML page shows every value the JSON has for each row, escaped: a label value and an error quoting a target's page that are markup appear as text, never as tags; the summary line is there and the landing page is linked relatively.
+- A target whose URL carries a user, password and token query parameter is shown, in its target and in its connection error, with none of them, on the page and in the JSON.
+- The page and its JSON answer 401 without the exporter's Basic Auth credential, 200 to GET and HEAD with it, 405 with `Allow: GET, HEAD` to POST, and 400 to an unknown `format`.
+- Without static targets the status page answers 404 and the landing page does not link it; with them the landing page links it.
+- The page moves with `--web.static-targets-path` and links the landing page from its depth; a self-metrics path on the status page's is refused naming the status page.
+- In allocator mode the page says it shows the targets the allocator gave this replica, and the JSON has `allocator_mode` true.
+- The chart fails rendering with `selfMetrics.path` equal to `staticTargets.path` followed by `/status`, default or set, and renders with a path beside it.
+
+## 34.198 Status records forgotten with their targets, backoff skips and following in order
+
+- A static target whose scrape failed, removed by a new static target file and brought back by the next with its name, collector and address as they were, each file followed as a reload follows it and nothing reading the static targets endpoint between, is shown on the status page as not yet scraped, with no failures, no error and no last scrape; it fails while the removal leaves the failed scrape's record in place.
+- A static target exported over OTLP that a reload removes has its result, its last success and its status page record forgotten at the reload, nothing having read the static targets endpoint, and so does one a bundle from the allocator (`ReloadReplacing`) moves away; the other target's are kept.
+- A target that failure_backoff backs off from after two failed scrapes, scraped three more times, is shown as skipped by backoff and failing, with 2 consecutive failures, the HTTP status error of the failed scrape and that scrape's time, a later last scrape, and the backoff's own failure count; the target was sent two requests. It fails while a skipped scrape counts as a failure and replaces the error with the backoff's.
+- Two followings made close together, the earlier configuration's held after it is made and before the request types are told of it while the later is made and told, leave the later configuration's entries of rate_limits in force; it fails while the earlier following, told last, puts its own entries back.
+
+## 34.199 Linear lint, wildcard shadowing refused and per-process host limits
+
+- The lint of a debug run of 100,000 distinct metric names finds each
+  name's type in one pass over the series and ends within a bound a scan of
+  every series for each name far exceeds (`TestALintRunIsLinearInItsSeries`).
+- The lint of a configuration of 10,000 collectors works out each
+  collector's names once and ends within a bound that working them out
+  anew for each collector far exceeds (`TestAConfigurationLintIsLinearInItsCollectors`).
+- `rate_limits` is refused at load for a host that an earlier entry's
+  wildcard covers, an exact name or a narrower wildcard, at any depth,
+  naming both entries and saying to list the narrower first; the wildcard's
+  parent name is not covered, and a narrower host listed before the
+  wildcard, or covered by a wildcard of its own entry, loads
+  (`TestAHostAnEarlierWildcardCoversIsRefused`).
+
+## 34.200 Lint of one series and of derived entries, and derived entries in a pass-through
+
+- A metric of one series in a run, `build_info{revision="<40-hex git sha>"}`,
+  gives no unbounded-label finding on the shape of its value, and two series
+  of such values give one; the test fails when the shape of a value is held
+  against a metric of one series (§ 30.1a).
+- The configuration lint, which `--dry-run` reports, gives counter-total on a
+  derived counter not named `_total`, unit-suffix on a derived `_percent`
+  of no type (a gauge), and name-clash between a derived counter and another
+  collector's gauge rule of its name, told to both collectors, and between a
+  derived `sum` `by: [pool]` and another collector's rule labelled `zone`;
+  a hidden entry is not linted and an element-wise entry's labels are not
+  compared. The test fails when the lint reads the rules alone (§ 30.1a).
+- Under a prometheus pass-through, a derived entry whose name the target
+  exports makes no series and is the entry's failure under log, the target's
+  family left as it came; an operand the target does not export gives no
+  series, no failure, and the rule report names it under the entry and
+  under the entry that reads a hidden one. The test fails when the entry's
+  series are added beside the target's, and when no absent operand is
+  reported (§ 18.1).
+- End to end, the probe of such a pass-through answers 200 with the target's
+  family, the entry's failure logged once and counted twice in
+  `http_exporter_rule_failures_total` over two probes, and the debug report
+  lists `failed_ratio (operand requests_failed_total: no series)` among the
+  entries that gave no series and does not mark the target's family as
+  derived; the test fails, the probe answering 502, without the run-time
+  check (§ 18.1).
+
+## 34.201 Every spelling of a rate-limited host
+
+- An entry of `rate_limits` matches every spelling of its host a request
+  may use: an IPv4 address mapped into IPv6 matches the entry of the IPv4
+  address and the other way round, written with or without brackets and in
+  any case; an IPv6 address with a zone matches the entry of the address,
+  and another address with that zone matches none; an `xn--` name matches
+  in any case and with a final dot, a wildcard over one its subdomains and
+  not itself (§ 5.1).
+- `rate_limits` is refused at load for a mapped address after its IPv4
+  form, plain or in brackets, as the same host listed twice, and for an
+  `xn--` name in capitals with a final dot under an earlier entry's
+  wildcard over its parent, naming both entries; for a name or wildcard
+  with a character outside ASCII, naming the character and the `xn--` form
+  to write; and for an IPv6 address with a zone, plain or in brackets,
+  naming the zone (§ 5.1).
+- A request whose host has a character outside ASCII, to the host of an
+  entry written in its `xn--` form, is refused by the target policy twice
+  in a row without waiting or being counted under the entry (§ 5.1,
+  § 26.1).
+
+## 34.202 The chart's exposure checks in make and CI, and webAuth read by the configuration
+
+- `TestChartRefusesToExposeTheExporterWhoseConfigurationIgnoresWebAuth`
+  (`test/repository/chartexposure_test.go`): with `webAuth.enabled`, an
+  Ingress, a `LoadBalancer` and a `NodePort` Service fail rendering when the
+  chart's `config.yaml` has no `web`, a `web` that is not a mapping,
+  `web.basic_auth` disabled, a password written in place, a `password_file`
+  elsewhere, or the default mount path's files beside another
+  `webAuth.mountPath`; the message names the setting, the expected
+  `<webAuth.mountPath>/password` and the opt-out.
+- `TestChartExposesTheExporterWhoseConfigurationReadsWebAuth`
+  (`test/repository/chartexposure_test.go`): an Ingress with `webAuth`
+  renders when `password_file` is the mounted file, at the default mount path
+  and at another written with a trailing and a doubled slash, and with the
+  opt-out, `config.enabled: false` (an external ConfigMap, not checked) or a
+  `config.yaml` that is not YAML; `webAuth` with a configuration that ignores
+  it renders when nothing is exposed.
+- `TestChartExposesTheExporterWithWebAuthOrTheOptOut`
+  (`test/repository/chartexposure_test.go`): the `webAuth` way out renders
+  with `testdata/chart/web-auth.yaml`, a configuration that reads its files.
+- `TestMakeHelmTestAndCICheckTheChartCasesTheGoTestsCover`
+  (`test/repository/helmtest_test.go`): both lists also refuse an Ingress, a
+  `LoadBalancer` and a `NodePort` Service without `webAuth` and with `webAuth`
+  beside the default configuration, render each with
+  `exposure.allowWithoutWebAuth=true` and with `webAuth` and
+  `testdata/chart/web-auth.yaml`, and refuse `selfMetrics.path` at the static
+  targets' status page, at the default and at another `staticTargets.path`.
+
+## 34.203 TLS of an http or graphite static target
+
+- `TestAnHTTPStaticTargetsOwnTLSBlockIsTheOneItsRequestIsMadeWith`
+  (`internal/fetch/targettls_http_test.go`): an `http` static target's own
+  `tls` block replaces the collector's whole: a server that verifies only
+  the target's client certificate answers the target and refuses the
+  collector's; a block without `ca_file` does not take the collector's CA;
+  `tls: {}` verifies with the system roots alone; and of two servers each
+  verified by a CA of its own, each target block reaches only the one its CA
+  verifies (§ 42.14).
+- `TestStaticTargetsWithTheirOwnCertificatesShareNoConnection`
+  (`internal/fetch/targettls_http_test.go`): two static targets of one
+  collector and one server, each with a client certificate of its own, are
+  answered on connections made with their own certificate over six
+  alternating requests, which make two connections, one per target
+  (§ 42.15b).
+- `TestStaticTargetsWithTheirOwnCertificatesShareNoLoginToken`
+  (`internal/fetch/targettls_http_test.go`): two static targets of one
+  collector logging in at one URL, each with a client certificate of its
+  own, make one login each and are never sent the other's token: the server
+  gives a token for the certificate its login was presented and refuses one
+  given to another certificate (§ 42.14).
+- `TestAStaticTargetsClientCertificateIsNotPresentedToAnUntrustedHost`
+  (`internal/fetch/targettls_http_test.go`): with a collector that has no
+  client certificate, a static target's own has a redirect over `https` to a
+  host that is not trusted refused before any connection is made there,
+  naming the static target's certificate; the same redirect without the
+  target's block is followed (§ 42.15c, rule 5a).
+- `TestAnHTTPStaticTargetsTLSIsChecked`
+  (`internal/fetch/targettls_http_test.go`): a block, `tls: {}` and a block
+  on an `http://` target are taken; half a client certificate, a
+  `server_name` that is no host, a placeholder and `insecure_skip_verify`
+  beside the block are refused; a `password_file` does not apply.
+- `TestAnHTTPStaticTargetsFilesAreReadByTheDryRun`
+  (`internal/fetch/targettls_http_test.go`): `--dry-run` warns, under the
+  target's name, of an `http` static target's own CA file that is not there,
+  and of nothing for `tls: {}` or a target without a block of its own.
+- `TestAGraphiteStaticTargetsOwnTLSBlockIsTheOneItsRequestIsMadeWith`
+  (`internal/fetch/targettls_graphite_test.go`): a render API that refuses
+  the collector's client certificate answers a `graphite` static target's
+  own; `tls: {}` is taken, and half a client certificate and
+  `insecure_skip_verify` beside the block are refused at load.
+- `TestAGraphiteStaticTargetsFilesAreReadByTheDryRun`
+  (`internal/fetch/targettls_graphite_test.go`): `--dry-run` warns, under
+  the target's name, of a `graphite` static target's own CA file that is not
+  there.
+- `TestHTTPStaticTargetsConnectWithTheirOwnTLSBlocks`
+  (`internal/exporter/targettls_http_test.go`): of three static targets of a
+  caching http collector without a client certificate, the one with its own
+  CA and certificate is up and its metric served, while the collector's and
+  the one with `tls: {}` are down, not answered from its cache entry; a
+  probe naming `tls`, `cert_file` and `key_file` parameters is not answered
+  with the certificate.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -27516,8 +28138,9 @@ and otherwise with the collector's `request.tls`, never with an
 `insecure_skip_verify` a probe parameter or a static target sets for the
 target.
 
-A token MUST be kept, by the collector, the login block, the URL the
-login was sent to and the `Host` it was sent with, and sent on every request
+A token MUST be kept, by the collector, the login block, the `tls` block the
+login was made with (the login's own, a static target's or the
+collector's), the URL the login was sent to and the `Host` it was sent with, and sent on every request
 until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
 else `ttl`, else until the target refuses it. Requests that need a token
@@ -27533,7 +28156,8 @@ meanwhile, and the request MUST be sent once more with the token of a new
 login, whatever its method; that request MUST NOT be one of
 `retry.attempts`, and MUST be made within the trip's deadline. At most 1000
 tokens MUST be kept, the one used longest ago dropped first, and a reload
-MUST drop the tokens of a login it changes or removes.
+MUST drop the tokens of a login it changes or removes, or whose `tls` block
+it changes.
 
 A login that fails MUST fail the trip in the `login` stage, saying where it
 went, with its query's values masked, and why: for an answer that is not
@@ -28541,7 +29165,35 @@ target only. An `http` or `graphite` target MUST also accept static request
 `headers`, and an `http`, `graphite` or `grpc` target its own target
 credentials, as inline or file-backed basic authentication or a bearer
 token; an `sshfile` or `sql` target MAY instead name its own user and key
-or password files, as § 5.1 says for each. A request that carries an
+or password files, a `redis` target its own `username` and `password_file`
+and an `ldap` target its own `bind_dn` and `password_file`, as § 5.1 says
+for each. A `redis`, `ldap`, `tcp`, `sql`, `grpc`, `http` or `graphite`
+target MAY name its own `tls` block, which MUST replace the collector's whole
+block for that target, no key of the collector's being taken for a key it
+leaves out; written, even as `tls: {}`, it MUST ask for TLS, so a target MAY
+ask for TLS its collector does not but MUST NOT leave out TLS its collector
+asks for. For `http` and `graphite`, whose URL's scheme decides whether TLS
+is spoken, `tls: {}` MUST verify with the system roots alone, a block on an
+`http://` target MUST be taken as the collector's is, and the target's block
+MUST be the one every request of the target's trips is made with: its
+pages, every hop of a followed redirect, whose client certificate rule
+(§ 42.15c, rule 5a) MUST apply with the target's certificate, and its
+login, unless the login block has a `tls` of its own; beside it the
+target's `insecure_skip_verify` MUST be refused at load. A target's own
+account and `tls` block MUST be checked at load as the collector's are —
+cert and key files both or neither, a `username` or `bind_dn` with its
+`password_file`, a target address that asks for plaintext refused beside a
+block of its own — MUST NOT hold a placeholder, and MUST NOT be settable by
+any probe parameter. They MUST be part of every key that tells the target's
+requests apart: its cache key, the key of the trip it shares with identical
+requests, `failure_backoff`'s key, and the key of every connection kept for
+it, a `sql` pool, a `grpc` connection, an `sshfile` connection or an `http`
+connection pool (§ 42.15b), and, for `http` and `graphite`, the key of the
+login token kept for it, so two targets that differ in them never share an
+answer, a trip, a backoff, a connection or a token. Their files MUST be read when the scrape needs them, as the
+collector's are, and by `--dry-run`, which MUST warn under the target's name
+of one a scrape would fail on; a debug report MUST mask a target's password
+as it masks the collector's. A request that carries an
 `Authorization` of its own — a static target's credential, or one a probe
 forwards — sends it instead of the collector's, and the collector's
 credential files MUST NOT be read for it: a missing or empty one MUST fail
@@ -28733,6 +29385,59 @@ metrics with its labels, or its stale result, and its health result — at
   (§ 42).
 
 The endpoint MUST be served, empty, without a static target document.
+
+The exporter MUST serve a status page of the static targets at the static
+targets path followed by `/status`, `/static-targets/status` by default, for
+people who cannot ask Prometheus:
+
+- It MUST have one row per static target in force, with its name, its
+  collector, its target as its health series show it (with any credential
+  withheld, as in the logs), its labels, its interval and whether it sets
+  `export_via_otlp`; and, once it has been scraped, when its last scrape
+  began, how long ago, how long it took, and its result: `success`,
+  `failed`, `stale result served` (a failed scrape answered with the stale
+  result under `cache.stale_if_error`) or `skipped by backoff` (a scrape
+  `failure_backoff` kept from the target); and whether the response cache
+  answered it. A target not yet scraped MUST be shown as `not yet scraped`.
+  A target whose collector or address a reload changed MUST be shown as not
+  yet scraped until its own scrape.
+- Each row MUST show the consecutive failed scrapes, the error of the last
+  failed scrape, kept through later successes, with when that scrape began,
+  and, while `failure_backoff` keeps scrapes from the target, until when, or
+  that the try after the wait is in progress, with the failures the backoff
+  counts. A scrape skipped by backoff MUST be shown as its own result,
+  `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
+  MUST leave the error of the last failed scrape, and when it began, as they
+  were. The error MUST be the text the
+  log has, with every URL's credentials already withheld, masked again for
+  what reads as a credential, and cut to the bound of a failure's text
+  (§ 25); nothing else of a target's answer MAY be shown.
+- A summary line MUST give the number of targets, of those failing, and of
+  those not yet scraped; the failing targets MUST come first, each part in
+  name order.
+- Every value MUST be HTML-escaped, the page MUST NOT refresh itself or run
+  a script, and it MUST be served as the other pages are (no caching, the
+  pages' Content-Security-Policy).
+- `?format=json` MUST serve the same rows and summary as JSON; another
+  `format` MUST be answered `400`.
+- In allocator mode the page MUST say that it shows the targets the
+  allocator gave this replica.
+- Without a static target in force the page MUST answer `404`; a reload that
+  adds targets MUST make it served without a restart.
+- It MUST answer `GET` and `HEAD`, and `405` otherwise with `Allow: GET,
+  HEAD`, and MUST be protected by `web.basic_auth` like every endpoint but
+  `/health` and `/ready`.
+- What it keeps of a target MUST be one record replaced by each scrape, and
+  MUST be forgotten with the target: when a reload, or a bundle from the
+  allocator, puts in force static targets without it, whether or not the
+  static targets endpoint is read, together with the target's stored result
+  and last success. A target brought back under its name MUST be shown as
+  not yet scraped, with no failures and no error, until its own scrape; a
+  scrape of the removed target that ends after the removal MUST record
+  nothing.
+- A self-metrics path equal to the status page's path MUST make the exporter
+  exit with status 2, as a self-metrics path equal to the static targets
+  path does.
 
 Every replica of the exporter scrapes every static target; running static
 targets with more than one replica, or with autoscaling, contacts each target
@@ -29250,7 +29955,7 @@ The Helm chart MUST expose both as list-valued `params` entries on each
 Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
-`server_name` — and HTTP/2
+`server_name`, a static target's own `tls` block being its set — and HTTP/2
 choice, shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
@@ -29357,8 +30062,9 @@ probe or a static target.
    rule 3's headers when it is not trusted, unless rule 5a refuses it.
 
    5a. The collector's TLS client certificate (`request.tls.cert_file` and
-   `key_file`) is a credential that every TLS connection of the request
-   presents. When the collector has one, a redirect over `https` to a
+   `key_file`), or a static target's own, in the `tls` block that replaces
+   the collector's for it (§ 42.14), is a credential that every TLS
+   connection of the request presents. When the request has one, a redirect over `https` to a
    destination that is not trusted MUST be refused before any connection is
    made there, with an error that names the redirect's URL, redacted as in
    rule 5, the destination, the certificate and
@@ -29689,7 +30395,8 @@ and MUST answer `200` with a `text/plain` report of it, with
   and outcome, a redirect with the headers it was sent and the names of the
   ones withheld from it (§ 42.15c); a request of `request.pagination` with
   the number of the page it asked for, `(page 2)` (§ 5.1, `http`); a request
-  that waited for its turn under `request.rate_limit` with how long and why,
+  that waited for its turn under `request.rate_limit`, or under an entry of
+  `rate_limits` naming the entry, with how long and why,
   its duration counted from when it was sent (§ 5.1, `http`); a `grpc`
   call with its method, metadata and code; a `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
@@ -29716,6 +30423,11 @@ and MUST answer `200` with a `text/plain` report of it, with
   empty name;
 - every line the trip logged, at every level whatever `--log.level` is,
   including rule failures and what a Python script printed;
+- a `Lint` section, after the logs, with the metric lint's findings on the
+  collector, against the configuration in force, and on the series the run
+  made (§ 30.1a), one a line as `[<rule>] metric "<name>": <message>`, or
+  `none`, and the rules the collector's `lint.ignore` silences; the same
+  for a debug scrape and a run of the page;
 - the exposition a probe would have served.
 
 What a report shows is the target's, the scraper's or a script's to make as
@@ -29933,7 +30645,9 @@ report says it; `series`, the exposition a probe would have served, to the
 byte; `requests` and `response`, what was sent and read, redacted and
 bounded as the text report redacts and bounds them; `stages` and `notes`,
 the stages and the warnings the load would give with every line the run
-logged; and `report`, the text report of a debug probe, whose first line names it a
+logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
+`collector`, `rule`, `metric` and `message`, which the page MUST show; and
+`report`, the text report of a debug probe, whose first line names it a
 debug run, the collector, whether it was written on the page, and what it
 read.
 

@@ -6,11 +6,12 @@ import "html/template"
 // from the configuration in force, the response it is run on — pasted, or at
 // --web.debug=full a target fetched through a configured collector or a
 // static target's scrape — and what the run gave: the series a probe would
-// answer, the requests, the response, the stages, what was logged and the
-// whole debug report. It runs on demand and, while Run as you type is on, a
-// moment after each edit; a run cancels the one before it. The collectors
-// page links each collector here as ?collector=<name>, with &target=<target>
-// at full, and the page starts from what the link names.
+// answer, the requests, the response, the stages, the metric lint's advice,
+// what was logged and the whole debug report. It runs on demand and, while
+// Run as you type is on, a moment after each edit; a run cancels the one
+// before it. The collectors page links each collector here as
+// ?collector=<name>, with &target=<target> at full, and the page starts from
+// what the link names.
 
 type debugPage struct {
 	// Full offers fetching a target and scraping a static target,
@@ -176,6 +177,10 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <pre id="series"></pre>
 <h3>Stages</h3>
 <ul class="stages" id="stages"></ul>
+<div id="lint-part" hidden>
+<h3>Lint</h3>
+<pre id="lint"></pre>
+</div>
 <div id="notes-part" hidden>
 <h3>Logged</h3>
 <pre id="notes"></pre>
@@ -304,7 +309,7 @@ function show(answer, response, took) {
     statusLine.textContent = response.status + ": refused in " + took + " ms";
     series.className = "error";
     series.textContent = answer.error;
-    for (const part of ["notes-part", "requests-part", "response-part"]) $(part).hidden = true;
+    for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
   }
@@ -318,6 +323,9 @@ function show(answer, response, took) {
     item.textContent = stage.stage + " " + stage.outcome + " in " + stage.took + (stage.note ? ": " + stage.note : "");
     stages.append(item);
   }
+  const lint = answer.lint || [];
+  $("lint-part").hidden = lint.length === 0;
+  $("lint").textContent = lint.map((f) => "[" + f.rule + "] metric " + JSON.stringify(f.metric) + ": " + f.message).join("\n");
   const notes = answer.notes || [];
   $("notes-part").hidden = notes.length === 0;
   $("notes").textContent = notes.join("\n");

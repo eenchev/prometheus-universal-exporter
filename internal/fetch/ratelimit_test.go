@@ -22,14 +22,19 @@ type rateClock struct {
 	waits []time.Duration
 }
 
-// freshRateLimits gives the test buckets and counts of its own and a clock
+// freshRateLimits gives the test buckets and counts of its own, of
+// request.rate_limit and of rate_limits, no entry of rate_limits, and a clock
 // that only the waits move, from now, so the deadlines of real contexts
 // still hold against it.
 func freshRateLimits(t *testing.T) *rateClock {
 	t.Helper()
 	clock := &rateClock{now: time.Now()}
 	previous, previousNow, previousSleep := rateLimits, rateLimitNow, rateLimitSleep
-	rateLimits = newRateLimiterSet()
+	previousHosts, previousRules := hostRateLimits, hostRateLimitRules.Load()
+	rateLimits, hostRateLimits = newRateLimiterSet(), newRateLimiterSet()
+	hostRateLimitRules.Store(nil)
+	resetHostRateLimits()
+	t.Cleanup(func() { hostRateLimits = previousHosts; hostRateLimitRules.Store(previousRules) })
 	rateLimitNow = func() time.Time {
 		clock.mu.Lock()
 		defer clock.mu.Unlock()

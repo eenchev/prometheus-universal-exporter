@@ -465,12 +465,16 @@ jobs:
               exit 1
             fi
           done
-          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true selfMetrics.path=/static-targets/status; do
             if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
               echo "helm template accepted $bad" >&2
               exit 1
             fi
           done
+          if helm template test charts/prometheus-universal-exporter --set staticTargets.path=/static --set selfMetrics.path=/static/status >/dev/null 2>&1; then
+            echo "helm template accepted selfMetrics.path at the static targets' status page" >&2
+            exit 1
+          fi
           if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then
             echo "helm template accepted an extraArgs entry that is not a flag" >&2
             exit 1
@@ -511,6 +515,44 @@ jobs:
             echo "helm template accepted an Ingress without the Service it routes to" >&2
             exit 1
           fi
+        if: steps.changes.outputs.chart == 'true'
+      - name: Reject an exporter exposed outside the cluster without authentication
+        run: |
+          # /probe sends requests on its caller's behalf, so an exporter an Ingress
+          # or a LoadBalancer or NodePort Service exposes without authentication is
+          # an open proxy to its targets. webAuth only mounts the Secret, so the
+          # configuration the chart renders has to point web.basic_auth at its
+          # files; exposure.allowWithoutWebAuth says callers authenticate elsewhere.
+          if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true >/dev/null 2>&1; then
+            echo "helm template accepted an Ingress without webAuth" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then
+            echo "helm template accepted an Ingress with webAuth beside a configuration whose web.basic_auth does not read its files" >&2
+            exit 1
+          fi
+          helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set exposure.allowWithoutWebAuth=true >/dev/null
+          helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
+          if helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer >/dev/null 2>&1; then
+            echo "helm template accepted a LoadBalancer Service without webAuth" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then
+            echo "helm template accepted a LoadBalancer Service with webAuth beside a configuration whose web.basic_auth does not read its files" >&2
+            exit 1
+          fi
+          helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set exposure.allowWithoutWebAuth=true >/dev/null
+          helm template test charts/prometheus-universal-exporter --set service.type=LoadBalancer --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
+          if helm template test charts/prometheus-universal-exporter --set service.type=NodePort >/dev/null 2>&1; then
+            echo "helm template accepted a NodePort Service without webAuth" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set webAuth.enabled=true --set webAuth.secretName=s >/dev/null 2>&1; then
+            echo "helm template accepted a NodePort Service with webAuth beside a configuration whose web.basic_auth does not read its files" >&2
+            exit 1
+          fi
+          helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set exposure.allowWithoutWebAuth=true >/dev/null
+          helm template test charts/prometheus-universal-exporter --set service.type=NodePort --set webAuth.enabled=true --set webAuth.secretName=s --set-file 'config.data.config\.yaml=testdata/chart/web-auth.yaml' >/dev/null
         if: steps.changes.outputs.chart == 'true'
       - name: Reject a garbage collector target that collects nothing, is 0 or has two sources
         run: |

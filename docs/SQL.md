@@ -374,7 +374,7 @@ its `target`, and may set under its `request` its `timeout`, its own account
 and credential file — `username`, and `password_file` or, for `snowflake`,
 `private_key_file`, either replacing the collector's credential file, and
 none of them holding a placeholder, which is refused when the file loads
-since no probe fills it — and
+since no probe fills it — its own `tls` block, and
 `connections`, whose keys each replace the collector's but `max_targets`,
 which is the collector's across its targets; a target whose `connections`
 change a setting is a target of its own for the limits, counted once more in
@@ -395,9 +395,24 @@ targets:
     request:
       username: legacy_metrics
       password_file: /etc/exporter/db/legacy-password
+      tls:
+        ca_file: /etc/exporter/db/legacy-ca.pem
       connections:
         max_per_target: 1
 ```
+
+A target's `tls` replaces the collector's whole block for that target, a key
+it leaves out not being taken from the collector's, and is held when the
+file loads to what the driver can honour with the collector's `options`, as
+the collector's is: a block beside an option that switches TLS off, or a
+`ca_file` or `server_name` beside one that verifies nothing, is refused.
+Written, even as `tls: {}`, it asks for TLS as the collector's would; a
+target cannot turn off the TLS its collector asks for. Its files are read
+when a connection is made, and by [`--dry-run`](CONFIGURATION.md#dry-run),
+under the target's name. A target's account, credential files and block are
+part of the key of its [pool](#connections) and of its
+[cache key](CONFIGURATION.md#response-caching), so targets that connect
+differently share no connection and no answer.
 
 ## Errors and self-metrics
 

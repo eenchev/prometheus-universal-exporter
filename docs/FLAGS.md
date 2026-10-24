@@ -9,7 +9,7 @@ in [Running it](ALLOCATOR.md#running-it) on its page.
 | `--config.file` | `/etc/prometheus-universal-exporter/config.yaml` | The configuration document. |
 | `--web.listen-address` | `:8080` | Address the HTTP endpoints listen on. |
 | `--web.self-metrics-path` | `/self-metrics` | Path of the exporter's own metrics, served there and nowhere else; `/metrics` for the conventional path. A path another endpoint uses is refused. |
-| `--web.static-targets-path` | `/static-targets` | Path the static targets' latest results are served at, for Prometheus to scrape. A path another endpoint uses is refused. |
+| `--web.static-targets-path` | `/static-targets` | Path the static targets' latest results are served at, for Prometheus to scrape; their [status page](STATIC-TARGETS.md#status-page) is served at this path followed by `/status`. A path another endpoint uses is refused, and so is a `--web.self-metrics-path` on the status page's. |
 | `--python.path` | `python3` | Interpreter used by the `python` transform. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`, in any case; anything else is refused. |
 | `--config.watch` | off | Re-read the configuration when it changes on disk, or a [descriptor file](CONFIGURATION.md#descriptor-files) of a grpc collector does. |

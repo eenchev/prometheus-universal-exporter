@@ -142,6 +142,15 @@
       }
     },
 
+    "exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ingress.enabled, and service.type NodePort or LoadBalancer, fail rendering unless webAuth is enabled, since an exporter reachable from outside the cluster without authentication is an open proxy to its targets; allowWithoutWebAuth lets them render when callers are authenticated where the chart cannot see it, at the ingress controller or by web.basic_auth written into the configuration.",
+      "properties": {
+        "allowWithoutWebAuth": {"type": "boolean"}
+      }
+    },
+
     "server": {
       "type": "object",
       "additionalProperties": false,

@@ -70,16 +70,22 @@ var (
 // meet again, closer to the deadline.
 var errRateLimitRefused = errors.New("refused by request.rate_limit")
 
-// rateLimitError is a request refused by request.rate_limit before it was
-// sent.
+// rateLimitError is a request refused by request.rate_limit, or by an entry
+// of rate_limits, before it was sent.
 type rateLimitError struct {
 	limit  string
 	origin string
 	wait   time.Duration
 	left   time.Duration
+	// rule is the name of the rate_limits entry that refused the request,
+	// and origin then the host it was for; "" for request.rate_limit.
+	rule string
 }
 
 func (e *rateLimitError) Error() string {
+	if e.rule != "" {
+		return fmt.Sprintf("rate limit of %s of rate_limits entry %q for %s would delay the request past its deadline: it would wait %s for its turn, and %s is left; ask the entry's hosts less often, raise the entry's rate_limit, or the timeout", e.limit, e.rule, e.origin, e.wait.Round(time.Millisecond), e.left.Round(time.Millisecond))
+	}
 	return fmt.Sprintf("rate limit of %s for %s would delay the request past its deadline: it would wait %s for its turn, and %s is left; ask the target less often, raise request.rate_limit, or the timeout", e.limit, e.origin, e.wait.Round(time.Millisecond), e.left.Round(time.Millisecond))
 }
 
@@ -88,7 +94,11 @@ func (e *rateLimitError) Is(target error) bool { return target == errRateLimitRe
 
 // rateLimitSetting is the limit in force for one trip's requests, carried in
 // its context, so the requests the trip makes beyond the first — retries,
-// pages, redirects, logins — wait on it wherever they are sent.
+// pages, redirects, logins — wait on it wherever they are sent. Every http
+// and graphite trip carries one, perSecond 0 when the collector has no
+// limit of its own, since the entries of rate_limits apply to its requests
+// all the same; no other type's trip carries one, and their requests take
+// no turn under either.
 type rateLimitSetting struct {
 	collector string
 	perSecond float64
@@ -119,16 +129,18 @@ func describeRateLimit(perSecond float64, burst int) string {
 }
 
 // withRateLimit returns ctx carrying the rate limit in force for a request
-// of c: a static target's own, or the collector's; ctx itself without one.
+// of c: a static target's own, or the collector's, or none, with which the
+// requests still take their turns under rate_limits.
 func withRateLimit(ctx context.Context, c *model.Collector, overrides RequestOverrides) context.Context {
 	l := c.Request.RateLimit
 	if overrides.RateLimit != nil {
 		l = overrides.RateLimit
 	}
-	if l == nil {
-		return ctx
+	setting := &rateLimitSetting{collector: c.Name}
+	if l != nil {
+		setting.perSecond, setting.burst = l.RequestsPerSecond, RateLimitBurst(l)
 	}
-	return context.WithValue(ctx, rateLimitContextKey{}, &rateLimitSetting{collector: c.Name, perSecond: l.RequestsPerSecond, burst: RateLimitBurst(l)})
+	return context.WithValue(ctx, rateLimitContextKey{}, setting)
 }
 
 // validateRateLimit checks request.rate_limit and fills in its burst.
@@ -178,66 +190,126 @@ func requestOrigin(u *url.URL) string {
 	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
-// waitRateLimit waits for the turn of a request to u under the rate limit
-// ctx carries, and returns how long it waited: nothing without a limit, or
-// with a token to spare. A wait that would end past ctx's deadline is not
-// begun, and the request is refused with a rateLimitError.
-func waitRateLimit(ctx context.Context, u *url.URL) (time.Duration, error) {
+// rateLimitWait is how long a request waited for its turns, and what a
+// debug report says of the waits.
+type rateLimitWait struct {
+	waited time.Duration
+	note   string
+}
+
+// rateLimitTurn is a bucket a request takes a turn from: its collector's,
+// under request.rate_limit, or that of the entry of rate_limits its host
+// matches, rule then naming the entry and host the host.
+type rateLimitTurn struct {
+	set  *rateLimiterSet
+	key  rateLimitKey
+	rule string
+	host string
+}
+
+// limit is how the turn's limit is named in messages: by its rate, and the
+// origin or the entry and the host it is for.
+func (t rateLimitTurn) limit() string {
+	if t.rule != "" {
+		return fmt.Sprintf("the rate limit of %s of rate_limits entry %q for %s", describeRateLimit(t.key.perSecond, t.key.burst), t.rule, t.host)
+	}
+	return fmt.Sprintf("the rate limit of %s for %s", describeRateLimit(t.key.perSecond, t.key.burst), t.key.origin)
+}
+
+// rateLimitTurns are the buckets a request to u under setting takes a turn
+// from, in order: its collector's, when it has a limit, then the entry of
+// rate_limits its host matches, when one does.
+func rateLimitTurns(setting *rateLimitSetting, u *url.URL) []rateLimitTurn {
+	var turns []rateLimitTurn
+	if setting.perSecond > 0 {
+		turns = append(turns, rateLimitTurn{set: rateLimits, key: rateLimitKey{collector: setting.collector, origin: requestOrigin(u), perSecond: setting.perSecond, burst: setting.burst}})
+	}
+	if rule, host := matchHostRateLimit(u); rule != nil {
+		turns = append(turns, rateLimitTurn{set: hostRateLimits, key: rule.key, rule: rule.key.collector, host: host})
+	}
+	return turns
+}
+
+// waitRateLimit waits for the turns of a request to u under the rate limits
+// that apply to it — the one ctx carries and the entry of rate_limits its
+// host matches — one after the other, and returns how long it waited:
+// nothing without a limit, or with a token to spare in each. A wait that
+// would end past ctx's deadline is not begun, and the request is refused
+// with a rateLimitError; the turns it took under the others are given back,
+// since it is not sent.
+func waitRateLimit(ctx context.Context, u *url.URL) (rateLimitWait, error) {
 	setting, ok := ctx.Value(rateLimitContextKey{}).(*rateLimitSetting)
 	if !ok {
-		return 0, nil
+		return rateLimitWait{}, nil
 	}
-	key := rateLimitKey{collector: setting.collector, origin: requestOrigin(u), perSecond: setting.perSecond, burst: setting.burst}
-	now := rateLimitNow()
-	deadline, hasDeadline := ctx.Deadline()
 	// A debug run's requests take their turns as any other's, so a debug
 	// probe asks the target no faster than the limit, but count in no
-	// self-metric of the collector's (§ 42.17).
+	// self-metric of the collector's or of rate_limits' (§ 42.17).
 	_, debug := ctx.Value(requestTraceKey{}).(*RequestTrace)
-	wait, err := rateLimits.reserve(key, now, deadline, hasDeadline, !debug)
-	if err != nil || wait == 0 {
+	var out rateLimitWait
+	var taken []rateLimitTurn
+	for _, turn := range rateLimitTurns(setting, u) {
+		wait, err := takeRateLimitTurn(ctx, turn, !debug)
+		if err != nil {
+			for _, t := range taken {
+				t.set.giveBack(t.key)
+			}
+			return rateLimitWait{}, err
+		}
+		taken = append(taken, turn)
+		if wait > 0 {
+			out.waited += wait
+			out.note = joinWaits(out.note, fmt.Sprintf("sent after waiting %s for its turn under %s", wait.Round(time.Millisecond), turn.limit()))
+		}
+	}
+	return out, nil
+}
+
+// takeRateLimitTurn waits for the request's turn in one bucket, read
+// against the clock as it is after the turns taken before it, and returns
+// how long it waited.
+func takeRateLimitTurn(ctx context.Context, turn rateLimitTurn, counted bool) (time.Duration, error) {
+	deadline, hasDeadline := ctx.Deadline()
+	wait, err := turn.set.reserve(turn.key, rateLimitNow(), deadline, hasDeadline, counted)
+	if err != nil {
+		var refused *rateLimitError
+		if turn.rule != "" && errors.As(err, &refused) {
+			refused.rule, refused.origin = turn.rule, turn.host
+		}
 		return 0, err
+	}
+	if wait == 0 {
+		return 0, nil
 	}
 	if err := rateLimitSleep(ctx, wait); err != nil {
 		// The turn not taken is given back, so a trip cut short does not
 		// slow those after it.
-		rateLimits.giveBack(key)
-		return 0, fmt.Errorf("the wait of %s for its turn under the rate limit of %s for %s was cut short: %w", wait.Round(time.Millisecond), describeRateLimit(key.perSecond, key.burst), key.origin, err)
+		turn.set.giveBack(turn.key)
+		return 0, fmt.Errorf("the wait of %s for its turn under %s was cut short: %w", wait.Round(time.Millisecond), turn.limit(), err)
 	}
 	return wait, nil
 }
 
-// rateLimitNote is what a debug report shows of a request that waited for
-// its turn.
-func rateLimitNote(ctx context.Context, u *url.URL, waited time.Duration) string {
-	setting, _ := ctx.Value(rateLimitContextKey{}).(*rateLimitSetting)
-	if setting == nil {
-		return ""
-	}
-	return fmt.Sprintf("sent after waiting %s for its turn under the rate limit of %s for %s", waited.Round(time.Millisecond), describeRateLimit(setting.perSecond, setting.burst), requestOrigin(u))
-}
-
 // traceRateLimitWait records on the last request recorded, the one just
-// waited for, how long it waited for its turn. recordedBefore says it was
-// recorded before the wait, a redirect being recorded before it is checked:
-// its duration then starts after the wait, which is no time the target
-// took.
-func traceRateLimitWait(ctx context.Context, u *url.URL, waited time.Duration, recordedBefore bool) {
-	if waited <= 0 {
+// waited for, how long it waited for its turns and why. recordedBefore says
+// it was recorded before the wait, a redirect being recorded before it is
+// checked: its duration then starts after the wait, which is no time the
+// target took.
+func traceRateLimitWait(ctx context.Context, w rateLimitWait, recordedBefore bool) {
+	if w.waited <= 0 {
 		return
 	}
 	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
 	if !ok {
 		return
 	}
-	note := rateLimitNote(ctx, u, waited)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if n := len(t.requests); n > 0 {
 		r := &t.requests[n-1]
-		r.Wait = joinWaits(r.Wait, note)
+		r.Wait = joinWaits(r.Wait, w.note)
 		if recordedBefore {
-			r.started = r.started.Add(waited)
+			r.started = r.started.Add(w.waited)
 		}
 	}
 }
@@ -251,7 +323,9 @@ func joinWaits(recorded, wait string) string {
 }
 
 // rateLimitKey names a bucket: a collector's requests to an origin under one
-// limit.
+// limit. For an entry of rate_limits (hostratelimit.go), collector is the
+// entry's name, under which its waits are counted, and origin its hosts, so
+// an entry a reload changes in any way has a new bucket.
 type rateLimitKey struct {
 	collector string
 	origin    string
@@ -359,11 +433,17 @@ func (s *rateLimiterSet) follow(collectors []model.Collector) {
 	for i := range collectors {
 		names[collectors[i].Name] = true
 	}
+	s.keep(func(key rateLimitKey) bool { return names[key.collector] }, names)
+}
+
+// keep drops the buckets whose key kept refuses, and the counts of the
+// names not among names.
+func (s *rateLimiterSet) keep(kept func(rateLimitKey) bool, names map[string]bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for element := s.order.Front(); element != nil; {
 		next := element.Next()
-		if !names[element.Value.(*rateBucket).key.collector] {
+		if !kept(element.Value.(*rateBucket).key) {
 			s.remove(element)
 		}
 		element = next

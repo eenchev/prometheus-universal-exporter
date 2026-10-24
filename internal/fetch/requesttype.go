@@ -226,6 +226,7 @@ func FollowConfiguration(collectors []model.Collector, targets []model.StaticTar
 // and counts with them.
 func CloseConnections() {
 	rateLimits.reset()
+	resetHostRateLimits()
 	for _, name := range BuiltRequestTypes() {
 		if rt := RequestTypes[name]; rt.CloseConnections != nil {
 			rt.CloseConnections()

@@ -66,9 +66,10 @@ type redirectHop struct {
 	// withheld names the headers of the first request the hop is not sent
 	// for that reason, sorted; never their values.
 	withheld []string
-	// certificate says the hop would be made over TLS with the collector's
-	// client certificate, which it must not be shown.
-	certificate bool
+	// certificate says whose client certificate the hop would be made over
+	// TLS with, the collector's or a static target's own (request.tls),
+	// which it must not be shown; "" when it would present none.
+	certificate string
 }
 
 // urlCredentials is how the credential in the userinfo of the first URL is
@@ -132,7 +133,9 @@ func settleRedirect(ctx context.Context, req *http.Request, via []*http.Request)
 		if ok && firstOK && host == firstHost {
 			hop.origin, hop.from = originOf(req.URL), originOf(first.URL)
 		}
-		hop.certificate = guard.clientCertificate && strings.EqualFold(req.URL.Scheme, "https")
+		if guard.clientCertificate && strings.EqualFold(req.URL.Scheme, "https") {
+			hop.certificate = guard.certificateOwner()
+		}
 	}
 	guard.mu.Lock()
 	guard.lastHop = hop
@@ -195,7 +198,7 @@ func carryNeutral(req, first *http.Request) []string {
 
 // refusal is the error of a hop that must not be made: one that would send
 // the request body to a host that is not trusted, or present the collector's
-// TLS client certificate to it; nil for every other hop. Go attaches the body
+// TLS client certificate, or a static target's own, to it; nil for every other hop. Go attaches the body
 // to the request of a hop that sends it again, after a 307 or a 308, before
 // it asks whether the hop is made, and no connection has been made yet.
 func (h redirectHop) refusal(req *http.Request) error {
@@ -205,8 +208,8 @@ func (h redirectHop) refusal(req *http.Request) error {
 	if req.Body != nil && req.Body != http.NoBody {
 		return &redirectRefusedError{url: RedactURL(req.URL, MaskQueryValues), because: "it would send the request body to " + h.stranger("listed in")}
 	}
-	if h.certificate {
-		return &redirectRefusedError{url: RedactURL(req.URL, MaskQueryValues), because: "it would present the collector's TLS client certificate to " + h.stranger("listed in")}
+	if h.certificate != "" {
+		return &redirectRefusedError{url: RedactURL(req.URL, MaskQueryValues), because: "it would present the " + h.certificate + " TLS client certificate to " + h.stranger("listed in")}
 	}
 	return nil
 }

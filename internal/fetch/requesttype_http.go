@@ -30,7 +30,7 @@ func init() {
 			"method", "path", "body", "timeout", "insecure_skip_verify",
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
-			"accept_status", "login", "rate_limit",
+			"accept_status", "login", "rate_limit", "tls",
 		},
 		URLPath: true,
 		Validate: func(c *model.Collector) error {
@@ -39,11 +39,17 @@ func init() {
 			}
 			return validatePagination(c)
 		},
-		CheckTarget:        checkHTTPTarget,
-		CheckTargetRequest: checkTargetLogin,
-		Fetch:              fetchHTTP,
-		// The tokens request.login keeps, and its counts (login.go).
-		CheckFiles:       checkLoginFiles,
+		CheckTarget: checkHTTPTarget,
+		CheckTargetRequest: func(c *model.Collector, t *model.StaticTarget) error {
+			if err := checkTargetLogin(c, t); err != nil {
+				return err
+			}
+			return checkHTTPTargetTLS(t)
+		},
+		Fetch: fetchHTTP,
+		// The files of a login and of a target's own tls block; the
+		// tokens request.login keeps, and its counts (login.go).
+		CheckFiles:       checkHTTPFiles,
 		Follow:           logins.follow,
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,

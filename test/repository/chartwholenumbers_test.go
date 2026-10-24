@@ -378,6 +378,8 @@ func TestChartRendersTheServicePortAsAWholeNumber(t *testing.T) {
 	helm := requireHelm(t)
 	out, ok := helmTemplate(t, helm, chartDir, "-f", valuesFile(t, `service:
   port: 9.115e3
+exposure:
+  allowWithoutWebAuth: true
 ingress:
   enabled: true
   hosts:

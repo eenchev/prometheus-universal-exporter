@@ -13,3 +13,10 @@ var optInRequestKeys = map[string][]string{
 	RequestTypeTCP:    {"send", "terminator"},
 	RequestTypeLDAP:   {"bind_dn", "start_tls", "searches"},
 }
+
+// optInTargetKeys are, by opt-in type, the keys of a static target's request
+// that type accepts and no type of a default build does, as optInRequestKeys
+// are of a collector's.
+var optInTargetKeys = map[string][]string{
+	RequestTypeLDAP: {"bind_dn"},
+}

@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"runtime/debug"
 	"strconv"
@@ -92,6 +93,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// fetched is when the data in result came from the target: now for a
 	// trip just made, the cache entry's time for a cached or stale result.
 	var fetched time.Time
+	// status is what the status page shows of this scrape
+	// (statictargetstatus.go), filled in as the scrape goes.
+	status := staticScrapeStatus{started: start, collector: target.Collector, target: target.Target}
 	finish := func(up float64) {
 		// The scrape is counted once, even when what follows panics.
 		failedOnPanic = nil
@@ -104,7 +108,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		// changed or brought back since the scrape read them is another
 		// target's under the name: its outcome is not that target's, and its
 		// result would replace the one that target's own scrape published.
-		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, up == 1, time.Now())
+		status.duration = elapsed
+		status.ok = up == 1
+		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, status, time.Now())
 		if !stands {
 			s.logger.Debug("static target scrape ended after a reload removed or changed its target or its collector; its result is not published", "target", target.Name, "collector", c.Name, "superseded", true)
 			return
@@ -125,16 +131,18 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
 	var cacheKey string
-	// failed ends a scrape that failed, and was logged. With
+	// failed ends a scrape that failed with err, and was logged. With
 	// cache.stale_if_error the last good result is exported in place of
 	// nothing, marked stale; http_exporter_target_up still says the scrape
 	// failed.
-	failed := func() {
+	failed := func(err error) {
+		status.err = err
 		if model.StaleIfError(c) > 0 && cacheKey != "" {
 			now := time.Now()
 			if cached, cachedAt, ok := s.cache.GetStale(cacheKey, now); ok {
 				if answer, err := withFreshness(cached, c, true, cachedAt, now); err == nil {
 					fetched = cachedAt
+					status.stale = true
 					count(func(st *serverStats) {
 						st.staleServed++
 						st.emitted += uint64(len(cached.Metrics))
@@ -145,12 +153,12 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		}
 		finish(0)
 	}
-	failedOnPanic = failed
+	failedOnPanic = func() { failed(errScrapePanicked) }
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {
 		s.logCollectFailure(rec.read, log, "credentials", err)
-		failed()
+		failed(err)
 		return
 	}
 	if model.UsesCache(c) {
@@ -164,6 +172,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 				st.emitted += uint64(len(cached.Metrics))
 			})
 			fetched = cachedAt
+			status.cached = true
 			answer, _ := withFreshness(cached, c, false, cachedAt, time.Now())
 			result = withTargetLabels(answer, target.Labels)
 			finish(1)
@@ -184,6 +193,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	if c.FailureBackoff != nil && backoffKey == "" {
 		backoffKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
 	}
+	if c.FailureBackoff != nil {
+		status.backoffKey = backoffKey
+	}
 	turn := s.backoffs.admit(c, backoffKey, address)
 	defer turn.settle(rec.read, backoffUnknown)
 	var trip collected
@@ -203,7 +215,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			}
 			count(func(st *serverStats) { countRejection(st, err) })
 			s.logCollectFailure(rec.read, log, "concurrency", err)
-			failed()
+			failed(err)
 			return
 		}
 		defer s.trips.release(c.Name)
@@ -224,7 +236,8 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			// collector's target policy refused, gets no stale result.
 			cacheKey = ""
 		}
-		failed()
+		status.skipped = trip.skipped
+		failed(trip.err)
 		return
 	}
 	// Under error_handling log or ignore a failed stage leaves the target up
@@ -366,9 +379,12 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 
 // targetOwnRequest is what the target's request sets that no probe can, for
 // its cache key: a graphite collector's targets, a grpc collector's metadata
-// and retry codes, the retried statuses, an sshfile collector's account and credential files, an http or graphite collector's login. Each section names itself and how many values follow, so
-// a value that looks like the next section's name cannot move the boundary
-// between two sections, and two different targets never share a key.
+// and retry codes, the retried statuses, an sshfile, sql, redis or ldap
+// collector's account and credential files, a redis, ldap, tcp, sql, grpc,
+// http or graphite collector's tls block, an http or graphite collector's
+// login. Each section names itself and how many values follow, so a value
+// that looks like the next section's name cannot move the boundary between
+// two sections, and two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
 	var own []string
 	if len(t.Request.Targets) > 0 {
@@ -392,8 +408,15 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	if t.Request.AcceptCodes != nil {
 		own = append(append(own, "accept_codes", strconv.Itoa(len(t.Request.AcceptCodes))), t.Request.AcceptCodes...)
 	}
-	if r := &t.Request; r.Username != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
-		own = append(own, "ssh_account", "4", r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	if r := &t.Request; r.Username != "" || r.BindDN != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
+		own = append(own, "account", "5", r.Username, r.BindDN, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	}
+	// A target's own tls block, every key of it, tls: {} as much as one
+	// with files: the certificate a scrape presents is part of the account
+	// it reads as, and the roots it trusts decide which server's answer it
+	// takes.
+	if r := &t.Request; r.TLS != nil {
+		own = append(own, "tls", "1", fmt.Sprintf("%#v", *r.TLS))
 	}
 	// A target that logs in as it does itself is answered for that login.
 	if login := fetch.LoginFingerprint(t.Request.Login); login != "" {

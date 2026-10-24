@@ -76,6 +76,9 @@ type landingPage struct {
 	StaticTargetsPath    string
 	StaticTargets        int
 	StaticTargetsViaOTLP int
+	// StatusPath and StatusHref are the static targets' status page
+	// (statictargetstatus.go), linked when there are static targets.
+	StatusPath, StatusHref string
 	// Reloaded says a reload has put something in force since the exporter
 	// started; ReloadedAt is when the last did, and ReloadChanges what it
 	// changed (config.ReloadSummary).
@@ -102,7 +105,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 {{- if .StaticTargets}}
 
 <h2>Static targets</h2>
-<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
+<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}. <a href="{{.StatusHref}}">See how each one's last scrape went</a>.</p>
 {{- end}}
 
 <h2>Configuration</h2>
@@ -120,6 +123,9 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 {{- end}}
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
 <li><a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
+{{- if .StaticTargets}}
+<li><a href="{{.StatusHref}}">{{.StatusPath}}</a> — each static target's last scrape: its result, its error and whether it is backing off; <code>?format=json</code> as JSON</li>
+{{- end}}
 <li><a href="{{.SelfMetricsHref}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="health">/health</a> and <a href="ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
@@ -146,6 +152,8 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 		Debug:             s.debug != DebugOff,
 		Collectors:        len(cfg.Collectors),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
+		StatusPath:        s.staticTargetsStatusEndpoint(),
+		StatusHref:        relativeLink(s.staticTargetsStatusEndpoint()),
 		Docs:              landingDocs,
 	}
 	if last, ok := s.manager.LastReload(); ok {

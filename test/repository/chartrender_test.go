@@ -257,7 +257,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 			avoid: []string{"kind: ServiceMonitor"},
 		},
 		"an Ingress to the Service": {
-			args: []string{"--set", "ingress.enabled=true"},
+			args: []string{"--set", "ingress.enabled=true", "--set", "exposure.allowWithoutWebAuth=true"},
 			want: []string{"kind: Ingress", "service:\n                name: test-prometheus-universal-exporter\n"},
 		},
 		"credential mounts at paths of their own": {

@@ -502,7 +502,11 @@ roots, and the label is `grpcs://`. The keys say how: `ca_file` to verify the
 server, `server_name` when the server's certificate is for another name than
 the target's host, `cert_file` and `key_file` for a client certificate, which
 together are mutual TLS, and `insecure_skip_verify`, which a probe may
-override, as for `http`.
+override, as for `http`. The files are read when a connection is made, and
+again when one of them changes, and by [`--dry-run`](CONFIGURATION.md#dry-run),
+which warns of one a connection would fail on. A
+[static target](#static-targets) may write a block of its own in place of
+the collector's.
 
 ## Probe parameters
 
@@ -519,9 +523,9 @@ exporter on its interval. Its `target` is the server, and under `request` it
 may set `message`, which replaces the collector's, `metadata`, sent besides
 the collector's with its own value for a key of both, `timeout`,
 `insecure_skip_verify`, `retry`, whose `codes` replaces the collector's,
-[`accept_codes`](#errors-and-retries), which replaces the collector's, and
-the credential keys (`basic_auth`, `basic_auth_file`, `bearer_token`,
-`bearer_token_file`):
+[`accept_codes`](#errors-and-retries), which replaces the collector's, the
+credential keys (`basic_auth`, `basic_auth_file`, `bearer_token`,
+`bearer_token_file`), and its own `tls` block:
 
 ```yaml
 interval: 1m
@@ -545,6 +549,17 @@ placeholders; the collector's are filled from the target's `params`. With
 [caching](CONFIGURATION.md#response-caching), each target's own message,
 metadata and retry codes are part of its cache key, so targets asking one
 server different questions never share a result.
+
+A target's `tls` replaces the collector's whole block for that target, a key
+it leaves out not being taken from the collector's, so a target presents a
+client certificate of its own, or trusts its own CA. Written, even as
+`tls: {}`, it asks for TLS, which a `grpc://` target, asking for plaintext,
+contradicts, refused when the file loads; a target cannot turn off the TLS
+its collector asks for. Its values hold no placeholder, and no probe
+parameter sets it. The block is part of the target's cache key, and a
+connection is kept by its TLS settings, so targets with different blocks
+share neither an answer nor a connection. [`--dry-run`](CONFIGURATION.md#dry-run)
+reads the files of a target's own block under the target's name.
 
 ## Self-metrics
 

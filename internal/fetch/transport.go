@@ -301,7 +301,7 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 			if err != nil {
 				return err
 			}
-			traceRateLimitWait(ctx, req.URL, waited, true)
+			traceRateLimitWait(ctx, waited, true)
 			return nil
 		}
 	} else {

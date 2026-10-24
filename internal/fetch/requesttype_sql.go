@@ -74,7 +74,7 @@ func init() {
 			"allowed_targets", "denied_targets",
 		},
 		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "username", "password_file", "private_key_file", "connections"},
+		TargetFields:       []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
 		Validate:           validateSQLRequest,
 		Fetch:              fetchSQL,
 		CheckTarget:        checkSQLTarget,
@@ -256,6 +256,12 @@ func checkSQLOptions(d *sqlDriver, options map[string]string, t model.TLSConfig)
 			return fmt.Errorf("request.options.%s is %q; write a value without control characters, or leave the option out", name, value)
 		}
 	}
+	return checkSQLTLS(d, options, t)
+}
+
+// checkSQLTLS holds a tls block, a collector's or a static target's own, to
+// what the driver can honour with the collector's options.
+func checkSQLTLS(d *sqlDriver, options map[string]string, t model.TLSConfig) error {
 	tlsSet := t != model.TLSConfig{}
 	if (t.CertFile == "") != (t.KeyFile == "") {
 		return errors.New("request.tls sets only one of cert_file and key_file; a client certificate needs both")
@@ -338,7 +344,9 @@ func checkSQLConnections(conns *model.SQLConnections, target bool) error {
 // collector's together (a target that sets either replaces both of the
 // collector's credential files with its own), and take no placeholder, as
 // sshfile's do not, since a static target's own values are used as they are
-// written; and its connection settings.
+// written; its own tls block, which replaces the collector's whole and is
+// held to what the driver can honour with the collector's options; and its
+// connection settings.
 func checkSQLTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	r := &t.Request
 	for _, key := range []struct{ name, value string }{{"request.username", r.Username}, {"request.password_file", r.PasswordFile}, {"request.private_key_file", r.PrivateKeyFile}} {
@@ -354,6 +362,14 @@ func checkSQLTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	}
 	if err := checkSQLAccountKeys(d, r.Username, r.PasswordFile, r.PrivateKeyFile, false); err != nil {
 		return err
+	}
+	if r.TLS != nil {
+		if err := checkTargetTLS(t); err != nil {
+			return err
+		}
+		if err := checkSQLTLS(d, c.Request.Options, *r.TLS); err != nil {
+			return err
+		}
 	}
 	return checkSQLConnections(r.Connections, true)
 }
@@ -481,7 +497,7 @@ type sqlConnSettings struct {
 }
 
 // sqlBaseOf is the base of a scrape of c with overrides: the collector's
-// settings, with a static target's account, credential files and
+// settings, with a static target's account, credential files, tls block and
 // connection settings over them.
 func sqlBaseOf(c *model.Collector, overrides RequestOverrides) sqlBase {
 	r := &c.Request
@@ -505,11 +521,17 @@ func sqlBaseOf(c *model.Collector, overrides RequestOverrides) sqlBase {
 		options.WriteByte(0)
 	}
 	b.options = options.String()
-	if name := strings.TrimSpace(overrides.SSHUsername); name != "" {
+	if name := strings.TrimSpace(overrides.Username); name != "" {
 		b.username = name
 	}
-	if overrides.SSHPasswordFile != "" || overrides.SSHPrivateKeyFile != "" {
-		b.passwordFile, b.privateKeyFile = overrides.SSHPasswordFile, overrides.SSHPrivateKeyFile
+	if overrides.PasswordFile != "" || overrides.PrivateKeyFile != "" {
+		b.passwordFile, b.privateKeyFile = overrides.PasswordFile, overrides.PrivateKeyFile
+	}
+	// A target's own tls block replaces the collector's whole; being part
+	// of the base, it is part of the pool's key (sqlPoolKey), so targets
+	// with blocks of their own share no connection.
+	if overrides.TLS != nil {
+		b.tls = *overrides.TLS
 	}
 	return b
 }
@@ -741,7 +763,8 @@ func sqlTLSConfig(d *sqlDriver, base *sqlBase, options map[string]string, host s
 }
 
 // checkSQLFiles reads the credential files of a collector, or of a static
-// target that sets its own, and the TLS files, as making a connection reads
+// target that sets its own, and the TLS files, the collector's or a static
+// target's own block's, as making a connection reads
 // them, for --dry-run: a file missing or unreadable, an empty password, a
 // key that is none or is encrypted, a certificate that does not load.
 // Loading the configuration reads none of them, since a file may be mounted
@@ -749,18 +772,24 @@ func sqlTLSConfig(d *sqlDriver, base *sqlBase, options map[string]string, host s
 func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 	who := fmt.Sprintf("collector %q", c.Name)
 	overrides := RequestOverrides{}
+	// A target's files are read when it names its own, the collector's
+	// being read as the collector's.
+	credentials, ownTLS := true, true
 	if t != nil {
-		if t.Request.PasswordFile == "" && t.Request.PrivateKeyFile == "" {
+		credentials, ownTLS = t.Request.PasswordFile != "" || t.Request.PrivateKeyFile != "", t.Request.TLS != nil
+		if !credentials && !ownTLS {
 			return nil
 		}
 		who, overrides = fmt.Sprintf("target %q", t.Name), TargetOverrides(t)
 	}
 	base := sqlBaseOf(c, overrides)
 	var problems []error
-	if _, _, err := sqlCredentials(&base); err != nil {
-		problems = append(problems, err)
+	if credentials {
+		if _, _, err := sqlCredentials(&base); err != nil {
+			problems = append(problems, err)
+		}
 	}
-	if d := sqlDriverOf(c); t == nil && d != nil {
+	if d := sqlDriverOf(c); ownTLS && d != nil {
 		if _, _, err := sqlTLSConfig(d, &base, c.Request.Options, "localhost"); err != nil {
 			problems = append(problems, err)
 		}

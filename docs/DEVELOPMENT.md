@@ -46,7 +46,7 @@ the ones above them in this list:
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
 | `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file`, `redis`, `tcp` and `ldap`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
-| `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
+| `internal/transform` | The transforms and metric rules, the Python worker pool, the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/allocclient` | The exporter's side of the target allocator in allocator mode (`--allocator.url`): the heartbeats to every copy of the allocator, the long poll for its bundle, and the cache directory a bundle is written into, checked in and put in force by swapping one symbolic link, for the configuration manager to reload ([Target allocator](ALLOCATOR.md)). |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
@@ -2007,8 +2007,13 @@ chart as a dependency of a parent chart, and the values that must be refused,
 among them a monitor's `auth` without a `type`, a monitor's `port` given as a
 number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
 Service, a mount at the configuration directory written with a trailing
-slash, and a `goGC.percent` that is `off` with no Go memory limit, `0`, or
-set beside a `GOGC` entry in `env`. The Go tests in `test/repository`
+slash, a `goGC.percent` that is `off` with no Go memory limit, `0`, or
+set beside a `GOGC` entry in `env`, a `selfMetrics.path` at the static
+targets' status page, and an Ingress or a `LoadBalancer` or `NodePort`
+Service without `webAuth`, or with `webAuth` beside a configuration whose
+`web.basic_auth` does not read its files (the renders with
+`exposure.allowWithoutWebAuth`, and with `testdata/chart/web-auth.yaml`,
+which does, beside them). The Go tests in `test/repository`
 check the same behaviour in more detail, but are skipped without helm, so a
 case worth keeping goes into these two lists as well. Write a case that looks
 at what is rendered so that it keeps the render first

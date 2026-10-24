@@ -95,7 +95,7 @@ func init() {
 		TargetFields: []string{
 			"message", "metadata", "timeout", "insecure_skip_verify", "retry",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
-			"accept_codes",
+			"accept_codes", "tls",
 		},
 		StatusCodes:        true,
 		Validate:           validateGRPCRequest,
@@ -107,6 +107,7 @@ func init() {
 		Stage:              "grpc",
 		Fetch:              fetchGRPC,
 		ReadFiles:          grpcReadFiles,
+		CheckFiles:         checkGRPCFiles,
 	})
 }
 
@@ -342,7 +343,8 @@ func normalizeRetryCodes(codes []string) error {
 
 // checkGRPCTargetRequest checks what a static target's request sets for a
 // grpc collector: its message, which must be JSON and, with descriptors
-// read at load, fit the method; its metadata; and its retry codes.
+// read at load, fit the method; its metadata; its retry codes; and its own
+// tls block, which a grpc:// target, asking for plaintext, contradicts.
 func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	credentials := c.Request.BasicAuth != nil || c.Request.BasicAuthFile != nil || c.Request.BearerToken != "" || c.Request.BearerTokenFile != "" ||
 		t.Request.BasicAuth != nil || t.Request.BasicAuthFile != nil || t.Request.BearerToken != "" || t.Request.BearerTokenFile != ""
@@ -358,6 +360,12 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	}
 	if err := normalizeRetryCodes(slices.Clone(t.Request.AcceptCodes)); err != nil {
 		return fmt.Errorf("request.accept_codes %s", strings.Replace(err.Error(), "never retried", "always accepted", 1))
+	}
+	if err := checkTargetTLS(t); err != nil {
+		return err
+	}
+	if a, err := parseGRPCTarget(t.Target); err == nil && a.plain && t.Request.TLS != nil {
+		return errors.New("target asks for plaintext with grpc://, but sets request.tls of its own; use grpcs:// or a bare host:port")
 	}
 	if t.Request.Message == "" {
 		return nil
@@ -452,7 +460,8 @@ func checkGRPCTarget(c *model.Collector, target string, _ bool) error {
 
 // grpcLabel is the url label of a call: grpc://host:port/package.Service/Method,
 // or grpcs:// over TLS.
-func grpcLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+func grpcLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	c = withTargetAccount(c, overrides)
 	a, err := parseGRPCTarget(target)
 	if err != nil {
 		return "", err
@@ -477,7 +486,18 @@ func grpcDisplay(target string) string {
 	return strings.TrimSpace(target)
 }
 
-// fetchGRPC makes a scrape's call (grpccall.go).
+// fetchGRPC makes a scrape's call (grpccall.go), with a static target's
+// own tls block in place of the collector's: the connection is kept by its
+// TLS settings (grpcConnKey), so targets with blocks of their own share no
+// connection.
 func fetchGRPC(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-	return callGRPC(ctx, target, c, overrides, forwarded)
+	return callGRPC(ctx, target, withTargetAccount(c, overrides), overrides, forwarded)
+}
+
+// checkGRPCFiles reads the tls block's files as a connection reads them,
+// the collector's or those of a static target's own block, for --dry-run.
+// Loading the configuration reads none of them, since a file may be
+// mounted after the exporter starts.
+func checkGRPCFiles(c *model.Collector, t *model.StaticTarget) []string {
+	return accountFileWarnings(c, t)
 }

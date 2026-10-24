@@ -369,18 +369,33 @@ type policyGuard struct {
 	// settled for the redirect followed last (redirecttrust.go).
 	trusted []string
 	lastHop redirectHop
-	// clientCertificate says the collector has a TLS client certificate,
-	// which every TLS connection of the request presents: a redirect is
-	// not followed over https to a host that is not trusted.
+	// clientCertificate says the request has a TLS client certificate,
+	// the collector's or a static target's own, which every TLS connection
+	// of the request presents: a redirect is not followed over https to a
+	// host that is not trusted. targetCertificate says it is the target's,
+	// for the refusal to name.
 	clientCertificate bool
+	targetCertificate bool
+}
+
+// certificateOwner names whose client certificate the request presents.
+func (g *policyGuard) certificateOwner() string {
+	if g.targetCertificate {
+		return "static target's"
+	}
+	return "collector's"
 }
 
 type policyGuardKey struct{}
 
 // withTargetPolicy checks the host of u against the collector's policy and
-// returns a context whose connections and redirects are checked too.
-func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error)) (context.Context, error) {
-	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != ""}
+// returns a context whose connections and redirects are checked too. c is
+// the collector as the request is made with it, a static target's own tls
+// block in place of the collector's (withTargetTLS), so the client
+// certificate a redirect is judged by is the one the request presents;
+// ownTLS says that block is the target's.
+func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error), ownTLS bool) (context.Context, error) {
+	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS}
 	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}

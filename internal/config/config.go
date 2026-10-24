@@ -70,7 +70,7 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		}
 		errs = append(errs, inCollectorFile(file, validateCollector(c, x)))
 	}
-	errs = append(errs, validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
+	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
 	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}
@@ -105,8 +105,8 @@ func expressionCount(c *model.Config) int {
 
 // validateCollector checks one collector and fills in its defaults, in the
 // order its settings are read: the request, the limits, the cache and the
-// names, the response and its transform, the error policies, and the metric
-// rules.
+// names, the response and its transform, the error policies, the metric
+// rules, and the derived series.
 func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := fetch.ValidateRequest(x); err != nil {
 		return err
@@ -147,6 +147,11 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	}
 	if err := validateFailureBackoff(x); err != nil {
 		return err
+	}
+	for _, id := range x.Lint.Ignore {
+		if !slices.Contains(model.LintRules, id) {
+			return fmt.Errorf("collector %q lint.ignore has unknown rule %q; want one of %s", x.Name, id, strings.Join(model.LintRules, ", "))
+		}
 	}
 	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
@@ -195,7 +200,12 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err != nil {
 		return err
 	}
-	return checkMetricFamilies(x)
+	if err := checkMetricFamilies(x); err != nil {
+		return err
+	}
+	// The derived entries read the rules' names and types, and are checked
+	// once those are sound.
+	return transform.CheckDerived(x)
 }
 
 // checkCSVColumns requires a csv transform reading rows without a header row

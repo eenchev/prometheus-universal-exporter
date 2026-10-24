@@ -85,7 +85,7 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"targets", "from", "until",
-			"accept_status", "login", "rate_limit",
+			"accept_status", "login", "rate_limit", "tls",
 		},
 		URLPath:            true,
 		Validate:           validateGraphiteRequest,
@@ -93,8 +93,9 @@ func init() {
 		Query:              graphiteQuery,
 		CheckTargetRequest: checkGraphiteTargetRequest,
 		Method:             graphiteMethod,
-		// The tokens request.login keeps, and its counts (login.go).
-		CheckFiles:       checkLoginFiles,
+		// The files of a login and of a target's own tls block; the
+		// tokens request.login keeps, and its counts (login.go).
+		CheckFiles:       checkHTTPFiles,
 		Follow:           logins.follow,
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,
@@ -172,10 +173,13 @@ func refuseRepeatedExpressions(targets []string) error {
 }
 
 // checkGraphiteTargetRequest checks what a static target's request sets for
-// a graphite collector: its own expressions, window and login, which
-// replace the collector's.
+// a graphite collector: its own expressions, window, login and tls block,
+// which replace the collector's.
 func checkGraphiteTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	if err := checkTargetLogin(c, t); err != nil {
+		return err
+	}
+	if err := checkHTTPTargetTLS(t); err != nil {
 		return err
 	}
 	for i, expression := range t.Request.Targets {

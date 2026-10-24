@@ -630,12 +630,15 @@ per target:
   `skipped by backoff` (`failure_backoff` kept the scrape from the target), or
   `not yet scraped`; and whether the response cache answered it;
 - the consecutive failed scrapes, and while `failure_backoff` keeps scrapes
-  from the target, until when, or that its next try is in progress;
+  from the target, until when, or that its next try is in progress, with the
+  failures the backoff counts. A scrape skipped by backoff tried nothing: it
+  is not counted as a failed scrape;
 - the error of the last failed scrape and when that scrape began. It stays
   shown after the target recovers, so a failure in the night can be read in
-  the morning. It is the error the log has, with every URL's credentials
-  withheld, anything else that reads as a credential masked, and cut to 2000
-  bytes.
+  the morning, and while scrapes are skipped by backoff, so the error that
+  made the exporter back off is the one shown. It is the error the log has,
+  with every URL's credentials withheld, anything else that reads as a
+  credential masked, and cut to 2000 bytes.
 
 A summary line above says how many targets there are, how many are failing
 and how many have not been scraped yet; the failing targets come first. The
@@ -653,9 +656,9 @@ curl 'http://exporter:8080/static-targets/status?format=json'
   {"name": "legacy_eu", "collector": "legacy", "target": "http://legacy-eu:8080", "labels": {"region": "eu"},
    "interval": "1m0s", "export_via_otlp": false, "result": "skipped by backoff", "failing": true,
    "last_scrape": "2026-10-24T08:59:41Z", "last_scrape_age_seconds": 19.2, "duration_seconds": 0.0001,
-   "cached": false, "stale": false, "consecutive_failures": 4,
-   "last_error": "http://legacy-eu:8080 is backing off after 3 consecutive failed scrapes; next try after 2026-10-24T09:02:00Z",
-   "last_error_at": "2026-10-24T08:59:41Z",
+   "cached": false, "stale": false, "consecutive_failures": 3,
+   "last_error": "fetch http://legacy-eu:8080: received HTTP status 503",
+   "last_error_at": "2026-10-24T08:58:41Z",
    "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3},
   {"name": "billing_eu", "...": "..."}
  ]}
@@ -663,9 +666,15 @@ curl 'http://exporter:8080/static-targets/status?format=json'
 
 A field without a value is left out: the scrape fields of a target not yet
 scraped, `last_error` of one that never failed, `backoff` of one not backing
-off. `consecutive_failures` counts the target's failed scrapes of every kind,
-`backoff_failures` the failed trips `failure_backoff` counts (see
+off. `consecutive_failures` counts the target's failed scrapes of every kind
+but those skipped by backoff, `backoff_failures` the failed trips
+`failure_backoff` counts (see
 [Backing off from failing targets](CONFIGURATION.md#backing-off-from-failing-targets)).
+
+What the page keeps of a target is forgotten when a reload, or a new bundle
+from the allocator, removes the target, whether or not anything reads the
+static targets endpoint: a target brought back under its name is
+`not yet scraped`, with no failures and no error, until its first scrape.
 
 The page shows nothing the endpoint's series and the log do not: it is
 protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`

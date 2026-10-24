@@ -107,6 +107,11 @@ type Server struct {
 	// generation (reconcile.go). It is replaced under statsMu, together with
 	// the state it describes, and under staticMu.
 	followed atomic.Pointer[followedConfig]
+	// appliedGeneration is the generation of the last configuration whose
+	// connections and rate limits the request types follow (applyFollowed),
+	// under appliedMu.
+	appliedMu         sync.Mutex
+	appliedGeneration uint64
 	// since says, for each collector of the followed configuration, the
 	// generation it has been there from, under statsMu: the statistics kept
 	// for it are those of that stay, and no others' (statsSince).

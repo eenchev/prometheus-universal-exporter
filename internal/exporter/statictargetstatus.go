@@ -70,7 +70,8 @@ type staticTargetStatus struct {
 	last staticScrapeStatus
 	// errorText is the shown error of the last failed scrape, which
 	// failedAt began; failures counts the consecutive failed scrapes up to
-	// the last, 0 when it succeeded.
+	// the last, 0 when it succeeded. A scrape skipped by failure_backoff is
+	// neither: it leaves both as they were.
 	errorText string
 	failedAt  time.Time
 	failures  int
@@ -91,9 +92,15 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 		st = &staticTargetStatus{}
 		s.staticStatus[name] = st
 	}
-	if status.ok {
+	switch {
+	case status.ok:
 		st.failures = 0
-	} else {
+	case status.skipped:
+		// A scrape failure_backoff kept from the target tried nothing: the
+		// error shown stays that of the last scrape that did, which is why
+		// the target is backed off from, and the run of failures is of the
+		// scrapes that failed, which the backoff counts apart.
+	default:
 		st.failures++
 		st.errorText = shownStatusError(status.err)
 		st.failedAt = status.started

@@ -994,6 +994,12 @@ The top-level `rate_limits` list MUST bound how fast the `http` and
   hosts and `rate_limit` alike, and MUST start an entry it changes from a
   full bucket. It MUST forget the bucket and the counts of an entry it
   removes, and the exporter's shutdown every bucket and count.
+- The entries in force MUST be those of the latest configuration in force:
+  of two reloads close together, the entries of the earlier MUST NOT be put
+  in force after those of the later, however the two followings interleave.
+  So MUST the collectors and static targets in force that the request types
+  keeping connections across scrapes, and the collectors' own
+  `request.rate_limit`, follow.
 
 #### `localfile`
 
@@ -29198,7 +29204,11 @@ people who cannot ask Prometheus:
 - Each row MUST show the consecutive failed scrapes, the error of the last
   failed scrape, kept through later successes, with when that scrape began,
   and, while `failure_backoff` keeps scrapes from the target, until when, or
-  that the try after the wait is in progress. The error MUST be the text the
+  that the try after the wait is in progress, with the failures the backoff
+  counts. A scrape skipped by backoff MUST be shown as its own result,
+  `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
+  MUST leave the error of the last failed scrape, and when it began, as they
+  were. The error MUST be the text the
   log has, with every URL's credentials already withheld, masked again for
   what reads as a credential, and cut to the bound of a failure's text
   (§ 25); nothing else of a target's answer MAY be shown.
@@ -29218,7 +29228,13 @@ people who cannot ask Prometheus:
   HEAD`, and MUST be protected by `web.basic_auth` like every endpoint but
   `/health` and `/ready`.
 - What it keeps of a target MUST be one record replaced by each scrape, and
-  MUST be forgotten with the target.
+  MUST be forgotten with the target: when a reload, or a bundle from the
+  allocator, puts in force static targets without it, whether or not the
+  static targets endpoint is read, together with the target's stored result
+  and last success. A target brought back under its name MUST be shown as
+  not yet scraped, with no failures and no error, until its own scrape; a
+  scrape of the removed target that ends after the removal MUST record
+  nothing.
 - A self-metrics path equal to the status page's path MUST make the exporter
   exit with status 2, as a self-metrics path equal to the static targets
   path does.

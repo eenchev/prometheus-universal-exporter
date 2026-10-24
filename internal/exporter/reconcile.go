@@ -354,28 +354,54 @@ func (s *Server) reconcile() *followedConfig {
 			if report != nil {
 				report()
 			}
-			// The request types that keep connections across scrapes close
-			// those no collector in force uses any more.
-			// The entries of rate_limits are followed with them, their
-			// buckets kept where a reload left an entry as it was.
-			var collectors []model.Collector
-			var hostRateLimits []model.HostRateLimit
-			if followed.config != nil {
-				collectors = followed.config.Collectors
-				hostRateLimits = followed.config.RateLimits
-			}
-			fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
-			fetch.FollowHostRateLimits(hostRateLimits)
+			s.applyFollowed(followed)
 			return followed
 		}
 		previous, cfg, targets = followed, inForce, file
 	}
 }
 
+// applyFollowed tells the request types what followed holds: those that
+// keep connections across scrapes close the ones no collector in force uses
+// any more, and the entries of rate_limits are followed with them, their
+// buckets kept where a reload left an entry as it was. It is done after
+// statsMu is released, which every probe takes, so two callers that each
+// made a following may get here in either order: one that followed an older
+// generation and comes last would put that generation's connections and
+// rate limits back in force, and they would stay until the next reload,
+// every later following finding the configuration followed already. So
+// only a generation later than the last applied is applied, under a lock of
+// its own that nothing else takes.
+func (s *Server) applyFollowed(followed *followedConfig) {
+	if hook := followAppliesHook.Load(); hook != nil {
+		(*hook)(followed.generation)
+	}
+	s.appliedMu.Lock()
+	defer s.appliedMu.Unlock()
+	if followed.generation <= s.appliedGeneration {
+		return
+	}
+	s.appliedGeneration = followed.generation
+	var collectors []model.Collector
+	var hostRateLimits []model.HostRateLimit
+	if followed.config != nil {
+		collectors = followed.config.Collectors
+		hostRateLimits = followed.config.RateLimits
+	}
+	fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
+	fetch.FollowHostRateLimits(hostRateLimits)
+}
+
 // followPlannedHook, set by tests, is called when a following has been
 // worked out and the statistics lock is not yet taken to make it, so a test
 // can put a probe, or another reload, between the two.
 var followPlannedHook atomic.Pointer[func()]
+
+// followAppliesHook, set by tests, is called with the generation of a
+// following made, once statsMu is released and before the request types
+// are told of it (applyFollowed), so a test can make a later following
+// meanwhile.
+var followAppliesHook atomic.Pointer[func(generation uint64)]
 
 // prepareReload works out, for a configuration a reload is about to put in
 // force, what following it needs that takes as long as the configuration is
@@ -656,10 +682,48 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 // statsMu is held, and the locks of the failure log and of the cache when
 // there is something of theirs to drop; the lock taken here is the innermost,
 // and nothing is locked under it.
+//
+// When next follows another static target file, what is kept of each target
+// it no longer has is forgotten with it, under the same lock: its result,
+// its last success and its status page record. Nothing else forgets them
+// but a read of the static targets endpoint, which an exporter whose
+// targets are exported over OTLP alone, or that the allocator gives targets
+// that move between replicas, may never have, and a target brought back
+// under its name would show the last scrape, error and failures of the one
+// removed. A scrape of a removed target that ends after this does not stand
+// (targetStands), so it records nothing, and the target brought back starts
+// with none.
 func (s *Server) storeFollowed(next *followedConfig) {
 	s.staticMu.Lock()
+	if previous := s.followed.Load(); previous == nil || previous.targets != next.targets {
+		s.forgetStaticTargetsGoneLocked(next.targetsDefined)
+	}
 	s.followed.Store(next)
 	s.staticMu.Unlock()
+}
+
+// forgetStaticTargetsGoneLocked forgets the result, last success and status
+// record of every static target not named in defined, the targets of the
+// file followed next. staticMu is held.
+func (s *Server) forgetStaticTargetsGoneLocked(defined map[string]uint64) {
+	for name := range s.staticResults {
+		if _, kept := defined[name]; !kept {
+			delete(s.staticResults, name)
+			delete(s.staticFetched, name)
+			// The endpoint's merge holds the result: it is made again.
+			s.staticGeneration++
+		}
+	}
+	for name := range s.staticLastSuccess {
+		if _, kept := defined[name]; !kept {
+			delete(s.staticLastSuccess, name)
+		}
+	}
+	for name := range s.staticStatus {
+		if _, kept := defined[name]; !kept {
+			delete(s.staticStatus, name)
+		}
+	}
 }
 
 // storeFollowedForgetting is storeFollowed for a reload that retires no

@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // probeRows is the status page's recent probes, as JSON, by collector and
@@ -189,6 +192,66 @@ func TestTheRecentProbesAreBounded(t *testing.T) {
 	}
 	if _, kept := rows["text "+key(recentProbeKeys).target]; !kept {
 		t.Error("the new key was not kept")
+	}
+}
+
+// What the recent probes hold of a key whose target and parameters a caller
+// made 8 KiB long, failing, is the target cut to 512 bytes, the parameters
+// cut and the error, within the 3.5 KiB a key may take with the target,
+// the parameters and the error at their bounds (512, 512 and 2000 bytes)
+// and what holds them: neither the target, the parameter nor the line of
+// the request that named them stays with the key, which would be over
+// 8 KiB. Measured as what
+// forgetting the keys frees, with the server kept alive through both
+// measurements and what the probes left settled by a collection before the
+// first, over the 500 keys kept of 1,000 probed, 200 under the race
+// detector.
+func TestTheRecentProbesHoldLittleOfLongTargets(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	defer target.Close()
+	app := testutil.Collector("app", "text")
+	app.Request.Path = "/{{param_tenant}}"
+	server := modeServer(t, app)
+	server.logger = testutil.QuietLogger(t)
+	handler := server.Handler()
+	pad := strings.Repeat("a", 8000)
+	keys := alloctest.UnlessRaced(1000, 200)
+	for i := range keys {
+		query := url.Values{"collector": {"app"}, "target": {target.URL + "/" + strconv.Itoa(i) + pad}, "param_tenant": {pad}}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/probe?"+query.Encode(), nil))
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("probe %d answered %d: %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	server.recent.mu.Lock()
+	kept := len(server.recent.entries)
+	for key, entry := range server.recent.entries {
+		if len(key.target) > recentProbeTargetBytes || len(key.params) > recentProbeParamsBytes || len(entry.probes) != 1 || len(entry.probes[0].failure) > model.MaxFailureBytes || entry.probes[0].failure == "" {
+			t.Errorf("a key is kept with a target of %d bytes, parameters of %d and %d probes", len(key.target), len(key.params), len(entry.probes))
+			break
+		}
+	}
+	server.recent.mu.Unlock()
+	if kept != min(keys, recentProbeKeys) {
+		t.Fatalf("%d keys are kept of %d probed", kept, keys)
+	}
+	var remembered, forgotten runtime.MemStats
+	runtime.GC()
+	runtime.GC()
+	runtime.ReadMemStats(&remembered)
+	server.recent.mu.Lock()
+	server.recent.entries = map[recentProbeKey]*recentProbeEntry{}
+	server.recent.order.Init()
+	server.recent.mu.Unlock()
+	runtime.GC()
+	runtime.ReadMemStats(&forgotten)
+	runtime.KeepAlive(server)
+	held := int64(remembered.HeapAlloc) - int64(forgotten.HeapAlloc)
+	if perKey := held / int64(kept); perKey > 3584 {
+		t.Errorf("the recent probes hold %d bytes for each of %d keys of 8 KiB targets, want at most 3584", perKey, kept)
 	}
 }
 

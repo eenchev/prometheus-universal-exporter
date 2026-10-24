@@ -27222,6 +27222,30 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   probe naming `tls`, `cert_file` and `key_file` parameters is not answered
   with the certificate.
 
+## 34.204 The image and the race suite in jobs of their own
+
+- CI builds the image in a job of its own, `image`, not in `build`: with
+  `docker/build-push-action` after `docker/setup-buildx-action`, pushing
+  nothing, loaded into the runner's docker with the tag the next step runs,
+  given `VERSION=0.0.0-ci` and the commit as `REVISION`, its layers read
+  from and written to the Actions cache (`type=gha`, `type=gha,mode=max`),
+  and then runs its `--version` and finds the commit in it, every step
+  after the setup under the go filter and none publishing; a workflow that
+  builds it in `build` with `docker build` fails the test
+  (TestCIBuildsForMacOSAndBuildsTheImage).
+- A job of ci.yml none of whose steps sets up Go or Python or runs go,
+  python3, pip or make starts with `test`'s checkout, filter and step
+  `changes` alone and is not held to `test`'s env; one that runs `go` after
+  only those steps, or whose step `changes` differs from `test`'s, fails the
+  test, and ci.yml has at least seven jobs beside `test`
+  (TestTheGoJobsOfCIStartWithTheSetupOfTest).
+- ci.yml runs the race suite in one step for `allocator`, one for
+  `exporter-core` and one for `exporter-rest`, by one command, each under
+  its side's filter output; `tools/ci-packages.sh exporter-core` lists
+  `internal/exporter` alone, and it and `exporter-rest` together list the
+  exporter's side, each package once; the single exporter step of before
+  fails the test (TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

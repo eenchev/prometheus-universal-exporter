@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -345,5 +346,51 @@ func TestALintRunRepeatsNoFinding(t *testing.T) {
 	}
 	if got := LintRun(&c, nil, set)[0].String(); !strings.HasPrefix(got, `[counter-total] metric "jobs": a counter whose name`) {
 		t.Fatalf("%s", got)
+	}
+}
+
+// A run of many metric names is linted in time linear in its series: the
+// type of each name was found by a scan of every series, which made 50,000
+// names take seconds. The old code takes far longer than the bound for
+// lintManyFamilies names; the linear one takes a small part of it.
+func TestALintRunIsLinearInItsSeries(t *testing.T) {
+	const lintManyFamilies = 100000
+	set := &model.MetricSet{Metrics: make([]model.Metric, lintManyFamilies)}
+	for i := range set.Metrics {
+		set.Metrics[i] = model.Metric{Name: fmt.Sprintf("app_metric_%d", i), Type: model.GaugeMetricType, Labels: map[string]string{"job": "app"}}
+	}
+	c := lintCollectorOf("app")
+	start := time.Now()
+	findings := LintRun(&c, nil, set)
+	elapsed := time.Since(start)
+	t.Logf("%d names linted in %s", lintManyFamilies, elapsed)
+	if len(findings) != 0 {
+		t.Fatalf("findings = %v, want none", findings[:1])
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("%d names took %s to lint, more than 10s: the lint of a run is not linear in its series", lintManyFamilies, elapsed)
+	}
+}
+
+// The configuration's lint is linear in its collectors: each collector's
+// names were compared with those of every other collector, worked out anew
+// for each, so a configuration of thousands of collectors took seconds. The
+// old code takes far longer than the bound for lintManyCollectors; the
+// linear one takes a small part of it.
+func TestAConfigurationLintIsLinearInItsCollectors(t *testing.T) {
+	const lintManyCollectors = 10000
+	conf := &model.Config{Collectors: make([]model.Collector, lintManyCollectors)}
+	for i := range conf.Collectors {
+		conf.Collectors[i] = lintCollectorOf(fmt.Sprintf("app%d", i), fmt.Sprintf("app_metric_%d:gauge", i), fmt.Sprintf("app_metric_%d_seconds:gauge", i))
+	}
+	start := time.Now()
+	findings := LintConfiguration(conf)
+	elapsed := time.Since(start)
+	t.Logf("%d collectors linted in %s", lintManyCollectors, elapsed)
+	if len(findings) != 0 {
+		t.Fatalf("findings = %v, want none", findings[:1])
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("%d collectors took %s to lint, more than 10s: the lint of a configuration is not linear in its collectors", lintManyCollectors, elapsed)
 	}
 }

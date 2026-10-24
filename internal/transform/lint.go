@@ -47,9 +47,10 @@ const MaxLintLabelValues = 100
 // another collector makes in another way. The series a run makes are not
 // known here, so unbounded-label gives none.
 func LintConfiguration(conf *model.Config) []LintFinding {
+	families, index := lintIndexOf(conf)
 	var out []LintFinding
 	for i := range conf.Collectors {
-		out = append(out, LintCollector(&conf.Collectors[i], conf)...)
+		out = append(out, lintCollector(&conf.Collectors[i], families[i], conf, index)...)
 	}
 	return out
 }
@@ -59,14 +60,48 @@ func LintConfiguration(conf *model.Config) []LintFinding {
 // or one of c's name, makes in another way. c need not be one of conf's: a
 // collector written on the debug page is compared with those in force.
 func LintCollector(c *model.Collector, conf *model.Config) []LintFinding {
+	var index map[string][]lintOwner
+	if conf != nil {
+		_, index = lintIndexOf(conf)
+	}
+	return lintCollector(c, lintStaticFamilies(c), conf, index)
+}
+
+// lintCollector is LintCollector's advice on c, whose names are mine, with
+// the names of conf's collectors indexed in index, nil where conf is.
+func lintCollector(c *model.Collector, mine []*lintFamily, conf *model.Config, index map[string][]lintOwner) []LintFinding {
 	var out []LintFinding
-	for _, f := range lintStaticFamilies(c) {
+	for _, f := range mine {
 		out = append(out, lintNameFindings(c, f.name, f.typ)...)
 	}
 	if conf != nil {
-		out = append(out, lintClashes(c, conf)...)
+		out = append(out, lintClashes(c, mine, conf, index)...)
 	}
 	return lintSilenced(c, out)
+}
+
+// lintOwner is a collector of a configuration, by its index, that makes a
+// name, and the name as its rules make it.
+type lintOwner struct {
+	collector int
+	family    *lintFamily
+}
+
+// lintIndexOf are the names each collector of conf makes, by the collector's
+// index, and the collectors that make each name, in their order. They are
+// worked out once for a configuration: working out every other collector's
+// names for each collector made the lint of thousands of collectors take
+// minutes.
+func lintIndexOf(conf *model.Config) ([][]*lintFamily, map[string][]lintOwner) {
+	families := make([][]*lintFamily, len(conf.Collectors))
+	index := map[string][]lintOwner{}
+	for i := range conf.Collectors {
+		families[i] = lintStaticFamilies(&conf.Collectors[i])
+		for _, f := range families[i] {
+			index[f.name] = append(index[f.name], lintOwner{collector: i, family: f})
+		}
+	}
+	return families, index
 }
 
 // LintRun is the advice of a debug run of c: LintCollector's, the name rules on the
@@ -83,8 +118,8 @@ func LintRun(c *model.Collector, conf *model.Config, set *model.MetricSet) []Lin
 		seen[f] = true
 	}
 	var found []LintFinding
-	for _, name := range lintFamilyOrder(set) {
-		found = append(found, lintNameFindings(c, name, lintTypeOf(set, name))...)
+	for _, f := range lintRunFamilies(set) {
+		found = append(found, lintNameFindings(c, f.name, f.typ)...)
 	}
 	found = append(found, lintUnboundedLabels(c, set)...)
 	for _, f := range lintSilenced(c, found) {
@@ -392,26 +427,19 @@ func lintUTF8Start(b byte) bool { return b&0xC0 != 0x80 }
 // type a prometheus rule leaves to the series, a help a rule does not write,
 // the labels of a prometheus transform's series, and the names a python
 // script or a prometheus rule without a name make.
-func lintClashes(c *model.Collector, conf *model.Config) []LintFinding {
-	mine := lintStaticFamilies(c)
-	if len(mine) == 0 {
-		return nil
+func lintClashes(c *model.Collector, mine []*lintFamily, conf *model.Config, index map[string][]lintOwner) []LintFinding {
+	type clash struct {
+		collector int
+		finding   LintFinding
 	}
-	var out []LintFinding
-	for i := range conf.Collectors {
-		other := &conf.Collectors[i]
-		if other.Name == c.Name {
-			continue
-		}
-		theirs := map[string]*lintFamily{}
-		for _, f := range lintStaticFamilies(other) {
-			theirs[f.name] = f
-		}
-		for _, f := range mine {
-			g := theirs[f.name]
-			if g == nil {
+	var clashes []clash
+	for _, f := range mine {
+		for _, owner := range index[f.name] {
+			other := &conf.Collectors[owner.collector]
+			if other.Name == c.Name {
 				continue
 			}
+			g := owner.family
 			var differences []string
 			if f.typ != "" && g.typ != "" && f.typ != g.typ {
 				differences = append(differences, fmt.Sprintf("as a %s, where this collector makes a %s", g.typ, f.typ))
@@ -425,30 +453,31 @@ func lintClashes(c *model.Collector, conf *model.Config) []LintFinding {
 			if len(differences) == 0 {
 				continue
 			}
-			out = append(out, LintFinding{Collector: c.Name, Rule: model.LintNameClash, Metric: f.name, Message: fmt.Sprintf("collector %q makes it too, %s; Prometheus keeps one type and one help for a name, and a query over both collectors' series mixes them, so give the two the same type, help and labels, or different names", other.Name, strings.Join(differences, ", "))})
+			clashes = append(clashes, clash{owner.collector, LintFinding{Collector: c.Name, Rule: model.LintNameClash, Metric: f.name, Message: fmt.Sprintf("collector %q makes it too, %s; Prometheus keeps one type and one help for a name, and a query over both collectors' series mixes them, so give the two the same type, help and labels, or different names", other.Name, strings.Join(differences, ", "))}})
 		}
+	}
+	// The findings are by the other collector, in conf's order, and then by
+	// c's names, in their order.
+	slices.SortStableFunc(clashes, func(a, b clash) int { return a.collector - b.collector })
+	out := make([]LintFinding, len(clashes))
+	for i, k := range clashes {
+		out[i] = k.finding
 	}
 	return out
 }
 
-// lintFamilyOrder are the metric names of set in the order each first appears.
-func lintFamilyOrder(set *model.MetricSet) []string {
-	var out []string
+// lintRunFamilies are the metric names of set in the order each first
+// appears, each with the type of its first series. They are found in one
+// pass over the series: a scan of every series for each name's type made a
+// run of 50,000 names take seconds to lint.
+func lintRunFamilies(set *model.MetricSet) []lintFamily {
+	var out []lintFamily
 	seen := map[string]bool{}
 	for _, m := range set.Metrics {
 		if !seen[m.Name] {
 			seen[m.Name] = true
-			out = append(out, m.Name)
+			out = append(out, lintFamily{name: m.Name, typ: m.Type})
 		}
 	}
 	return out
-}
-
-func lintTypeOf(set *model.MetricSet, name string) model.MetricType {
-	for _, m := range set.Metrics {
-		if m.Name == name {
-			return m.Type
-		}
-	}
-	return ""
 }

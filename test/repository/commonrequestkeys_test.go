@@ -18,7 +18,6 @@ var pendingCommonKeys = []string{
 	"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections",
 	"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file",
 	"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server",
-	"bind_dn", "start_tls", "searches",
 }
 
 // The common part of a collector's request block, model.RequestConfig's

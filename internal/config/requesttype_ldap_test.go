@@ -42,8 +42,9 @@ func TestAnLDAPCollectorDecodesJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := cfg.Collectors[0]
-	s := c.Request.Searches[0]
-	if c.Decoder.Type != "json" || !c.Request.StartTLS || s.Scope != "" || s.Filter != "" || s.Attributes != nil || s.MaxEntries != 0 || len(cfg.Warnings) != 0 {
+	own := c.Request.Own.(fetch.LDAPConfig)
+	s := own.Searches[0]
+	if c.Decoder.Type != "json" || !own.StartTLS || s.Scope != "" || s.Filter != "" || s.Attributes != nil || s.MaxEntries != 0 || len(cfg.Warnings) != 0 {
 		t.Errorf("decoder %q, request %+v, warnings %q", c.Decoder.Type, c.Request, cfg.Warnings)
 	}
 	for transform, want := range map[string]string{"regex": "transforms with regex, which cannot read the JSON an ldap collector is answered with", "jq\n    decoder:\n      type: yaml": "decodes with yaml, but an ldap collector's answer is JSON"} {

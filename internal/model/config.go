@@ -309,15 +309,6 @@ type RequestConfig struct {
 	FieldSelector string   `yaml:"field_selector,omitempty"`
 	MaxObjects    int      `yaml:"max_objects,omitempty"`
 	APIServer     string   `yaml:"api_server,omitempty"`
-	// BindDN, StartTLS and Searches belong to the ldap type, with
-	// PasswordFile above: the DN a simple bind is made as, none for an
-	// anonymous bind, whether TLS is begun with the StartTLS operation on
-	// a plaintext connection, and the searches whose results the document
-	// holds (fetch/requesttype_ldap.go). Left out of a collector written as
-	// YAML when empty, as the sql keys are.
-	BindDN   string       `yaml:"bind_dn,omitempty"`
-	StartTLS bool         `yaml:"start_tls,omitempty"`
-	Searches []LDAPSearch `yaml:"searches,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -418,35 +409,6 @@ const KubernetesNamePattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 // KubernetesGroupPattern is what a kubernetes collector's request.group is
 // made of: a DNS subdomain, lower case, of at most 253 characters.
 const KubernetesGroupPattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-
-// LDAPSearch is one entry of an ldap collector's request.searches: the name
-// its result is put under in the document, where it searches, which
-// entries it matches and what of them it reads. Scope "" is sub, Filter ""
-// is (objectClass=*), no Attributes asks for the entries' DNs alone, and
-// MaxEntries 0 is the default bound.
-type LDAPSearch struct {
-	Name       string   `yaml:"name"`
-	Base       string   `yaml:"base,omitempty"`
-	Scope      string   `yaml:"scope,omitempty"`
-	Filter     string   `yaml:"filter,omitempty"`
-	Attributes []string `yaml:"attributes,omitempty"`
-	CountOnly  bool     `yaml:"count_only,omitempty"`
-	MaxEntries int      `yaml:"max_entries,omitempty"`
-}
-
-// LDAPSearchNamePattern is what request.searches[].name is written with: a
-// name a jq path reaches as .searches.<name>.
-const LDAPSearchNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
-
-// LDAPScopes are the values of request.searches[].scope.
-var LDAPScopes = []string{"base", "one", "sub"}
-
-// LDAPAttributePattern is what an entry of request.searches[].attributes
-// is written with: an attribute's name or OID, with options after ; as in
-// cn;lang-de, or * for every user attribute and + for every operational
-// one. The exporter and
-// the schema hold them to it alike.
-const LDAPAttributePattern = `^(\*|\+|[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*|[0-9]+(\.[0-9]+)+(;[A-Za-z0-9-]+)*)$`
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how

@@ -18,8 +18,9 @@ import (
 
 // withTargetAccount is c as a scrape with overrides makes it: a static
 // target's tls block in place of the collector's whole, its password_file
-// in place of the collector's, and its username or bind_dn, which come only
-// with its own password_file, in place of the collector's. A target that
+// in place of the collector's, and its username, which comes only with its
+// own password_file, in place of the collector's; an ldap target's bind_dn,
+// which comes so too, is ldap's own (withLDAPTargetAccount). A target that
 // names a password file alone logs in as the collector's account with that
 // password: servers that each keep their own password for one account are
 // what it is for. c itself is never written, being the configuration's.
@@ -33,9 +34,6 @@ func withTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector 
 	}
 	if o.Username != "" {
 		x.Request.Username = o.Username
-	}
-	if o.BindDN != "" {
-		x.Request.BindDN = o.BindDN
 	}
 	if o.TLS != nil {
 		x.Request.TLS = *o.TLS

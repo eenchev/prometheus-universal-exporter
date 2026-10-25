@@ -104,9 +104,6 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "args") {
 			c.Request.Args = []string{"{{param_arg:x}}"}
 		}
-		if slices.Contains(fields, "searches") {
-			c.Request.Searches = []model.LDAPSearch{{Name: "n", Base: "ou={{param_ou:x}},dc=org", Filter: "(uid={{param_uid:x}})"}}
-		}
 		if fill := ownPlaceholders[name]; fill != nil {
 			fill(&c)
 		}

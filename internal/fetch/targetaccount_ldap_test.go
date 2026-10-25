@@ -19,7 +19,8 @@ import (
 // its own block is ldaps://.
 func TestAnLDAPStaticTargetsAccountAndTLSAreChecked(t *testing.T) {
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.BindDN, c.Request.PasswordFile = "cn=exporter,dc=example,dc=org", "/secrets/exporter"
+		c.Request.PasswordFile = "/secrets/exporter"
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
 	})
 	ca := &model.TLSConfig{CAFile: "/ca.pem", Set: true}
 	checkTargetRequests(t, c, map[string]struct {
@@ -39,7 +40,7 @@ func TestAnLDAPStaticTargetsAccountAndTLSAreChecked(t *testing.T) {
 		"ldap:// with its own tls":   {"ldap://dir.internal", model.TargetRequestConfig{TLS: ca}, "asks for plaintext with ldap://, but sets request.tls of its own"},
 		"a redis account":            {"dir.internal", model.TargetRequestConfig{Username: "tenant", PasswordFile: "/p"}, "sets request.username, which does not apply"},
 	})
-	startTLS := ldapCollector(t, func(c *model.Collector) { c.Request.StartTLS = true })
+	startTLS := ldapCollector(t, func(c *model.Collector) { editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true }) })
 	checkTargetRequests(t, startTLS, map[string]struct {
 		target  string
 		request model.TargetRequestConfig
@@ -58,6 +59,7 @@ func TestAnLDAPStaticTargetsAccountAndTLSAreChecked(t *testing.T) {
 // a scrape of it would, under the target's name.
 func TestAnLDAPStaticTargetsFilesAreReadByTheDryRun(t *testing.T) {
 	checkTargetFilesAreRead(t, ldapCollector(t, func(c *model.Collector) {
-		c.Request.BindDN, c.Request.PasswordFile = "cn=exporter,dc=example,dc=org", "/missing/collector"
+		c.Request.PasswordFile = "/missing/collector"
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
 	}), true)
 }

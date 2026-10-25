@@ -14,7 +14,6 @@ import (
 var pendingCommonKeys = []string{
 	"method", "body", "pagination", "accept_codes", "targets", "from", "until",
 	"rpc", "message", "metadata", "descriptors", "protoset_file", "proto_files", "proto_import_paths",
-	"passphrase_file", "known_hosts_file", "keepalive_interval", "keepalive_count_max", "idle_timeout", "max_open_connections",
 	"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections",
 }
 

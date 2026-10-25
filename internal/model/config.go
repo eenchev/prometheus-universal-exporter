@@ -240,23 +240,13 @@ type RequestConfig struct {
 	ProtosetFile     string            `yaml:"protoset_file"`
 	ProtoFiles       []string          `yaml:"proto_files"`
 	ProtoImportPaths []string          `yaml:"proto_import_paths"`
-	// Username, the credential files and KnownHostsFile belong to the
-	// sshfile type: the account a file is read as on the remote host, its
-	// private key (with the file of the key's passphrase) or password, and
-	// the known_hosts file the host's key is verified against. The
-	// keepalive settings and IdleTimeout say how long the connection it
-	// keeps to a host lives; nil is the default, and 0 switches each off.
-	// MaxOpenConnections is the most connections the collector holds open
-	// at once, 0 for no limit (fetch/requesttype_sshfile.go).
-	Username           string    `yaml:"username"`
-	PrivateKeyFile     string    `yaml:"private_key_file"`
-	PassphraseFile     string    `yaml:"passphrase_file"`
-	PasswordFile       string    `yaml:"password_file"`
-	KnownHostsFile     string    `yaml:"known_hosts_file"`
-	KeepaliveInterval  *Duration `yaml:"keepalive_interval"`
-	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
-	IdleTimeout        *Duration `yaml:"idle_timeout"`
-	MaxOpenConnections int       `yaml:"max_open_connections"`
+	// Username and the credential files belong to the types that log in
+	// as an account: sshfile, the account a file is read as on the remote
+	// host, with its private key or password; sql, redis and ldap, with
+	// theirs (fetch/requesttype_<name>.go).
+	Username       string `yaml:"username"`
+	PrivateKeyFile string `yaml:"private_key_file"`
+	PasswordFile   string `yaml:"password_file"`
 	// Driver, Database, Statement, Args, Options and ServiceName belong to
 	// the sql type, with Username, PasswordFile, PrivateKeyFile and
 	// PassphraseFile above: the database driver, the database, the one

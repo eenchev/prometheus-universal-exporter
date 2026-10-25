@@ -265,13 +265,11 @@ func (r RequestConfig) MarshalYAML() (any, error) {
 // RequestView is r as a request block is read: a struct with a field for
 // each key of the common part and of every request type's own, holding r's
 // values, which a caller may change through it, as the load does when it
-// reads again what the decoder took for a mistake. store writes the view
-// back into r as reading the block would have: the common part, Own, and
-// Foreign with the keys of other types the view now sets beside those r
-// had.
-func RequestView(r *RequestConfig) (view reflect.Value, store func()) {
+// reads again what the decoder took for a mistake, and then write back
+// into r (StoreRequestView).
+func RequestView(r *RequestConfig) reflect.Value {
 	layout := currentRequestLayout()
-	view = reflect.New(layout.decoded).Elem()
+	view := reflect.New(layout.decoded).Elem()
 	in := reflect.ValueOf(r).Elem()
 	for i, field := range layout.common {
 		view.Field(i).Set(in.Field(field))
@@ -285,22 +283,27 @@ func RequestView(r *RequestConfig) (view reflect.Value, store func()) {
 			}
 		}
 	}
-	return view, func() {
-		foreign := r.Foreign
-		layout.store(view, r)
-		if len(foreign) == 0 {
-			return
-		}
-		// The keys r had, whose values the view does not hold, in the
-		// order of the layout with those it sets.
-		var merged []string
-		for _, key := range layout.owned {
-			if slices.Contains(foreign, key.key) || slices.Contains(r.Foreign, key.key) {
-				merged = append(merged, key.key)
-			}
-		}
-		r.Foreign = merged
+	return view
+}
+
+// StoreRequestView writes a RequestView of r back into r as reading the
+// block would have: the common part, Own, and Foreign with the keys of
+// other types the view now sets beside those r had, whose values the view
+// does not hold.
+func StoreRequestView(view reflect.Value, r *RequestConfig) {
+	layout := currentRequestLayout()
+	foreign := r.Foreign
+	layout.store(view, r)
+	if len(foreign) == 0 {
+		return
 	}
+	var merged []string
+	for _, key := range layout.owned {
+		if slices.Contains(foreign, key.key) || slices.Contains(r.Foreign, key.key) {
+			merged = append(merged, key.key)
+		}
+	}
+	r.Foreign = merged
 }
 
 // RequestViewType is the type of a RequestView.

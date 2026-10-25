@@ -691,7 +691,7 @@ func TestASQLCollectorsRequestIsCheckedWhenItLoads(t *testing.T) {
 		"no username":           {func(r *model.RequestConfig) { r.Username = "" }, `collector "db" request.username is required for request.type sql`},
 		"a blank password file": {func(r *model.RequestConfig) { r.PasswordFile = " " }, "request.password_file is written with blanks alone"},
 		"a private key":         {func(r *model.RequestConfig) { r.PrivateKeyFile = "/k" }, "sets request.private_key_file, which only the snowflake driver takes"},
-		"a passphrase":          {func(r *model.RequestConfig) { r.PassphraseFile = "/p" }, `collector "db" sets request.passphrase_file, which does not apply to request.type "sql"`},
+		"a passphrase":          {func(r *model.RequestConfig) { r.Foreign = []string{"passphrase_file"} }, `collector "db" sets request.passphrase_file, which does not apply to request.type "sql"`},
 		"a service name":        {func(r *model.RequestConfig) { r.ServiceName = "ORCL" }, "sets request.service_name, which only the oracle driver takes"},
 		"a blank database":      {func(r *model.RequestConfig) { r.Database = "  " }, "request.database is written with blanks alone"},
 		"an unknown option":     {func(r *model.RequestConfig) { r.Options = map[string]string{"sslrootcert": "/ca"} }, `request.options sets "sslrootcert", which the postgres driver does not take; it takes: application_name, sslmode`},

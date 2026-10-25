@@ -3,6 +3,8 @@
 package exporter
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
@@ -368,6 +371,85 @@ func TestTheRecentProbesJSONShape(t *testing.T) {
 	for _, field := range []string{`"probe_keys":1`, `"failing_probe_keys":0`, `"probes":[{"collector":"text","target":"` + up.URL + `","result":"success","failing":false,"shared":false,"last_probe":"`, `"last_probe_age_seconds":`, `"duration_seconds":`, `"status":200,"series":1,"probes":[{"at":"`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("the JSON has no %s:\n%s", field, body)
+		}
+	}
+}
+
+// A probe that panicked is shown with a fixed error, as a static target's
+// scrape that panicked is: the panic says whatever its code had at hand, a
+// URL with its password here, and only the log has it.
+func TestAPanickedProbeShowsAFixedError(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	fetch.RequestTypes["panics"] = &fetch.RequestType{
+		Name:         "panics",
+		Fields:       []string{"path"},
+		TargetFields: []string{"path"},
+		Validate:     func(*model.Collector) error { return nil },
+		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+			panic("boom at https://reader:hunter2@db.example/x")
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
+	broken := testutil.Collector("broken", "text")
+	broken.Request = model.RequestConfig{Type: "panics", Path: "/data"}
+	server := modeServer(t, broken)
+	if r := probeOnce(t, server, probeOf("broken", "panics://data"), nil); r.Code != http.StatusInternalServerError {
+		t.Fatalf("the panicking probe answered %d: %s", r.Code, r.Body)
+	}
+	row := probeRows(t, server)["broken panics://data"]
+	if row.Result != probeFailed || row.LastError != probePanickedText {
+		t.Errorf("the panicked probe's row is %+v; want failed with %q", row, probePanickedText)
+	}
+	body := getPage(t, server, "/static-targets/status")
+	for _, text := range []string{body, statusJSONText(t, server)} {
+		if strings.Contains(text, "boom") || strings.Contains(text, "hunter2") {
+			t.Fatalf("the status shows the panic:\n%s", text)
+		}
+	}
+	if !strings.Contains(logs.String(), "boom") {
+		t.Fatalf("the panic is not in the log:\n%s", logs.String())
+	}
+}
+
+// statusJSONText is the status page as JSON, as served.
+func statusJSONText(t *testing.T, server *Server) string {
+	t.Helper()
+	return getPath(server, http.MethodGet, "/static-targets/status?format=json").Body.String()
+}
+
+// The userinfo of a URL is withheld wherever the page shows text the
+// exporter did not write: in an error that quotes one, a probe's or a static
+// target's alike, and in a probe parameter's value.
+func TestTheRecentProbesWithholdAURLsUserinfo(t *testing.T) {
+	quoting := textTarget(t, "value=https://reader:hunter2@db.example/x\n")
+	strict := testutil.Collector("strict", "text")
+	strict.Metrics[0].ErrorMode = "fail"
+	strict.Metrics[0].Expression = `value=(.+)`
+	strict.Request.Path = "/{{param_tenant}}"
+	server := modeServer(t, strict)
+	server.logger = testutil.QuietLogger(t)
+	tenant := url.QueryEscape("https://writer:hunter3@other.example/t")
+	if r := probeOnce(t, server, probeOf("strict", quoting.URL)+"&param_tenant="+tenant, nil); r.Code != http.StatusBadGateway {
+		t.Fatalf("the probe answered %d: %s", r.Code, r.Body)
+	}
+	body := getPage(t, server, "/static-targets/status")
+	for _, text := range []string{body, statusJSONText(t, server)} {
+		for _, secret := range []string{"hunter2", "hunter3"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("the status shows the password %s:\n%s", secret, text)
+			}
+		}
+	}
+	row := probeRows(t, server)["strict "+quoting.URL]
+	if !strings.Contains(row.LastError, "db.example") || !strings.Contains(row.Params, "other.example") {
+		t.Errorf("the row is %+v; want its error and parameter shown, the passwords withheld", row)
+	}
+	for _, err := range []error{
+		errors.New("fetching https://reader:hunter2@db.example/x: refused"),
+		&url.Error{Op: "Get", URL: "https://reader:hunter2@db.example/x?token=abc", Err: errors.New("refused")},
+	} {
+		if shown := shownStatusError(err); strings.Contains(shown, "hunter2") || strings.Contains(shown, "abc") || !strings.Contains(shown, "db.example") {
+			t.Errorf("the error %q is shown as %q", err, shown)
 		}
 	}
 }

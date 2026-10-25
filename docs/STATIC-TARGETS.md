@@ -657,8 +657,10 @@ target:
   shown after the target recovers, so a failure in the night can be read in
   the morning, and while scrapes are skipped by backoff, so the error that
   made the exporter back off is the one shown. It is the error the log has,
-  with every URL's credentials withheld, anything else that reads as a
-  credential masked, and cut to 2000 bytes.
+  with every URL's credentials withheld, its userinfo too where the text
+  only quotes the URL, anything else that reads as a credential masked, and
+  cut to 2000 bytes. A scrape that panicked shows `the scrape panicked; the
+  exporter's log has the panic`: the panic's own text is only in the log.
 
 A summary line above says how many targets there are, how many are failing
 and how many have not been scraped yet; the failing targets come first. The

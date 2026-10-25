@@ -12,10 +12,12 @@
 #   sh tools/run-example.sh check-root-binaries prometheus-universal-exporter pue-allocator
 #
 # An example is a directory under examples/, named by the directory, whose
-# configuration is the YAML file with a top-level collectors or
-# collector_files key and whose static target file, if any, the one with a
-# top-level targets key (the test of the example tree tells them apart the
-# same way); or a configuration of its own directly in examples/,
+# configuration is its config.yaml and whose static target file, if any, the
+# YAML file beside it with a top-level targets key; any other YAML file in
+# the directory or below is a collector file of the configuration's
+# collector_files, never an example of its own (the test of the example tree
+# tells them apart the same way). Or it is a configuration of its own
+# directly in examples/,
 # config.<name>.<anything>.yaml, named by <name>: examples/config.ecb.xml-test.yaml
 # is ecb. A name that two examples would share is an error, which a test
 # keeps from being shipped.
@@ -30,30 +32,41 @@ set -eu
 app=prometheus-universal-exporter
 
 # examples prints "name<TAB>configuration<TAB>static target file" for every
-# example, the last field empty for one without static targets.
+# example, the last field empty for one without static targets. It fails
+# for a directory of YAML without a config.yaml and for one with two static
+# target files; its callers run it in a command substitution of its own, not
+# in a pipeline, whose status would be that of its last command alone.
 examples() {
 	for dir in examples/*/; do
 		[ -d "$dir" ] || continue
 		dir=${dir%/}
+		# A directory with no YAML at all is no example.
+		[ -n "$(find "$dir" \( -name '*.yaml' -o -name '*.yml' \) -type f | head -n 1)" ] || continue
 		config=""
+		for file in "$dir/config.yaml" "$dir/config.yml"; do
+			[ -f "$file" ] || continue
+			if [ -n "$config" ]; then
+				echo "run-example: $dir has two configurations, $config and $file" >&2
+				exit 1
+			fi
+			config=$file
+		done
+		if [ -z "$config" ]; then
+			echo "run-example: $dir has YAML files but no config.yaml, the configuration of an example directory" >&2
+			exit 1
+		fi
 		targets=""
 		for file in "$dir"/*.yaml "$dir"/*.yml; do
-			[ -f "$file" ] || continue
-			if grep -Eq '^(collectors|collector_files):' "$file"; then
-				if [ -n "$config" ]; then
-					echo "run-example: $dir has two configurations, $config and $file" >&2
-					exit 1
-				fi
-				config=$file
-			elif grep -Eq '^targets:' "$file"; then
-				if [ -n "$targets" ]; then
-					echo "run-example: $dir has two static target files, $targets and $file" >&2
-					exit 1
-				fi
-				targets=$file
+			[ -f "$file" ] && [ "$file" != "$config" ] || continue
+			# Any other YAML file is a collector file of the configuration's
+			# collector_files, read with it and never on its own.
+			grep -Eq '^targets:' "$file" || continue
+			if [ -n "$targets" ]; then
+				echo "run-example: $dir has two static target files, $targets and $file" >&2
+				exit 1
 			fi
+			targets=$file
 		done
-		[ -n "$config" ] || continue
 		printf '%s\t%s\t%s\n' "${dir#examples/}" "$config" "$targets"
 	done
 	for file in examples/config.*.yaml examples/config.*.yml; do
@@ -178,7 +191,10 @@ check-host)
 	listen_host "${2:-}" >/dev/null
 	;;
 list)
-	examples | sort | awk -F '\t' '{ printf "  %-16s %s%s\n", $1, $2, ($3 == "" ? "" : " " $3) }'
+	# Not `examples | sort | awk`: a pipeline has the status of awk, and
+	# would print part of the list and succeed where examples failed.
+	all=$(examples)
+	[ -z "$all" ] || printf '%s\n' "$all" | sort | awk -F '\t' '{ printf "  %-16s %s%s\n", $1, $2, ($3 == "" ? "" : " " $3) }'
 	;;
 files)
 	line=$(example "${2:-}")

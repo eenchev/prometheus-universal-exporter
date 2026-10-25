@@ -119,6 +119,18 @@ func TestRedactText(t *testing.T) {
 			t.Errorf("RedactText(%q) = %q", text, got)
 		}
 	}
+	// A URL's userinfo is withheld as RedactURL withholds it, up to the
+	// authority's last @.
+	for text, want := range map[string]string{
+		`Get "https://user:hunter2@host/x?token=abc": refused`: `Get "https://redacted:redacted@host/x?token=` + Redacted + `": refused`,
+		`dial ftp://bob:p@ss@files.example/: timeout`:          `dial ftp://redacted:redacted@files.example/: timeout`,
+		`see s3+http://key@bucket and mailto:a@b.example`:      `see s3+http://redacted:redacted@bucket and mailto:a@b.example`,
+		`https://host/path@x stays`:                            `https://host/path@x stays`,
+	} {
+		if got := RedactText(text); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", text, got, want)
+		}
+	}
 	for _, text := range []string{
 		"502 Bad Gateway: the upstream did not answer",
 		`{"status":"down","since":"2026-09-25T10:00:00Z"}`,

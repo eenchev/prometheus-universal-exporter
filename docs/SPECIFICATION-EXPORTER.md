@@ -773,8 +773,12 @@ and the source MUST list the opt-in types.
   MUST say the exporter listens on every interface; an empty `HOST` MUST
   fail with a message before anything is built. An example's name MUST come from the tree
   (`tools/run-example.sh`): a directory under `examples/` is named by the
-  directory, `examples/config.<name>.<anything>.yaml` by `<name>`, and a
-  name two examples share MUST fail; `make run` without `EXAMPLE` MUST list
+  directory, its configuration being its `config.yaml` and its other YAML
+  files its static target file and collector files, which MUST NOT be
+  taken for a second configuration, `examples/config.<name>.<anything>.yaml`
+  by `<name>`, and a name two examples share MUST fail, as MUST every use
+  of the script, `list` among them, while the tree has a directory of YAML
+  without a `config.yaml` or with two static target files; `make run` without `EXAMPLE` MUST list
   the names and exit non-zero, and an unknown name MUST fail before
   anything is built. `make ci` MUST NOT reach `run`. CI MUST
   also vet, build and test (the `internal/fetch` package) a build with every
@@ -10588,12 +10592,18 @@ reading the source of the listed files.
 
 Whether or not its service is probed for real, every example under
 `examples/` MUST be covered by the default suite, at any depth: an example
-may be one file or a directory holding a configuration and the static target
-file that goes with it. The tests that check every example — against the
-committed schemas, that it loads, and that its scripts satisfy the contract —
-MUST take their list from the directory tree rather than from a file name
-pattern or a written list, telling a configuration from a static target file
-by its content, and MUST fail on a YAML file there that is neither. An
+may be one file or a directory holding a configuration, its `config.yaml`,
+with the static target file and the collector files that go with it. The
+tests that check every example — against the committed schemas, that it
+loads, and that its scripts satisfy the contract — MUST take their list from
+the directory tree rather than from a file name pattern or a written list,
+telling a configuration from a static target file by its content, and MUST
+fail on a YAML file there that is neither. In a directory the configuration
+MUST be `config.yaml` alone: any other file of collectors there or below is a
+collector file, checked as its configuration loads it and never as an
+example of its own, and the tests MUST fail on one the configuration's
+`collector_files` does not name, and on a directory of YAML without a
+`config.yaml`. An
 example's static target file MUST be valid against the configuration in its
 directory, as startup checks the two. An example of an opt-in request type
 (`examples/tcp`) MUST be loaded, and checked against the schema the build
@@ -27270,8 +27280,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   after the setup under the go filter and none publishing; a workflow that
   builds it in `build` with `docker build` fails the test
   (TestCIBuildsForMacOSAndBuildsTheImage).
-- A job of ci.yml none of whose steps sets up Go or Python or runs go,
-  python3, pip or make starts with `test`'s checkout, filter and step
+- A job of ci.yml none of whose steps sets up Go or Python, or has in its
+  script go, python3, pip, make or the like as a word or a script of
+  `tools/`, starts with `test`'s checkout, filter and step
   `changes` alone and is not held to `test`'s env; one that runs `go` after
   only those steps, or whose step `changes` differs from `test`'s, fails the
   test, and ci.yml has at least seven jobs beside `test`
@@ -27464,6 +27475,38 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - An exporter without OTLP export logs nothing of OTLP from a SIGTERM to its
   exit (TestASIGHUPDuringTheShutdownDoesNotEndIt), and one with it says it
   sends the last export (TestOTLPExportsThroughTheShutdownDelay).
+
+## 34.211 Panics and passwords on the status page, the CI setup rule and example collector files
+
+- A probe that panicked is shown on the status page with a fixed error, as
+  a static target's scrape that panicked is; neither the panic's text nor a
+  password it quotes is shown, and the panic is in the log
+  (TestAPanickedProbeShowsAFixedError).
+- The userinfo of a URL is withheld wherever the status page shows text the
+  exporter did not write: in a probe's error quoting one, in a probe
+  parameter's value, and in a static target's or a probe's error whether or
+  not it is a `*url.Error` (TestTheRecentProbesWithholdAURLsUserinfo).
+- `fetch.RedactText` withholds a URL's userinfo as `redacted:redacted`, up to
+  the authority's last `@`, and leaves an `@` in a path or a `mailto:` alone
+  (TestRedactText).
+- A step added to ci.yml's `image` job that runs Go or Python after an
+  assignment (`CGO_ENABLED=0 GOOS=darwin … go build`), after `&&`, `;` or
+  `||`, in a pipe, in `$(…)` or backticks, by a full path, or through a
+  script of `tools/` (`sh tools/ci-packages.sh`, `python3 tools/ci-passed.py`)
+  makes the job fail the setup check without `test`'s whole setup, and the
+  job as it is passes it (TestAJobThatRunsGoInAnyShapeNeedsTheWholeSetup).
+- A directory example with a `config.yaml` naming a collector file beside it
+  in `collector_files` and a static target file is one example to
+  `tools/run-example.sh` — `list`, `files`, `opt-in-types`, which finds the
+  opt-in type of the collector file, and `run` — and to the example tree's
+  tests, whose collector file is neither a configuration nor run on its
+  own; a file of collectors the configuration does not name, and a
+  directory of YAML without a `config.yaml`, fail the tree's tests
+  (TestAnExampleDirectoryMayHaveCollectorFiles).
+- While examples/ has a directory of YAML without a `config.yaml` or with
+  two static target files, `tools/run-example.sh list` and `files` exit
+  non-zero rather than print part of the list and succeed
+  (TestRunExampleListFailsWhereTheTreeIsRefused).
 
 # 35. Documentation requirements
 
@@ -29668,9 +29711,12 @@ then one of the OTLP export. Of the static targets:
   `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
   MUST leave the error of the last failed scrape, and when it began, as they
   were. The error MUST be the text the
-  log has, with every URL's credentials already withheld, masked again for
-  what reads as a credential, and cut to the bound of a failure's text
-  (§ 25); nothing else of a target's answer MAY be shown.
+  log has, with every URL's credentials withheld, masked again for what
+  reads as a credential, a URL's userinfo (`scheme://user:password@`)
+  anywhere in it among that, and cut to the bound of a failure's text
+  (§ 25); nothing else of a target's answer MAY be shown. A scrape that
+  panicked MUST be shown with a fixed error saying so; the panic's text MUST
+  NOT be shown, only logged.
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
@@ -29704,8 +29750,9 @@ Of the recent probes:
 - Every `/probe` the exporter answers MUST be recorded under its collector,
   its target as the logs show it (with any credential withheld) and its probe
   parameters that change the request, each value with what reads as a
-  credential masked, withheld whole when its parameter's name reads as a
-  credential, and cut; forwarded headers MUST NOT be shown. A probe answered
+  credential masked, a URL's userinfo in it among that, withheld whole when
+  its parameter's name reads as a credential, and cut; forwarded headers
+  MUST NOT be shown. A probe answered
   from the response cache MUST be recorded as `cached`, and one answered by
   another probe's trip (§ 42.13a) MUST be recorded and marked shared. A
   debug probe MUST NOT be recorded, nor a probe answered `400`, nor one whose
@@ -29714,7 +29761,8 @@ Of the recent probes:
   result — `success`, `cached`, `failed`, `refused by policy` (`403`),
   `rejected by limit` (`503`), `stale result served` or `backing off` — the
   HTTP status the exporter answered, the series it gave and its error, shown
-  and cut as a static target's error is.
+  and cut as a static target's error is; a probe that panicked MUST be shown
+  with a fixed error, as a static target's scrape that panicked is.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to

@@ -52,7 +52,7 @@ as the log shows it, with a credential in its URL withheld, and its probe
 parameters: `param_<name>`, `path`, `method`, `body`, `message`, `timeout` and
 the rest that change the request, since each makes a request of its own, a
 tenant or a path. A parameter's value is shown with anything reading as a
-credential masked, the whole value withheld when its name reads as one
+credential masked, a URL's `user:password@` among it, the whole value withheld when its name reads as one
 (`param_token`), and cut to 64 bytes; forwarded headers (`header_<name>`) are
 not shown. A probe answered from the response cache, or by a trip another
 identical probe started at the same moment, is recorded too, marked `cached`
@@ -77,8 +77,10 @@ collector, target and parameters:
   backing off; each mark's title has the probe's time, result and status;
 - the error of the latest failed probe of the ten, and when that probe began,
   shown as the static targets' errors are: the log's text, with every URL's
-  credentials withheld, anything else that reads as a credential masked, and
-  cut to 2000 bytes.
+  credentials withheld, its userinfo too where the text only quotes the URL,
+  anything else that reads as a credential masked, and cut to 2000 bytes. A
+  probe that panicked shows `the probe panicked; the exporter's log has the
+  panic`: the panic's own text is only in the log.
 
 A row is failing when its latest probe did not succeed: `success` and
 `cached` are the successes. A summary line says how many collectors and

@@ -9,8 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 // `make run` is how a shipped example is tried out. Running one by hand went
@@ -150,20 +148,11 @@ func TestMakeRunWithoutAnExampleListsThem(t *testing.T) {
 // built with tcp, and an unknown example fails before anything is built.
 func TestMakeRunAddsTheOptInTypesAnExampleNeeds(t *testing.T) {
 	optIn := optInRequestTypes(t)
-	for _, config := range shippedExamples(t).configs {
-		var document struct {
-			Collectors []struct {
-				Request struct {
-					Type string `yaml:"type"`
-				} `yaml:"request"`
-			} `yaml:"collectors"`
-		}
-		if err := yaml.Unmarshal([]byte(read(t, config)), &document); err != nil {
-			t.Fatalf("%s: %v", config, err)
-		}
+	tree := shippedExamples(t)
+	for _, config := range tree.configs {
 		var want []string
-		for _, collector := range document.Collectors {
-			if name := collector.Request.Type; slices.Contains(optIn, name) && !slices.Contains(want, name) {
+		for _, name := range exampleCollectorTypes(t, tree, config) {
+			if slices.Contains(optIn, name) {
 				want = append(want, name)
 			}
 		}
@@ -462,5 +451,124 @@ func TestDocsGiveMakeRun(t *testing.T) {
 	}
 	if !strings.Contains(read(t, "docs/DEVELOPMENT.md"), "make run EXAMPLE=open-meteo") {
 		t.Error("docs/DEVELOPMENT.md does not list make run")
+	}
+}
+
+// writeTree writes files, each path from dir, into dir.
+func writeTree(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// runExampleIn runs tools/run-example.sh with args in the tree dir.
+func runExampleIn(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	script, err := filepath.Abs("tools/run-example.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", append([]string{script}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// exampleCollector is a collector named name of the request type kind, as a
+// configuration or a collector file lists it.
+func exampleCollector(name, kind string) string {
+	return "  - name: " + name + "\n    request:\n      type: " + kind + "\n    transform:\n      type: jq\n    metrics:\n      - name: " + name + "_up\n        expression: .up\n"
+}
+
+// A directory example may keep collectors in collector files beside its
+// config.yaml, as docs/CONFIGURATION.md shows collector_files: the
+// configuration is config.yaml, the static target file the one with
+// targets, and a collector file is neither listed as an example nor run on
+// its own, but read with its configuration — for the opt-in types it needs
+// among the rest. The example tree's tests read the directory the same way,
+// and refuse a file of collectors that the configuration does not name, and
+// a directory of YAML without a config.yaml, which the script refuses too.
+func TestAnExampleDirectoryMayHaveCollectorFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"examples/team/config.yaml":           "# curl 'http://localhost:9115/probe?collector=extra&target=http://127.0.0.1:8080'\ncollector_files: ['collectors-*.yaml']\ncollectors:\n" + exampleCollector("main", "http"),
+		"examples/team/collectors-extra.yaml": "collectors:\n" + exampleCollector("extra", "tcp"),
+		"examples/team/static-targets.yaml":   "interval: 1m\ntargets:\n  - name: one\n    collector: main\n    target: http://127.0.0.1:8080\n",
+		"examples/config.solo.json-test.yaml": "collectors:\n" + exampleCollector("solo", "http"),
+		"bin/prometheus-universal-exporter":   "#!/bin/sh\nfor a in \"$@\"; do echo \"arg: $a\"; done\n",
+		// opt-in-types reads the opt-in types from the tree.
+		"internal/fetch/requesttype_tcp.go": read(t, "internal/fetch/requesttype_tcp.go"),
+	})
+	if err := os.Chmod(filepath.Join(dir, "bin", "prometheus-universal-exporter"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tree, problems := exampleTreeAt(dir)
+	if len(problems) != 0 || !slices.Equal(tree.configs, []string{"examples/config.solo.json-test.yaml", "examples/team/config.yaml"}) ||
+		!slices.Equal(tree.staticTargets, []string{"examples/team/static-targets.yaml"}) ||
+		!slices.Equal(tree.collectorFiles["examples/team/config.yaml"], []string{"examples/team/collectors-extra.yaml"}) {
+		t.Errorf("the tree reads as %+v with the problems %v", tree, problems)
+	}
+	out, err := runExampleIn(t, dir, "list")
+	if err != nil || !strings.Contains(out, "  team             examples/team/config.yaml examples/team/static-targets.yaml\n") || !strings.Contains(out, "  solo ") || strings.Contains(out, "collectors-extra") {
+		t.Errorf("list gives (%v):\n%s", err, out)
+	}
+	if out, err := runExampleIn(t, dir, "files", "team"); err != nil || out != "examples/team/config.yaml\nexamples/team/static-targets.yaml\n" {
+		t.Errorf("files team gives (%v):\n%s", err, out)
+	}
+	if out, err := runExampleIn(t, dir, "opt-in-types", "team"); err != nil || strings.TrimSpace(out) != "tcp" {
+		t.Errorf("opt-in-types team gives %q (%v), want tcp from the collector file", out, err)
+	}
+	out, err = runExampleIn(t, dir, "run", "team", "127.0.0.1", "9115")
+	if err != nil || !strings.Contains(out, "arg: --config.file=examples/team/config.yaml\n") || !strings.Contains(out, "arg: --static-targets-file=examples/team/static-targets.yaml\n") ||
+		!strings.Contains(out, "Open http://127.0.0.1:9115/probe?collector=extra&target=http://127.0.0.1:8080 for a probe.") {
+		t.Errorf("run team gives (%v):\n%s", err, out)
+	}
+
+	for name, files := range map[string]map[string]string{
+		"a file of collectors the configuration does not name": {"examples/team/stray.yaml": "collectors:\n" + exampleCollector("stray", "http")},
+		"a directory of YAML without a config.yaml":            {"examples/loose/main.yaml": "collectors:\n" + exampleCollector("loose", "http")},
+	} {
+		broken := t.TempDir()
+		writeTree(t, broken, map[string]string{
+			"examples/team/config.yaml":           "collector_files: ['collectors-*.yaml']\n",
+			"examples/team/collectors-extra.yaml": "collectors:\n" + exampleCollector("extra", "http"),
+		})
+		writeTree(t, broken, files)
+		if _, problems := exampleTreeAt(broken); len(problems) == 0 {
+			t.Errorf("the example tree's tests accept %s", name)
+		}
+	}
+}
+
+// examples() refusing the tree, for a directory of YAML without a
+// config.yaml or with two static target files, makes list fail, as it makes
+// files and run fail: the list is not printed in part and passed off as
+// whole.
+func TestRunExampleListFailsWhereTheTreeIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"no config.yaml": {
+			"examples/loose/main.yaml":    "collectors:\n" + exampleCollector("loose", "http"),
+			"examples/loose/targets.yaml": "targets: []\n",
+		},
+		"two static target files": {
+			"examples/team/config.yaml": "collectors:\n" + exampleCollector("main", "http"),
+			"examples/team/a.yaml":      "targets: []\n",
+			"examples/team/b.yaml":      "targets: []\n",
+		},
+	} {
+		dir := t.TempDir()
+		writeTree(t, dir, map[string]string{"examples/config.solo.json-test.yaml": "collectors:\n" + exampleCollector("solo", "http")})
+		writeTree(t, dir, files)
+		for _, args := range [][]string{{"list"}, {"files", "solo"}} {
+			if out, err := runExampleIn(t, dir, args...); err == nil {
+				t.Errorf("%s: %v succeeded:\n%s", name, args, out)
+			}
+		}
 	}
 }

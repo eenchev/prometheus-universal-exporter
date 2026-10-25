@@ -31,7 +31,9 @@ before it runs, so the binary that runs is never one built before a pull. A
 plain `go build .` leaves `./prometheus-universal-exporter` in the repository
 root instead, ignored by git and soon older than `bin/`'s; `make build` warns
 while one is there. An example is a directory under `examples/`, named by the
-directory, such as `open-meteo`, or `examples/config.<name>.<format>-test.yaml`,
+directory, such as `open-meteo`, whose configuration is its `config.yaml`
+beside an optional static target file and any collector files its
+`collector_files` names, or `examples/config.<name>.<format>-test.yaml`,
 named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
 files and the opt-in request types an example needs (a `type: tcp` line, for
 `examples/tcp`) from the tree. Before it runs the binary it prints the
@@ -1947,7 +1949,9 @@ The default suite covers every example too, without the network. The tests in
 loads, that its scripts satisfy the contract, and that a static target file
 is valid with the configuration in its directory — walk `examples/` at any
 depth, so a new example, a file or a directory like `examples/open-meteo/`,
-is covered without a test naming it. And nine examples run against a local
+is covered without a test naming it. A directory's collector files are read
+with its `config.yaml`, not as examples of their own, and one its
+`collector_files` does not name fails the tests. And nine examples run against a local
 stand-in answering in their service's documented shape, with every series
 asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`),
 Open-Meteo's (`internal/exporter/openmeteo_example_test.go`, which also checks

@@ -69,6 +69,7 @@ func init() {
 		TargetFields:   []string{"timeout"},
 		Validate:       validateKubernetesRequest,
 		Fetch:          fetchKubernetes,
+		SchemaRule:     kubernetesSchemaRule,
 		OptionalTarget: true,
 		// A kubernetes collector lists what its configuration names, and
 		// takes no target at all.
@@ -488,4 +489,30 @@ func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 		warnings = append(warnings, fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each scrape, so one put in place later is used then)", c.Name, err))
 	}
 	return warnings
+}
+
+// kubernetesSchemaRule is what a kubernetes collector's request is held to, as
+// the exporter holds it (validateKubernetesRequest): resource,
+// written with something other than "", and not the core group's secrets;
+// namespaces or all_namespaces, not both; bearer_token_file only beside
+// api_server, and beside api_server a credential, bearer_token_file or
+// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
+// to the exporter, so each is "written" when it is something else
+// (SchemaWrittenKey).
+func kubernetesSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("resource")
+	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
+	rule["allOf"] = []any{
+		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
+		map[string]any{
+			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
+			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
+		},
+		map[string]any{"if": map[string]any{"not": SchemaWrittenKey("api_server")}, "then": map[string]any{"not": SchemaWrittenKey("bearer_token_file")}},
+		map[string]any{"if": SchemaWrittenKey("api_server"), "then": map[string]any{
+			"anyOf":      []any{SchemaWrittenKey("bearer_token_file"), map[string]any{"properties": map[string]any{"tls": SchemaWrittenKey("cert_file")}, "required": []string{"tls"}}},
+			"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}},
+		}},
+	}
+	return rule
 }

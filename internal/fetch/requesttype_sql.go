@@ -84,6 +84,7 @@ func init() {
 			return "the database server, host or host:port"
 		},
 		Fetch:              fetchSQL,
+		SchemaRule:         sqlSchemaRule,
 		CheckTarget:        checkSQLTarget,
 		CheckTargetRequest: checkSQLTargetRequest,
 		Label:              sqlLabel,
@@ -811,4 +812,35 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 		warnings = append(warnings, fmt.Sprintf("%s: %v; a scrape would fail on it now (the file is read when a connection is made, so one put in place later is used then)", who, err))
 	}
 	return warnings
+}
+
+// sqlSchemaRule is what a sql collector's request requires, as the exporter
+// does (validateSQLRequest): driver, statement and username, each
+// written with something other than ""; for the oracle driver, when it is
+// built, service_name; and for the snowflake driver, when it is built,
+// password_file or private_key_file; each driver named as the exporter
+// matches it (SchemaCaselessOneOf).
+func sqlSchemaRule() map[string]any {
+	keys := []string{"driver", "statement", "username"}
+	properties := map[string]any{}
+	for _, key := range keys {
+		properties[key] = SchemaWrittenKey(key)["properties"].(map[string]any)[key]
+	}
+	rule := map[string]any{"required": keys, "properties": properties}
+	driverIs := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(name)}}, "required": []string{"driver"}}
+	}
+	var conditions []any
+	for _, name := range BuiltSQLDrivers() {
+		switch name {
+		case SQLDriverOracle:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": SchemaWrittenKey("service_name")})
+		case SQLDriverSnowflake:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{SchemaWrittenKey("password_file"), SchemaWrittenKey("private_key_file")}}})
+		}
+	}
+	if len(conditions) > 0 {
+		rule["allOf"] = conditions
+	}
+	return rule
 }

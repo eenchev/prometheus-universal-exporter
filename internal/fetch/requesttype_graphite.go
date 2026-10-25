@@ -91,6 +91,7 @@ func init() {
 		Revalidates:        true,
 		Decoder:            "graphite",
 		Validate:           validateGraphiteRequest,
+		SchemaRule:         func() map[string]any { return map[string]any{"required": []string{"targets"}} },
 		TargetHint:         func(*model.Collector) string { return "http://graphite:8080" },
 		CheckTarget:        checkHTTPTarget,
 		Query:              graphiteQuery,

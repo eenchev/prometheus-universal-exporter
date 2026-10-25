@@ -71,6 +71,7 @@ func init() {
 		FileExtensions:     true,
 		TargetHint:         func(*model.Collector) string { return "host or host:port" },
 		Fetch:              fetchSSHFile,
+		SchemaRule:         sshFileSchemaRule,
 		CheckTarget:        checkSSHTarget,
 		CheckTargetRequest: checkSSHTargetRequest,
 		Label:              sshFileLabel,
@@ -501,4 +502,23 @@ func checkSSHFiles(c *model.Collector, t *model.StaticTarget) []string {
 		warnings = append(warnings, fmt.Sprintf("%s: %v; a scrape would fail on it now (the file is read when a connection is made, so one put in place later is used then)", who, err))
 	}
 	return warnings
+}
+
+// sshFileSchemaRule is what an sshfile collector's request requires, as the
+// exporter does (validateSSHFileRequest): root, username and
+// known_hosts_file, each written with something other than ""; a private key
+// or a password, or both; and a passphrase only beside a private key.
+func sshFileSchemaRule() map[string]any {
+	keys := []string{"root", "username", "known_hosts_file"}
+	properties := map[string]any{}
+	for _, key := range keys {
+		properties[key] = SchemaWrittenKey(key)["properties"].(map[string]any)[key]
+	}
+	return map[string]any{
+		"required":   keys,
+		"properties": properties,
+		"anyOf":      []any{SchemaWrittenKey("private_key_file"), SchemaWrittenKey("password_file")},
+		"if":         SchemaWrittenKey("passphrase_file"),
+		"then":       SchemaWrittenKey("private_key_file"),
+	}
 }

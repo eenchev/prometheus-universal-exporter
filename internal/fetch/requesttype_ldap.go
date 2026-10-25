@@ -70,6 +70,7 @@ func init() {
 		Article:            "an",
 		TargetHint:         func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
 		Fetch:              fetchLDAP,
+		SchemaRule:         ldapSchemaRule,
 		CheckTarget:        checkLDAPTarget,
 		CheckTargetRequest: checkLDAPTargetRequest,
 		Label:              ldapLabel,
@@ -780,4 +781,19 @@ func ldapFailure(ctx context.Context, err error) error {
 // a static target names of its own.
 func checkLDAPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// ldapSchemaRule is what an ldap collector's request is held to beyond its keys,
+// as the exporter holds it (validateLDAPRequest): searches, and
+// bind_dn and password_file each only beside the other, since a simple
+// bind with a DN and no password is an unauthenticated one and a password
+// is sent with its account's DN.
+func ldapSchemaRule() map[string]any {
+	return map[string]any{
+		"required": []string{"searches"},
+		"allOf": []any{
+			map[string]any{"if": SchemaWrittenKey("bind_dn"), "then": SchemaWrittenKey("password_file")},
+			map[string]any{"if": SchemaWrittenKey("password_file"), "then": SchemaWrittenKey("bind_dn")},
+		},
+	}
 }

@@ -3,11 +3,9 @@ package config
 import (
 	"encoding/json"
 	"reflect"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -224,20 +222,13 @@ func optionalPattern(pattern string) string {
 	return "^$|" + pattern
 }
 
-// writtenKey is the rule that an object has the key and that it is not "":
-// what required alone cannot say, which goes by the key being there,
-// whatever its value. Every rule about a key that may be written "" — one
-// that requires it, or that forbids it beside another — is made of it, so
-// that key: "" is the key left out to the rule as it is to the exporter.
-func writtenKey(key string) map[string]any {
-	return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
-}
+// writtenKey is the rule that an object has the key and that it is not ""
+// (fetch.SchemaWrittenKey).
+func writtenKey(key string) map[string]any { return fetch.SchemaWrittenKey(key) }
 
-// surroundingBlank is a regular expression class of the characters
-// strings.TrimSpace takes off a text, written so that Go and JavaScript read
-// it alike: the two below U+0100 that are no ASCII as escapes, the rest as
-// themselves.
-const surroundingBlank = `\t\n\v\f\r \x85\xA0` + "\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000"
+// surroundingBlank is the class of the characters strings.TrimSpace takes
+// off a text (fetch.SchemaSurroundingBlank).
+const surroundingBlank = fetch.SchemaSurroundingBlank
 
 // valueMapKeys is what the exporter refuses of a value_map's keys, a metric
 // rule's and a label's alike (transform.checkValueRules): the empty key, and
@@ -276,23 +267,9 @@ func blanksOrPlaceholder() map[string]any {
 // which the exporter asks, takes these and no others.
 const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
 
-// caseless is a regular expression of text matched without regard to case,
-// written so that Go and JavaScript read it alike: each letter as a class of
-// its two cases, anything else escaped as regexp.QuoteMeta escapes it.
-func caseless(text string) string {
-	var b strings.Builder
-	for _, r := range text {
-		if lower, upper := unicode.ToLower(r), unicode.ToUpper(r); lower != upper {
-			b.WriteByte('[')
-			b.WriteRune(upper)
-			b.WriteRune(lower)
-			b.WriteByte(']')
-			continue
-		}
-		b.WriteString(regexp.QuoteMeta(string(r)))
-	}
-	return b.String()
-}
+// caseless is a regular expression of text matched without regard to case
+// (fetch.SchemaCaseless).
+func caseless(text string) string { return fetch.SchemaCaseless(text) }
 
 // headerNames is what the exporter takes as a name of request.headers, a
 // collector's or a static target's, and of otlp.headers
@@ -524,7 +501,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.access_key_id_file":              {"not": onlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},
 		"collectors[].request.secret_access_key_file":          {"not": onlyBlanks(), "description": "s3file, with access_key_id_file: the file of the static access key's secret."},
 		"collectors[].request.session_token_file":              {"not": onlyBlanks(), "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token."},
-		"collectors[].request.driver":                          {"type": "string", "pattern": sqlDriverName(fetch.BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
+		"collectors[].request.driver":                          {"type": "string", "pattern": fetch.SchemaCaselessOneOf(fetch.BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
 		"collectors[].request.db":                              {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
 		"collectors[].request.info_sections":                   {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
 		"collectors[].request.info_sections[]":                 {"pattern": model.RedisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
@@ -551,7 +528,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
 		"collectors[].request.options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
 		"collectors[].request.service_name":                    {"not": onlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
-		"collectors[].request.record_type":                     {"type": "string", "pattern": optionalPattern(sqlDriverName(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
+		"collectors[].request.record_type":                     {"type": "string", "pattern": optionalPattern(fetch.SchemaCaselessOneOf(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
 		"collectors[].request.server":                          {"not": onlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
 		"collectors[].request.transport":                       {"enum": optionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
 		"collectors[].request.resource":                        {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
@@ -945,29 +922,17 @@ func labelSchemaRule() map[string]any {
 	}
 }
 
-// requestSchemaRule requires type, and for each built request type with
-// required keys of its own, those keys when the type is chosen. A required
-// key of text written "" is as missing as left out, to the exporter and so
-// here (writtenKey). A grpc collector also says where its message types come
-// from, descriptors, unless it calls the health service, whose types are
-// built in (fetch.validateDescriptorKeys), a tlscert collector's tls
-// block takes no insecure_skip_verify true (tlscertRule), and a kubernetes
-// collector names its resource and keeps to its rules (kubernetesRule), and
-// a redis collector's username comes with its password_file (redisRule), and
-// an ldap collector has searches and its bind_dn and password_file come
-// together (ldapRule).
+// requestSchemaRule requires type, and for each built request type with a
+// rule of its own beyond its keys (fetch.RequestType.SchemaRule), that rule
+// when the type is chosen.
 func requestSchemaRule() map[string]any {
 	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file, docs/KUBERNETES.md for kubernetes, docs/REDIS.md for redis, docs/TCP.md for tcp and docs/LDAP.md for ldap."}
-	grpc := writtenKey("rpc")
-	grpc["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
-	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired(), fetch.RequestTypeTLSCert: tlscertRule(), fetch.RequestTypeKubernetes: kubernetesRule(), fetch.RequestTypeRedis: redisRule(), fetch.RequestTypeLDAP: ldapRule()}[name]
-		if required != nil {
+		if rt := fetch.RequestTypes[name]; rt.SchemaRule != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
-				"then": required,
+				"then": rt.SchemaRule(),
 			})
 		}
 	}
@@ -994,143 +959,6 @@ func paginationRule() map[string]any {
 			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": writtenKey("param")},
 		},
 	}
-}
-
-// tlscertRule is what a tlscert collector's request is held to beyond its
-// keys, as the exporter holds it (fetch.validateTLSCertRequest): its tls
-// block takes no insecure_skip_verify true, since a chain that does not
-// verify is reported and never refused.
-func tlscertRule() map[string]any {
-	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
-}
-
-// redisRule is what a redis collector's request is held to beyond its
-// keys, as the exporter holds it (fetch.validateRedisRequest): username only
-// beside password_file, since an ACL user logs in with both. "" is a key
-// left out to the exporter, so each is "written" when it is something else
-// (writtenKey).
-func redisRule() map[string]any {
-	return map[string]any{"if": writtenKey("username"), "then": writtenKey("password_file")}
-}
-
-// ldapRule is what an ldap collector's request is held to beyond its keys,
-// as the exporter holds it (fetch.validateLDAPRequest): searches, and
-// bind_dn and password_file each only beside the other, since a simple
-// bind with a DN and no password is an unauthenticated one and a password
-// is sent with its account's DN.
-func ldapRule() map[string]any {
-	return map[string]any{
-		"required": []string{"searches"},
-		"allOf": []any{
-			map[string]any{"if": writtenKey("bind_dn"), "then": writtenKey("password_file")},
-			map[string]any{"if": writtenKey("password_file"), "then": writtenKey("bind_dn")},
-		},
-	}
-}
-
-// kubernetesRule is what a kubernetes collector's request is held to, as
-// the exporter holds it (fetch.validateKubernetesRequest): resource,
-// written with something other than "", and not the core group's secrets;
-// namespaces or all_namespaces, not both; bearer_token_file only beside
-// api_server, and beside api_server a credential, bearer_token_file or
-// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
-// to the exporter, so each is "written" when it is something else
-// (writtenKey).
-func kubernetesRule() map[string]any {
-	rule := writtenKey("resource")
-	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
-	rule["allOf"] = []any{
-		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
-		map[string]any{
-			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
-			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
-		},
-		map[string]any{"if": map[string]any{"not": writtenKey("api_server")}, "then": map[string]any{"not": writtenKey("bearer_token_file")}},
-		map[string]any{"if": writtenKey("api_server"), "then": map[string]any{
-			"anyOf":      []any{writtenKey("bearer_token_file"), map[string]any{"properties": map[string]any{"tls": writtenKey("cert_file")}, "required": []string{"tls"}}},
-			"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}},
-		}},
-	}
-	return rule
-}
-
-// sshfileRequired is what an sshfile collector's request requires, as the
-// exporter does (fetch.validateSSHFileRequest): root, username and
-// known_hosts_file, each written with something other than ""; a private key
-// or a password, or both; and a passphrase only beside a private key.
-func sshfileRequired() map[string]any {
-	keys := []string{"root", "username", "known_hosts_file"}
-	properties := map[string]any{}
-	for _, key := range keys {
-		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
-	}
-	return map[string]any{
-		"required":   keys,
-		"properties": properties,
-		"anyOf":      []any{writtenKey("private_key_file"), writtenKey("password_file")},
-		"if":         writtenKey("passphrase_file"),
-		"then":       writtenKey("private_key_file"),
-	}
-}
-
-// s3fileRequired is what an s3file collector's request requires, as the
-// exporter does (fetch.validateS3FileRequest): root, written with something
-// other than ""; access_key_id_file and secret_access_key_file together, if
-// at all; and session_token_file only beside them. "" is a key left out to
-// the exporter, so each is "written" when it is something else (writtenKey).
-func s3fileRequired() map[string]any {
-	rule := writtenKey("root")
-	rule["allOf"] = []any{
-		map[string]any{"if": writtenKey("access_key_id_file"), "then": writtenKey("secret_access_key_file")},
-		map[string]any{"if": writtenKey("secret_access_key_file"), "then": writtenKey("access_key_id_file")},
-		map[string]any{"if": writtenKey("session_token_file"), "then": writtenKey("access_key_id_file")},
-	}
-	return rule
-}
-
-// sqlDriverName is the pattern of request.driver naming one of names, as
-// the exporter matches a driver (fetch.validateSQLRequest): in any case, with
-// blanks around it or not. The spec has the driver matched so, as it has
-// request.type, so the schema takes what the exporter takes rather than the
-// exporter refusing what an enum would.
-func sqlDriverName(names ...string) string {
-	alternatives := make([]string, len(names))
-	for i, name := range names {
-		alternatives[i] = caseless(name)
-	}
-	blanks := "[" + surroundingBlank + "]*"
-	return "^" + blanks + "(" + strings.Join(alternatives, "|") + ")" + blanks + "$"
-}
-
-// sqlRequired is what a sql collector's request requires, as the exporter
-// does (fetch.validateSQLRequest): driver, statement and username, each
-// written with something other than ""; for the oracle driver, when it is
-// built, service_name; and for the snowflake driver, when it is built,
-// password_file or private_key_file; each driver named as the exporter
-// matches it (sqlDriverName).
-func sqlRequired() map[string]any {
-	keys := []string{"driver", "statement", "username"}
-	properties := map[string]any{}
-	for _, key := range keys {
-		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
-	}
-	rule := map[string]any{"required": keys, "properties": properties}
-	driverIs := func(name string) map[string]any {
-		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": sqlDriverName(name)}}, "required": []string{"driver"}}
-	}
-	var conditions []any
-	for _, name := range fetch.BuiltSQLDrivers() {
-		switch name {
-		case fetch.SQLDriverOracle:
-			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": writtenKey("service_name")})
-		case fetch.SQLDriverSnowflake:
-			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{writtenKey("password_file"), writtenKey("private_key_file")}}})
-		}
-	}
-	if len(conditions) > 0 {
-		rule["allOf"] = conditions
-	}
-	return rule
 }
 
 // staticTargetsSchemaRules adds, by path, what the StaticTargetFile struct cannot say.

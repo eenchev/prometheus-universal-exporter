@@ -58,12 +58,14 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:           RequestTypeLocalFile,
-		Fields:         []string{"root", "path", "max_age", "max_response_bytes", "files", "max_files", "max_total_bytes"},
-		Overrides:      []string{"path", "timeout", PathParamPrefix},
-		TargetFields:   []string{"path", "timeout"},
-		Validate:       validateLocalFileRequest,
-		Fetch:          fetchLocalFile,
+		Name:         RequestTypeLocalFile,
+		Fields:       []string{"root", "path", "max_age", "max_response_bytes", "files", "max_files", "max_total_bytes"},
+		Overrides:    []string{"path", "timeout", PathParamPrefix},
+		TargetFields: []string{"path", "timeout"},
+		Validate:     validateLocalFileRequest,
+		Fetch:        fetchLocalFile,
+		// root, written with something other than "" (SchemaWrittenKey).
+		SchemaRule:     func() map[string]any { return SchemaWrittenKey("root") },
 		OptionalTarget: true,
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "a file or directory under its root" },

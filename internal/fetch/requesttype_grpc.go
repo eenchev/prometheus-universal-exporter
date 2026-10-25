@@ -108,6 +108,7 @@ func init() {
 		Display:            grpcDisplay,
 		Stage:              "grpc",
 		Fetch:              fetchGRPC,
+		SchemaRule:         grpcSchemaRule,
 		ReadFiles:          grpcReadFiles,
 		CheckFiles:         checkGRPCFiles,
 	})
@@ -502,4 +503,16 @@ func fetchGRPC(ctx context.Context, target string, c *model.Collector, overrides
 // mounted after the exporter starts.
 func checkGRPCFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// grpcSchemaRule is what a grpc collector's request requires, as the
+// exporter does (validateGRPCRequest): rpc, written with something other
+// than "", and where its message types come from, descriptors, unless it
+// calls the health service, whose types are built in
+// (validateDescriptorKeys).
+func grpcSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("rpc")
+	rule["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
+	rule["then"] = SchemaWrittenKey("descriptors")
+	return rule
 }

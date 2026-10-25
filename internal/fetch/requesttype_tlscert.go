@@ -58,6 +58,7 @@ func init() {
 		JSONAnswer:   true,
 		TargetHint:   func(*model.Collector) string { return "host or host:port" },
 		Fetch:        fetchTLSCert,
+		SchemaRule:   tlsCertSchemaRule,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseTLSCertTarget(target)
 			return err
@@ -408,4 +409,12 @@ func checkTLSCertFiles(c *model.Collector, t *model.StaticTarget) []string {
 		return []string{fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each handshake, so one put in place later is used then)", c.Name, err)}
 	}
 	return nil
+}
+
+// tlsCertSchemaRule is what a tlscert collector's request is held to beyond its
+// keys, as the exporter holds it (validateTLSCertRequest): its tls
+// block takes no insecure_skip_verify true, since a chain that does not
+// verify is reported and never refused.
+func tlsCertSchemaRule() map[string]any {
+	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
 }

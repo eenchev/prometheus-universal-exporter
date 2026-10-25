@@ -74,6 +74,7 @@ func init() {
 		JSONAnswer:         true,
 		TargetHint:         func(*model.Collector) string { return "host, host:port or rediss://host:port" },
 		Fetch:              fetchRedis,
+		SchemaRule:         redisSchemaRule,
 		CheckTarget:        checkRedisTarget,
 		CheckTargetRequest: checkRedisTargetRequest,
 		Label:              redisLabel,
@@ -691,4 +692,13 @@ func redisFailure(ctx context.Context, err error) error {
 // them, since a file may be mounted after the exporter starts.
 func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// redisSchemaRule is what a redis collector's request is held to beyond its
+// keys, as the exporter holds it (validateRedisRequest): username only
+// beside password_file, since an ACL user logs in with both. "" is a key
+// left out to the exporter, so each is "written" when it is something else
+// (SchemaWrittenKey).
+func redisSchemaRule() map[string]any {
+	return map[string]any{"if": SchemaWrittenKey("username"), "then": SchemaWrittenKey("password_file")}
 }

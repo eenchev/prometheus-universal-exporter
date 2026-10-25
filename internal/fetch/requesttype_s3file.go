@@ -71,6 +71,7 @@ func init() {
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
 		Fetch:          fetchS3File,
+		SchemaRule:     s3FileSchemaRule,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseS3Target(target)
 			return err
@@ -449,4 +450,19 @@ func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
 		return []string{fmt.Sprintf("collector %q: %v; a scrape would fail on it now (the file is read at every request, so one put in place later is used then)", c.Name, err)}
 	}
 	return nil
+}
+
+// s3FileSchemaRule is what an s3file collector's request requires, as the
+// exporter does (validateS3FileRequest): root, written with something
+// other than ""; access_key_id_file and secret_access_key_file together, if
+// at all; and session_token_file only beside them. "" is a key left out to
+// the exporter, so each is "written" when it is something else (SchemaWrittenKey).
+func s3FileSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("root")
+	rule["allOf"] = []any{
+		map[string]any{"if": SchemaWrittenKey("access_key_id_file"), "then": SchemaWrittenKey("secret_access_key_file")},
+		map[string]any{"if": SchemaWrittenKey("secret_access_key_file"), "then": SchemaWrittenKey("access_key_id_file")},
+		map[string]any{"if": SchemaWrittenKey("session_token_file"), "then": SchemaWrittenKey("access_key_id_file")},
+	}
+	return rule
 }

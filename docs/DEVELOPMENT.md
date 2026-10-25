@@ -93,6 +93,58 @@ test that validates a whole configuration lives in `internal/config`, and one
 that probes through a running `Server` lives in `internal/exporter`, even when
 what it checks is a transform or a request type.
 
+### How a request type is registered
+
+A request type registers a `fetch.RequestType` from the `init` function of
+its `internal/fetch/requesttype_<name>.go`, under the build constraint that
+decides whether a build carries it. The registration holds everything the
+exporter knows of the type, and the rest of the exporter reads it from the
+registry, `fetch.RequestTypes`, rather than naming the type: nothing in
+package `main`, `internal/config`, `internal/decode`, `internal/exporter` or
+`internal/transform` names a request type, which
+`TestCorePackagesNameNoRequestType` keeps so, with an allowlist of the same
+words meaning something else, such as the graphite decoder or `tcp` as a
+network.
+
+- `Name`, `Fields`, `Overrides` and `TargetFields`: the type's name, the
+  request keys it accepts, the probe parameters that may change them and
+  the keys a static target may set.
+- `Requester`: what every type does, an interface each registration gives a
+  small value of (`httpRequester{}`, `tcpRequester{}`): `Validate` checks a
+  collector's request and fills in its defaults, `Fetch` performs one,
+  `CheckTarget` checks a target, `Label` and `Method` give the `url` and
+  `http_method` labels of the verbose self-metrics, and `Display` renders a
+  target for logs. A type whose target is a URL embeds `fetch.URLTarget`,
+  http's label, method and display, and overrides what differs, as graphite
+  does `Method`.
+- The optional hooks, function fields left nil by a type without the
+  capability: a target a probe may leave out (`OptionalTarget`), the checks
+  of a static target's request (`CheckOverride`, `CheckTargetRequest`), the
+  files read at a request (`CheckFiles`, `ReadFiles`), connections kept
+  across scrapes (`Follow`, `CloseConnections`, `Connections`,
+  `ConnectionLimit`, `ConnectionPools`) and logins (`Logins`). They stay
+  fields rather than methods of `Requester` so that a type without the
+  capability says nothing, instead of implementing a method to say it has
+  none.
+- What the rest of the exporter knows of the type: its own self-metric
+  families (`Families`; the shared ones follow from its keys and hooks, the
+  target lists giving `http_exporter_targets_refused_total`), whether its
+  cached responses are revalidated (`Revalidates`), its target hint on the
+  collectors page (`TargetHint`, `NoTarget`), whether the debug page writes
+  it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
+  `FileExtensions`), the article its name is read with (`Article`), its rule
+  in the configuration schema (`SchemaRule`), the templated parts of its
+  request and the encoding of their values (`Templates`, `templateEscapers`)
+  and the places a refusal of unused probe parameters names
+  (`UnusedParams`).
+
+So a new type is its own files and the build wiring (the guard file, the tag
+script, the Makefile's and CI's loops and the documentation's marked lists,
+each checked by a test), and nothing in the core. Only `internal/fetch`'s
+`requesttype.go` names every type of the tree, built or not, in
+`knownRequestTypes` and `optInRequestTypes`, so that a configuration naming a
+type the build left out is told so.
+
 An error whose text names where in the response it happened — a row, a node,
 an item, a line — or a size or a duration it measured is made with
 `model.Errorf`, the number given as a `model.Position`, a `model.Size` or a

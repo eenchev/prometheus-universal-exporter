@@ -681,6 +681,21 @@ and the source MUST list the opt-in types.
   that only that type needs MUST live behind the same constraint, and so MUST
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
+- What the rest of the exporter knows of a type MUST be part of the type's
+  registration (`fetch.RequestType`): what every type does as its
+  `Requester` interface (validating a request, fetching, checking,
+  labelling and displaying a target), and what only some types have, or
+  what the core needs to know, as a field of its own, such as the
+  self-metric families its collectors have, its target hint, its decoder,
+  its rule in the configuration schema, the templated parts of its request
+  and whether the debug page writes it. The core (package `main`,
+  `internal/config`, `internal/decode`, `internal/exporter` and
+  `internal/transform`) MUST read these from the registry and MUST NOT name
+  a request type, so that adding a type touches its own files and the build
+  wiring alone. A test MUST find no `RequestType<Name>` constant and no
+  string literal that is a request type's name in the core's non-test
+  files, but for an exact allowlist of the same words meaning something
+  else, each with its reason.
 - Code that some types share and others do not, such as the rules of a
   request made over HTTP, which `http` and `graphite` share, or the credential
   keys' rules, which `http`, `graphite` and `grpc` share, MUST live behind a

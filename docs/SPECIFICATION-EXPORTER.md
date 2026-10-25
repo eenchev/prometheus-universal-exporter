@@ -27521,6 +27521,41 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   non-zero rather than print part of the list and succeed
   (TestRunExampleListFailsWhereTheTreeIsRefused).
 
+## 34.212 A panicked probe's answer, cheap probe recording and fuzzed Vertica splitting
+
+- A probe that panics with a text quoting `https://user:hunter2@host` is
+  answered `500` with the fixed text `probe failed: the scrape panicked; the
+  exporter's log has the panic`; a debug probe's and a debug scrape's report
+  show the panic with the userinfo withheld (`redacted:redacted`), and the
+  exporter's log has it as it was (TestAPanickedProbeAnswersAFixedError).
+- Recording a probe with two parameters like the probe before it allocates
+  at most twice (it allocated 24 times, sorting and redacting the parameters
+  again); its row shows the parameters as before, a probe whose parameter is
+  named like a credential is recorded under the key its parameters make,
+  `password=<redacted>`, and no more than 1,024 probe keys are remembered
+  (TestRecordingAProbeLikeOneBeforeItCostsALookup; BenchmarkNoteProbe).
+- A vertica statement the server reads as several though the driver reads
+  it as one is refused at load: `SELECT E'\''; COMMIT; --'`, the same with
+  `'a\''` (standard_conforming_strings off), `SELECT a$b$; COMMIT; SELECT
+  $b$x$b$`, `SELECT 1 AS x$$; COMMIT; SELECT $$x$$` and `SELECT 1 /* /* */
+  ' */; COMMIT; SELECT '1'`; `SELECT E'it\'s' AS one`, `SELECT a$b AS one`,
+  a nested comment and a dollar quote holding a `;` are taken; the driver
+  splits none of the refused ones
+  (TestAVerticaStatementTheServerReadsAsSeveralIsRefused).
+- A vertica statement the driver's lexer panics on, `'?` and a `'?'` at the
+  start of a line after a `--` comment, is refused at load saying the lexer
+  fails on it, where the load panicked; `SELECT '?' AS one, ? AS two` is
+  taken (TestAVerticaStatementTheDriversLexerFailsOnIsRefused).
+- With the vertica tag, the seeds of FuzzVerticaStatementSplitting, the
+  cases of the vertica statement tests and those above, hold for any text:
+  the check never panics; a text the driver splits, as written or lexed, or
+  verticaParts or a reading of the server's (standard strings or not,
+  comments nesting or not) finds several statements in, is refused; two
+  statements whole in every reading joined by `;`, `; ` or a line of `;`
+  are refused. Fuzzing it found the lexer's panic, a `$` inside a word read
+  as a dollar quote, and a lone no-break space byte taken for a blank
+  (FuzzVerticaStatementSplitting).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

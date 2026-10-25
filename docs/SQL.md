@@ -151,7 +151,16 @@ since vertica-sql-go 1.3.9 the driver does not split at a `;` it takes to
 stand inside a `BEGIN ... END`, `CASE`, `IF`, `LOOP` or `WHILE` block, and
 sends such text to the server whole, which runs every statement in it — even
 `SELECT 1 AS begin; COMMIT`. A `//` is not a comment to either, so a `;`
-followed by `// ...` is refused too.
+followed by `// ...` is refused too. The exporter reads the text every way
+the server may, which is not always the driver's way, and refuses it if any
+reading finds several statements: a `$` inside a word is part of it, not a
+dollar quote (`SELECT a$b$; COMMIT; SELECT $b$x$b$` is three statements); a
+`\` escapes the next character in an `E'...'`, and in every `'...'` where
+`standard_conforming_strings` is off (`SELECT E'\''; COMMIT; --'` is two);
+block comments may nest; and only ASCII white space is blank. A statement
+the driver's lexer fails on — a `?` right after a quote at the start of the
+text or of a line after a `--` comment, as in `'?'` — is a startup error
+too, since the driver would fail on it at every scrape.
 The other drivers send what is written, and a statement of several parts is the database's to run
 or refuse: another reason for an account that can only read.
 

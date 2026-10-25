@@ -767,6 +767,22 @@ docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres:17
 PUE_TEST_POSTGRES=127.0.0.1:5432 PUE_TEST_POSTGRES_USER=postgres PUE_TEST_POSTGRES_PASSWORD=pw make test-sql-live
 ```
 
+`FuzzVerticaStatementSplitting` (`internal/fetch`, under the vertica tag)
+holds the refusal of a `vertica` statement of several parts to the driver's
+splitting, to `verticaParts` and to a reading of the server's written apart
+from it in the test, on any text and on two statements joined by a `;`. Its
+seed corpus, the cases of the vertica statement tests, runs as a test in the
+build with every opt-in driver, as CI's and `make test-sql-drivers`' run of
+`./internal/fetch/` does; to fuzz it:
+
+```sh
+go test -tags "$(sh tools/request-type-tags.sh '' vertica)" -run '^$' \
+  -fuzz FuzzVerticaStatementSplitting -fuzztime 60s ./internal/fetch/
+```
+
+A failing input is written under `internal/fetch/testdata/fuzz/`; add it to
+the seeds in the test (`verticaFuzzSeeds`) rather than commit that file.
+
 ## Test data
 
 The files under `testdata/` are what the tests read, a directory per format

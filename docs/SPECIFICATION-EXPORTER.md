@@ -1828,7 +1828,15 @@ of objects, one a row, of its columns by name. Its keys:
   several, MUST be refused at load — decided by the exporter's own reading,
   which knows no blocks, as well as by the driver's splitting, since the
   driver sends a statement whose `;` it takes to stand in a `BEGIN ... END`
-  or similar block to the server whole, and the server runs every part. A `{{param_...}}` placeholder in
+  or similar block to the server whole, and the server runs every part. The
+  exporter's reading MUST count the most statements of any way the server
+  may read the text as well as the driver's: a `$` inside a word as part of
+  it, not the start of a dollar quote; a `\` in an `E'...'`, and in every
+  `'...'` with `standard_conforming_strings` off, escaping the next
+  character; block comments nesting or not; and only ASCII white space as
+  blank. A `vertica` statement the driver's lexer fails on (a `?` right
+  after a quote it begins a string at, which panics it) MUST be refused at
+  load, never panic the load. A `{{param_...}}` placeholder in
   `statement` MUST be refused at load; one in `database` MUST be filled only
   with letters, digits and `_ - . $`, refused otherwise before anything is
   sent.

@@ -119,6 +119,54 @@ func TestAVerticaStatementHoldingMoreThanOneIsRefused(t *testing.T) {
 	}
 }
 
+// A vertica statement the server reads as several is refused though the
+// driver would send it whole, reading it as one: the server takes a $
+// inside a word for part of it, not for the start of a dollar quote, a \ in
+// an E'...' (and with standard_conforming_strings off in every '...') to
+// escape the next character, and may nest block comments, and each hides
+// a ; and a COMMIT from the driver. They were let through. A statement that
+// is one however the server reads it still is.
+func TestAVerticaStatementTheServerReadsAsSeveralIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		statement string
+		refused   bool
+	}{
+		{"SELECT E'\\''; COMMIT; --'", true},
+		{"SELECT 'a\\''; COMMIT; --'", true},
+		{"SELECT a$b$; COMMIT; SELECT $b$x$b$", true},
+		{"SELECT 1 AS x$$; COMMIT; SELECT $$x$$", true},
+		{"SELECT 1 /* /* */ ' */; COMMIT; SELECT '1'", true},
+		{"SELECT E'it\\'s' AS one", false},
+		{"SELECT a$b AS one", false},
+		{"SELECT 1 AS one /* /* */ */", false},
+		{"SELECT $x$;$x$ AS one", false},
+	} {
+		if tc.refused && len(parse.SplitStatements(tc.statement)) > 1 {
+			t.Errorf("%q: the driver splits it, so it shows nothing the driver misses", tc.statement)
+		}
+		if err := verticaSingleStatement(tc.statement); (err != nil) != tc.refused {
+			t.Errorf("%q: %v, want refused %t", tc.statement, err, tc.refused)
+		}
+	}
+}
+
+// A vertica statement the driver's lexer panics on, a ? right after a
+// quote it begins a string at, is refused when the configuration is
+// loaded, saying so: the check that runs the lexer panicked, taking the
+// load, and the exporter, down, and the driver would panic on it at every
+// scrape.
+func TestAVerticaStatementTheDriversLexerFailsOnIsRefused(t *testing.T) {
+	for _, statement := range []string{"'?", "SELECT 1 AS one -- c\n'?'"} {
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverVertica, Statement: statement, Username: "metrics"}}
+		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "lexer fails") {
+			t.Errorf("%q: loading gives %v, want the lexer's failure", statement, err)
+		}
+	}
+	if err := verticaSingleStatement("SELECT '?' AS one, ? AS two"); err != nil {
+		t.Errorf("a ? inside a string and a placeholder are refused: %v", err)
+	}
+}
+
 // The vertica driver's log reaches the exporter's logger, at the level of
 // each line, rather than stdout in a format of the driver's own.
 func TestTheVerticaDriversLogReachesTheExportersLogger(t *testing.T) {

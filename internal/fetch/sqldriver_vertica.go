@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 
 	vertigo "github.com/vertica/vertica-sql-go"
 	verticalog "github.com/vertica/vertica-sql-go/logger"
@@ -82,25 +81,95 @@ func (verticaLog) Close() {}
 // the driver would split it, as written or as its lexer rewrites the
 // placeholders of, or when verticaParts finds a ; followed by anything but
 // blanks and comments outside quotes, quoted identifiers, comments and
-// dollar quotes, whatever block it seems to stand in.
+// dollar quotes, whatever block it seems to stand in. A statement the
+// driver's lexer fails on is refused too (verticaLex).
 func verticaSingleStatement(statement string) error {
-	if len(parse.SplitStatements(statement)) > 1 || len(parse.SplitStatements(parse.Lex(statement))) > 1 ||
-		verticaParts(statement) > 1 || verticaParts(parse.Lex(statement)) > 1 {
+	lexed, ok := verticaLex(statement)
+	if !ok {
+		return errors.New("request.statement is one the vertica driver's lexer fails on, as it does on a ? right after a quote it takes to end a string " +
+			"(\"'?\", or a ' and a ? at the start of a line after a -- comment); write a blank or a parenthesis between them")
+	}
+	if len(parse.SplitStatements(statement)) > 1 || len(parse.SplitStatements(lexed)) > 1 ||
+		verticaParts(statement) > 1 || verticaParts(lexed) > 1 {
 		return errors.New("request.statement holds more than one statement, which the vertica driver would run one after another, " +
 			"the later ones outside the read-only transaction; write a single statement (a ; may end it, followed by nothing but blanks and comments)")
 	}
 	return nil
 }
 
+// verticaLex is statement as the driver's lexer rewrites its placeholders
+// (parse.Lex), which it does to every statement it prepares (stmt.go,
+// newStmt), and false where the lexer panics: on a ? right after a ' it
+// begins a string state at, as at the start of the text or of a line after a
+// -- comment ("'?"), it slices before what it wrote. The driver would panic
+// on such a statement at every scrape, and the check, made where a
+// configuration is loaded, would take the exporter down with it.
+func verticaLex(statement string) (lexed string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			lexed, ok = "", false
+		}
+	}()
+	return parse.Lex(statement), true
+}
+
 // verticaParts counts the statements in statement as Vertica's SQL has
-// them, every ; outside a quote ending one: 'text' with ” inside, "name"
-// with "" inside, -- to the end of the line, /* ... */, and $tag$ ... $tag$.
-// A part of nothing but blanks and comments is no statement. It knows no
-// blocks, so a ; never stands inside one, and a // is not taken for a
-// comment, as the driver since 1.3.9 does not take it for one either: a
-// statement that is one only if those were honoured is refused, which costs
-// a metrics query nothing.
+// them, every ; outside a quote ending one: 'text' with a doubled quote
+// inside, "name" with "" inside, -- to the end of the line, /* ... */, and
+// $tag$ ... $tag$. A part of nothing but blanks (ASCII white space) and
+// comments is no statement. It knows no blocks, so a ; never stands inside
+// one, and a // is not taken for a comment, as the driver since 1.3.9 does
+// not take it for one either: a statement that is one only if those were
+// honoured is refused, which costs a metrics query nothing.
+//
+// Where the server's reading is not the driver's, or not one, the text is
+// read every way the server may read it, and the most statements any
+// reading finds are counted (verticaReadings): the driver, and the first
+// reading, take a $ anywhere for the start of a dollar quote and a \ for
+// nothing; the server, like PostgreSQL, whose SQL Vertica's follows, takes
+// a $ inside a word for part of it ("SELECT a$b$; COMMIT; SELECT $b$x$b$"
+// is three statements), a \ in an E'...' to escape the next character, a
+// quote among them, so that the string ends at a quote the driver takes for
+// half of a doubled one, and in every '...' with
+// standard_conforming_strings off, and may nest block comments.
 func verticaParts(statement string) int {
+	most := 0
+	for _, reading := range verticaReadings {
+		most = max(most, verticaPartsAs(statement, reading))
+	}
+	return most
+}
+
+// verticaReading is one way of reading a statement's quotes and comments.
+type verticaReading struct {
+	// words takes a $ inside a word, after a letter, a digit, a _, a $ or
+	// a byte of a multi-byte character, for part of it rather than the
+	// start of a dollar quote.
+	words bool
+	// escapes takes a \ in an E'...' begun outside a word to escape the
+	// next byte, and backslashes in every '...'.
+	escapes, backslashes bool
+	// nested lets block comments nest.
+	nested bool
+}
+
+// verticaReadings are the driver's reading and the server's.
+var verticaReadings = []verticaReading{
+	{},
+	{words: true, escapes: true},
+	{words: true, escapes: true, nested: true},
+	{words: true, escapes: true, backslashes: true},
+	{words: true, escapes: true, backslashes: true, nested: true},
+}
+
+// verticaWordByte reports whether c may stand inside a word of Vertica's
+// SQL: a letter, a digit, _, $, or a byte of a multi-byte character.
+func verticaWordByte(c byte) bool {
+	return c == '_' || c == '$' || c >= 0x80 || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// verticaPartsAs counts the statements in statement as reading reads it.
+func verticaPartsAs(statement string, reading verticaReading) int {
 	parts, content := 0, false
 	end := func() {
 		if content {
@@ -113,7 +182,13 @@ func verticaParts(statement string) int {
 		switch {
 		case ch == '\'' || ch == '"':
 			content = true
+			escapes := ch == '\'' && (reading.backslashes || reading.escapes && i > 0 &&
+				(statement[i-1] == 'E' || statement[i-1] == 'e') && (i == 1 || !verticaWordByte(statement[i-2])))
 			for i++; i < len(statement); i++ {
+				if escapes && statement[i] == '\\' {
+					i++
+					continue
+				}
 				if statement[i] == ch {
 					if i+1 < len(statement) && statement[i+1] == ch {
 						i++
@@ -127,12 +202,19 @@ func verticaParts(statement string) int {
 				i++
 			}
 		case ch == '/' && i+1 < len(statement) && statement[i+1] == '*':
-			i += 2
-			for i+1 < len(statement) && (statement[i] != '*' || statement[i+1] != '/') {
-				i++
+			depth := 1
+			for i += 2; i < len(statement) && depth > 0; i++ {
+				switch {
+				case reading.nested && statement[i] == '/' && i+1 < len(statement) && statement[i+1] == '*':
+					depth++
+					i++
+				case statement[i] == '*' && i+1 < len(statement) && statement[i+1] == '/':
+					depth--
+					i++
+				}
 			}
-			i++
-		case ch == '$':
+			i--
+		case ch == '$' && (!reading.words || i == 0 || !verticaWordByte(statement[i-1])):
 			content = true
 			if tag, ok := verticaDollarTag(statement[i:]); ok {
 				if found := strings.Index(statement[i+len(tag):], tag); found >= 0 {
@@ -143,7 +225,7 @@ func verticaParts(statement string) int {
 			}
 		case ch == ';':
 			end()
-		case !unicode.IsSpace(rune(ch)):
+		case ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r' && ch != '\f' && ch != '\v':
 			content = true
 		}
 	}

@@ -155,7 +155,10 @@ under the request block: its description, and any pattern or bound. A build
 without the type carries neither the struct nor the rules. It still knows
 the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue of the
 own keys of every type of the tree with the Go types of their fields and
-their schemas, which `make schemas` writes from a build with every type, by
+their schemas — a type of `internal/model` by its name, a type of the
+request type's own, such as redis's `RedisCommand`, by its structure, which
+a build without the type makes again to read the key into, so that what it
+refuses of the value it refuses as a build with the type does — which `make schemas` writes from a build with every type, by
 running `TestTheRequestKeyCatalogueIsCurrent` (`internal/config`) with
 `-update-request-keys`, and which that test otherwise holds to the structs: so a build that left `tcp` out refuses `send` under
 another type as a key of another type, in the words a build with every type

@@ -338,7 +338,7 @@ func TestATCPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 		"a broken placeholder":  {func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "get {{param_\r\n"} }, "request.send has an unclosed placeholder"},
 		"a filter":              {func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "get {{param_k|json}}\r\n"} }, "has a filter"},
 		"a key of another type": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"DBSIZE"}}}
+			c.Request.Foreign = []string{"commands"}
 		}, "sets request.commands, which does not apply"},
 		"a header":                  {func(c *model.Collector) { c.Request.Headers = map[string]string{"X": "y"} }, "sets request.headers, which does not apply"},
 		"half a client certificate": {func(c *model.Collector) { c.Request.TLS.CertFile = "/c.pem" }, "only one of cert_file and key_file"},

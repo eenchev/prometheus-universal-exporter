@@ -52,6 +52,9 @@ type DNSConfig struct {
 	Transport  string `yaml:"transport,omitempty"`
 }
 
+// dnsRecordTypes are the values of a dns collector's request.record_type.
+var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
+
 // dnsRequest is a dns collector's own request keys: the zero DNSConfig of
 // a collector built in code whose request has not been validated, which
 // sets them (ValidateRequest).
@@ -142,8 +145,8 @@ func validateDNSRequest(x *model.Collector) error {
 	r := dnsRequest(x)
 	r.RecordType = dnsRecordType(x)
 	x.Request.Own = r
-	if !slices.Contains(model.DNSRecordTypes, r.RecordType) {
-		return fmt.Errorf("collector %q has unknown request.record_type %q; want one of %s, in any case", x.Name, r.RecordType, strings.Join(model.DNSRecordTypes, ", "))
+	if !slices.Contains(dnsRecordTypes, r.RecordType) {
+		return fmt.Errorf("collector %q has unknown request.record_type %q; want one of %s, in any case", x.Name, r.RecordType, strings.Join(dnsRecordTypes, ", "))
 	}
 	if r.Server != "" {
 		if _, err := ParseDNSServer(r.Server); err != nil {
@@ -463,7 +466,7 @@ func checkDNSPolicy(p *targetPolicy, name string) error {
 // own keys.
 func dnsKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
+		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
 		"server":      {"not": SchemaOnlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
 		"transport":   {"enum": SchemaOptionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
 	}

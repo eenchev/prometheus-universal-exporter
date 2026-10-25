@@ -27,10 +27,13 @@ func ownKeyValue(goType string) (set, unset string) {
 		return "3", "~"
 	case "map[string]string":
 		return "{a: b}", "~"
+	case "[]string":
+		return "[x]", "~"
 	case "*model.SQLConnections":
 		return "{}", "~"
 	}
-	return "[x]", "~"
+	// A list of the type's own entries, such as redis's commands.
+	return "[{}]", "~"
 }
 
 // A request block that sets a key of another request type's own is
@@ -74,7 +77,8 @@ func TestAKeyOfAnotherTypesOwnIsRefusedWhetherTheBuildHasTheTypeOrNot(t *testing
 
 // A key of no request type's own, and of no common part, is refused as
 // the decoder refuses an unknown key, and a value of the wrong kind for a
-// key of a type the build left out as for one it has.
+// key of a type the build left out as for one it has, a type of the
+// request type's own named as that build names it.
 func TestARequestBlockRefusesAnUnknownKeyAndAWrongKind(t *testing.T) {
 	var c model.Collector
 	err := yaml.Unmarshal([]byte("name: c\nrequest:\n  type: http\n  sned: x\n"), &c)
@@ -82,12 +86,22 @@ func TestARequestBlockRefusesAnUnknownKeyAndAWrongKind(t *testing.T) {
 		t.Errorf("an unknown key: %v", err)
 	}
 	for _, entry := range RequestKeyCatalogue() {
-		if entry.GoType != "string" {
+		var document, want string
+		switch {
+		case entry.GoType == "string":
+			document, want = "[x]", "line 4: cannot unmarshal !!seq into string"
+		case strings.HasPrefix(entry.GoType, "[]fetch."):
+			// An entry of a list of the type's own, such as redis's
+			// commands, named as a build with the type names it.
+			document, want = "[x]", "line 4: cannot unmarshal !!str `x` into "+strings.TrimPrefix(entry.GoType, "[]")
+		case strings.HasPrefix(entry.GoType, "[]"):
+			document, want = "[[x]]", "line 4: cannot unmarshal !!seq into "
+		default:
 			continue
 		}
-		err := yaml.Unmarshal(fmt.Appendf(nil, "name: c\nrequest:\n  type: %s\n  %s: [x]\n", entry.Type, entry.Key), &c)
-		if err == nil || !strings.Contains(err.Error(), "line 4: cannot unmarshal !!seq into string") {
-			t.Errorf("%s of %s written as a list: %v", entry.Key, entry.Type, err)
+		err := yaml.Unmarshal(fmt.Appendf(nil, "name: c\nrequest:\n  type: %s\n  %s: %s\n", entry.Type, entry.Key, document), &c)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s of %s written %s: %v, want %q", entry.Key, entry.Type, document, err, want)
 		}
 	}
 }

@@ -90,11 +90,7 @@ package fetch
 var requestKeysCatalogue = []RequestKeyEntry{
 `)
 	for _, entry := range builtRequestKeyEntries() {
-		schema := strconv.Quote(entry.Schema)
-		if strconv.CanBackquote(entry.Schema) {
-			schema = "`" + entry.Schema + "`"
-		}
-		fmt.Fprintf(&b, "\t{Type: %q, Key: %q, GoType: %q, Schema: %s},\n", entry.Type, entry.Key, entry.GoType, schema)
+		fmt.Fprintf(&b, "\t{Type: %q, Key: %q, GoType: %q, Shape: %s, Schema: %s},\n", entry.Type, entry.Key, entry.GoType, quoted(entry.Shape), quoted(entry.Schema))
 	}
 	b.WriteString("}\n")
 	return format.Source([]byte(b.String()))
@@ -114,7 +110,11 @@ func builtRequestKeyEntries() []fetch.RequestKeyEntry {
 			if err != nil {
 				panic(err)
 			}
-			entries = append(entries, fetch.RequestKeyEntry{Type: rt.Name, Key: key, GoType: field.Type.String(), Schema: string(schema)})
+			shape, err := fetch.GoTypeShape(field.Type)
+			if err != nil {
+				panic(err)
+			}
+			entries = append(entries, fetch.RequestKeyEntry{Type: rt.Name, Key: key, GoType: field.Type.String(), Shape: shape, Schema: string(schema)})
 		}
 	}
 	return entries
@@ -128,4 +128,12 @@ func ownField(own reflect.Type, key string) (reflect.StructField, bool) {
 		}
 	}
 	return reflect.StructField{}, false
+}
+
+// quoted is text as a Go literal: in backquotes, unless it holds one.
+func quoted(text string) string {
+	if strconv.CanBackquote(text) {
+		return "`" + text + "`"
+	}
+	return strconv.Quote(text)
 }

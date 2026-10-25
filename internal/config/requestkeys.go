@@ -29,12 +29,42 @@ func ownRequestKeys(properties map[string]any, path string, rules map[string]map
 		}
 	}
 	for _, entry := range fetch.UnbuiltRequestKeys() {
-		var schema map[string]any
+		var schema any
 		if err := json.Unmarshal([]byte(entry.Schema), &schema); err != nil {
 			panic(fmt.Sprintf("internal/fetch/requestkeys_catalogue.go: request.%s: %v", entry.Key, err))
 		}
-		properties[entry.Key] = schema
+		properties[entry.Key] = asMade(schema)
 	}
+}
+
+// asMade is a schema read back from JSON in the shapes schemaFor and the
+// rules make it in, which the load reads it by (kindsOf): a list of texts
+// as a []string, and a whole number as an int.
+func asMade(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, sub := range value {
+			value[key] = asMade(sub)
+		}
+		return value
+	case []any:
+		texts := make([]string, 0, len(value))
+		for i, sub := range value {
+			value[i] = asMade(sub)
+			if text, ok := value[i].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+		if len(texts) == len(value) && len(value) > 0 {
+			return texts
+		}
+		return value
+	case float64:
+		if whole := int(value); float64(whole) == value {
+			return whole
+		}
+	}
+	return value
 }
 
 // ownKeySchemas are the schemas of the own keys of rt, by key, for the

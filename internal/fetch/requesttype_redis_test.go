@@ -18,6 +18,20 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
+// A redis collector's placeholders are in its commands' arguments.
+func init() {
+	ownPlaceholders[RequestTypeRedis] = func(c *model.Collector) {
+		c.Request.Own = RedisConfig{Commands: []RedisCommand{{Name: "n", Command: []string{"LLEN", "{{param_key:x}}"}}}}
+	}
+}
+
+// editRedis edits a redis collector's own keys.
+func editRedis(c *model.Collector, edit func(*RedisConfig)) {
+	r := redisRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
+
 // redisCollector is a validated redis collector, as edit makes it.
 func redisCollector(t *testing.T, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
@@ -96,7 +110,9 @@ func TestARedisCollectorAnswersINFOAsADocument(t *testing.T) {
 func TestARedisCollectorAsksForItsSectionsOneByOne(t *testing.T) {
 	server := redistest.New(t)
 	server.SetInfo(redisInfo...)
-	body, err := redisScrape(t, redisCollector(t, func(c *model.Collector) { c.Request.InfoSections = []string{"memory", "keyspace"} }), server.Addr, nil)
+	body, err := redisScrape(t, redisCollector(t, func(c *model.Collector) {
+		editRedis(c, func(r *RedisConfig) { r.InfoSections = []string{"memory", "keyspace"} })
+	}), server.Addr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +126,7 @@ func TestARedisCollectorAsksForItsSectionsOneByOne(t *testing.T) {
 	if got := server.Commands(); len(got) != 2 || strings.Join(got[0], " ") != "INFO memory" || strings.Join(got[1], " ") != "INFO keyspace" {
 		t.Errorf("sent %q", got)
 	}
-	_, err = redisScrape(t, redisCollector(t, func(c *model.Collector) { c.Request.InfoSections = []string{"memroy"} }), server.Addr, nil)
+	_, err = redisScrape(t, redisCollector(t, func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.InfoSections = []string{"memroy"} }) }), server.Addr, nil)
 	if err == nil || !strings.Contains(err.Error(), "INFO memroy: the server answered no section") {
 		t.Errorf("an unknown section: %v", err)
 	}
@@ -168,16 +184,16 @@ func TestARedisCollectorLogsInWithItsPasswordFile(t *testing.T) {
 func TestARedisCollectorSelectsItsDatabase(t *testing.T) {
 	server := redistest.New(t)
 	server.SetInfo(redisInfo...)
-	if _, err := redisScrape(t, redisCollector(t, func(c *model.Collector) { c.Request.DB = 3 }), server.Addr, nil); err != nil {
+	if _, err := redisScrape(t, redisCollector(t, func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.DB = 3 }) }), server.Addr, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := server.Commands(); len(got) != 2 || strings.Join(got[0], " ") != "SELECT 3" {
 		t.Errorf("sent %q", got)
 	}
-	if _, err := redisScrape(t, redisCollector(t, func(c *model.Collector) { c.Request.DB = 20 }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "SELECT 20: the server answered: ERR DB index is out of range") {
+	if _, err := redisScrape(t, redisCollector(t, func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.DB = 20 }) }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "SELECT 20: the server answered: ERR DB index is out of range") {
 		t.Errorf("a database out of range: %v", err)
 	}
-	label, err := RequestLabelFor(server.Addr, redisCollector(t, func(c *model.Collector) { c.Request.DB = 3 }), RequestOverrides{})
+	label, err := RequestLabelFor(server.Addr, redisCollector(t, func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.DB = 3 }) }), RequestOverrides{})
 	if err != nil || label != "redis://"+server.Addr+"/3" {
 		t.Errorf("label %q, %v", label, err)
 	}
@@ -199,15 +215,17 @@ func TestARedisCollectorPutsEachCommandsReplyUnderItsName(t *testing.T) {
 	server.Reply("ROLE", "*3\r\n"+redistest.Bulk("master")+":1240\r\n*1\r\n*3\r\n"+redistest.Bulk("10.0.0.2")+redistest.Bulk("6379")+redistest.Bulk("1234")+"")
 	server.Reply("CLUSTER INFO", redistest.Bulk("cluster_state:ok\r\ncluster_slots_assigned:16384\r\n"))
 	c := redisCollector(t, func(c *model.Collector) {
-		c.Request.Commands = []model.RedisCommand{
-			{Name: "queue", Command: []string{"llen", "jobs:{{param_queue}}"}},
-			{Name: "counter", Command: []string{"GET", "counter"}},
-			{Name: "missing", Command: []string{"GET", "missing"}},
-			{Name: "stats", Command: []string{"HGETALL", "stats"}},
-			{Name: "groups", Command: []string{"XINFO", "groups", "events"}},
-			{Name: "role", Command: []string{"ROLE"}},
-			{Name: "cluster", Command: []string{"CLUSTER", "INFO"}},
-		}
+		editRedis(c, func(r *RedisConfig) {
+			r.Commands = []RedisCommand{
+				{Name: "queue", Command: []string{"llen", "jobs:{{param_queue}}"}},
+				{Name: "counter", Command: []string{"GET", "counter"}},
+				{Name: "missing", Command: []string{"GET", "missing"}},
+				{Name: "stats", Command: []string{"HGETALL", "stats"}},
+				{Name: "groups", Command: []string{"XINFO", "groups", "events"}},
+				{Name: "role", Command: []string{"ROLE"}},
+				{Name: "cluster", Command: []string{"CLUSTER", "INFO"}},
+			}
+		})
 	})
 	body, err := redisScrape(t, c, server.Addr, map[string]string{"param_queue": "emails"})
 	if err != nil {
@@ -229,8 +247,8 @@ func TestARedisCollectorPutsEachCommandsReplyUnderItsName(t *testing.T) {
 		t.Errorf("method %q", method)
 	}
 	both := redisCollector(t, func(c *model.Collector) {
-		c.Request.InfoSections = []string{"memory"}
-		c.Request.Commands = []model.RedisCommand{{Name: "role", Command: []string{"ROLE"}}}
+		editRedis(c, func(r *RedisConfig) { r.InfoSections = []string{"memory"} })
+		editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "role", Command: []string{"ROLE"}}} })
 	})
 	if method := RequestMethodFor(both, RequestOverrides{}); method != "INFO+COMMANDS" {
 		t.Errorf("the method of info_sections and commands together: %q", method)
@@ -256,43 +274,55 @@ func TestARedisCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 		want string
 	}{
 		"a command that writes": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"SET", "a", "1"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"SET", "a", "1"}}} })
 		}, "sends SET, which is not among the read-only commands"},
 		"CONFIG GET": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"config", "get", "requirepass"}}}
+			editRedis(c, func(r *RedisConfig) {
+				r.Commands = []RedisCommand{{Name: "x", Command: []string{"config", "get", "requirepass"}}}
+			})
 		}, "sends CONFIG, which is not among"},
 		"CLIENT LIST": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"CLIENT", "LIST"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"CLIENT", "LIST"}}} })
 		}, "sends CLIENT, which is not among"},
 		"KEYS": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"KEYS", "*"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"KEYS", "*"}}} })
 		}, "sends KEYS"},
 		"XINFO STREAM FULL": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"XINFO", "STREAM", "s", "FULL"}}}
+			editRedis(c, func(r *RedisConfig) {
+				r.Commands = []RedisCommand{{Name: "x", Command: []string{"XINFO", "STREAM", "s", "FULL"}}}
+			})
 		}, "gives XINFO STREAM 2 arguments; it takes 1"},
 		"too few arguments": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"LLEN"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"LLEN"}}} })
 		}, "gives LLEN 0 arguments; it takes 1"},
 		"a placeholder as command": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"{{param_c}}", "a"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"{{param_c}}", "a"}}} })
 		}, "a placeholder in its command's name"},
 		"a placeholder as subcommand": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"XINFO", "{{param_c}}", "a"}}}
+			editRedis(c, func(r *RedisConfig) {
+				r.Commands = []RedisCommand{{Name: "x", Command: []string{"XINFO", "{{param_c}}", "a"}}}
+			})
 		}, "a placeholder in its command's subcommand"},
 		"a broken placeholder": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"LLEN", "{{param_"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x", Command: []string{"LLEN", "{{param_"}}} })
 		}, "request.commands[0].command[1]"},
-		"no command": {func(c *model.Collector) { c.Request.Commands = []model.RedisCommand{{Name: "x"}} }, "has no command"},
+		"no command": {func(c *model.Collector) {
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "x"}} })
+		}, "has no command"},
 		"a name twice": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"DBSIZE"}}, {Name: "x", Command: []string{"DBSIZE"}}}
+			editRedis(c, func(r *RedisConfig) {
+				r.Commands = []RedisCommand{{Name: "x", Command: []string{"DBSIZE"}}, {Name: "x", Command: []string{"DBSIZE"}}}
+			})
 		}, "names x twice"},
 		"a name jq cannot reach": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "queue-len", Command: []string{"DBSIZE"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "queue-len", Command: []string{"DBSIZE"}}} })
 		}, `request.commands[0].name "queue-len"`},
-		"a username alone":          {func(c *model.Collector) { c.Request.Username = "exporter" }, "without request.password_file"},
-		"a negative database":       {func(c *model.Collector) { c.Request.DB = -1 }, "request.db is -1"},
-		"a section in capitals":     {func(c *model.Collector) { c.Request.InfoSections = []string{"Memory"} }, `request.info_sections[0] "Memory"`},
-		"a section twice":           {func(c *model.Collector) { c.Request.InfoSections = []string{"memory", "memory"} }, "names memory twice"},
+		"a username alone":      {func(c *model.Collector) { c.Request.Username = "exporter" }, "without request.password_file"},
+		"a negative database":   {func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.DB = -1 }) }, "request.db is -1"},
+		"a section in capitals": {func(c *model.Collector) { editRedis(c, func(r *RedisConfig) { r.InfoSections = []string{"Memory"} }) }, `request.info_sections[0] "Memory"`},
+		"a section twice": {func(c *model.Collector) {
+			editRedis(c, func(r *RedisConfig) { r.InfoSections = []string{"memory", "memory"} })
+		}, "names memory twice"},
 		"a key of another type":     {func(c *model.Collector) { c.Request.Statement = "SELECT 1" }, "sets request.statement, which does not apply"},
 		"half a client certificate": {func(c *model.Collector) { c.Request.TLS.CertFile = "/c.pem" }, "only one of cert_file and key_file"},
 	} {
@@ -399,7 +429,7 @@ func TestARedisServersRepliesAreHeldToTheResponseLimit(t *testing.T) {
 	commands := func(limit model.ByteSize) *model.Collector {
 		return redisCollector(t, func(c *model.Collector) {
 			c.Request.MaxResponseBytes = limit
-			c.Request.Commands = []model.RedisCommand{{Name: "v", Command: []string{"GET", "v"}}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "v", Command: []string{"GET", "v"}}} })
 		})
 	}
 	for name, tc := range map[string]struct {
@@ -476,8 +506,9 @@ func TestARedisScrapeIsTracedWithoutItsPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := redisCollector(t, func(c *model.Collector) {
-		c.Request.Username, c.Request.PasswordFile, c.Request.DB = "exporter", passwordFile, 1
-		c.Request.Commands = []model.RedisCommand{{Name: "jobs", Command: []string{"LLEN", "jobs"}}}
+		c.Request.Username, c.Request.PasswordFile = "exporter", passwordFile
+		editRedis(c, func(r *RedisConfig) { r.DB = 1 })
+		editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "jobs", Command: []string{"LLEN", "jobs"}}} })
 	})
 	ctx, trace := WithRequestTrace(context.Background())
 	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err != nil {
@@ -531,7 +562,7 @@ func TestARedisReplyThatIsNotTextFailsTheScrape(t *testing.T) {
 	server.Reply("CLUSTER INFO", redistest.Bulk("cluster_state:\xff\r\n"))
 	for command, words := range map[string][]string{"GET v": {"GET", "v"}, "HGETALL h": {"HGETALL", "h"}, "CLUSTER INFO": {"CLUSTER", "INFO"}} {
 		c := redisCollector(t, func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "v", Command: words}}
+			editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "v", Command: words}} })
 		})
 		_, err := redisScrape(t, c, server.Addr, nil)
 		if !errors.Is(err, errRedisNotText) || !strings.Contains(err.Error(), command) {
@@ -543,7 +574,7 @@ func TestARedisReplyThatIsNotTextFailsTheScrape(t *testing.T) {
 	}
 	server.Reply("GET v", redistest.Bulk("caf\u00e9"))
 	c := redisCollector(t, func(c *model.Collector) {
-		c.Request.Commands = []model.RedisCommand{{Name: "v", Command: []string{"GET", "v"}}}
+		editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "v", Command: []string{"GET", "v"}}} })
 	})
 	if body, err := redisScrape(t, c, server.Addr, nil); err != nil || body != "{\"commands\":{\"v\":\"caf\u00e9\"}}" {
 		t.Errorf("UTF-8 text: %s %v", body, err)
@@ -557,7 +588,7 @@ func TestARedisDocumentPastTheResponseLimitFailsTheScrape(t *testing.T) {
 	server := redistest.New(t)
 	c := redisCollector(t, func(c *model.Collector) {
 		c.Request.MaxResponseBytes = 1000
-		c.Request.Commands = []model.RedisCommand{{Name: "v", Command: []string{"GET", "v"}}}
+		editRedis(c, func(r *RedisConfig) { r.Commands = []RedisCommand{{Name: "v", Command: []string{"GET", "v"}}} })
 	})
 	server.Reply("GET v", redistest.Bulk(strings.Repeat("\x01", 400)))
 	if _, err := redisScrape(t, c, server.Addr, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "as JSON") {

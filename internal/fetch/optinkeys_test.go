@@ -10,7 +10,6 @@ package fetch
 // accepts (checkOptInRequestKeys).
 var optInRequestKeys = map[string][]string{
 	RequestTypeS3File: {"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file"},
-	RequestTypeRedis:  {"db", "info_sections", "commands"},
 	RequestTypeLDAP:   {"bind_dn", "start_tls", "searches"},
 }
 

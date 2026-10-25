@@ -1,11 +1,11 @@
 package fetch
 
 import (
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -22,9 +22,10 @@ import (
 
 // RequestKeyEntry is one key of a request type's own, as the catalogue
 // holds it: the type, the key, the Go type of the field it is read into,
-// as reflect names it, and its configuration schema, as JSON.
+// as reflect names it and by its shape (GoTypeShape), and its
+// configuration schema, as JSON.
 type RequestKeyEntry struct {
-	Type, Key, GoType, Schema string
+	Type, Key, GoType, Shape, Schema string
 }
 
 // RequestKeyCatalogue is the catalogue of the own keys of every request
@@ -73,17 +74,6 @@ func UnbuiltRequestKeys() []RequestKeyEntry {
 	return out
 }
 
-// catalogueGoTypes are the Go types a key of a type the build left out is
-// read into, by their names, when the build has them: a key of another
-// Go type, one of the left-out type's own, is read as a yaml.Node.
-var catalogueGoTypes = func() map[string]reflect.Type {
-	types := map[string]reflect.Type{}
-	for _, value := range []any{"", false, 0, []string(nil), map[string]string(nil), model.Duration(0), (*model.Duration)(nil), (*int)(nil), (*bool)(nil), model.ByteSize(0), (*model.SQLConnections)(nil)} {
-		types[reflect.TypeOf(value).String()] = reflect.TypeOf(value)
-	}
-	return types
-}()
-
 // requestKeys is what a request block holds beyond model.RequestConfig's
 // common part (model.SetRequestKeys): the own structs of the built types
 // and the keys of the others.
@@ -92,12 +82,13 @@ var requestKeys = sync.OnceValue(func() *model.RequestKeys {
 	for _, rt := range OwnKeyTypes() {
 		keys.Structs = append(keys.Structs, model.RequestStruct{Type: rt.Name, Struct: reflect.TypeOf(rt.Config)})
 	}
+	keys.TypeNames = map[string]string{}
 	for _, entry := range UnbuiltRequestKeys() {
-		goType, ok := catalogueGoTypes[entry.GoType]
-		if !ok {
-			goType = reflect.TypeOf(yaml.Node{})
+		var shape typeShape
+		if err := json.Unmarshal([]byte(entry.Shape), &shape); err != nil {
+			panic(fmt.Sprintf("internal/fetch/requestkeys_catalogue.go: request.%s: %v", entry.Key, err))
 		}
-		keys.Unbuilt = append(keys.Unbuilt, model.UnbuiltRequestKey{Type: entry.Type, Key: entry.Key, GoType: goType})
+		keys.Unbuilt = append(keys.Unbuilt, model.UnbuiltRequestKey{Type: entry.Type, Key: entry.Key, GoType: goTypeOf(shape, keys.TypeNames)})
 	}
 	return keys
 })

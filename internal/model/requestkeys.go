@@ -35,10 +35,14 @@ type RequestKeys struct {
 	Structs []RequestStruct
 	// Unbuilt are the keys of the request types of the source tree that
 	// the build left out, each read into a value of Go type GoType: the
-	// type of the field that holds it in a build with the type, or
-	// yaml.Node when that type is the request type's own and not in this
-	// build.
+	// type of the field that holds it in a build with the type, or, for a
+	// type of the request type's own, which this build does not have, one
+	// made again to its shape.
 	Unbuilt []UnbuiltRequestKey
+	// TypeNames are the names of the structs made again, by their text,
+	// for the errors of a decoding to name them as a build with the type
+	// does.
+	TypeNames map[string]string
 }
 
 // RequestStruct is a request type of the build and the struct of its own
@@ -80,6 +84,8 @@ type requestLayout struct {
 	owned []ownedKey
 	// structs are the built types' own structs by type.
 	structs map[string]reflect.Type
+	// typeNames are RequestKeys.TypeNames.
+	typeNames map[string]string
 }
 
 // ownedKey is a field of a decoded request block that holds a key of one
@@ -135,6 +141,7 @@ func newRequestLayout(keys *RequestKeys) *requestLayout {
 		fields = append(fields, reflect.StructField{Name: "K" + strconv.Itoa(len(layout.owned)), Type: goType, Tag: reflect.StructTag(`yaml:"` + key + `"`)})
 	}
 	if keys != nil {
+		layout.typeNames = keys.TypeNames
 		for _, own := range keys.Structs {
 			layout.structs[own.Type] = own.Struct
 			for i := 0; i < own.Struct.NumField(); i++ {
@@ -183,10 +190,15 @@ func (r *RequestConfig) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	layout.store(decoded.Elem(), r)
-	if len(problems) > 0 {
-		return &yaml.TypeError{Errors: problems}
+	if len(problems) == 0 {
+		return nil
 	}
-	return nil
+	for i := range problems {
+		for made, name := range layout.typeNames {
+			problems[i] = strings.ReplaceAll(problems[i], made, name)
+		}
+	}
+	return &yaml.TypeError{Errors: problems}
 }
 
 // store puts what a request block was decoded into where it belongs.

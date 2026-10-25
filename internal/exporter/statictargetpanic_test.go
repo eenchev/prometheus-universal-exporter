@@ -22,10 +22,9 @@ func TestAPanickingStaticScrapeFailsOnlyThatScrape(t *testing.T) {
 		Name:         "panics",
 		Fields:       []string{"path"},
 		TargetFields: []string{"path"},
-		Validate:     func(*model.Collector) error { return nil },
-		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
 			panic("boom")
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
 	registerFixtureType(t)

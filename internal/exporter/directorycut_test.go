@@ -27,9 +27,8 @@ func registerDirectoryFixture(t *testing.T, cutShort bool) *atomic.Int64 {
 	fetches := &atomic.Int64{}
 	fetch.RequestTypes["dirfixture"] = &fetch.RequestType{
 		Name:           "dirfixture",
-		Validate:       func(*model.Collector) error { return nil },
 		OptionalTarget: true,
-		Fetch: func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			fetches.Add(1)
 			file := &fetch.HTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"text/plain"}}, Body: []byte("value=1\n"), Target: target, Collector: c.Name}
 			read := &fetch.DirectoryRead{Path: "/data", Matched: 2, CutShort: cutShort, Files: []fetch.FileRead{
@@ -37,7 +36,7 @@ func registerDirectoryFixture(t *testing.T, cutShort bool) *atomic.Int64 {
 				{Name: "slow.prom", Err: context.DeadlineExceeded},
 			}}
 			return &fetch.HTTPResponse{StatusCode: http.StatusOK, Target: target, Collector: c.Name, Directory: read}, nil
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "dirfixture") })
 	return fetches

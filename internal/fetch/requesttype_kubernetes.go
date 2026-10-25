@@ -67,8 +67,7 @@ func init() {
 		Fields:       []string{"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server", "tls", "bearer_token_file", "max_response_bytes"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
-		Validate:     validateKubernetesRequest,
-		Fetch:        fetchKubernetes,
+		Requester:    kubernetesRequester{},
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},
@@ -78,23 +77,46 @@ func init() {
 		// takes no target at all.
 		NoTarget:   true,
 		JSONAnswer: true,
-		CheckTarget: func(c *model.Collector, target string, static bool) error {
-			if strings.TrimSpace(target) == "" {
-				return nil
-			}
-			if static {
-				return fmt.Errorf("names a target, %q, which a kubernetes collector takes none of: it lists what collector %q's request names; leave target out", target, c.Name)
-			}
-			return fmt.Errorf("target %q is not taken: a kubernetes collector lists what its configuration names, so a probe of collector %q leaves target out", target, c.Name)
-		},
-		Label: func(_ string, c *model.Collector, _ RequestOverrides) (string, error) {
-			return kubernetesLabel(c), nil
-		},
-		Method:     func(*model.Collector, RequestOverrides) string { return kubernetesMethod },
-		Display:    strings.TrimSpace,
 		Stage:      "kubernetes",
 		CheckFiles: checkKubernetesFiles,
 	})
+}
+
+// kubernetesRequester is the kubernetes request type's Requester.
+type kubernetesRequester struct{}
+
+// Validate checks a kubernetes collector's request and fills in its defaults.
+func (kubernetesRequester) Validate(c *model.Collector) error {
+	return validateKubernetesRequest(c)
+}
+
+// Fetch performs one request of a kubernetes collector.
+func (kubernetesRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchKubernetes(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a kubernetes collector's target.
+func (kubernetesRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	if strings.TrimSpace(target) == "" {
+		return nil
+	}
+	if static {
+		return fmt.Errorf("names a target, %q, which a kubernetes collector takes none of: it lists what collector %q's request names; leave target out", target, c.Name)
+	}
+	return fmt.Errorf("target %q is not taken: a kubernetes collector lists what its configuration names, so a probe of collector %q leaves target out", target, c.Name)
+}
+
+// Label is the url label of a kubernetes request.
+func (kubernetesRequester) Label(_ string, c *model.Collector, _ RequestOverrides) (string, error) {
+	return kubernetesLabel(c), nil
+}
+
+// Method is the http_method label of a kubernetes request.
+func (kubernetesRequester) Method(*model.Collector, RequestOverrides) string { return kubernetesMethod }
+
+// Display renders a kubernetes target for logs and labels.
+func (kubernetesRequester) Display(target string) string {
+	return strings.TrimSpace(target)
 }
 
 // kubernetesMethod is the http_method label of a listing.

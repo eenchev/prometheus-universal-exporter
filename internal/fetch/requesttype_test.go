@@ -35,8 +35,8 @@ func TestEveryRequestKeyBelongsToAType(t *testing.T) {
 		for _, key := range rt.TargetFields {
 			targetClaimed[key] = true
 		}
-		if rt.Validate == nil || rt.Fetch == nil {
-			t.Errorf("request type %q is missing Validate or Fetch", rt.Name)
+		if rt.Requester == nil {
+			t.Errorf("request type %q has no Requester", rt.Name)
 		}
 	}
 	for _, key := range yamlKeys(reflect.TypeOf(model.RequestConfig{})) {

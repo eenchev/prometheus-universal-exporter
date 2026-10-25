@@ -97,17 +97,12 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_codes", "tls",
 		},
+		Requester:          grpcRequester{},
 		StatusCodes:        true,
 		JSONAnswer:         true,
-		Validate:           validateGRPCRequest,
 		TargetHint:         func(*model.Collector) string { return "host:port" },
-		CheckTarget:        checkGRPCTarget,
 		CheckTargetRequest: checkGRPCTargetRequest,
-		Label:              grpcLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return http.MethodPost },
-		Display:            grpcDisplay,
 		Stage:              "grpc",
-		Fetch:              fetchGRPC,
 		Templates:          grpcTemplates,
 		UnusedParams: func(c *model.Collector, overrides RequestOverrides, unused string) error {
 			if overrides.Message != nil {
@@ -119,6 +114,37 @@ func init() {
 		ReadFiles:  grpcReadFiles,
 		CheckFiles: checkGRPCFiles,
 	})
+}
+
+// grpcRequester is the grpc request type's Requester.
+type grpcRequester struct{}
+
+// Validate checks a grpc collector's request and fills in its defaults.
+func (grpcRequester) Validate(c *model.Collector) error {
+	return validateGRPCRequest(c)
+}
+
+// Fetch performs one request of a grpc collector.
+func (grpcRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchGRPC(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a grpc collector's target.
+func (grpcRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkGRPCTarget(c, target, static)
+}
+
+// Label is the url label of a grpc request.
+func (grpcRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return grpcLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a grpc request.
+func (grpcRequester) Method(*model.Collector, RequestOverrides) string { return http.MethodPost }
+
+// Display renders a grpc target for logs and labels.
+func (grpcRequester) Display(target string) string {
+	return grpcDisplay(target)
 }
 
 // grpcReadFiles is what compiling a collector's proto_files looked at

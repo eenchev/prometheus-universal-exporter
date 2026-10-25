@@ -67,19 +67,14 @@ func init() {
 			"path", "timeout",
 			"username", "private_key_file", "passphrase_file", "password_file",
 		},
-		Validate:       validateSSHFileRequest,
+		Requester:      sshFileRequester{},
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "host or host:port" },
-		Fetch:          fetchSSHFile,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},
 		SchemaRule:         sshFileSchemaRule,
-		CheckTarget:        checkSSHTarget,
 		CheckTargetRequest: checkSSHTargetRequest,
-		Label:              sshFileLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return localFileMethod },
-		Display:            sshDisplay,
 		Stage:              "ssh",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// As for localfile: a param_ parameter can still fill a label
@@ -100,6 +95,37 @@ func init() {
 			"http_exporter_sshfile_limit_waits_total", "http_exporter_sshfile_limit_failures_total",
 		},
 	})
+}
+
+// sshFileRequester is the sshfile request type's Requester.
+type sshFileRequester struct{}
+
+// Validate checks an sshfile collector's request and fills in its defaults.
+func (sshFileRequester) Validate(c *model.Collector) error {
+	return validateSSHFileRequest(c)
+}
+
+// Fetch performs one request of an sshfile collector.
+func (sshFileRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchSSHFile(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an sshfile collector's target.
+func (sshFileRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkSSHTarget(c, target, static)
+}
+
+// Label is the url label of an sshfile request.
+func (sshFileRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return sshFileLabel(target, c, overrides)
+}
+
+// Method is the http_method label of an sshfile request.
+func (sshFileRequester) Method(*model.Collector, RequestOverrides) string { return localFileMethod }
+
+// Display renders an sshfile target for logs and labels.
+func (sshFileRequester) Display(target string) string {
+	return sshDisplay(target)
 }
 
 // The defaults of the connection settings.

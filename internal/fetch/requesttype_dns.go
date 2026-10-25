@@ -49,7 +49,7 @@ func init() {
 		Fields:       []string{"record_type", "server", "transport", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
-		Validate:     validateDNSRequest,
+		Requester:    dnsRequester{},
 		JSONAnswer:   true,
 		TargetHint: func(c *model.Collector) string {
 			if c.Request.RecordType == "PTR" {
@@ -57,19 +57,43 @@ func init() {
 			}
 			return "the name to resolve"
 		},
-		Fetch: fetchDNS,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},
-		CheckTarget: func(c *model.Collector, target string, _ bool) error {
-			_, err := parseDNSTarget(c, target)
-			return err
-		},
-		Label:   dnsLabel,
-		Method:  func(*model.Collector, RequestOverrides) string { return dnsMethod },
-		Display: dnsDisplay,
-		Stage:   "dns",
+		Stage: "dns",
 	})
+}
+
+// dnsRequester is the dns request type's Requester.
+type dnsRequester struct{}
+
+// Validate checks a dns collector's request and fills in its defaults.
+func (dnsRequester) Validate(c *model.Collector) error {
+	return validateDNSRequest(c)
+}
+
+// Fetch performs one request of a dns collector.
+func (dnsRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchDNS(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a dns collector's target.
+func (dnsRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
+	_, err := parseDNSTarget(c, target)
+	return err
+}
+
+// Label is the url label of a dns request.
+func (dnsRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return dnsLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a dns request.
+func (dnsRequester) Method(*model.Collector, RequestOverrides) string { return dnsMethod }
+
+// Display renders a dns target for logs and labels.
+func (dnsRequester) Display(target string) string {
+	return dnsDisplay(target)
 }
 
 // dnsMethod is the http_method label of a lookup.

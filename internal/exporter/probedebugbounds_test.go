@@ -409,15 +409,14 @@ func registerShapedType(t *testing.T, answer func(target string) (*fetch.HTTPRes
 		Name:         "shaped",
 		Fields:       []string{"path"},
 		TargetFields: []string{"path"},
-		Validate:     func(*model.Collector) error { return nil },
-		Fetch: func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			response, err := answer(target)
 			if err != nil {
 				return nil, err
 			}
 			response.Target, response.Collector = target, c.Name
 			return response, nil
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "shaped") })
 }

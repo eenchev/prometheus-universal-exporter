@@ -62,8 +62,7 @@ func init() {
 		Fields:       []string{"root", "path", "max_age", "max_response_bytes", "files", "max_files", "max_total_bytes"},
 		Overrides:    []string{"path", "timeout", PathParamPrefix},
 		TargetFields: []string{"path", "timeout"},
-		Validate:     validateLocalFileRequest,
-		Fetch:        fetchLocalFile,
+		Requester:    localFileRequester{},
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},
@@ -72,14 +71,7 @@ func init() {
 		OptionalTarget: true,
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "a file or directory under its root" },
-		CheckTarget: func(c *model.Collector, target string, _ bool) error {
-			_, err := localFileTargetDir(c, target)
-			return err
-		},
-		Label:   localFileLabel,
-		Method:  func(*model.Collector, RequestOverrides) string { return localFileMethod },
-		Display: func(target string) string { return target },
-		Stage:   "file",
+		Stage:          "file",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// A param_ parameter can still fill a label value of the
 			// collector (labelparams.go): when its labels hold a
@@ -92,6 +84,36 @@ func init() {
 		},
 	})
 }
+
+// localFileRequester is the localfile request type's Requester.
+type localFileRequester struct{}
+
+// Validate checks a localfile collector's request and fills in its defaults.
+func (localFileRequester) Validate(c *model.Collector) error {
+	return validateLocalFileRequest(c)
+}
+
+// Fetch performs one request of a localfile collector.
+func (localFileRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchLocalFile(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a localfile collector's target.
+func (localFileRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
+	_, err := localFileTargetDir(c, target)
+	return err
+}
+
+// Label is the url label of a localfile request.
+func (localFileRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return localFileLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a localfile request.
+func (localFileRequester) Method(*model.Collector, RequestOverrides) string { return localFileMethod }
+
+// Display renders a localfile target for logs and labels.
+func (localFileRequester) Display(target string) string { return target }
 
 func validateLocalFileRequest(x *model.Collector) error {
 	if err := validateFileRequest(x, RequestTypeLocalFile, true); err != nil {

@@ -69,27 +69,53 @@ func init() {
 		Fields:       []string{"send", "terminator", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "tls"},
-		Validate:     validateTCPRequest,
+		Requester:    tcpRequester{},
 		TargetHint:   func(*model.Collector) string { return "host:port" },
-		Fetch:        fetchTCP,
 		Templates:    tcpTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.send or its label values")
 		},
-		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
-			_, err := parseTCPTarget(target)
-			return err
-		},
 		// A target's own tls block, which replaces the collector's whole
 		// (withTargetAccount), is checked as the collector's is.
 		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkTargetTLS(t) },
-		Label:              tcpLabel,
-		Method:             tcpMethod,
-		Display:            tcpDisplay,
 		Stage:              "tcp",
 		CheckFiles:         checkTCPFiles,
 	})
 	templateEscapers["line"] = escapeLineValue
+}
+
+// tcpRequester is the tcp request type's Requester.
+type tcpRequester struct{}
+
+// Validate checks a tcp collector's request and fills in its defaults.
+func (tcpRequester) Validate(c *model.Collector) error {
+	return validateTCPRequest(c)
+}
+
+// Fetch performs one request of a tcp collector.
+func (tcpRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchTCP(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a tcp collector's target.
+func (tcpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseTCPTarget(target)
+	return err
+}
+
+// Label is the url label of a tcp request.
+func (tcpRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return tcpLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a tcp request.
+func (tcpRequester) Method(c *model.Collector, overrides RequestOverrides) string {
+	return tcpMethod(c, overrides)
+}
+
+// Display renders a tcp target for logs and labels.
+func (tcpRequester) Display(target string) string {
+	return tcpDisplay(target)
 }
 
 // tcpTimeout bounds a scrape with no deadline of its own.

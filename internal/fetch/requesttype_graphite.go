@@ -88,32 +88,51 @@ func init() {
 			"targets", "from", "until",
 			"accept_status", "login", "rate_limit", "tls",
 		},
+		Requester:   graphiteRequester{},
 		URLPath:     true,
 		Revalidates: true,
 		Decoder:     "graphite",
-		Validate:    validateGraphiteRequest,
 		Templates:   graphiteTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.targets, its request.path (%q), its header or query values or its label values", c.Request.Path))
 		},
 		SchemaRule:         func() map[string]any { return map[string]any{"required": []string{"targets"}} },
 		TargetHint:         func(*model.Collector) string { return "http://graphite:8080" },
-		CheckTarget:        checkHTTPTarget,
 		Query:              graphiteQuery,
 		CheckTargetRequest: checkGraphiteTargetRequest,
-		Method:             graphiteMethod,
 		// The files of a login and of a target's own tls block; the
 		// tokens request.login keeps, and its counts (login.go).
 		CheckFiles:       checkHTTPFiles,
 		Follow:           logins.follow,
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,
-		Fetch: func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-			overrides.formPost = graphiteMethod(c, overrides) == http.MethodPost
-			return fetch(ctx, target, c, overrides, forwarded)
-		},
 	})
 	templateEscapers["graphite"] = escapeGraphiteValue
+}
+
+// graphiteRequester is the graphite request type's Requester. Its target is a URL
+// (URLTarget).
+type graphiteRequester struct{ URLTarget }
+
+// Validate checks a graphite collector's request and fills in its defaults.
+func (graphiteRequester) Validate(c *model.Collector) error {
+	return validateGraphiteRequest(c)
+}
+
+// Fetch performs one request of a graphite collector.
+func (graphiteRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	overrides.formPost = graphiteMethod(c, overrides) == http.MethodPost
+	return fetch(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a graphite collector's target.
+func (graphiteRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkHTTPTarget(c, target, static)
+}
+
+// Method is the http_method label of a graphite request.
+func (graphiteRequester) Method(c *model.Collector, overrides RequestOverrides) string {
+	return graphiteMethod(c, overrides)
 }
 
 // validateGraphiteRequest holds the graphite type's rules: at least one

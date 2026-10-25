@@ -384,10 +384,9 @@ func TestAPanickedProbeShowsAFixedError(t *testing.T) {
 		Name:         "panics",
 		Fields:       []string{"path"},
 		TargetFields: []string{"path"},
-		Validate:     func(*model.Collector) error { return nil },
-		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
 			panic("boom at https://reader:hunter2@db.example/x")
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
 	broken := testutil.Collector("broken", "text")
@@ -422,10 +421,9 @@ func TestAPanickedProbeAnswersAFixedError(t *testing.T) {
 		Name:         "panics",
 		Fields:       []string{"path"},
 		TargetFields: []string{"path"},
-		Validate:     func(*model.Collector) error { return nil },
-		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
 			panic("boom at https://user:hunter2@host/x")
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
 	broken := testutil.Collector("broken", "text")

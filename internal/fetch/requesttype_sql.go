@@ -75,7 +75,7 @@ func init() {
 		},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
-		Validate:     validateSQLRequest,
+		Requester:    sqlRequester{},
 		Rows:         true,
 		TargetHint: func(c *model.Collector) string {
 			if c.Request.Driver == SQLDriverSnowflake {
@@ -83,17 +83,12 @@ func init() {
 			}
 			return "the database server, host or host:port"
 		},
-		Fetch:     fetchSQL,
 		Templates: sqlTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.database, its args or its label values")
 		},
 		SchemaRule:         sqlSchemaRule,
-		CheckTarget:        checkSQLTarget,
 		CheckTargetRequest: checkSQLTargetRequest,
-		Label:              sqlLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return sqlMethod },
-		Display:            sqlDisplay,
 		Stage:              "sql",
 		CheckFiles:         checkSQLFiles,
 		Follow:             sqlPools.follow,
@@ -108,6 +103,37 @@ func init() {
 		},
 	})
 	templateEscapers["database"] = escapeSQLDatabase
+}
+
+// sqlRequester is the sql request type's Requester.
+type sqlRequester struct{}
+
+// Validate checks a sql collector's request and fills in its defaults.
+func (sqlRequester) Validate(c *model.Collector) error {
+	return validateSQLRequest(c)
+}
+
+// Fetch performs one request of a sql collector.
+func (sqlRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchSQL(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a sql collector's target.
+func (sqlRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkSQLTarget(c, target, static)
+}
+
+// Label is the url label of a sql request.
+func (sqlRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return sqlLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a sql request.
+func (sqlRequester) Method(*model.Collector, RequestOverrides) string { return sqlMethod }
+
+// Display renders a sql target for logs and labels.
+func (sqlRequester) Display(target string) string {
+	return sqlDisplay(target)
 }
 
 // sqlMethod is the http_method label of a statement.

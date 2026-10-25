@@ -67,28 +67,20 @@ func init() {
 		},
 		Overrides:      []string{"path", "timeout", PathParamPrefix},
 		TargetFields:   []string{"path", "timeout"},
-		Validate:       validateS3FileRequest,
+		Requester:      s3FileRequester{},
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
-		Fetch:          fetchS3File,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},
 		SchemaRule: s3FileSchemaRule,
-		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
-			_, err := parseS3Target(target)
-			return err
-		},
 		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error {
 			if t.Request.PathSet {
 				return checkLocalFileName("request.path", t.Request.Path)
 			}
 			return nil
 		},
-		Label:   s3FileLabel,
-		Method:  func(*model.Collector, RequestOverrides) string { return localFileMethod },
-		Display: s3Display,
-		Stage:   "s3",
+		Stage: "s3",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// As for localfile: a param_ parameter can still fill a label
 			// value of a collector reading a directory.
@@ -100,6 +92,38 @@ func init() {
 		CheckFiles: checkS3Files,
 		Follow:     s3Clients.follow,
 	})
+}
+
+// s3FileRequester is the s3file request type's Requester.
+type s3FileRequester struct{}
+
+// Validate checks an s3file collector's request and fills in its defaults.
+func (s3FileRequester) Validate(c *model.Collector) error {
+	return validateS3FileRequest(c)
+}
+
+// Fetch performs one request of an s3file collector.
+func (s3FileRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchS3File(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an s3file collector's target.
+func (s3FileRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseS3Target(target)
+	return err
+}
+
+// Label is the url label of an s3file request.
+func (s3FileRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return s3FileLabel(target, c, overrides)
+}
+
+// Method is the http_method label of an s3file request.
+func (s3FileRequester) Method(*model.Collector, RequestOverrides) string { return localFileMethod }
+
+// Display renders an s3file target for logs and labels.
+func (s3FileRequester) Display(target string) string {
+	return s3Display(target)
 }
 
 // s3DefaultRegion is the region of a collector that sets none, when the

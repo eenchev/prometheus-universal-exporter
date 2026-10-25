@@ -3,6 +3,9 @@
 package fetch
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -32,23 +35,16 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_status", "login", "rate_limit", "tls",
 		},
+		Requester:   httpRequester{},
 		URLPath:     true,
 		Revalidates: true,
 		DebugPage:   true,
-		Validate: func(c *model.Collector) error {
-			if err := validateHTTPRequest(c); err != nil {
-				return err
-			}
-			return validatePagination(c)
-		},
-		CheckTarget: checkHTTPTarget,
 		CheckTargetRequest: func(c *model.Collector, t *model.StaticTarget) error {
 			if err := checkTargetLogin(c, t); err != nil {
 				return err
 			}
 			return checkHTTPTargetTLS(t)
 		},
-		Fetch:      fetchHTTP,
 		TargetHint: func(*model.Collector) string { return "http://host:port" },
 		// The files of a login and of a target's own tls block; the
 		// tokens request.login keeps, and its counts (login.go).
@@ -57,4 +53,26 @@ func init() {
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,
 	})
+}
+
+// httpRequester is the http request type's Requester. Its target is a URL
+// (URLTarget).
+type httpRequester struct{ URLTarget }
+
+// Validate checks an http collector's request and fills in its defaults.
+func (httpRequester) Validate(c *model.Collector) error {
+	if err := validateHTTPRequest(c); err != nil {
+		return err
+	}
+	return validatePagination(c)
+}
+
+// Fetch performs one request of an http collector.
+func (httpRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchHTTP(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an http collector's target.
+func (httpRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkHTTPTarget(c, target, static)
 }

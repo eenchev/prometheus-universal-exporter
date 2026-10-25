@@ -1194,9 +1194,10 @@ func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
 	if overrides.RetryNonIdempotent != nil {
 		anyMethod = *overrides.RetryNonIdempotent
 	}
-	// graphite's method is its own, a GET or a form that only reads, and
-	// is retried as a GET (fetch).
-	if attempts <= 0 || rt.Method == nil && !anyMethod && !IdempotentMethod(requestMethod(c, overrides)) {
+	// Only a type that takes request.method, http, sends a method that may
+	// not be idempotent: graphite's method is its own, a GET or a form that
+	// only reads, and is retried as a GET (fetch).
+	if attempts <= 0 || rt.Takes("method") && !anyMethod && !IdempotentMethod(requestMethod(c, overrides)) {
 		return ""
 	}
 	statuses := RetryStatuses(c, overrides)

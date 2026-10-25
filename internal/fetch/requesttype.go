@@ -34,13 +34,16 @@ import (
 //   - Overrides: the /probe parameters it accepts. A parameter that belongs to
 //     some other type is rejected with 400 rather than ignored.
 //   - TargetFields: the keys a static target's request block may set.
-//   - Validate: the type's required fields, defaults and cross-field rules.
-//   - Fetch: how a scrape actually gets its bytes. Everything after it —
-//     decoding, transforms, limits, caching — is shared by every type.
-//   - What a target is: whether a probe or static target may leave it
-//     out, how it is checked, how it appears in logs, and the url and
-//     http_method labels of the verbose self-metrics. Left unset, these are
-//     http's.
+//   - Requester: what every type does. Validate: the type's required
+//     fields, defaults and cross-field rules. Fetch: how a scrape actually
+//     gets its bytes; everything after it — decoding, transforms, limits,
+//     caching — is shared by every type. What a target is: how it is
+//     checked, how it appears in logs, and the url and http_method labels
+//     of the verbose self-metrics.
+//   - The optional hooks and settings: what only some types have, such as
+//     a target a probe may leave out, connections kept across scrapes, or
+//     files read at a request, and what the rest of the exporter knows of
+//     the type, such as its self-metric families or its schema rule.
 
 // The request types in the source tree.
 const (
@@ -78,32 +81,67 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestT
 // constraints.
 var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP}
 
+// Requester is what every request type does: each type's registration
+// gives a small value implementing it (requesttype_<name>.go), whose
+// methods are the type's own.
+type Requester interface {
+	// Validate checks a collector's request and fills in its defaults.
+	Validate(c *model.Collector) error
+	// Fetch performs one request of a collector.
+	Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
+	// CheckTarget validates a target before anything is fetched: a probe's
+	// target, answered with 400 when it fails, and a static target's, at
+	// load. static tells the two apart. A target left out is refused before
+	// it is asked, unless the type has OptionalTarget.
+	CheckTarget(c *model.Collector, target string, static bool) error
+	// Label and Method give the url and http_method labels of the verbose
+	// self-metrics.
+	Label(target string, c *model.Collector, overrides RequestOverrides) (string, error)
+	Method(c *model.Collector, overrides RequestOverrides) string
+	// Display renders a target for logs, error bodies and the target label
+	// of a static target's health series.
+	Display(target string) string
+}
+
+// URLTarget is the part of a Requester of a type whose target is a URL, as
+// http's and graphite's is: the url label is the URL the request is made
+// to, its placeholders kept (requestLabel), http_method its method, and the
+// target is displayed without credentials (safeTarget). A type embeds it
+// and overrides what differs.
+type URLTarget struct{}
+
+// Label is the URL a request is made to (requestLabel).
+func (URLTarget) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return requestLabel(target, c, overrides)
+}
+
+// Method is the request's method (requestMethod).
+func (URLTarget) Method(c *model.Collector, overrides RequestOverrides) string {
+	return requestMethod(c, overrides)
+}
+
+// Display is the target without credentials (safeTarget).
+func (URLTarget) Display(target string) string { return safeTarget(target) }
+
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
-// and TargetFields the keys a static target may set; Validate checks a
-// collector's request and fills in its defaults, and Fetch performs one.
-// Each type registers itself in RequestTypes.
+// and TargetFields the keys a static target may set; its Requester validates
+// a collector's request, performs one, and says what a target is. Each type
+// registers itself in RequestTypes.
+//
+// What only some types have stays a field of its own, a hook left nil or a
+// setting left zero by the types without it, rather than a method of
+// Requester every type would implement to say it has nothing: an optional
+// capability, which the core asks about only of a type that has it.
 type RequestType struct {
 	Name         string
 	Fields       []string
 	Overrides    []string // a name ending in "_" is a prefix, such as header_
 	TargetFields []string
-	Validate     func(c *model.Collector) error
-	Fetch        func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
+	Requester
 
 	// OptionalTarget lets a probe or a static target leave target out.
 	OptionalTarget bool
-	// CheckTarget validates a target before anything is fetched: a probe's
-	// target, answered with 400 when it fails, and a static target's, at
-	// load. static tells the two apart. Unset, any target is accepted.
-	CheckTarget func(c *model.Collector, target string, static bool) error
-	// Label and Method give the url and http_method labels of the verbose
-	// self-metrics. Unset, they are http's.
-	Label  func(target string, c *model.Collector, overrides RequestOverrides) (string, error)
-	Method func(c *model.Collector, overrides RequestOverrides) string
-	// Display renders a target for logs, error bodies and the target label of
-	// a static target's health series. Unset, it is safeTarget.
-	Display func(target string) string
 	// Stage names the fetch stage in logs and error bodies. Unset, "http".
 	Stage string
 	// CheckOverride lets a collector refuse a probe parameter, or a static
@@ -384,6 +422,9 @@ func registerRequestType(rt *RequestType) {
 	if _, exists := RequestTypes[rt.Name]; exists {
 		panic(fmt.Sprintf("request type %q registered twice", rt.Name))
 	}
+	if rt.Requester == nil {
+		panic(fmt.Sprintf("request type %q registered without its Requester", rt.Name))
+	}
 	RequestTypes[rt.Name] = rt
 }
 
@@ -630,15 +671,12 @@ func CheckTarget(c *model.Collector, target string, static bool) error {
 	if strings.TrimSpace(target) == "" && !rt.OptionalTarget {
 		return ErrMissingTarget
 	}
-	if rt.CheckTarget != nil {
-		return rt.CheckTarget(c, target, static)
-	}
-	return nil
+	return rt.CheckTarget(c, target, static)
 }
 
 // RequestLabelFor is the url label of a request, by the collector's type.
 func RequestLabelFor(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
-	if rt := requestTypeOf(c); rt != nil && rt.Label != nil {
+	if rt := requestTypeOf(c); rt != nil {
 		return rt.Label(target, c, overrides)
 	}
 	return requestLabel(target, c, overrides)
@@ -647,7 +685,7 @@ func RequestLabelFor(target string, c *model.Collector, overrides RequestOverrid
 // RequestMethodFor is the http_method label of a request, by the collector's
 // type.
 func RequestMethodFor(c *model.Collector, overrides RequestOverrides) string {
-	if rt := requestTypeOf(c); rt != nil && rt.Method != nil {
+	if rt := requestTypeOf(c); rt != nil {
 		return rt.Method(c, overrides)
 	}
 	return requestMethod(c, overrides)
@@ -655,7 +693,7 @@ func RequestMethodFor(c *model.Collector, overrides RequestOverrides) string {
 
 // DisplayTarget renders a target for logs and labels, by the collector's type.
 func DisplayTarget(c *model.Collector, target string) string {
-	if rt := requestTypeOf(c); rt != nil && rt.Display != nil {
+	if rt := requestTypeOf(c); rt != nil {
 		return rt.Display(target)
 	}
 	return safeTarget(target)

@@ -64,22 +64,17 @@ func init() {
 		Fields:       []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "bind_dn", "password_file", "tls"},
-		Validate:     validateLDAPRequest,
+		Requester:    ldapRequester{},
 		JSONAnswer:   true,
 		// ldap is said letter by letter.
 		Article:    "an",
 		TargetHint: func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
-		Fetch:      fetchLDAP,
 		Templates:  ldapTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the base or filter of its request.searches or its label values")
 		},
 		SchemaRule:         ldapSchemaRule,
-		CheckTarget:        checkLDAPTarget,
 		CheckTargetRequest: checkLDAPTargetRequest,
-		Label:              ldapLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return ldapMethod },
-		Display:            ldapDisplay,
 		Stage:              "ldap",
 		CheckFiles:         checkLDAPFiles,
 	})
@@ -91,6 +86,37 @@ func init() {
 		return written, nil
 	}
 	templateEscapers["ldap_filter"] = func(_, _, value string) (string, error) { return ldapEscapeFilterValue(value), nil }
+}
+
+// ldapRequester is the ldap request type's Requester.
+type ldapRequester struct{}
+
+// Validate checks an ldap collector's request and fills in its defaults.
+func (ldapRequester) Validate(c *model.Collector) error {
+	return validateLDAPRequest(c)
+}
+
+// Fetch performs one request of an ldap collector.
+func (ldapRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchLDAP(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an ldap collector's target.
+func (ldapRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkLDAPTarget(c, target, static)
+}
+
+// Label is the url label of an ldap request.
+func (ldapRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return ldapLabel(target, c, overrides)
+}
+
+// Method is the http_method label of an ldap request.
+func (ldapRequester) Method(*model.Collector, RequestOverrides) string { return ldapMethod }
+
+// Display renders an ldap target for logs and labels.
+func (ldapRequester) Display(target string) string {
+	return ldapDisplay(target)
 }
 
 // The ports of a target that names none.

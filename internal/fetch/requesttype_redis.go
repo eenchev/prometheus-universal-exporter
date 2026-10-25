@@ -70,23 +70,51 @@ func init() {
 		Fields:       []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "username", "password_file", "tls"},
-		Validate:     validateRedisRequest,
+		Requester:    redisRequester{},
 		JSONAnswer:   true,
 		TargetHint:   func(*model.Collector) string { return "host, host:port or rediss://host:port" },
-		Fetch:        fetchRedis,
 		Templates:    redisTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the arguments of its request.commands or its label values")
 		},
 		SchemaRule:         redisSchemaRule,
-		CheckTarget:        checkRedisTarget,
 		CheckTargetRequest: checkRedisTargetRequest,
-		Label:              redisLabel,
-		Method:             redisMethod,
-		Display:            redisDisplay,
 		Stage:              "redis",
 		CheckFiles:         checkRedisFiles,
 	})
+}
+
+// redisRequester is the redis request type's Requester.
+type redisRequester struct{}
+
+// Validate checks a redis collector's request and fills in its defaults.
+func (redisRequester) Validate(c *model.Collector) error {
+	return validateRedisRequest(c)
+}
+
+// Fetch performs one request of a redis collector.
+func (redisRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchRedis(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a redis collector's target.
+func (redisRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkRedisTarget(c, target, static)
+}
+
+// Label is the url label of a redis request.
+func (redisRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return redisLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a redis request.
+func (redisRequester) Method(c *model.Collector, overrides RequestOverrides) string {
+	return redisMethod(c, overrides)
+}
+
+// Display renders a redis target for logs and labels.
+func (redisRequester) Display(target string) string {
+	return redisDisplay(target)
 }
 
 // redisDefaultPort is the port of a target that names none.

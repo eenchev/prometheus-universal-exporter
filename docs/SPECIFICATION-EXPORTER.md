@@ -27476,6 +27476,38 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   exit (TestASIGHUPDuringTheShutdownDoesNotEndIt), and one with it says it
   sends the last export (TestOTLPExportsThroughTheShutdownDelay).
 
+## 34.211 Panics and passwords on the status page, the CI setup rule and example collector files
+
+- A probe that panicked is shown on the status page with a fixed error, as
+  a static target's scrape that panicked is; neither the panic's text nor a
+  password it quotes is shown, and the panic is in the log
+  (TestAPanickedProbeShowsAFixedError).
+- The userinfo of a URL is withheld wherever the status page shows text the
+  exporter did not write: in a probe's error quoting one, in a probe
+  parameter's value, and in a static target's or a probe's error whether or
+  not it is a `*url.Error` (TestTheRecentProbesWithholdAURLsUserinfo).
+- `fetch.RedactText` withholds a URL's userinfo as `redacted:redacted`, up to
+  the authority's last `@`, and leaves an `@` in a path or a `mailto:` alone
+  (TestRedactText).
+- A step added to ci.yml's `image` job that runs Go or Python after an
+  assignment (`CGO_ENABLED=0 GOOS=darwin … go build`), after `&&`, `;` or
+  `||`, in a pipe, in `$(…)` or backticks, by a full path, or through a
+  script of `tools/` (`sh tools/ci-packages.sh`, `python3 tools/ci-passed.py`)
+  makes the job fail the setup check without `test`'s whole setup, and the
+  job as it is passes it (TestAJobThatRunsGoInAnyShapeNeedsTheWholeSetup).
+- A directory example with a `config.yaml` naming a collector file beside it
+  in `collector_files` and a static target file is one example to
+  `tools/run-example.sh` — `list`, `files`, `opt-in-types`, which finds the
+  opt-in type of the collector file, and `run` — and to the example tree's
+  tests, whose collector file is neither a configuration nor run on its
+  own; a file of collectors the configuration does not name, and a
+  directory of YAML without a `config.yaml`, fail the tree's tests
+  (TestAnExampleDirectoryMayHaveCollectorFiles).
+- While examples/ has a directory of YAML without a `config.yaml` or with
+  two static target files, `tools/run-example.sh list` and `files` exit
+  non-zero rather than print part of the list and succeed
+  (TestRunExampleListFailsWhereTheTreeIsRefused).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

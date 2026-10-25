@@ -27567,6 +27567,27 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   as a dollar quote, and a lone no-break space byte taken for a blank
   (FuzzVerticaStatementSplitting).
 
+## 34.213 Vertica statements the driver would not prepare
+
+- With the vertica tag, against a stand-in Vertica server that records what
+  the real driver sends it, a probe value ending in `\` is bound to a
+  prepared statement and never sent inside its text: `SELECT ? AS one`,
+  `SELECT 'copy' AS one, ? AS two`, `SELECT 1 AS copy, ? AS two` and a
+  `COPY ... FROM LOCAL` inside a comment are prepared as written with the
+  value bound; `COPY ... FROM LOCAL` in upper and lower case, with `--` and
+  `/* */` comments, with two files and a trailing `;`, behind a quoted
+  identifier, and hidden from a nesting server in `/* /* */ COPY t FROM
+  LOCAL 'f' */ SELECT ? AS one` are refused at load saying `COPY ... FROM
+  LOCAL`, where the driver sent them with the value written in (`SELECT 'x\'
+  AS one`); `COPY ... FROM STDIN` and a `COPY` from a server file are
+  refused as a COPY that loads rows; `CREATE OR REPLACE FUNCTION` and `GRANT
+  EXECUTE ON FUNCTION` are refused as a function's DDL the driver sends
+  unprepared (TestAVerticaProbeValueIsBoundNeverWrittenIntoTheStatement).
+- With the vertica tag, FuzzVerticaStatementSplitting also runs the whole
+  load check on every text without a panic, and refuses any text after
+  `COPY ` and after `/* /* */ COPY t FROM LOCAL '/f' */ `; its seeds hold
+  the COPY cases above (FuzzVerticaStatementSplitting).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

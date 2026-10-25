@@ -27431,6 +27431,27 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   schemas refuse 1001 only in a block that is switched on, as the exporter
   does, and take 1000 in either (TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock).
 
+## 34.209 The image's module layer, readiness on the page and make run's hosts
+
+- The Dockerfile's build stage declares no `ARG` (`VERSION`, `REVISION`,
+  `TARGETOS`, `TARGETARCH` among them) before `go mod download`, so a new
+  commit's `REVISION` leaves the module download's layer cached.
+- While the exporter shuts down, `/ready` answers 503, and the status page's
+  OTLP readiness says `unready` for "the exporter is shutting down", in the
+  JSON as `"readiness": "unready"` and `"unready_reasons"`, with no
+  `unready_since`; after OTLP failures the row gives the failures' reason too.
+- `tools/run-example.sh run` prints filebeat's probe as a hint with
+  `<your target>`, its target `filebeat-host` being a placeholder, and ecb's
+  and metar's probe URLs as before; the target check takes localhost,
+  127.0.0.1, `[::1]` and public DNS names, and refuses names without a dot,
+  `-host` names, non-loopback addresses and names under `example.com`,
+  `.example`, `.local`, `.internal`, `.svc`.
+- `tools/run-example.sh run` brackets a bare IPv6 `HOST` in the listen address
+  and the URLs, keeps a bracketed one, opens `localhost` and `[::1]` for
+  `HOST=0.0.0.0` and `HOST=::` and says the exporter listens on every
+  interface, and refuses an empty `HOST`; `make -n run EXAMPLE=ecb HOST=`
+  fails without building.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

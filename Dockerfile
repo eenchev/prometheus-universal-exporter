@@ -6,6 +6,18 @@ ARG PYTHON_DATEUTIL_VERSION=2.9.0.post0
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# The build arguments are declared here, after the module download, not at the
+# top of the stage: every RUN after an ARG depends on its value, and REVISION
+# changes with every commit, so declared earlier it would make go mod download
+# miss the layer cache on every build. TARGETOS and TARGETARCH come here too,
+# so one download serves every platform the image is built for.
 ARG TARGETOS
 ARG TARGETARCH
 # REQUEST_TYPES selects the request types built in, as a comma-separated list
@@ -26,13 +38,6 @@ ARG VERSION
 # build stage has no git, and the build context no .git (.dockerignore), so Go
 # cannot stamp it itself; the release workflow passes the tag's commit.
 ARG REVISION
-
-WORKDIR /src
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
 
 RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}" "${SQL_DRIVERS}" "${OPT_IN_REQUEST_TYPES}")" || exit 1; \
     CGO_ENABLED=0 \

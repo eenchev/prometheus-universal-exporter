@@ -241,3 +241,51 @@ func TestChartReadmeNamesTheImagesPython(t *testing.T) {
 		}
 	}
 }
+
+// Every RUN after an ARG depends on the argument's value, so a build argument
+// declared before the module download makes go mod download miss the layer
+// cache whenever its value changes: REVISION changes with every commit. The
+// build stage declares its arguments after the module download.
+func TestDockerfileBuildArgumentsFollowTheModuleDownload(t *testing.T) {
+	raw, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Skipf("no Dockerfile to check: %v", err)
+	}
+	inBuild, downloaded := false, false
+	declared := map[string]bool{}
+	for i, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		switch strings.ToUpper(fields[0]) {
+		case "FROM":
+			if inBuild {
+				inBuild = false
+				continue
+			}
+			inBuild = strings.EqualFold(fields[len(fields)-1], "build")
+		case "ARG":
+			if !inBuild || len(fields) < 2 {
+				continue
+			}
+			name, _, _ := strings.Cut(fields[1], "=")
+			declared[name] = true
+			if !downloaded {
+				t.Errorf("Dockerfile:%d: the build stage declares ARG %s before go mod download, which then depends on it", i+1, name)
+			}
+		case "RUN":
+			if inBuild && strings.Contains(line, "go mod download") {
+				downloaded = true
+			}
+		}
+	}
+	if !downloaded {
+		t.Fatal("the Dockerfile's build stage no longer runs go mod download")
+	}
+	for _, name := range []string{"VERSION", "REVISION", "TARGETOS", "TARGETARCH"} {
+		if !declared[name] {
+			t.Errorf("the build stage no longer declares ARG %s", name)
+		}
+	}
+}

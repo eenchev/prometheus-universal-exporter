@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -58,4 +59,23 @@ func SchemaCaselessOneOf(names ...string) string {
 	}
 	blanks := "[" + SchemaSurroundingBlank + "]*"
 	return "^" + blanks + "(" + strings.Join(alternatives, "|") + ")" + blanks + "$"
+}
+
+// SchemaOptionalEnum is values with "", which is the key left out, beside
+// them: the allowed values of a key that may be left out.
+func SchemaOptionalEnum(values []string) []string {
+	return append(slices.Clone(values), "")
+}
+
+// SchemaOptionalPattern is pattern taking "" too, which is the key left
+// out.
+func SchemaOptionalPattern(pattern string) string {
+	return "^$|" + pattern
+}
+
+// SchemaOnlyBlanks is text of one blank or more and nothing else: what a
+// key that names something may not be. It goes under not, so that the key
+// keeps the types it takes, and "" stays the key left out.
+func SchemaOnlyBlanks() map[string]any {
+	return map[string]any{"type": "string", "pattern": "^[" + SchemaSurroundingBlank + "]+$"}
 }

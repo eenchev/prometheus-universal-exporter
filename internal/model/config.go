@@ -277,13 +277,6 @@ type RequestConfig struct {
 	ServiceName string            `yaml:"service_name,omitempty"`
 	MaxRows     int               `yaml:"max_rows,omitempty"`
 	Connections *SQLConnections   `yaml:"connections,omitempty"`
-	// RecordType, Server and Transport belong to the dns type: the record
-	// type asked for, A when left out; the server asked, host:port, the
-	// system's resolver when left out; and udp or tcp (fetch/requesttype_dns.go).
-	// Left out of a collector written as YAML when empty, as the sql keys.
-	RecordType string `yaml:"record_type,omitempty"`
-	Server     string `yaml:"server,omitempty"`
-	Transport  string `yaml:"transport,omitempty"`
 	// Region, Endpoint and PathStyle belong to the s3file type, with Root,
 	// Path and the directory keys above: the region requests are signed
 	// for, the URL of an S3-compatible store in place of AWS's, and whether

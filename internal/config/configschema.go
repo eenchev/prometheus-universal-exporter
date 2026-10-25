@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -214,13 +213,11 @@ func durationSchema() map[string]any {
 // optionalEnum is the values and "", and optionalPattern the pattern or
 // nothing at all. A key the exporter requires, such as transform.type, has
 // neither: written "", it is as missing as left out, to both.
-func optionalEnum(values []string) []string {
-	return append(slices.Clone(values), "")
-}
+// optionalEnum is fetch.SchemaOptionalEnum.
+func optionalEnum(values []string) []string { return fetch.SchemaOptionalEnum(values) }
 
-func optionalPattern(pattern string) string {
-	return "^$|" + pattern
-}
+// optionalPattern is fetch.SchemaOptionalPattern.
+func optionalPattern(pattern string) string { return fetch.SchemaOptionalPattern(pattern) }
 
 // writtenKey is the rule that an object has the key and that it is not ""
 // (fetch.SchemaWrittenKey).
@@ -243,10 +240,8 @@ func valueMapKeys() map[string]any {
 // onlyBlanks is text of one blank or more and nothing else: what a label's
 // expression may not be (validateMetricRule). It goes under not, so that the
 // key keeps the types it takes, an unquoted 1 for a capture group among
-// them, and "" stays the key left out.
-func onlyBlanks() map[string]any {
-	return map[string]any{"type": "string", "pattern": "^[" + surroundingBlank + "]+$"}
-}
+// them, and "" stays the key left out (fetch.SchemaOnlyBlanks).
+func onlyBlanks() map[string]any { return fetch.SchemaOnlyBlanks() }
 
 // blanksOrPlaceholder is onlyBlanks, or text with {{ in it: what a static
 // target's account and credential files may not be, a placeholder being
@@ -529,9 +524,6 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
 		"collectors[].request.options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
 		"collectors[].request.service_name":                    {"not": onlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
-		"collectors[].request.record_type":                     {"type": "string", "pattern": optionalPattern(fetch.SchemaCaselessOneOf(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
-		"collectors[].request.server":                          {"not": onlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
-		"collectors[].request.transport":                       {"enum": optionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
 		"collectors[].request.resource":                        {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
 		"collectors[].request.group":                           {"type": "string", "pattern": optionalPattern(model.KubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
 		"collectors[].request.version":                         {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},

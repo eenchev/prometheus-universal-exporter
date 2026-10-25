@@ -28,9 +28,10 @@ import (
 // its answer, ldap searches an LDAP directory. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
-//   - Fields: the request keys it accepts. A key another type owns is an error
-//     for this one, so a configuration cannot carry settings that are quietly
-//     ignored.
+//   - Fields and Config: the request keys it accepts, those of the common
+//     part it takes and those of its own struct (requestkeys.go). A key
+//     another type owns is an error for this one, so a configuration cannot
+//     carry settings that are quietly ignored.
 //   - Overrides: the /probe parameters it accepts. A parameter that belongs to
 //     some other type is rejected with 400 rather than ignored.
 //   - TargetFields: the keys a static target's request block may set.
@@ -124,10 +125,11 @@ func (URLTarget) Method(c *model.Collector, overrides RequestOverrides) string {
 func (URLTarget) Display(target string) string { return safeTarget(target) }
 
 // RequestType is how one request.type reaches its data. Fields lists the
-// request keys it accepts, Overrides the probe parameters that may change them
-// and TargetFields the keys a static target may set; its Requester validates
-// a collector's request, performs one, and says what a target is. Each type
-// registers itself in RequestTypes.
+// keys of the common part it accepts and Config holds its own, Overrides
+// the probe parameters that may change them and TargetFields the keys a
+// static target may set; its Requester validates a collector's request,
+// performs one, and says what a target is. Each type registers itself in
+// RequestTypes.
 //
 // What only some types have stays a field of its own, a hook left nil or a
 // setting left zero by the types without it, rather than a method of

@@ -123,8 +123,8 @@ network.
   of a static target's request (`CheckOverride`, `CheckTargetRequest`), the
   files read at a request or at the load (`CheckFiles`, `ReadFiles`,
   `NamedFiles`), what `--dry-run` shows of its request's policy (`Policy`),
-  the method and body of a request made over HTTP (`MethodBody`), connections kept
-  across scrapes (`Follow`, `CloseConnections`, `Connections`,
+  the method and body of a request made over HTTP (`MethodBody`),
+  connections kept across scrapes (`Follow`, `CloseConnections`, `Connections`,
   `ConnectionLimit`, `ConnectionPools`) and logins (`Logins`). They stay
   fields rather than methods of `Requester` so that a type without the
   capability says nothing, instead of implementing a method to say it has
@@ -137,10 +137,9 @@ network.
   it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
   `FileExtensions`), the article its name is read with (`Article`), its rule
   in the configuration schema (`SchemaRule`) and what the schema says of its
-  own keys (`KeyRules`), the templated parts of its
-  request and the encoding of their values (`Templates`, `templateEscapers`)
-  and the places a refusal of unused probe parameters names
-  (`UnusedParams`).
+  own keys (`KeyRules`), the templated parts of its request and the
+  encoding of their values (`Templates`, `templateEscapers`) and the places
+  a refusal of unused probe parameters names (`UnusedParams`).
 
 A collector's `request` block is written flat, its type's keys beside
 `type`, but only the keys several types take are fields of
@@ -148,34 +147,40 @@ A collector's `request` block is written flat, its type's keys beside
 fails for a field there that one type alone takes. The keys only one type
 takes are fields of the type's own struct, declared in its file beside the
 registration and given as its `Config`, such as `fetch.TCPConfig{}` with
-`send` and `terminator`: the loader reads `request.type` and puts the keys of
-that type's own into a value of its struct, which the collector holds in
-`Request.Own`, and the type reads it back with a typed accessor
-(`tcpRequest(c).Send`). A key's schema is made from its field's Go type, as
-every other key's is, with what the type's `KeyRules` say of it by its path
-under the request block: its description, and any pattern or bound. A build
-without the type carries neither the struct nor the rules. It still knows
-the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue of the
-own keys of every type of the tree with the Go types of their fields and
-their schemas — a type of `internal/model` by its name, a type of the
+`send` and `terminator`. The loader reads `request.type` and puts the keys
+of that type's own into a value of its struct, which the collector holds in
+`Request.Own`, written back flat when the collector is written as YAML (its
+cache key, a reload's comparison); a key of another type's own goes into
+`Request.Foreign`, which the validation refuses as it refuses a key of the
+common part the type does not take. The type reads its keys with a typed
+accessor (`tcpRequest(c).Send`), and writes a changed value back into `Own`,
+which is a value, so that a copy of a collector is a copy of its keys. A
+key's schema is made from its field's Go type, as every other key's is,
+with what the type's `KeyRules` say of it by its path under the request
+block: its description, and any pattern or bound.
+
+A build without the type carries neither the struct nor the rules. It still
+knows the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue
+of the own keys of every type of the tree with the Go types of their fields
+and their schemas: a type of `internal/model` by its name, and a type of the
 request type's own, such as redis's `RedisCommand`, by its structure, which
 a build without the type makes again to read the key into, so that what it
-refuses of the value it refuses as a build with the type does — which `make schemas` writes from a build with every type, by
-running `TestTheRequestKeyCatalogueIsCurrent` (`internal/config`) with
-`-update-request-keys`, and which that test otherwise holds to the structs: so a build that left `tcp` out refuses `send` under
-another type as a key of another type, in the words a build with every type
-has, and its schema describes `send` as theirs does. What a rule makes of
-the build, such as the drivers `request.driver` names, is the generating
-build's, which has the default drivers: a build without `sql` describes
-`driver` with them.
+refuses of the value it refuses as a build with the type does. So a build
+that left `tcp` out refuses `send` under another type as a key of another
+type, in the words a build with every type has, and its schema describes
+`send` as theirs does. `make schemas` writes the catalogue from a build with
+every type, by running `TestTheRequestKeyCatalogueIsCurrent`
+(`internal/config`) with `-update-request-keys`; that test otherwise holds
+it to the structs. What a rule makes of the build, such as the drivers
+`request.driver` names, is the generating build's, which has the default
+drivers: a build without `sql` describes `driver` with them.
 
 So a new type is its own files and the build wiring (the guard file, the tag
 script, the Makefile's and CI's loops and the documentation's marked lists,
 each checked by a test), the catalogue `make schemas` writes, and nothing in
-the core. Only `internal/fetch`'s
-`requesttype.go` names every type of the tree, built or not, in
-`knownRequestTypes` and `optInRequestTypes`, so that a configuration naming a
-type the build left out is told so.
+the core. Only `internal/fetch`'s `requesttype.go` names every type of the
+tree, built or not, in `knownRequestTypes` and `optInRequestTypes`, so that
+a configuration naming a type the build left out is told so.
 
 An error whose text names where in the response it happened — a row, a node,
 an item, a line — or a size or a duration it measured is made with

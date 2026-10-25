@@ -71,7 +71,10 @@ func init() {
 		FileExtensions: true,
 		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
 		Fetch:          fetchS3File,
-		SchemaRule:     s3FileSchemaRule,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
+		},
+		SchemaRule: s3FileSchemaRule,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseS3Target(target)
 			return err
@@ -115,7 +118,7 @@ var s3RegionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var s3BucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 func validateS3FileRequest(x *model.Collector) error {
-	if err := validateFileRequest(x, RequestTypeS3File); err != nil {
+	if err := validateFileRequest(x, RequestTypeS3File, false); err != nil {
 		return err
 	}
 	if err := validateLocalDirectory(x); err != nil {

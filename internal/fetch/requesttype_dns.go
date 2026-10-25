@@ -58,6 +58,9 @@ func init() {
 			return "the name to resolve"
 		},
 		Fetch: fetchDNS,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
+		},
 		CheckTarget: func(c *model.Collector, target string, _ bool) error {
 			_, err := parseDNSTarget(c, target)
 			return err

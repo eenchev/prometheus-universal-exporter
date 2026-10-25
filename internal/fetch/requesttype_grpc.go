@@ -108,9 +108,16 @@ func init() {
 		Display:            grpcDisplay,
 		Stage:              "grpc",
 		Fetch:              fetchGRPC,
-		SchemaRule:         grpcSchemaRule,
-		ReadFiles:          grpcReadFiles,
-		CheckFiles:         checkGRPCFiles,
+		Templates:          grpcTemplates,
+		UnusedParams: func(c *model.Collector, overrides RequestOverrides, unused string) error {
+			if overrides.Message != nil {
+				return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request and no label value of the collector names them", unused)
+			}
+			return unusedParamsIn(c, unused, "its request.message, its metadata values or its label values")
+		},
+		SchemaRule: grpcSchemaRule,
+		ReadFiles:  grpcReadFiles,
+		CheckFiles: checkGRPCFiles,
 	})
 }
 
@@ -515,4 +522,20 @@ func grpcSchemaRule() map[string]any {
 	rule["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
 	rule["then"] = SchemaWrittenKey("descriptors")
 	return rule
+}
+
+// grpcTemplates are a grpc collector's message, which takes the body's
+// filters, unless the probe replaced it, and its metadata values, which
+// take the header rule.
+func grpcTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
+	var out []templateField
+	if overrides.Message == nil && HasPathParams(c.Request.Message) {
+		out = append(out, templateField{"request.message", c.Request.Message, "body"})
+	}
+	for _, name := range model.SortedKeys(c.Request.Metadata) {
+		if value := c.Request.Metadata[name]; HasPathParams(value) {
+			out = append(out, templateField{"request.metadata." + name, value, "header"})
+		}
+	}
+	return out
 }

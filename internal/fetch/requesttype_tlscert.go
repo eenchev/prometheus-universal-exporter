@@ -58,7 +58,10 @@ func init() {
 		JSONAnswer:   true,
 		TargetHint:   func(*model.Collector) string { return "host or host:port" },
 		Fetch:        fetchTLSCert,
-		SchemaRule:   tlsCertSchemaRule,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
+		},
+		SchemaRule: tlsCertSchemaRule,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseTLSCertTarget(target)
 			return err

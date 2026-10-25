@@ -66,14 +66,18 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:               RequestTypeRedis,
-		Fields:             []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "username", "password_file", "tls"},
-		Validate:           validateRedisRequest,
-		JSONAnswer:         true,
-		TargetHint:         func(*model.Collector) string { return "host, host:port or rediss://host:port" },
-		Fetch:              fetchRedis,
+		Name:         RequestTypeRedis,
+		Fields:       []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "username", "password_file", "tls"},
+		Validate:     validateRedisRequest,
+		JSONAnswer:   true,
+		TargetHint:   func(*model.Collector) string { return "host, host:port or rediss://host:port" },
+		Fetch:        fetchRedis,
+		Templates:    redisTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "the arguments of its request.commands or its label values")
+		},
 		SchemaRule:         redisSchemaRule,
 		CheckTarget:        checkRedisTarget,
 		CheckTargetRequest: checkRedisTargetRequest,
@@ -701,4 +705,19 @@ func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
 // (SchemaWrittenKey).
 func redisSchemaRule() map[string]any {
 	return map[string]any{"if": SchemaWrittenKey("username"), "then": SchemaWrittenKey("password_file")}
+}
+
+// redisTemplates are the arguments of a redis collector's commands, sent as
+// values, as a sql collector's args are; a command's name takes no
+// placeholder.
+func redisTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	for i, cmd := range c.Request.Commands {
+		for j, arg := range cmd.Command {
+			if j > 0 && HasPathParams(arg) {
+				out = append(out, templateField{fmt.Sprintf("request.commands[%d].command[%d]", i, j), arg, "arg"})
+			}
+		}
+	}
+	return out
 }

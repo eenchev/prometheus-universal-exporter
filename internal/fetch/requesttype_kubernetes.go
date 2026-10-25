@@ -63,12 +63,15 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:           RequestTypeKubernetes,
-		Fields:         []string{"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server", "tls", "bearer_token_file", "max_response_bytes"},
-		Overrides:      []string{"timeout", PathParamPrefix},
-		TargetFields:   []string{"timeout"},
-		Validate:       validateKubernetesRequest,
-		Fetch:          fetchKubernetes,
+		Name:         RequestTypeKubernetes,
+		Fields:       []string{"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server", "tls", "bearer_token_file", "max_response_bytes"},
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout"},
+		Validate:     validateKubernetesRequest,
+		Fetch:        fetchKubernetes,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
+		},
 		SchemaRule:     kubernetesSchemaRule,
 		OptionalTarget: true,
 		// A kubernetes collector lists what its configuration names, and

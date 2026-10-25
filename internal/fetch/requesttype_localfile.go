@@ -64,6 +64,9 @@ func init() {
 		TargetFields: []string{"path", "timeout"},
 		Validate:     validateLocalFileRequest,
 		Fetch:        fetchLocalFile,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
+		},
 		// root, written with something other than "" (SchemaWrittenKey).
 		SchemaRule:     func() map[string]any { return SchemaWrittenKey("root") },
 		OptionalTarget: true,
@@ -91,7 +94,7 @@ func init() {
 }
 
 func validateLocalFileRequest(x *model.Collector) error {
-	if err := validateFileRequest(x, RequestTypeLocalFile); err != nil {
+	if err := validateFileRequest(x, RequestTypeLocalFile, true); err != nil {
 		return err
 	}
 	return validateLocalDirectory(x)

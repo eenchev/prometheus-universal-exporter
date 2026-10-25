@@ -67,10 +67,13 @@ func init() {
 			"path", "timeout",
 			"username", "private_key_file", "passphrase_file", "password_file",
 		},
-		Validate:           validateSSHFileRequest,
-		FileExtensions:     true,
-		TargetHint:         func(*model.Collector) string { return "host or host:port" },
-		Fetch:              fetchSSHFile,
+		Validate:       validateSSHFileRequest,
+		FileExtensions: true,
+		TargetHint:     func(*model.Collector) string { return "host or host:port" },
+		Fetch:          fetchSSHFile,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
+		},
 		SchemaRule:         sshFileSchemaRule,
 		CheckTarget:        checkSSHTarget,
 		CheckTargetRequest: checkSSHTargetRequest,
@@ -115,7 +118,7 @@ const sshDefaultPort = "22"
 const sshMinKeepaliveInterval = time.Second
 
 func validateSSHFileRequest(x *model.Collector) error {
-	if err := validateFileRequest(x, RequestTypeSSHFile); err != nil {
+	if err := validateFileRequest(x, RequestTypeSSHFile, false); err != nil {
 		return err
 	}
 	if err := validateLocalDirectory(x); err != nil {

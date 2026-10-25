@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -87,10 +88,14 @@ func init() {
 			"targets", "from", "until",
 			"accept_status", "login", "rate_limit", "tls",
 		},
-		URLPath:            true,
-		Revalidates:        true,
-		Decoder:            "graphite",
-		Validate:           validateGraphiteRequest,
+		URLPath:     true,
+		Revalidates: true,
+		Decoder:     "graphite",
+		Validate:    validateGraphiteRequest,
+		Templates:   graphiteTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, fmt.Sprintf("its request.targets, its request.path (%q), its header or query values or its label values", c.Request.Path))
+		},
 		SchemaRule:         func() map[string]any { return map[string]any{"required": []string{"targets"}} },
 		TargetHint:         func(*model.Collector) string { return "http://graphite:8080" },
 		CheckTarget:        checkHTTPTarget,
@@ -108,6 +113,7 @@ func init() {
 			return fetch(ctx, target, c, overrides, forwarded)
 		},
 	})
+	templateEscapers["graphite"] = escapeGraphiteValue
 }
 
 // validateGraphiteRequest holds the graphite type's rules: at least one
@@ -323,4 +329,33 @@ func checkGraphiteExpression(expression string) error {
 		return fmt.Errorf("has a %c that is never closed", open[len(open)-1])
 	}
 	return nil
+}
+
+// graphiteValue is what a placeholder may be filled with in a Graphite
+// expression: the characters of a path node or a tag value, and none that
+// Graphite's grammar gives a meaning.
+var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
+
+// graphiteTemplates are a graphite collector's targets, whose placeholders'
+// values land inside Graphite expressions (graphiteValue). A static target's
+// own targets replace the collector's, placeholders and all.
+func graphiteTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
+	var out []templateField
+	if overrides.Targets == nil {
+		for i, target := range c.Request.Targets {
+			if HasPathParams(target) {
+				out = append(out, templateField{fmt.Sprintf("request.targets[%d]", i), target, "graphite"})
+			}
+		}
+	}
+	return out
+}
+
+// escapeGraphiteValue refuses a value that could change the Graphite
+// expression it lands in (graphiteValue).
+func escapeGraphiteValue(where, name, value string) (string, error) {
+	if !graphiteValue.MatchString(value) {
+		return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . : @ %% + ~, since it lands inside a Graphite expression, where anything else could change the expression", where, name, value)
+	}
+	return value, nil
 }

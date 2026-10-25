@@ -83,7 +83,11 @@ func init() {
 			}
 			return "the database server, host or host:port"
 		},
-		Fetch:              fetchSQL,
+		Fetch:     fetchSQL,
+		Templates: sqlTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its request.database, its args or its label values")
+		},
 		SchemaRule:         sqlSchemaRule,
 		CheckTarget:        checkSQLTarget,
 		CheckTargetRequest: checkSQLTargetRequest,
@@ -103,6 +107,7 @@ func init() {
 			"http_exporter_sql_limit_waits_total", "http_exporter_sql_limit_failures_total", "http_exporter_sql_rows",
 		},
 	})
+	templateEscapers["database"] = escapeSQLDatabase
 }
 
 // sqlMethod is the http_method label of a statement.
@@ -843,4 +848,34 @@ func sqlSchemaRule() map[string]any {
 		rule["allOf"] = conditions
 	}
 	return rule
+}
+
+// sqlDatabaseName is what a placeholder may be filled with in a sql
+// collector's request.database: the characters of a database name that
+// need no quoting in any of the databases.
+var sqlDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.$-]+$`)
+
+// sqlTemplates are a sql collector's database, which names the database
+// the statement runs on (sqlDatabaseName), and the values bound to its
+// statement, sent as values.
+func sqlTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	if HasPathParams(c.Request.Database) {
+		out = append(out, templateField{"request.database", c.Request.Database, "database"})
+	}
+	for i, arg := range c.Request.Args {
+		if HasPathParams(arg) {
+			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
+		}
+	}
+	return out
+}
+
+// escapeSQLDatabase refuses a value that is no database name
+// (sqlDatabaseName).
+func escapeSQLDatabase(where, name, value string) (string, error) {
+	if !sqlDatabaseName.MatchString(value) {
+		return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . $, since it names the database the statement runs on", where, name, value)
+	}
+	return value, nil
 }

@@ -67,9 +67,13 @@ func init() {
 		Validate:     validateLDAPRequest,
 		JSONAnswer:   true,
 		// ldap is said letter by letter.
-		Article:            "an",
-		TargetHint:         func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
-		Fetch:              fetchLDAP,
+		Article:    "an",
+		TargetHint: func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
+		Fetch:      fetchLDAP,
+		Templates:  ldapTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "the base or filter of its request.searches or its label values")
+		},
 		SchemaRule:         ldapSchemaRule,
 		CheckTarget:        checkLDAPTarget,
 		CheckTargetRequest: checkLDAPTargetRequest,
@@ -79,8 +83,14 @@ func init() {
 		Stage:              "ldap",
 		CheckFiles:         checkLDAPFiles,
 	})
-	templateEscapers["ldap_dn"] = ldapEscapeDNValue
-	templateEscapers["ldap_filter"] = func(value string) (string, error) { return ldapEscapeFilterValue(value), nil }
+	templateEscapers["ldap_dn"] = func(where, name, value string) (string, error) {
+		written, err := ldapEscapeDNValue(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: the value of %s: %w", where, name, err)
+		}
+		return written, nil
+	}
+	templateEscapers["ldap_filter"] = func(_, _, value string) (string, error) { return ldapEscapeFilterValue(value), nil }
 }
 
 // The ports of a target that names none.
@@ -796,4 +806,19 @@ func ldapSchemaRule() map[string]any {
 			map[string]any{"if": SchemaWrittenKey("password_file"), "then": SchemaWrittenKey("bind_dn")},
 		},
 	}
+}
+
+// ldapTemplates are the base and the filter of an ldap collector's
+// searches, each value escaped as its place escapes one (ldapfilter.go).
+func ldapTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	for i, search := range c.Request.Searches {
+		if HasPathParams(search.Base) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].base", i), search.Base, "ldap_dn"})
+		}
+		if HasPathParams(search.Filter) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].filter", i), search.Filter, "ldap_filter"})
+		}
+	}
+	return out
 }

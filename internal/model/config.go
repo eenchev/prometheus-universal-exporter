@@ -325,13 +325,6 @@ type RequestConfig struct {
 	DB           int            `yaml:"db,omitempty"`
 	InfoSections []string       `yaml:"info_sections,omitempty"`
 	Commands     []RedisCommand `yaml:"commands,omitempty"`
-	// Send and Terminator belong to the tcp type: the text written once
-	// the connection is made, nothing when empty, and what the answer ends
-	// with, the answer ending when the server closes the connection when
-	// it is empty (fetch/requesttype_tcp.go). Left out of a collector
-	// written as YAML when empty, as the sql keys are.
-	Send       string `yaml:"send,omitempty"`
-	Terminator string `yaml:"terminator,omitempty"`
 	// BindDN, StartTLS and Searches belong to the ldap type, with
 	// PasswordFile above: the DN a simple bind is made as, none for an
 	// anonymous bind, whether TLS is begun with the StartTLS operation on
@@ -352,6 +345,17 @@ type RequestConfig struct {
 	// not asked faster than it can answer (fetch/ratelimit.go). Left out
 	// of a collector written as YAML when unset, as the sql keys are.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+
+	// Own holds the keys only the collector's request type takes, read
+	// into the struct its registration declares (fetch.RequestType.Config;
+	// requestkeys.go), as a value of that struct: nil for a type that
+	// takes none, or that the build left out. A key of the struct is
+	// written flat beside the ones above, as a key of the request block.
+	Own any `yaml:"-"`
+	// Foreign are the keys of other request types' own that the request
+	// block sets, which the validation refuses: a collector it accepts has
+	// none.
+	Foreign []string `yaml:"-"`
 }
 
 // RateLimitConfig is request.rate_limit: the requests a second a collector

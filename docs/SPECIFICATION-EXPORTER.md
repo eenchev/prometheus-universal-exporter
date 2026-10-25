@@ -696,6 +696,17 @@ and the source MUST list the opt-in types.
   string literal that is a request type's name in the core's non-test
   files, but for an exact allowlist of the same words meaning something
   else, each with its reason.
+- A request key that only one type accepts MUST be that type's own: read
+  into a struct its registration declares, behind the type's constraint,
+  so that a build without the type does not carry it. The request block's
+  common part MUST hold only `type` and the keys that several types accept,
+  and a test MUST enforce it. The configuration MUST stay as it is written,
+  a type's own keys flat beside the common ones under `request`. Every build
+  MUST know the own keys of every type of the tree, from a catalogue
+  generated from a build with every type: a key of a type the build left out,
+  set under another type, MUST be rejected as a key the type does not accept,
+  in the same words as in a build with every type, and the configuration
+  schema MUST describe it as that build's does.
 - Code that some types share and others do not, such as the rules of a
   request made over HTTP, which `http` and `graphite` share, or the credential
   keys' rules, which `http`, `graphite` and `grpc` share, MUST live behind a

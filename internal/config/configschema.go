@@ -354,6 +354,9 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 				}
 				properties[key] = schemaFor(field.Type, joinSchemaPath(path, key), rules)
 			}
+			if t == requestConfigType {
+				ownRequestKeys(properties, path, rules)
+			}
 			schema = map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
 		case reflect.Slice:
 			schema = map[string]any{"type": "array", "items": schemaFor(t.Elem(), path+"[]", rules)}
@@ -509,8 +512,6 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.commands[]":                      {"required": []string{"name", "command"}},
 		"collectors[].request.commands[].name":                 {"pattern": model.RedisCommandNamePattern, "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands."},
 		"collectors[].request.commands[].command":              {"minItems": 1, "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold."},
-		"collectors[].request.send":                            {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
-		"collectors[].request.terminator":                      {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
 		"collectors[].request.bind_dn":                         {"not": onlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding."},
 		"collectors[].request.start_tls":                       {"description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls."},
 		"collectors[].request.searches":                        {"minItems": 1, "description": "ldap, required: the searches whose results the document holds under .searches.<name>, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches."},

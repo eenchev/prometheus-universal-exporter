@@ -181,8 +181,8 @@ func TestTheCheckOfParametersSaysWhatItSaidWhileItFoundThePlaceholdersEachTime(t
 
 // setKeysCorpusValue fills v, a settable value, with a generated value of
 // its type: each field of a struct set or left zero, a pointer nil or to a
-// zero or a set value, a map or a slice nil, empty or with one entry, and a
-// string, a number or a bool zero or not. depth bounds how far it goes into
+// zero or a set value, a map or a slice nil, empty or with one entry, a
+// string, a number or a bool zero or not, and an interface nil. depth bounds how far it goes into
 // nested types.
 func setKeysCorpusValue(r *rand.Rand, v reflect.Value, depth int) {
 	if depth > 3 || r.IntN(3) == 0 {
@@ -221,6 +221,9 @@ func setKeysCorpusValue(r *rand.Rand, v reflect.Value, depth int) {
 		v.SetUint(uint64(r.IntN(3)))
 	case reflect.Float32, reflect.Float64:
 		v.SetFloat(float64(r.IntN(3)))
+	case reflect.Interface:
+		// A request's Own, the type's own keys, which are not the common
+		// part's that setKeys reads.
 	default:
 		panic(fmt.Sprintf("setKeysCorpusValue: no value of kind %s", v.Kind()))
 	}

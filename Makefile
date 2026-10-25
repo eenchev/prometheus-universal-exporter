@@ -173,8 +173,12 @@ test-external:
 	EXTERNAL_E2E=1 go test -run TestExternal -v ./...
 
 # The committed JSON Schemas are generated from the configuration structs; a
-# test fails when one is out of date. Run this after changing a key.
+# test fails when one is out of date. Run this after changing a key. The
+# catalogue of the request types' own keys, which every build reads the keys
+# of the types it leaves out from, is made first, from a build with every
+# request type.
 schemas:
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && go test -count=1 -tags "$$tags" -run '^TestTheRequestKeyCatalogueIsCurrent$$' ./internal/config/ -args -update-request-keys
 	go run . --config.schema > configs/config.schema.json
 	go run . --config.collector-file-schema > configs/collector-file.schema.json
 	go run . --static-targets-file-schema > configs/static-targets.schema.json

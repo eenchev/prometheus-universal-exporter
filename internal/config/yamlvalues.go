@@ -263,6 +263,18 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 				out = out.Elem()
 			}
 		}
+		// A request block is walked as it is read, as its common part and
+		// every request type's own keys (model.RequestView).
+		if t == requestConfigType {
+			t = model.RequestViewType()
+			if out.IsValid() && out.CanAddr() {
+				view, store := model.RequestView(out.Addr().Interface().(*model.RequestConfig))
+				defer store()
+				out = view
+			} else {
+				out = reflect.Value{}
+			}
+		}
 		switch t.Kind() {
 		case reflect.Struct:
 			if n.Kind != yaml.MappingNode {

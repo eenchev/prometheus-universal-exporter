@@ -63,10 +63,29 @@ import (
 // The type is opt-in, built under its tag alone, and imports nothing
 // outside the standard library.
 
+// TCPConfig is a tcp collector's own request keys: the text written once
+// the connection is made, nothing when empty, and what the answer ends
+// with, the answer ending when the server closes the connection when it
+// is empty.
+type TCPConfig struct {
+	Send       string `yaml:"send,omitempty"`
+	Terminator string `yaml:"terminator,omitempty"`
+}
+
+// tcpRequest is a tcp collector's own request keys: the zero TCPConfig of
+// a collector built in code whose request has not been validated, which
+// sets them (ValidateRequest).
+func tcpRequest(c *model.Collector) TCPConfig {
+	own, _ := c.Request.Own.(TCPConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeTCP,
-		Fields:       []string{"send", "terminator", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Config:       TCPConfig{},
+		KeyRules:     tcpKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "tls"},
 		Requester:    tcpRequester{},
@@ -133,8 +152,8 @@ const (
 )
 
 func validateTCPRequest(x *model.Collector) error {
-	r := &x.Request
-	t := r.TLS
+	t := x.Request.TLS
+	r := tcpRequest(x)
 	if (t.CertFile == "") != (t.KeyFile == "") {
 		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
 	}
@@ -226,7 +245,7 @@ func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (st
 }
 
 func tcpMethod(c *model.Collector, _ RequestOverrides) string {
-	if c.Request.Send == "" {
+	if tcpRequest(c).Send == "" {
 		return tcpMethodRead
 	}
 	return tcpMethodSend
@@ -251,7 +270,7 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	if err != nil {
 		return nil, err
 	}
-	send, err := templateField{"request.send", c.Request.Send, "line"}.render(overrides.Params)
+	send, err := templateField{"request.send", tcpRequest(c).Send, "line"}.render(overrides.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +354,7 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 			return nil, "", tcpFailure(ctx, fmt.Errorf("sending request.send to %s: %w", address.hostPort, err))
 		}
 	}
-	return tcpRead(ctx, conn, address, []byte(c.Request.Terminator), responseLimit(c))
+	return tcpRead(ctx, conn, address, []byte(tcpRequest(c).Terminator), responseLimit(c))
 }
 
 // tcpRead reads the answer from conn until it ends with terminator, or,
@@ -442,8 +461,8 @@ func lineValueRefused(value string) (string, bool) {
 
 // tcpTemplates is a tcp collector's send, the line written to its server.
 func tcpTemplates(c *model.Collector, _ RequestOverrides) []templateField {
-	if HasPathParams(c.Request.Send) {
-		return []templateField{{"request.send", c.Request.Send, "line"}}
+	if send := tcpRequest(c).Send; HasPathParams(send) {
+		return []templateField{{"request.send", send, "line"}}
 	}
 	return nil
 }
@@ -454,4 +473,13 @@ func escapeLineValue(where, name, value string) (string, error) {
 		return "", fmt.Errorf("%s: the value of %s holds %s; %s", where, name, character, lineValueRule)
 	}
 	return value, nil
+}
+
+// tcpKeyRules is what the configuration schema says of a tcp collector's
+// own keys.
+func tcpKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"send":       {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
+		"terminator": {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
+	}
 }

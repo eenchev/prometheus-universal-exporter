@@ -134,8 +134,16 @@ func (URLTarget) Display(target string) string { return safeTarget(target) }
 // Requester every type would implement to say it has nothing: an optional
 // capability, which the core asks about only of a type that has it.
 type RequestType struct {
-	Name         string
-	Fields       []string
+	Name string
+	// Fields are the keys of model.RequestConfig's common part the type
+	// accepts, those several types take; the keys only it takes are those
+	// of Config.
+	Fields []string
+	// Config is the zero value of the struct the keys only this type takes
+	// are read into, its own keys, each a field with its yaml key, which a
+	// collector's request holds in Own (requestkeys.go). Nil for a type
+	// whose keys are all of the common part.
+	Config       any
 	Overrides    []string // a name ending in "_" is a prefix, such as header_
 	TargetFields []string
 	Requester
@@ -247,6 +255,12 @@ type RequestType struct {
 	// Article is the article the type's name is read with in messages.
 	// Unset, "an" before a vowel and "a" otherwise.
 	Article string
+	// KeyRules is what the configuration schema says of the type's own
+	// keys beyond their Go types, by the path of each under the request
+	// block, such as send or commands[].name: their descriptions, and any
+	// pattern, bound or required key, as the rules of the configuration
+	// schema are written. Unset, nothing.
+	KeyRules func() map[string]map[string]any
 	// SchemaRule is what the configuration schema holds a collector of the
 	// type to beyond its keys: its required keys and the rules between
 	// them, as Validate holds them. Unset, nothing more.
@@ -264,7 +278,7 @@ type RequestType struct {
 
 // Takes reports whether the type accepts the request key.
 func (rt *RequestType) Takes(key string) bool {
-	return slices.Contains(rt.Fields, key)
+	return slices.Contains(rt.Fields, key) || slices.Contains(rt.OwnKeys(), key)
 }
 
 // TypeArticle is the article the name of the request type is read with in
@@ -425,7 +439,21 @@ func registerRequestType(rt *RequestType) {
 	if rt.Requester == nil {
 		panic(fmt.Sprintf("request type %q registered without its Requester", rt.Name))
 	}
+	if rt.Config != nil && reflect.TypeOf(rt.Config).Kind() != reflect.Struct {
+		panic(fmt.Sprintf("request type %q registered with a Config that is no struct", rt.Name))
+	}
+	for _, key := range rt.OwnKeys() {
+		if slices.ContainsFunc(yamlKeysOf(reflect.TypeOf(model.RequestConfig{})), func(field yamlField) bool { return field.key == key }) {
+			panic(fmt.Sprintf("request type %q has its own request.%s, which is a key of the common part", rt.Name, key))
+		}
+		for _, other := range registered {
+			if slices.Contains(other.OwnKeys(), key) {
+				panic(fmt.Sprintf("request types %q and %q both have their own request.%s; a key several types take is one of the common part", other.Name, rt.Name, key))
+			}
+		}
+	}
 	RequestTypes[rt.Name] = rt
+	registered[rt.Name] = rt
 }
 
 // BuiltRequestTypes lists the types this binary was built with, sorted.
@@ -474,10 +502,16 @@ func ValidateRequest(c *model.Collector) error {
 	if !ok {
 		return fmt.Errorf("collector %q has unsupported request.type %q; the supported types are: %s", c.Name, c.Request.Type, supportedRequestTypes())
 	}
-	for _, key := range setKeys(reflect.ValueOf(c.Request), "type") {
-		if !slices.Contains(rt.Fields, key) {
+	// The keys of other types' own are refused as the common part's keys
+	// the type does not take are, after them.
+	for _, key := range append(setKeys(reflect.ValueOf(c.Request), "type"), c.Request.Foreign...) {
+		if !rt.Takes(key) {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
+	}
+	// A collector built in code, rather than read, has no Own until here.
+	if rt.Config != nil && c.Request.Own == nil {
+		c.Request.Own = rt.Config
 	}
 	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent, c.Request.Retry.RetryAfter); err != nil {
 		return fmt.Errorf("collector %q %w", c.Name, err)

@@ -194,6 +194,13 @@ func walkStrings(v reflect.Value, path string, visit func(path, text string)) {
 			}
 			walkStrings(v.Field(i), joinSchemaPath(path, key), visit)
 		}
+		// A request's own keys, those of its type alone, are written
+		// beside its common part's.
+		if v.Type() == requestConfigType {
+			if own := v.FieldByName("Own"); !own.IsNil() {
+				walkStrings(own.Elem(), path, visit)
+			}
+		}
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
 			walkStrings(v.Index(i), fmt.Sprintf("%s[%d]", path, i), visit)

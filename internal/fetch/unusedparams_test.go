@@ -30,6 +30,10 @@ var unusedRefusals = map[string]string{
 	RequestTypeLDAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in the base or filter of its request.searches or its label values names them`,
 }
 
+// ownPlaceholders put, by request type, a placeholder in each of the
+// type's own keys that is filled; each type's test file adds its own.
+var ownPlaceholders = map[string]func(*model.Collector){}
+
 // placeWords are the words the refusal has for each place a placeholder is
 // filled in, by the start of the place's name (TemplatedFields).
 var placeWords = []struct{ field, word string }{
@@ -69,7 +73,7 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 			t.Errorf("request type %s has no refusal to compare with", name)
 			continue
 		}
-		fields := RequestTypes[name].Fields
+		fields := RequestTypes[name].Keys()
 		c := labelCollector(map[string]string{"tenant": "{{param_tenant:t}}"})
 		c.Name = "places"
 		c.Request.Type = name
@@ -103,11 +107,11 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "commands") {
 			c.Request.Commands = []model.RedisCommand{{Name: "n", Command: []string{"LLEN", "{{param_key:x}}"}}}
 		}
-		if slices.Contains(fields, "send") {
-			c.Request.Send = "get {{param_key:x}}\r\n"
-		}
 		if slices.Contains(fields, "searches") {
 			c.Request.Searches = []model.LDAPSearch{{Name: "n", Base: "ou={{param_ou:x}},dc=org", Filter: "(uid={{param_uid:x}})"}}
+		}
+		if fill := ownPlaceholders[name]; fill != nil {
+			fill(&c)
 		}
 		if err := readLabels(&c); err != nil {
 			t.Fatal(err)

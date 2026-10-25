@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1179,7 +1178,7 @@ func RetryStatuses(c *model.Collector, overrides RequestOverrides) []string {
 // grpc, which retries by code.
 func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
 	rt := requestTypeOf(c)
-	if rt == nil || rt.StatusCodes || !slices.Contains(rt.Fields, "retry") {
+	if rt == nil || rt.StatusCodes || !rt.Takes("retry") {
 		return ""
 	}
 	attempts := c.Request.Retry.Attempts

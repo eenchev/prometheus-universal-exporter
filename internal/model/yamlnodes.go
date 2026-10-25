@@ -271,7 +271,9 @@ func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 		for t.Kind() == reflect.Pointer {
 			t = t.Elem()
 		}
-		if !top && reflect.PointerTo(t).Implements(unmarshalerType) {
+		// A type that decodes itself checks its own keys, and a yaml.Node
+		// holds whatever it is given.
+		if !top && (reflect.PointerTo(t).Implements(unmarshalerType) || t == nodeType) {
 			return
 		}
 		switch t.Kind() {

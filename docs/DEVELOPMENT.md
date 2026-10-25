@@ -106,9 +106,10 @@ package `main`, `internal/config`, `internal/decode`, `internal/exporter` or
 words meaning something else, such as the graphite decoder or `tcp` as a
 network.
 
-- `Name`, `Fields`, `Overrides` and `TargetFields`: the type's name, the
-  request keys it accepts, the probe parameters that may change them and
-  the keys a static target may set.
+- `Name`, `Fields`, `Config`, `Overrides` and `TargetFields`: the type's
+  name, the keys of the request block's common part it accepts, the struct
+  of the keys only it accepts (below), the probe parameters that may change
+  them and the keys a static target may set.
 - `Requester`: what every type does, an interface each registration gives a
   small value of (`httpRequester{}`, `tcpRequester{}`): `Validate` checks a
   collector's request and fills in its defaults, `Fetch` performs one,
@@ -133,14 +134,37 @@ network.
   collectors page (`TargetHint`, `NoTarget`), whether the debug page writes
   it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
   `FileExtensions`), the article its name is read with (`Article`), its rule
-  in the configuration schema (`SchemaRule`), the templated parts of its
+  in the configuration schema (`SchemaRule`) and what the schema says of its
+  own keys (`KeyRules`), the templated parts of its
   request and the encoding of their values (`Templates`, `templateEscapers`)
   and the places a refusal of unused probe parameters names
   (`UnusedParams`).
 
+A collector's `request` block is written flat, its type's keys beside
+`type`, but only the keys several types take are fields of
+`model.RequestConfig`, its common part; `TestTheCommonPartHoldsNoKeyOfOneType`
+fails for a field there that one type alone takes. The keys only one type
+takes are fields of the type's own struct, declared in its file beside the
+registration and given as its `Config`, such as `fetch.TCPConfig{}` with
+`send` and `terminator`: the loader reads `request.type` and puts the keys of
+that type's own into a value of its struct, which the collector holds in
+`Request.Own`, and the type reads it back with a typed accessor
+(`tcpRequest(c).Send`). A key's schema is made from its field's Go type, as
+every other key's is, with what the type's `KeyRules` say of it by its path
+under the request block: its description, and any pattern or bound. A build
+without the type carries neither the struct nor the rules. It still knows
+the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue of the
+own keys of every type of the tree with the Go types of their fields and
+their schemas, which `make schemas` writes from a build with every type, by
+running `TestTheRequestKeyCatalogueIsCurrent` (`internal/config`) with
+`-update-request-keys`, and which that test otherwise holds to the structs: so a build that left `tcp` out refuses `send` under
+another type as a key of another type, in the words a build with every type
+has, and its schema describes `send` as theirs does.
+
 So a new type is its own files and the build wiring (the guard file, the tag
 script, the Makefile's and CI's loops and the documentation's marked lists,
-each checked by a test), and nothing in the core. Only `internal/fetch`'s
+each checked by a test), the catalogue `make schemas` writes, and nothing in
+the core. Only `internal/fetch`'s
 `requesttype.go` names every type of the tree, built or not, in
 `knownRequestTypes` and `optInRequestTypes`, so that a configuration naming a
 type the build left out is told so.
@@ -935,7 +959,8 @@ opt-in type, too.
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
 in `staticTargetsSchemaRules` for the target file, both in
-`internal/config/configschema.go`.
+`internal/config/configschema.go`, and, for a key only one request type takes,
+in that type's `KeyRules`, by the key's path under the request block.
 
 When the exporter comes to refuse a value, give the schema the rule too where
 a schema can tell, and add the value to

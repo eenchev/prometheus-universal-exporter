@@ -57,14 +57,37 @@ import (
 // alone of the types imports. This file and s3source.go are built under its
 // tag alone, so only a build that asks for it links the SDK's S3 client.
 
+// S3FileConfig is an s3file collector's own request keys: the region
+// requests are signed for, the URL of an S3-compatible store in place of
+// AWS's, and whether the bucket is named in the URL's path rather than its
+// host; and the files of static credentials, read at each request, without
+// which the AWS SDK's default chain finds credentials.
+type S3FileConfig struct {
+	Region              string `yaml:"region,omitempty"`
+	Endpoint            string `yaml:"endpoint,omitempty"`
+	PathStyle           bool   `yaml:"path_style,omitempty"`
+	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
+	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
+	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
+}
+
+// s3FileRequest is an s3file collector's own request keys: the zero
+// S3FileConfig of a collector built in code whose request has not been
+// validated, which sets them (ValidateRequest).
+func s3FileRequest(c *model.Collector) S3FileConfig {
+	own, _ := c.Request.Own.(S3FileConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeS3File,
 		Fields: []string{
 			"root", "path", "files", "max_files", "max_total_bytes", "max_age", "max_response_bytes",
-			"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file",
 			"allowed_targets", "denied_targets",
 		},
+		Config:         S3FileConfig{},
+		KeyRules:       s3FileKeyRules,
 		Overrides:      []string{"path", "timeout", PathParamPrefix},
 		TargetFields:   []string{"path", "timeout"},
 		Requester:      s3FileRequester{},
@@ -149,15 +172,16 @@ func validateS3FileRequest(x *model.Collector) error {
 		return err
 	}
 	r := &x.Request
-	if r.Region != "" && !s3RegionPattern.MatchString(r.Region) {
-		return fmt.Errorf("collector %q request.region %q is not a region; write it as the store names it, such as eu-west-1, with letters, digits, - and _ alone", x.Name, r.Region)
+	own := s3FileRequest(x)
+	if own.Region != "" && !s3RegionPattern.MatchString(own.Region) {
+		return fmt.Errorf("collector %q request.region %q is not a region; write it as the store names it, such as eu-west-1, with letters, digits, - and _ alone", x.Name, own.Region)
 	}
-	if r.Endpoint != "" {
-		if err := checkS3Endpoint(r.Endpoint); err != nil {
+	if own.Endpoint != "" {
+		if err := checkS3Endpoint(own.Endpoint); err != nil {
 			return fmt.Errorf("collector %q request.endpoint %w", x.Name, err)
 		}
 	}
-	if err := checkS3CredentialKeys(r.AccessKeyIDFile, r.SecretAccessKeyFile, r.SessionTokenFile); err != nil {
+	if err := checkS3CredentialKeys(own.AccessKeyIDFile, own.SecretAccessKeyFile, own.SessionTokenFile); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	policy, err := compileTargetPolicy(r.AllowedTargets, r.DeniedTargets)
@@ -366,7 +390,7 @@ type s3Settings struct {
 }
 
 func s3SettingsOf(c *model.Collector) s3Settings {
-	r := &c.Request
+	r := s3FileRequest(c)
 	return s3Settings{
 		region: r.Region, endpoint: r.Endpoint, pathStyle: r.PathStyle,
 		accessKeyIDFile: r.AccessKeyIDFile, secretAccessKeyFile: r.SecretAccessKeyFile, sessionTokenFile: r.SessionTokenFile,
@@ -469,7 +493,7 @@ func (f s3FileCredentials) Retrieve(context.Context) (aws.Credentials, error) {
 // the exporter starts. The default chain is not asked: what it finds
 // depends on where the exporter runs, which a dry run need not be.
 func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil || c.Request.AccessKeyIDFile == "" {
+	if t != nil || s3FileRequest(c).AccessKeyIDFile == "" {
 		return nil
 	}
 	s := s3SettingsOf(c)
@@ -492,4 +516,17 @@ func s3FileSchemaRule() map[string]any {
 		map[string]any{"if": SchemaWrittenKey("session_token_file"), "then": SchemaWrittenKey("access_key_id_file")},
 	}
 	return rule
+}
+
+// s3FileKeyRules is what the configuration schema says of a s3file
+// collector's own keys.
+func s3FileKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"region":                 {"pattern": SchemaOptionalPattern(`^[A-Za-z0-9_-]+$`), "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md."},
+		"endpoint":               {"pattern": SchemaOptionalPattern(`^https?://[^/?#@]+/?$`), "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores."},
+		"path_style":             {"description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false."},
+		"access_key_id_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},
+		"secret_access_key_file": {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file: the file of the static access key's secret."},
+		"session_token_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token."},
+	}
 }

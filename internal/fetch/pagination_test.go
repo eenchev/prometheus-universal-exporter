@@ -26,7 +26,7 @@ import (
 func pagedCollector(t *testing.T, p model.PaginationConfig) *model.Collector {
 	t.Helper()
 	c := testutil.Collector("paged", "json")
-	c.Request.Pagination = &p
+	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &p })
 	c.Limits.MaxResponseBytes = 1 << 20
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
@@ -509,12 +509,12 @@ func TestPaginationValidation(t *testing.T) {
 		"size negative":    {model.PaginationConfig{Type: "offset", Param: "p", Size: -5, Items: "."}, nil, `request.pagination.size must be at least 1`},
 		"max pages":        {model.PaginationConfig{Type: "link", MaxPages: 1001, Items: "."}, nil, `collector "paged" request.pagination.max_pages must be from 1 to 1000`},
 		"max pages low":    {model.PaginationConfig{Type: "link", MaxPages: -1, Items: "."}, nil, `request.pagination.max_pages must be from 1 to 1000`},
-		"head":             {model.PaginationConfig{Type: "link", Items: "."}, func(c *model.Collector) { c.Request.Method = "head" }, `collector "paged" sets request.pagination with method HEAD`},
+		"head":             {model.PaginationConfig{Type: "link", Items: "."}, func(c *model.Collector) { editHTTP(c, func(r *HTTPConfig) { r.Method = "head" }) }, `collector "paged" sets request.pagination with method HEAD`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := testutil.Collector("paged", "json")
 			p := tc.pagination
-			c.Request.Pagination = &p
+			editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &p })
 			if tc.change != nil {
 				tc.change(&c)
 			}
@@ -524,15 +524,17 @@ func TestPaginationValidation(t *testing.T) {
 		})
 	}
 	c := testutil.Collector("paged", "json")
-	c.Request.Pagination = &model.PaginationConfig{Type: " Offset ", Param: "o", Items: "."}
+	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: " Offset ", Param: "o", Items: "."} })
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}
-	if p := c.Request.Pagination; p.Type != "offset" || p.MaxPages != model.DefaultMaxPages || p.Start == nil || *p.Start != 0 {
+	if p := httpRequest(&c).Pagination; p.Type != "offset" || p.MaxPages != model.DefaultMaxPages || p.Start == nil || *p.Start != 0 {
 		t.Fatalf("defaults %+v", p)
 	}
-	c.Request.Pagination = &model.PaginationConfig{Type: "page", Param: "p", Items: ".data[0].items # the list"}
-	if err := ValidateRequest(&c); err != nil || *c.Request.Pagination.Start != 1 {
+	editHTTP(&c, func(r *HTTPConfig) {
+		r.Pagination = &model.PaginationConfig{Type: "page", Param: "p", Items: ".data[0].items # the list"}
+	})
+	if err := ValidateRequest(&c); err != nil || *httpRequest(&c).Pagination.Start != 1 {
 		t.Fatalf("err=%v", err)
 	}
 }

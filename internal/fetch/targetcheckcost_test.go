@@ -86,7 +86,7 @@ func paramsCorpusCollector(t *testing.T, r *rand.Rand) model.Collector {
 	t.Helper()
 	c := labelCollector(pick(r, nil, map[string]string{"site": "dc1"}, map[string]string{"tenant": "{{param_tenant}}"}, map[string]string{"site": "{{param_site:dc1}}"}))
 	c.Request.Path = pick(r, "", "/status", "/api/{{param_tenant}}", "/api/{{param_tenant}}/v{{param_version:2}}", "/api/{{param_tenant", "/api/{{ param_tenant }}", "/{{param_tenant|json}}")
-	c.Request.Body = pick(r, "", "", "plain {x}", `{"s": {{param_service|json}}}`, `{"l": {{param_limit:10|number}}}`, "{{param_service|bogus}}", "{{param_service", "{{ param_service}}", "{{{param_service}}}")
+	setOwnKey(&c, "body", pick(r, "", "", "plain {x}", `{"s": {{param_service|json}}}`, `{"l": {{param_limit:10|number}}}`, "{{param_service|bogus}}", "{{param_service", "{{ param_service}}", "{{{param_service}}}"))
 	c.Request.Headers = pick(r, nil, nil, map[string]string{"X-T": "{{param_tenant}}", "Accept": "text/plain"}, map[string]string{"X-B": "{{param_tenant|json}}"})
 	c.Request.Query = pick(r, nil, nil, map[string]string{"region": "{{param_region:eu}}"}, map[string]string{"bad": "{{param_region:${X}}}"})
 	setOwnKey(&c, "message", pick(r, "", "", `{"q": {{param_queue:orders|json}}}`, `{"q": {{param_queue|form}}}`))
@@ -277,7 +277,9 @@ func TestTheKeysARequestBlockSetsAreThoseFoundWhileTheTagsWereReadForEach(t *tes
 func TestThePlaceholdersOfACollectorAndTheKeysOfARequestBlockAreFoundOnceForManyTargets(t *testing.T) {
 	collectors := []model.Collector{labelCollector(nil), labelCollector(nil), labelCollector(nil)}
 	collectors[0].Request.Path = "/tenants/{{param_tenant}}/status"
-	collectors[1].Request.Body = `{"t": {{param_tenant|json}}}`
+	// A body is an http collector's own key.
+	collectors[1].Request.Type = RequestTypeHTTP
+	setOwnKey(&collectors[1], "body", `{"t": {{param_tenant|json}}}`)
 	collectors[2].Request.Headers = map[string]string{"X-Tenant": "{{param_tenant:acme}}"}
 	body := "{}"
 	var parsed, read atomic.Int64

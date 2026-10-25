@@ -207,7 +207,7 @@ func TestOnlyARevalidableResponseIsKeptAndRevalidated(t *testing.T) {
 	off := revalidatingCollector("off", time.Minute)
 	off.Cache.Revalidate = new(false)
 	posting := revalidatingCollector("posting", time.Minute)
-	posting.Request.Method = http.MethodPost
+	editHTTP(&posting, func(r *fetch.HTTPConfig) { r.Method = http.MethodPost })
 	for _, tc := range []struct {
 		name      string
 		collector model.Collector

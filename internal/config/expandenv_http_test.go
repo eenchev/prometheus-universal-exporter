@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"log/slog"
 	"os"
 	"reflect"
@@ -292,7 +293,7 @@ func TestExpansionHappensBeforeParsing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Collectors[0].Request.Method; got != "POST" {
+	if got := cfg.Collectors[0].Request.Own.(fetch.HTTPConfig).Method; got != "POST" {
 		t.Fatalf("method=%q", got)
 	}
 	if got := cfg.Collectors[0].Request.Headers["Accept"]; got != "application/json" {

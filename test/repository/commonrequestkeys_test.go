@@ -2,18 +2,11 @@ package repository
 
 import (
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
-
-// pendingCommonKeys are the keys of one request type that are still fields
-// of the common part, until the type's own struct holds them.
-var pendingCommonKeys = []string{
-	"method", "body", "pagination",
-}
 
 // The common part of a collector's request block, model.RequestConfig's
 // fields, holds type and the keys several request types take, and no key
@@ -26,7 +19,7 @@ func TestTheCommonPartHoldsNoKeyOfOneType(t *testing.T) {
 	common := reflect.TypeFor[model.RequestConfig]()
 	for i := 0; i < common.NumField(); i++ {
 		key, _, _ := strings.Cut(common.Field(i).Tag.Get("yaml"), ",")
-		if key == "" || key == "-" || key == "type" || slices.Contains(pendingCommonKeys, key) {
+		if key == "" || key == "-" || key == "type" {
 			continue
 		}
 		if taking := typesTaking(keys, key, func(k requestTypeKeys) []string { return k.fields }); len(taking) < 2 {

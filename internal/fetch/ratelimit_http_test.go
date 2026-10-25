@@ -209,7 +209,7 @@ func TestRateLimitCountsEveryRequestSent(t *testing.T) {
 		t.Cleanup(server.Close)
 		c := testutil.Collector("paged", "json")
 		c.Limits.MaxResponseBytes = 1 << 20
-		c.Request.Pagination = &model.PaginationConfig{Type: "page", Param: "p", Items: ".items"}
+		editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: "page", Param: "p", Items: ".items"} })
 		c.Request.RateLimit = rateLimitOf(1, 1)
 		if err := ValidateRequest(&c); err != nil {
 			t.Fatal(err)

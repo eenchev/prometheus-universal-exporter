@@ -195,7 +195,6 @@ func validateGraphiteRequest(x *model.Collector) error {
 	if err := validateHTTPRequest(x); err != nil {
 		return err
 	}
-	x.Request.Method = ""
 	for i, expression := range own.Targets {
 		if err := checkGraphiteExpression(withoutPlaceholders(expression)); err != nil {
 			return fmt.Errorf("collector %q request.targets[%d] %q: %w", x.Name, i, expression, err)

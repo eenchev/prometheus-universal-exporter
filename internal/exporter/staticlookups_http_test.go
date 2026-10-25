@@ -223,7 +223,7 @@ func staticRequestsCase(random *rand.Rand, unique bool) (*model.Config, *model.S
 		}
 		c := testutil.Collector(name, "text")
 		c.Request.Path = "/collector" + strconv.Itoa(i)
-		c.Request.Method = []string{http.MethodGet, http.MethodPost}[i%2]
+		editHTTP(&c, func(r *fetch.HTTPConfig) { r.Method = []string{http.MethodGet, http.MethodPost}[i%2] })
 		cfg.Collectors = append(cfg.Collectors, c)
 	}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Hour)}

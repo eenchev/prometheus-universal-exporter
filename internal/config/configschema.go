@@ -476,8 +476,6 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].failure_backoff.min_budget":   {"description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
 		"collectors[].request":                      requestSchemaRule(),
 		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method":               {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
-		"collectors[].request.body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
 		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. s3file: the object, relative to request.root, its key the two joined. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
 		"collectors[].request.root":                 {"description": "localfile, sshfile and s3file, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host, or, for s3file, the key prefix written as one, /exports/app for the keys under exports/app/. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree, and for s3file, for every key of the bucket. See docs/LOCALFILE.md, docs/SSHFILE.md and docs/S3FILE.md."},
 		"collectors[].request.files":                {"description": "localfile, sshfile and s3file: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
@@ -487,14 +485,6 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.username":             {"not": onlyBlanks(), "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone."},
 		"collectors[].request.private_key_file":     {"not": onlyBlanks(), "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication."},
 		"collectors[].request.password_file":        {"not": onlyBlanks(), "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape."},
-		"collectors[].request.pagination":           paginationRule(),
-		"collectors[].request.pagination.type":      {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
-		"collectors[].request.pagination.items":     {"not": onlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
-		"collectors[].request.pagination.next":      {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
-		"collectors[].request.pagination.param":     {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
-		"collectors[].request.pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it."},
-		"collectors[].request.pagination.size":      {"minimum": 1, "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held."},
-		"collectors[].request.pagination.max_pages": {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
 		"collectors[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
 		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
 		"collectors[].request.retry.retry_after":    {"description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read."},
@@ -866,25 +856,6 @@ func requestSchemaRule() map[string]any {
 		rule["allOf"] = conditions
 	}
 	return rule
-}
-
-// paginationRule is the rule of request.pagination: type and items
-// required, each written with something other than "", next with type
-// next_url and cursor, and param with cursor, page and offset, as the
-// exporter has them (fetch.validatePagination).
-func paginationRule() map[string]any {
-	when := func(types ...string) map[string]any {
-		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
-	}
-	return map[string]any{
-		"description": "http: fetch the further pages of a paginated answer and merge them into one JSON document, the first page with its items array holding every page's items, which the decoder and the rules read as the answer. Every page is sent the request's headers, credentials and body, and must stay on the target's scheme, host and port. The decoder is json. See docs/REQUESTS.md#pagination.",
-		"allOf": []any{
-			writtenKey("type"),
-			writtenKey("items"),
-			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": writtenKey("next")},
-			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": writtenKey("param")},
-		},
-	}
 }
 
 // staticTargetsSchemaRules adds, by path, what the StaticTargetFile struct cannot say.

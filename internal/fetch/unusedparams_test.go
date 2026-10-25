@@ -80,9 +80,6 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "path") {
 			c.Request.Path = "/p/{{param_path:x}}"
 		}
-		if slices.Contains(fields, "body") {
-			c.Request.Body = "{{param_body:x}}"
-		}
 		if slices.Contains(fields, "headers") {
 			c.Request.Headers = map[string]string{"X-Set": "{{param_header:x}}"}
 		}

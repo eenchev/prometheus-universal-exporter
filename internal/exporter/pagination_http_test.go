@@ -51,7 +51,7 @@ func reposTarget(t *testing.T, pages int, failing *atomic.Int32) *httptest.Serve
 func reposCollector(maxPages int) model.Collector {
 	return model.Collector{
 		Name:    "repos",
-		Request: model.RequestConfig{Type: fetch.RequestTypeHTTP, Path: "/orgs/acme/repos", Pagination: &model.PaginationConfig{Type: model.PaginationLink, Items: ".", MaxPages: maxPages}},
+		Request: model.RequestConfig{Type: fetch.RequestTypeHTTP, Path: "/orgs/acme/repos", Own: fetch.HTTPConfig{Pagination: &model.PaginationConfig{Type: model.PaginationLink, Items: ".", MaxPages: maxPages}}},
 		// The decoder is left out: pagination makes it json.
 		Transform: model.TransformConfig{Type: "jq"},
 		Limits:    model.Limits{MaxResponseBytes: 1 << 20},

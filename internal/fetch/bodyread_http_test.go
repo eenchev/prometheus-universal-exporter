@@ -125,7 +125,7 @@ func TestAnAnswerIsReadWholeWithOrWithoutALength(t *testing.T) {
 			c := httpCollector(t, func(c *model.Collector) {
 				c.Request.MaxResponseBytes = model.ByteSize(test.limit)
 				if test.method != "" {
-					c.Request.Method = test.method
+					editHTTP(c, func(r *HTTPConfig) { r.Method = test.method })
 					c.Request.AcceptStatus = []string{"2xx"}
 				}
 			})

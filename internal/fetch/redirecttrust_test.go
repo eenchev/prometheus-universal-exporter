@@ -587,8 +587,8 @@ func TestAHostOverrideStaysOnTheOrigin(t *testing.T) {
 func postCollector(t *testing.T, edit func(*model.Collector)) *model.Collector {
 	t.Helper()
 	return trustCollector(t, func(c *model.Collector) {
-		c.Request.Method = http.MethodPost
-		c.Request.Body = `{"query":"up"}`
+		editHTTP(c, func(r *HTTPConfig) { r.Method = http.MethodPost })
+		editHTTP(c, func(r *HTTPConfig) { r.Body = `{"query":"up"}` })
 		c.Request.Headers["Content-Type"] = "application/json"
 		if edit != nil {
 			edit(c)
@@ -880,16 +880,18 @@ func TestRequestsOnTheOriginAreOnTheWireWhatTheyWere(t *testing.T) {
 		// referer says Go added a Referer to the hop.
 		referer bool
 	}{
-		"a GET, no redirect":               {nil, 0, "", false},
-		"a POST, no redirect":              {func(c *model.Collector) { c.Request.Method, c.Request.Body = http.MethodPost, `{"query":"up"}` }, 0, "", false},
+		"a GET, no redirect": {nil, 0, "", false},
+		"a POST, no redirect": {func(c *model.Collector) {
+			editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = http.MethodPost, `{"query":"up"}` })
+		}, 0, "", false},
 		"a GET, 302 to a path":             {nil, http.StatusFound, "/end?x=1", true},
 		"a GET, 301 to the origin in full": {nil, http.StatusMovedPermanently, origin + "/end", true},
 		"a POST, 307 to a path": {func(c *model.Collector) {
-			c.Request.Method, c.Request.Body = http.MethodPost, `{"query":"up"}`
+			editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = http.MethodPost, `{"query":"up"}` })
 			c.Request.Headers["Content-Type"] = "application/json"
 		}, http.StatusTemporaryRedirect, "/end", true},
 		"a POST, 303 to a path": {func(c *model.Collector) {
-			c.Request.Method, c.Request.Body = http.MethodPost, `{"query":"up"}`
+			editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = http.MethodPost, `{"query":"up"}` })
 			c.Request.Headers["Content-Type"] = "application/json"
 		}, http.StatusSeeOther, "/end", true},
 		"a Host of the collector's, 302 to a path":    {func(c *model.Collector) { c.Request.Headers["Host"] = "vhost.example" }, http.StatusFound, "/end", true},

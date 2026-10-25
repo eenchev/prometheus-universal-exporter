@@ -703,7 +703,8 @@ func requestMethod(c *model.Collector, overrides RequestOverrides) string {
 	if overrides.Method != "" {
 		return overrides.Method
 	}
-	return c.Request.Method
+	method, _ := methodBody(c)
+	return method
 }
 
 // withTargetTLS is c with a static target's own tls block in place of the
@@ -772,11 +773,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		requestContext, cancel = context.WithTimeout(ctx, overrides.Timeout)
 	}
 	defer cancel()
-	method := c.Request.Method
+	method, requestBody := methodBody(c)
 	if overrides.Method != "" {
 		method = overrides.Method
 	}
-	requestBody := c.Request.Body
 	if overrides.Body != nil {
 		requestBody = *overrides.Body
 	} else if HasPathParams(requestBody) {

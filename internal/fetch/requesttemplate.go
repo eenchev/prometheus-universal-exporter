@@ -166,8 +166,8 @@ type templateField struct {
 // (RequestType.Templates). The body is left out when the probe replaced it.
 func requestTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
 	var out []templateField
-	if overrides.Body == nil && HasPathParams(c.Request.Body) {
-		out = append(out, templateField{"request.body", c.Request.Body, "body"})
+	if _, body := methodBody(c); overrides.Body == nil && HasPathParams(body) {
+		out = append(out, templateField{"request.body", body, "body"})
 	}
 	for _, name := range model.SortedKeys(c.Request.Headers) {
 		if value := c.Request.Headers[name]; HasPathParams(value) {

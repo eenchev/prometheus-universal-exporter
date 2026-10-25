@@ -267,8 +267,8 @@ func TestGraphiteRequestValidation(t *testing.T) {
 		"its own query":   {func(c *model.Collector) { c.Request.Query = map[string]string{"Target": "x"} }, "sets request.query Target, which a graphite collector sets itself"},
 		"format":          {func(c *model.Collector) { c.Request.Query = map[string]string{"format": "csv"} }, "format always json"},
 		"a spaced window": {func(c *model.Collector) { editGraphite(c, func(r *GraphiteConfig) { r.From = "-5 min" }) }, `request.from: "-5 min" has a space in it`},
-		"an http key":     {func(c *model.Collector) { c.Request.Method = "POST" }, `request.method, which does not apply to request.type "graphite"`},
-		"a body":          {func(c *model.Collector) { c.Request.Body = "x" }, `request.body, which does not apply`},
+		"an http key":     {func(c *model.Collector) { c.Request.Foreign = []string{"method"} }, `request.method, which does not apply to request.type "graphite"`},
+		"a body":          {func(c *model.Collector) { c.Request.Foreign = []string{"body"} }, `request.body, which does not apply`},
 		"a localfile key": {func(c *model.Collector) { c.Request.Root = "/tmp" }, `request.root, which does not apply`},
 		"basic and bearer": {func(c *model.Collector) {
 			c.Request.BearerToken = "t"

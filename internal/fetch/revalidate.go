@@ -79,7 +79,7 @@ func revalidationFrom(ctx context.Context) *CachedResponse {
 // Failed, not 304 (RFC 9110 § 13.1.2), and a graphite request too long for a
 // URL is sent as a POST (requesttype_graphite.go).
 func Revalidable(c *model.Collector, overrides RequestOverrides) bool {
-	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || c.Request.Pagination != nil {
+	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || CollectorPolicy(c).Pagination != nil {
 		return false
 	}
 	method := RequestMethodFor(c, overrides)

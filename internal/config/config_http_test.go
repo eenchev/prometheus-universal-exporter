@@ -347,8 +347,8 @@ func TestConfigValidationAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := cfg.Collectors[0]
-	if c.Request.Method != http.MethodGet || c.Decoder.Type != "text" {
-		t.Fatalf("unexpected inferred defaults: method=%q decoder=%q", c.Request.Method, c.Decoder.Type)
+	if c.Request.Own.(fetch.HTTPConfig).Method != http.MethodGet || c.Decoder.Type != "text" {
+		t.Fatalf("unexpected inferred defaults: method=%q decoder=%q", c.Request.Own.(fetch.HTTPConfig).Method, c.Decoder.Type)
 	}
 	if c.ErrorHandling.OnFetchError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
 		t.Fatalf("unexpected error policy defaults: %#v", c.ErrorHandling)
@@ -379,7 +379,7 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 		},
 		{
 			name: "unsupported method",
-			cfg:  &model.Config{Collectors: []model.Collector{{Name: "invalid_method", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP, Method: "TRACE"}}}},
+			cfg:  &model.Config{Collectors: []model.Collector{{Name: "invalid_method", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP, Own: fetch.HTTPConfig{Method: "TRACE"}}}}},
 			want: "unsupported method",
 		},
 		{

@@ -11,6 +11,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
+// An http collector's own placeholder is in its body.
+func init() {
+	ownPlaceholders[RequestTypeHTTP] = func(c *model.Collector) { c.Request.Own = HTTPConfig{Body: "{{param_body:x}}"} }
+}
+
 // The keys of the other request types do not apply to an http collector,
 // which is refused by the key's name, whether or not the build has the type
 // the key belongs to. The tests of each type's own validation have what a

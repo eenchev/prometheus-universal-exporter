@@ -149,7 +149,7 @@ func TestStaticTargetsRefuseParamPlaceholdersInTheirOwnValues(t *testing.T) {
 		want string
 	}{
 		"target":           {func(st *model.StaticTarget) { st.Target = "http://{{param_host}}.example" }, `target "one" target cannot use {{param_...}}`},
-		"body":             {func(st *model.StaticTarget) { st.Request.Body, st.Request.BodySet = `{"q": {{param_q|json}}}`, true }, `target "one" request.body cannot use {{param_...}}`},
+		"body":             {func(st *model.StaticTarget) { st.Request.BodySet = true; st.Request.Body = `{"q": {{param_q|json}}}` }, `target "one" request.body cannot use {{param_...}}`},
 		"body with spaces": {func(st *model.StaticTarget) { st.Request.Body = `{{ param_q }}` }, `request.body cannot use`},
 		"header": {func(st *model.StaticTarget) {
 			st.Request.Headers = map[string]string{"X-Ok": "fine", "X-Tenant": "{{param_tenant}}"}

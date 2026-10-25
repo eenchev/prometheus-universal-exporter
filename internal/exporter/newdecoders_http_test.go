@@ -61,7 +61,7 @@ func TestTheNewDecodersFeedAJQTransform(t *testing.T) {
 			t.Cleanup(target.Close)
 			c := model.Collector{
 				Name:          "c",
-				Request:       model.RequestConfig{Type: fetch.RequestTypeHTTP, Method: "GET"},
+				Request:       model.RequestConfig{Type: fetch.RequestTypeHTTP, Own: fetch.HTTPConfig{Method: "GET"}},
 				Decoder:       model.DecoderConfig{Type: tc.decoder},
 				Transform:     model.TransformConfig{Type: "jq"},
 				ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},

@@ -29,7 +29,9 @@ func ownKeyValue(goType string) (set, unset string) {
 		return "{a: b}", "~"
 	case "[]string":
 		return "[x]", "~"
-	case "*model.SQLConnections":
+	}
+	if strings.HasPrefix(goType, "*") {
+		// A block, such as sql's connections or http's pagination.
 		return "{}", "~"
 	}
 	// A list of the type's own entries, such as redis's commands.

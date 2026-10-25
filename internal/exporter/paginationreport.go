@@ -37,7 +37,7 @@ func (s *Server) notePages(ctx context.Context, response *fetch.HTTPResponse, ac
 	if !accepted {
 		return
 	}
-	attrs := []any{"collector", c.Name, "target", target, "pages", len(read.Pages), "max_pages", c.Request.Pagination.MaxPages}
+	attrs := []any{"collector", c.Name, "target", target, "pages", len(read.Pages), "max_pages", fetch.CollectorPolicy(c).Pagination.MaxPages}
 	key := aspectKey(c.Name, keyTarget, "", pagesAspect)
 	if read.MoreLeft {
 		s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "pagination stopped at request.pagination.max_pages with another page to come; the series are of the pages fetched", "pagination", nil, attrs...)

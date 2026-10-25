@@ -167,8 +167,8 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	// Retries of a POST or PATCH need retry.non_idempotent, since sending one
 	// again may repeat what it did; without it they are not made, which the
 	// operator who set attempts is told.
-	if x.Request.Retry.Attempts > 0 && !x.Request.Retry.NonIdempotent && !fetch.IdempotentMethod(x.Request.Method) {
-		c.Warnings = append(c.Warnings, fmt.Sprintf("collector %q sets request.retry.attempts, but its method %s is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway", x.Name, strings.ToUpper(x.Request.Method)))
+	if method := fetch.ConfiguredMethod(x); x.Request.Retry.Attempts > 0 && !x.Request.Retry.NonIdempotent && !fetch.IdempotentMethod(method) {
+		c.Warnings = append(c.Warnings, fmt.Sprintf("collector %q sets request.retry.attempts, but its method %s is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway", x.Name, strings.ToUpper(method)))
 	}
 	for _, policy := range []struct {
 		key   string
@@ -326,7 +326,7 @@ func normalizeFormats(x *model.Collector) error {
 			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, fetch.TypeArticle(x.Request.Type), x.Request.Type)
 		}
 	}
-	if x.Request.Pagination != nil {
+	if fetch.CollectorPolicy(x).Pagination != nil {
 		// The pages are read as JSON to find the next one and their items,
 		// and merged into one JSON document, whatever their Content-Type.
 		switch x.Decoder.Type {

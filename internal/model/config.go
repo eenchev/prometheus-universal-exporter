@@ -168,16 +168,16 @@ type Collector struct {
 }
 
 // RequestConfig is a collector's request block: how the target is reached.
-// Which keys apply depends on Type.
+// Which keys apply depends on Type. Its fields are the common part, type and
+// the keys several request types take; a key only one type takes is a field
+// of that type's own struct, which Own holds (requestkeys.go).
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
 	// fetch/requesttype.go for the types and the keys each accepts.
 	Type                 string            `yaml:"type"`
-	Method               string            `yaml:"method"`
 	Path                 string            `yaml:"path"`
 	Query                map[string]string `yaml:"query"`
 	Headers              map[string]string `yaml:"headers"`
-	Body                 string            `yaml:"body"`
 	BasicAuth            *BasicAuth        `yaml:"basic_auth"`
 	BasicAuthFile        *BasicAuthFile    `yaml:"basic_auth_file"`
 	BearerToken          string            `yaml:"bearer_token"`
@@ -190,12 +190,6 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
-	// Pagination fetches the further pages of a paginated answer and merges
-	// them into one JSON document, the first page with its items array
-	// holding every page's items (fetch/pagination.go). Left out of a
-	// collector written as YAML when unset, as the sql keys are below, so
-	// the fingerprint of a collector without it is what it was.
-	Pagination *PaginationConfig `yaml:"pagination,omitempty"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses
@@ -208,11 +202,12 @@ type RequestConfig struct {
 	// AcceptStatus is the HTTP statuses whose answers are decoded, such as
 	// [200, 503] or ["2xx", 503]; every 2xx when empty.
 	AcceptStatus []string `yaml:"accept_status"`
-	// Root and MaxAge belong to the localfile type: the directory it may read
-	// under, and how old a file may be before a scrape refuses it as stale.
+	// Root and MaxAge belong to the types that read files, localfile,
+	// sshfile and s3file: the directory they may read under, and how old a
+	// file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
 	MaxAge Duration `yaml:"max_age"`
-	// Files, MaxFiles and MaxTotalBytes turn a localfile collector into a
+	// Files, MaxFiles and MaxTotalBytes turn such a collector into a
 	// directory reader: every file of the directory whose name matches one of
 	// the patterns is read and checked on its own (fetch/localfile_directory.go).
 	Files         []string `yaml:"files"`
@@ -228,13 +223,13 @@ type RequestConfig struct {
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
-	// when unset, as the sql keys are.
+	// when unset.
 	Login *LoginConfig `yaml:"login,omitempty"`
 	// RateLimit belongs to the http and graphite types: how many requests
 	// a second the collector sends to one origin of a target, so a target
 	// that many probes, static targets, retries or pages ask at once is
 	// not asked faster than it can answer (fetch/ratelimit.go). Left out
-	// of a collector written as YAML when unset, as the sql keys are.
+	// of a collector written as YAML when unset.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
 
 	// Own holds the keys only the collector's request type takes, read

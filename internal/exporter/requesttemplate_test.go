@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -62,11 +63,13 @@ func (e *echoTarget) count() int {
 
 func templatedCollector() model.Collector {
 	c := testutil.Collector("graphql", "text")
-	c.Request.Method = "POST"
+	editHTTP(&c, func(r *fetch.HTTPConfig) { r.Method = "POST" })
 	c.Request.Path = "/api/{{param_tenant}}"
 	c.Request.Headers = map[string]string{"Content-Type": "application/json", "X-Tenant": "{{param_tenant}}"}
 	c.Request.Query = map[string]string{"region": "{{param_region:eu}}", "static": "yes"}
-	c.Request.Body = `{"service": {{param_service|json}}, "limit": {{param_limit:10|number}}}`
+	editHTTP(&c, func(r *fetch.HTTPConfig) {
+		r.Body = `{"service": {{param_service|json}}, "limit": {{param_limit:10|number}}}`
+	})
 	return c
 }
 

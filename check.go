@@ -244,7 +244,7 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	for i := range conf.Collectors {
 		c := &conf.Collectors[i]
 		own := fetch.CollectorPolicy(c)
-		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: own.AcceptCodes, Pagination: c.Request.Pagination, Login: shownLogin(c.Request.Login), RateLimit: c.Request.RateLimit}
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: own.AcceptCodes, Pagination: own.Pagination, Login: shownLogin(c.Request.Login), RateLimit: c.Request.RateLimit}
 		if retried := c.Request.Retry.Statuses; retried != nil {
 			p.RetryStatuses = &retried
 		}

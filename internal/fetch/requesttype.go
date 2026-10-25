@@ -215,10 +215,16 @@ type RequestType struct {
 	// ConnectionPools reports, of a collector, what the type's pools of
 	// connections hold now (PoolStats). Unset, the type keeps no pools.
 	ConnectionPools func(collector string) PoolStats
-	// Policy gives what a collector's request lets through that only some
-	// types have, as --dry-run shows it beside what every type's does
-	// (RequestPolicy). Unset, nothing.
+	// Policy gives what a collector's request lets through, and how it
+	// pages, that only some types have, as --dry-run shows it beside what
+	// every type's does (RequestPolicy). Unset, nothing.
 	Policy func(c *model.Collector) RequestPolicy
+	// MethodBody gives the method and the body of a collector's request
+	// made over HTTP, as its configuration writes them, which the shared
+	// request of http and graphite sends (fetch). Unset, none: the method
+	// is the one the overrides carry, GET when they carry none, and there
+	// is no body.
+	MethodBody func(c *model.Collector) (method, body string)
 	// Logins reports how many logins a collector's request.login made and
 	// how many of them failed (login.go). Unset, the type does not log in.
 	Logins func(collector string) (made, failed uint64)
@@ -312,11 +318,13 @@ func CollectorLogins(requestType, collector string) (made, failed uint64) {
 	return 0, 0
 }
 
-// RequestPolicy is what a collector's request lets through that only some
-// request types have (RequestType.Policy): the gRPC status codes, other
-// than OK, whose calls are answers.
+// RequestPolicy is what a collector's request lets through, and how it
+// pages, that only some request types have (RequestType.Policy): the gRPC
+// status codes, other than OK, whose calls are answers, and the pagination
+// of a paginated answer, its defaults filled in once validated.
 type RequestPolicy struct {
 	AcceptCodes []string
+	Pagination  *model.PaginationConfig
 }
 
 // CollectorPolicy is what the request of c lets through that only its type
@@ -326,6 +334,24 @@ func CollectorPolicy(c *model.Collector) RequestPolicy {
 		return rt.Policy(c)
 	}
 	return RequestPolicy{}
+}
+
+// methodBody is the method and the body of a collector's request made over
+// HTTP, as its configuration writes them (RequestType.MethodBody).
+func methodBody(c *model.Collector) (method, body string) {
+	if rt := requestTypeOf(c); rt != nil && rt.MethodBody != nil {
+		return rt.MethodBody(c)
+	}
+	return "", ""
+}
+
+// ConfiguredMethod is the method of a collector's request as its
+// configuration writes it, its default filled in once validated, which a
+// static target or a probe may replace; "" for a type whose request has
+// none of its own (RequestType.MethodBody).
+func ConfiguredMethod(c *model.Collector) string {
+	method, _ := methodBody(c)
+	return method
 }
 
 // PoolStats is what a collector's pools of connections hold: the
@@ -545,6 +571,14 @@ func ValidateRequest(c *model.Collector) error {
 		if !rt.Takes(key) {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
+	}
+	// Own keys of another type, as a collector built in code may hold, are
+	// refused as the keys of another type a request block sets are.
+	if own := c.Request.Own; own != nil && (rt.Config == nil || reflect.TypeOf(own) != reflect.TypeOf(rt.Config)) {
+		if set := setKeys(reflect.ValueOf(own)); len(set) > 0 {
+			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, set[0], rt.Name)
+		}
+		c.Request.Own = nil
 	}
 	// A collector built in code, rather than read, has no Own until here.
 	if rt.Config != nil && c.Request.Own == nil {

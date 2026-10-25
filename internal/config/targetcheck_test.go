@@ -150,7 +150,7 @@ func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
 		// replaces a part and another of it does not, in either order
 		// (fetch.RequestParamsCheck).
 		if r.IntN(5) == 0 {
-			c.Request.Body = oneOf(r, `{"t": {{param_tenant|json}}}`, "{{param_zone:eu}}", "{{param_tenant")
+			setOwnKey(c, "body", oneOf(r, `{"t": {{param_tenant|json}}}`, "{{param_zone:eu}}", "{{param_tenant"))
 		}
 		if r.IntN(6) == 0 {
 			setOwnKey(c, "message", oneOf(r, `{"t": {{param_tenant:acme|json}}}`, `{"t": {{param_tenant|form}}}`))
@@ -206,7 +206,8 @@ func checkCorpusFile(r *rand.Rand, cfg *model.Config) *model.StaticTargetFile {
 			t.Request.Path, t.Request.PathSet = "/own", true
 		}
 		if r.IntN(10) == 0 {
-			t.Request.Body, t.Request.BodySet = "ping", true
+			t.Request.BodySet = true
+			t.Request.Body = "ping"
 		}
 		if r.IntN(10) == 0 {
 			t.Request.Targets = []string{"servers.a.load"}

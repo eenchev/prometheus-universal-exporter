@@ -9256,6 +9256,9 @@ probes in progress, 15 seconds by default, longer than a typical scrape timeout;
 refused as a malformed command line. When it runs out, the connections still
 open MUST be closed, which MUST be logged with the timeout, before the last
 OTLP export (§ 42.1a) and a clean exit.
+The line logged as the graceful shutdown begins MUST name the last OTLP
+export only when OTLP export is enabled with an endpoint, the only case in
+which one is sent.
 
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
@@ -27451,6 +27454,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `HOST=0.0.0.0` and `HOST=::` and says the exporter listens on every
   interface, and refuses an empty `HOST`; `make -n run EXAMPLE=ecb HOST=`
   fails without building.
+
+## 34.210 The shutdown names the last OTLP export only when one is sent
+
+- The line the graceful shutdown begins with names the last OTLP export with
+  OTLP export enabled and an endpoint, and not without an otlp block, with
+  one switched off or with no endpoint
+  (TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent).
+- An exporter without OTLP export logs nothing of OTLP from a SIGTERM to its
+  exit (TestASIGHUPDuringTheShutdownDoesNotEndIt), and one with it says it
+  sends the last export (TestOTLPExportsThroughTheShutdownDelay).
 
 # 35. Documentation requirements
 

@@ -367,6 +367,10 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
 		t.Fatalf("the process ended before the graceful shutdown:\n%s", p.logs.String())
 	}
+	// Without OTLP export, the shutdown names no export it will not send.
+	if strings.Contains(p.logs.String(), "OTLP") {
+		t.Errorf("an exporter without OTLP export logged of one at its shutdown:\n%s", p.logs.String())
+	}
 }
 
 // The OTLP export keeps running through --web.shutdown-delay, as the static
@@ -400,6 +404,10 @@ func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
+	}
+	// With OTLP export on, the shutdown says it sends the last export.
+	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress and sending the last OTLP export") {
+		t.Errorf("the shutdown did not say it sends the last OTLP export:\n%s", p.logs.String())
 	}
 }
 

@@ -760,7 +760,7 @@ type sqlResult struct {
 // query runs c's statement with args on a connection of the pool of key,
 // within ctx.
 func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Collector, args []any) (*sqlResult, error) {
-	p, err := c.acquire(key, col.Request.Options)
+	p, err := c.acquire(key, sqlRequest(col).Options)
 	if err != nil {
 		traceSQL(ctx, key, len(args), false, err)
 		return nil, err
@@ -822,7 +822,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	// whose context has ended is abandoned by the driver, its connection
 	// closed with it.
 	stmtCtx, stop := context.WithCancel(ctx)
-	rows, done, err := p.driver.run(stmtCtx, conn, col.Request.Statement, args, timeout)
+	rows, done, err := p.driver.run(stmtCtx, conn, sqlRequest(col).Statement, args, timeout)
 	if err != nil {
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "running the statement", err)
@@ -1099,7 +1099,7 @@ func (c *sqlPoolCache) follow(collectors []model.Collector, targets []model.Stat
 	byName := map[string]*model.Collector{}
 	for i := range collectors {
 		col := &collectors[i]
-		if col.Request.Type != RequestTypeSQL || sqlDriverTable[col.Request.Driver] == nil {
+		if col.Request.Type != RequestTypeSQL || sqlDriverTable[sqlRequest(col).Driver] == nil {
 			continue
 		}
 		byName[col.Name] = col

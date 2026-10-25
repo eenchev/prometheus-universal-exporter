@@ -164,7 +164,10 @@ refuses of the value it refuses as a build with the type does — which `make sc
 running `TestTheRequestKeyCatalogueIsCurrent` (`internal/config`) with
 `-update-request-keys`, and which that test otherwise holds to the structs: so a build that left `tcp` out refuses `send` under
 another type as a key of another type, in the words a build with every type
-has, and its schema describes `send` as theirs does.
+has, and its schema describes `send` as theirs does. What a rule makes of
+the build, such as the drivers `request.driver` names, is the generating
+build's, which has the default drivers: a build without `sql` describes
+`driver` with them.
 
 So a new type is its own files and the build wiring (the guard file, the tag
 script, the Makefile's and CI's loops and the documentation's marked lists,

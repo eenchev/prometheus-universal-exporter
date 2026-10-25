@@ -89,12 +89,6 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "query") {
 			c.Request.Query = map[string]string{"set": "{{param_query:x}}"}
 		}
-		if slices.Contains(fields, "database") {
-			c.Request.Database = "{{param_database:x}}"
-		}
-		if slices.Contains(fields, "args") {
-			c.Request.Args = []string{"{{param_arg:x}}"}
-		}
 		if fill := ownPlaceholders[name]; fill != nil {
 			fill(&c)
 		}

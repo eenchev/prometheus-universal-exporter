@@ -66,7 +66,9 @@ func TestASQLStaticTargetsTLSIsChecked(t *testing.T) {
 		"half a client certificate": {"db.example", model.TargetRequestConfig{TLS: &model.TLSConfig{KeyFile: "/k", Set: true}}, "only one of cert_file and key_file"},
 		"a placeholder":             {"db.example", model.TargetRequestConfig{TLS: &model.TLSConfig{CAFile: "{{param_ca}}", Set: true}}, "has a placeholder"},
 	})
-	disabled := f.collector(t, "off", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Options = map[string]string{"sslmode": "disable"} })
+	disabled := f.collector(t, "off", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslmode": "disable"} })
+	})
 	checkTargetRequests(t, disabled, map[string]struct {
 		target  string
 		request model.TargetRequestConfig
@@ -74,7 +76,9 @@ func TestASQLStaticTargetsTLSIsChecked(t *testing.T) {
 	}{
 		"TLS the options switch off": {"db.example", model.TargetRequestConfig{TLS: ca}, `sets request.tls, but request.options.sslmode is "disable"`},
 	})
-	unverified := f.collector(t, "require", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Options = map[string]string{"sslmode": "require"} })
+	unverified := f.collector(t, "require", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslmode": "require"} })
+	})
 	checkTargetRequests(t, unverified, map[string]struct {
 		target  string
 		request model.TargetRequestConfig

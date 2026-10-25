@@ -46,7 +46,7 @@ import (
 func TestTheSnowflakeDriver(t *testing.T) {
 	f := newSQLFixture(t)
 	c := f.collector(t, "db", SQLDriverSnowflake, "SELECT 1 AS one", func(r *model.RequestConfig) {
-		r.Options = map[string]string{"warehouse": "metrics_wh", "role": "reader"}
+		sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"warehouse": "metrics_wh", "role": "reader"} })
 	})
 	address, err := parseSQLTarget(c, "MyOrg-MyAccount")
 	if err != nil || address.account != "myorg-myaccount" || address.hostPort != "myorg-myaccount.snowflakecomputing.com:443" {
@@ -89,9 +89,11 @@ func TestTheSnowflakeDriver(t *testing.T) {
 	}{
 		{func(r *model.RequestConfig) { r.PasswordFile = "" }, "sets neither request.password_file nor request.private_key_file"},
 		{func(r *model.RequestConfig) { r.PrivateKeyFile = "/k" }, "sets both request.password_file and request.private_key_file"},
-		{func(r *model.RequestConfig) { r.Options = map[string]string{"a": "b"} }, `which the snowflake driver does not take; it takes: role, schema, warehouse`},
+		{func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"a": "b"} })
+		}, `which the snowflake driver does not take; it takes: role, schema, warehouse`},
 	} {
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverSnowflake, Statement: "q", Username: "u", PasswordFile: "/p"}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", PasswordFile: "/p", Own: SQLConfig{Driver: SQLDriverSnowflake, Statement: "q"}}}
 		tc.change(&c.Request)
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v, want %q", err, tc.want)
@@ -412,7 +414,9 @@ func TestASnowflakeResultInMoreThanOneChunkCannotHangTheScrape(t *testing.T) {
 	snowflakeLogContext.Store(&inWindow)
 	t.Cleanup(func() { snowflakeLogContext.Store(nil) })
 	one := 1
-	limit := func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} }
+	limit := func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	}
 	columns := []map[string]any{{"name": "N", "type": "fixed", "precision": 9, "scale": 0}}
 	s.results["SELECT many"] = snowflakeRows(columns, [][]string{{"1"}}, map[string]any{
 		"url": "https://myorg-myaccount.snowflakecomputing.com/chunks/0", "rowCount": 1, "uncompressedSize": 8, "compressedSize": 8,

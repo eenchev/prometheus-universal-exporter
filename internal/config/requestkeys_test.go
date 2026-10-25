@@ -50,7 +50,18 @@ func TestTheRequestKeyCatalogueIsCurrent(t *testing.T) {
 			catalogued = append(catalogued, entry)
 		}
 	}
-	if !slices.Equal(builtRequestKeyEntries(), catalogued) {
+	made := builtRequestKeyEntries()
+	// The schema of request.driver names the drivers the build carries,
+	// and the catalogue is made from a build with the default ones: in a
+	// build with opt-in drivers, the schemas are not compared.
+	if fetch.RequestTypes[fetch.RequestTypeSQL] != nil && !slices.Equal(fetch.BuiltSQLDrivers(), []string{fetch.SQLDriverMySQL, fetch.SQLDriverPostgres, fetch.SQLDriverSQLServer}) {
+		for _, entries := range [][]fetch.RequestKeyEntry{made, catalogued} {
+			for i := range entries {
+				entries[i].Schema = ""
+			}
+		}
+	}
+	if !slices.Equal(made, catalogued) {
 		t.Fatal("internal/fetch/requestkeys_catalogue.go is out of date for the request types of this build; regenerate it with: make schemas")
 	}
 	if len(fetch.UnbuiltRequestTypes()) > 0 {

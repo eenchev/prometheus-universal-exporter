@@ -29,7 +29,7 @@ func TestASQLTargetWithAnEmptyPortIsRefusedAndIPv6KeepsItsBrackets(t *testing.T)
 	if opened := f.db.Opened(); opened != 0 {
 		t.Errorf("%d connections made to targets with no port", opened)
 	}
-	unknown := &model.Collector{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: "db2"}}
+	unknown := &model.Collector{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Own: SQLConfig{Driver: "db2"}}}
 	for target, want := range map[string]string{"[::1]": "[::1]", "[2001:DB8::1]": "[2001:db8::1]", "[::1]:7": "[::1]:7", "db.example": "db.example"} {
 		if address, err := parseSQLTarget(unknown, target); err != nil || address.hostPort != want {
 			t.Errorf("%s: %q %v, want %q", target, address.hostPort, err, want)
@@ -45,7 +45,7 @@ func TestASQLTargetIsReadAsItWasButForAnEmptyPort(t *testing.T) {
 	f := newSQLFixture(t)
 	collectors := []*model.Collector{
 		f.collector(t, "db", SQLDriverPostgres, "q"),
-		{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: "db2"}},
+		{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Own: SQLConfig{Driver: "db2"}}},
 	}
 	var targets []string
 	for _, host := range []string{"db.example", "DB.Example.", "10.0.0.1", "[::1]", "::1", "[2001:db8::1]", "[fe80::1%eth0]", "", " db ", "a:b:c", "x@y", "h/p", "[::1"} {
@@ -62,7 +62,7 @@ func TestASQLTargetIsReadAsItWasButForAnEmptyPort(t *testing.T) {
 				continue
 			}
 			if got != want || fmt.Sprint(err) != fmt.Sprint(wantErr) {
-				t.Errorf("%s %q: %+v %v, as it was %+v %v", c.Request.Driver, target, got, err, want, wantErr)
+				t.Errorf("%s %q: %+v %v, as it was %+v %v", sqlRequest(c).Driver, target, got, err, want, wantErr)
 			}
 		}
 	}
@@ -88,10 +88,10 @@ func parseSQLTargetAsItWas(c *model.Collector, raw string) (sqlAddress, error) {
 			return sqlAddress{}, fmt.Errorf("target %q is not a Snowflake account identifier; write the account as myorg-myaccount, or its locator as xy12345.eu-west-1", raw)
 		}
 		host := d.host(account)
-		port := d.port(c.Request.Options)
+		port := d.port(sqlRequest(c).Options)
 		return sqlAddress{host: host, port: port, hostPort: net.JoinHostPort(host, port), account: account}, nil
 	}
-	host, port := raw, d.port(c.Request.Options)
+	host, port := raw, d.port(sqlRequest(c).Options)
 	if h, p, err := net.SplitHostPort(raw); err == nil {
 		host, port = h, p
 	} else if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {

@@ -711,7 +711,7 @@ func TestAnLDAPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 			c.Request.PasswordFile = "/p"
 			editLDAP(c, func(r *LDAPConfig) { r.BindDN = "exporter" })
 		}, `request.bind_dn "exporter" is not a DN`},
-		"a key of another type":     {func(c *model.Collector) { c.Request.Statement = "SELECT 1" }, "sets request.statement, which does not apply"},
+		"a key of another type":     {func(c *model.Collector) { c.Request.Foreign = []string{"statement"} }, "sets request.statement, which does not apply"},
 		"half a client certificate": {func(c *model.Collector) { c.Request.TLS.CertFile = "/c.pem" }, "only one of cert_file and key_file"},
 	} {
 		c := &model.Collector{Name: "directory", Request: model.RequestConfig{Type: RequestTypeLDAP, Own: LDAPConfig{Searches: []LDAPSearch{{Name: "people", Base: "ou=people,dc=example,dc=org", Attributes: []string{"cn"}}}}}}

@@ -43,7 +43,9 @@ func TestTheClickHouseDriver(t *testing.T) {
 		t.Errorf("%+v", options)
 	}
 	f := newSQLFixture(t)
-	c := f.collector(t, "db", SQLDriverClickHouse, "SELECT 1 AS one", func(r *model.RequestConfig) { r.Options = map[string]string{"protocol": "http"} })
+	c := f.collector(t, "db", SQLDriverClickHouse, "SELECT 1 AS one", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"protocol": "http"} })
+	})
 	if address, err := parseSQLTarget(c, "db.example"); err != nil || address.hostPort != "db.example:8123" {
 		t.Errorf("%+v %v", address, err)
 	}

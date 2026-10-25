@@ -268,7 +268,7 @@ func TestAVerticaProbeValueIsBoundNeverWrittenIntoTheStatement(t *testing.T) {
 		{"GRANT EXECUTE ON FUNCTION f(int) TO metrics", "function's DDL"},
 	} {
 		c := &model.Collector{Name: "db", Request: model.RequestConfig{
-			Type: RequestTypeSQL, Driver: SQLDriverVertica, Statement: tc.statement, Username: "metrics", Args: []string{"{{param_x}}"},
+			Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverVertica, Statement: tc.statement, Args: []string{"{{param_x}}"}},
 		}}
 		err := ValidateRequest(c)
 		if tc.refused != "" {

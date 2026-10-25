@@ -46,8 +46,8 @@ func TestATargetKeepsNoMoreSQLPoolsThanItsMaxPerTarget(t *testing.T) {
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	two := 2
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
-		r.Connections = &model.SQLConnections{MaxPerTarget: &two}
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &two} })
 	})
 	for _, database := range []string{"a", "b", "a", "c"} {
 		if err := sqlProbe(c, "db.example", database, 0); err != nil {
@@ -61,8 +61,8 @@ func TestATargetKeepsNoMoreSQLPoolsThanItsMaxPerTarget(t *testing.T) {
 
 	one := 1
 	busy := f.collector(t, "busy", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
-		r.Connections = &model.SQLConnections{MaxPerTarget: &one}
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
 	})
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 1)
 	first := make(chan error, 1)
@@ -90,8 +90,8 @@ func TestATargetWithoutMaxPerTargetKeepsABoundedNumberOfSQLPools(t *testing.T) {
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	zero := 0
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
-		r.Connections = &model.SQLConnections{MaxPerTarget: &zero}
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &zero} })
 	})
 	for i := range sqlMaxPoolsPerTarget + 1 {
 		if err := sqlProbe(c, "db.example", fmt.Sprintf("d%d", i), 0); err != nil {
@@ -156,7 +156,7 @@ func TestAReloadClosesASQLPoolsIdleConnectionsOutsideThePoolsLock(t *testing.T) 
 	armed, closing, release := slowCloses(t, f)
 	two := 2
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Connections = &model.SQLConnections{MaxIdlePerTarget: &two}
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxIdlePerTarget: &two} })
 	})
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 4)
 	errs := make(chan error, 3)
@@ -176,7 +176,7 @@ func TestAReloadClosesASQLPoolsIdleConnectionsOutsideThePoolsLock(t *testing.T) 
 	<-f.db.Started
 	armed.Store(true)
 	changed := *c
-	changed.Request.Database = "other"
+	editSQL(&changed, func(r *SQLConfig) { r.Database = "other" })
 	followed := make(chan struct{})
 	go func() { FollowConfiguration([]model.Collector{changed}, nil); close(followed) }()
 	<-closing
@@ -200,8 +200,8 @@ func TestMakingRoomAtMaxPerTargetDoesNotHoldTheScrapePastItsDeadline(t *testing.
 	armed, closing, _ := slowCloses(t, f)
 	two := 2
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
-		r.Connections = &model.SQLConnections{MaxPerTarget: &two, MaxIdlePerTarget: &two}
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &two, MaxIdlePerTarget: &two} })
 	})
 	// Database a's pool keeps two connections idle.
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 2)
@@ -279,7 +279,9 @@ func TestAStatementsEndThatHangsDoesNotHoldTheSQLScrapePastItsDeadline(t *testin
 	}
 	sqlConnectHook.Store(&hook)
 	one := 1
-	c := f.collector(t, "db", SQLDriverMySQL, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	c := f.collector(t, "db", SQLDriverMySQL, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	})
 	target := server.Addr().String()
 	returned := make(chan struct{})
 	var resp *HTTPResponse
@@ -361,7 +363,9 @@ func TestSQLTransactionsEndedAtTheirDeadlineAtOnceEachFailSo(t *testing.T) {
 	f.db.Block = make(chan struct{})
 	f.db.Results["slow"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	workers := 16
-	c := f.collector(t, "db", SQLDriverPostgres, "slow", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &workers} })
+	c := f.collector(t, "db", SQLDriverPostgres, "slow", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &workers} })
+	})
 	var scrapes sync.WaitGroup
 	for range workers {
 		scrapes.Go(func() {
@@ -386,7 +390,9 @@ func TestADrainingSQLPoolOfARemovedCollectorIsNoLongerCounted(t *testing.T) {
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 4)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one := 1
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	})
 	first, second := make(chan error, 1), make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil)
@@ -399,7 +405,7 @@ func TestADrainingSQLPoolOfARemovedCollectorIsNoLongerCounted(t *testing.T) {
 	}()
 	events.await(t, "waiting: max_per_target", 1)
 	changed := *c
-	changed.Request.Database = "other"
+	editSQL(&changed, func(r *SQLConfig) { r.Database = "other" })
 	FollowConfiguration([]model.Collector{changed}, nil)
 	FollowConfiguration(nil, nil)
 	close(f.db.Block)
@@ -423,8 +429,7 @@ func TestASQLKeepalivePingsEveryIdleConnection(t *testing.T) {
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	two, interval := 2, model.Duration(5*time.Millisecond)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{MaxIdlePerTarget: &two, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{MaxIdlePerTarget: &two, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 2)
 	errs := make(chan error, 2)
 	for range 2 {
@@ -454,8 +459,7 @@ func TestASkippedSQLKeepaliveForgetsConnectionsPastTheirIdleTimeout(t *testing.T
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one, interval, idle := 1, model.Duration(5*time.Millisecond), model.Duration(time.Hour)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{MaxPerTarget: &one, IdleTimeout: &idle, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{MaxPerTarget: &one, IdleTimeout: &idle, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -484,8 +488,8 @@ func TestMaxIdlePerTargetBoundsTheIdleSQLConnectionsAcrossTheTargetsDatabases(t 
 	for _, limit := range []int{1, 2} {
 		name := fmt.Sprintf("idle%d", limit)
 		c := f.collector(t, name, SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-			r.Database = "{{param_db}}"
-			r.Connections = &model.SQLConnections{MaxIdlePerTarget: &limit}
+			sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+			sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxIdlePerTarget: &limit} })
 		})
 		for _, database := range []string{"a", "b", "a", "b"} {
 			if err := sqlProbe(c, "db.example", database, 0); err != nil {

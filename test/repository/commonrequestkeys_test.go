@@ -13,7 +13,6 @@ import (
 // of the common part, until the type's own struct holds them.
 var pendingCommonKeys = []string{
 	"method", "body", "pagination",
-	"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections",
 }
 
 // The common part of a collector's request block, model.RequestConfig's

@@ -20,7 +20,7 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
+.PHONY: build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
 # but the opt-in ones.
@@ -42,6 +42,35 @@ SQL_DRIVERS ?=
 # allocator checks the configuration it serves with the exporter's loader.
 build:
 	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)' '$(SQL_DRIVERS)' '$(OPT_IN_REQUEST_TYPES)')" && go build -tags "$$tags" -o bin/$(APP) . && go build -tags "$$tags" -o bin/$(ALLOCATOR) ./cmd/$(ALLOCATOR)
+	@sh tools/run-example.sh check-root-binaries $(APP) $(ALLOCATOR)
+
+# EXAMPLE names the shipped example `make run` runs: a directory under
+# examples/ by its name, such as open-meteo, or examples/config.<name>.*.yaml
+# by <name>, such as ecb; `make run` alone lists them. The exporter listens on
+# HOST:PORT, this machine alone by default, as an example is something to try
+# out, not to serve; an IPv6 HOST may be bare (::1) or bracketed. ARGS adds
+# flags, such as ARGS=--log.level=debug. Set with = rather than ?=, so that
+# only the command line sets them: zsh exports HOST as the machine's name,
+# which ?= would take.
+EXAMPLE =
+HOST = 127.0.0.1
+PORT = 8080
+ARGS =
+
+# Builds as `make build` does, with the opt-in request types the example
+# needs added to OPT_IN_REQUEST_TYPES, so a binary built before a pull is
+# never what runs, and runs bin/$(APP) with the example's configuration and
+# static target file. See tools/run-example.sh.
+run:
+	@if [ -z '$(EXAMPLE)' ]; then \
+		echo "usage: make run EXAMPLE=<name> [PORT=8080] [HOST=127.0.0.1] [ARGS=--log.level=debug]; the examples are:" >&2; \
+		sh tools/run-example.sh list >&2; \
+		exit 2; \
+	fi
+	@sh tools/run-example.sh check-host '$(HOST)' && \
+		types="$$(sh tools/run-example.sh opt-in-types '$(EXAMPLE)' '$(OPT_IN_REQUEST_TYPES)')" && \
+		$(MAKE) --no-print-directory build OPT_IN_REQUEST_TYPES="$$types"
+	@sh tools/run-example.sh run '$(EXAMPLE)' '$(HOST)' '$(PORT)' $(ARGS)
 
 # What ci.yml's build steps run: every package compiled, then each request
 # type vetted and built on its own, so code one type needs cannot quietly

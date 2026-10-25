@@ -501,7 +501,7 @@ func pendingQueues(server *Server) []string {
 func exportCounts(server *Server) (successes, failures uint64, dropped int) {
 	server.otlp.mu.Lock()
 	defer server.otlp.mu.Unlock()
-	return server.otlp.successes, server.otlp.failures, server.otlp.dropped
+	return server.otlp.successes, server.otlp.failures, server.otlp.droppedLocked()
 }
 
 // 90,000 points are about 20.5MiB of JSON, more than the OpenTelemetry

@@ -11,7 +11,8 @@ import (
 
 // The exporter keeps state per collector: its self-metric counters, the
 // verbose per-request series and scrape-time histogram, cached results and
-// what the failure log remembers, the targets failure_backoff is backing off
+// what the failure log remembers, the recent probes the status page shows
+// (recentprobes.go), the targets failure_backoff is backing off
 // from, and the worker pool the statistics of its
 // Python workers (pythonstats.go). A reload can remove a collector, or change
 // its definition, and that state has to follow:
@@ -663,7 +664,13 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 	s.failures.forgetStaticTargetsLocked(moved)
 	dropped := s.cache.dropCollectorsLocked(stale)
 	s.backoffs.forgetLocked(stale)
+	// The recent probes of the status page (recentprobes.go) go with them,
+	// under the lock a probe records under once it has asked whether its
+	// collector stands.
+	s.recent.mu.Lock()
+	s.recent.forgetLocked(stale)
 	s.storeFollowed(next)
+	s.recent.mu.Unlock()
 	s.backoffs.mu.Unlock()
 	s.cache.mu.Unlock()
 	s.failures.mu.Unlock()

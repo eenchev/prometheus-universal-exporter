@@ -5,7 +5,7 @@
 # servers of one cluster apart. ZooKeeper's servers are given 5 seconds, so
 # that one that does not answer is not waited for as long as the others.
 #
-#   ./prometheus-universal-exporter --config.file=examples/tcp/config.yaml --static-targets-file=examples/tcp/static-targets.yaml
+#   make run EXAMPLE=tcp
 #   curl http://localhost:8080/static-targets
 #
 # x-memcached and x-zookeeper are this file's own keys, which the exporter

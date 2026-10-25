@@ -140,28 +140,64 @@ func TestTheReleaseArchivesAreLinkedAsTheImageIs(t *testing.T) {
 
 // CI builds what the release builds, so a change that breaks it fails on
 // its pull request: the code for darwin, whose archives the release
-// cross-compiles, and the image from the Dockerfile, pushed nowhere. Both
-// run under the go filter, which matches every file they read, in the job
-// build, which runs the builds beside test.
+// cross-compiles, in the job build, which runs the builds beside test, and
+// the image from the Dockerfile, pushed nowhere, in a job of its own, image,
+// beside build, which the image's build once made one of CI's two longest
+// jobs. The image is built with docker/build-push-action, loaded into the
+// runner's docker to run its --version, which shows the revision it was
+// given, and its layers are read from and written to the Actions cache, all
+// of them (mode=max), so the next run builds again only what changed. All
+// of it runs under the go filter, which matches every file they read.
 func TestCIBuildsForMacOSAndBuildsTheImage(t *testing.T) {
-	steps := workflowSteps(t, ".github/workflows/ci.yml")["build"]
-	for _, c := range []struct {
-		what      string
-		fragments []string
-	}{
-		{"builds for darwin", []string{"GOOS=darwin", "amd64", "arm64", "go build ./...", "-o /dev/null .", "-o /dev/null ./cmd/pue-allocator"}},
-		{"builds the image", []string{"docker build", "REVISION=", "--version"}},
+	all := workflowSteps(t, ".github/workflows/ci.yml")
+	build, image := all["build"], all["image"]
+	darwin := stepIndex(build, "GOOS=darwin", "amd64", "arm64", "go build ./...", "-o /dev/null .", "-o /dev/null ./cmd/pue-allocator")
+	if darwin < 0 {
+		t.Error("no step of ci.yml's job build builds for darwin")
+	} else if build[darwin]["if"] != sideCondition("go") {
+		t.Errorf("the step of ci.yml that builds for darwin runs under %v, not the go filter", build[darwin]["if"])
+	}
+	built := slices.IndexFunc(image, func(step map[string]any) bool {
+		uses, _ := buildPushAction(step)
+		return uses
+	})
+	if built < 0 {
+		t.Fatal("ci.yml's job image does not build the image with docker/build-push-action")
+	}
+	with, _ := image[built]["with"].(map[string]any)
+	for key, want := range map[string]any{
+		"context":    ".",
+		"push":       false,
+		"load":       true,
+		"tags":       "prometheus-universal-exporter:ci",
+		"build-args": "VERSION=0.0.0-ci\nREVISION=${{ github.sha }}\n",
+		"cache-from": "type=gha",
+		"cache-to":   "type=gha,mode=max",
 	} {
-		index := stepIndex(steps, c.fragments...)
-		if index < 0 {
-			t.Errorf("no step of ci.yml's job build %s (%q)", c.what, c.fragments)
-			continue
+		if with[key] != want {
+			t.Errorf("ci.yml's job image builds the image with %s %#v, not %#v", key, with[key], want)
 		}
-		if steps[index]["if"] != sideCondition("go") {
-			t.Errorf("the step of ci.yml that %s runs under %v, not the go filter", c.what, steps[index]["if"])
+	}
+	buildx := slices.IndexFunc(image, func(step map[string]any) bool {
+		uses, _ := step["uses"].(string)
+		return strings.HasPrefix(uses, "docker/setup-buildx-action@")
+	})
+	if buildx < 0 || buildx > built {
+		t.Error("ci.yml's job image does not set up buildx before it builds the image; the Actions cache needs a builder of buildx's own")
+	}
+	checked := stepIndex(image, "docker run --rm prometheus-universal-exporter:ci --version", `grep -F "$REVISION"`)
+	if checked < built {
+		t.Error("ci.yml's job image does not run the image's --version after building it, to see the revision it was given")
+	} else if env, _ := image[checked]["env"].(map[string]any); env["REVISION"] != "${{ github.sha }}" {
+		t.Errorf("ci.yml checks the image's revision against %v, not the commit's", env["REVISION"])
+	}
+	changes := slices.IndexFunc(image, func(step map[string]any) bool { return step["id"] == "changes" })
+	for _, step := range image[changes+1:] {
+		if step["if"] != sideCondition("go") {
+			t.Errorf("a step of ci.yml's job image runs under %v, not the go filter:\n%s", step["if"], yamlText(step))
 		}
-		if releasePublishes(steps[index]) || strings.Contains(steps[index]["run"].(string), "--push") {
-			t.Errorf("the step of ci.yml that %s publishes something", c.what)
+		if run, _ := step["run"].(string); releasePublishes(step) || strings.Contains(run, "--push") {
+			t.Errorf("a step of ci.yml's job image publishes something:\n%s", yamlText(step))
 		}
 	}
 	patterns := ciFilters(t)["go"]

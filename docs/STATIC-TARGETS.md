@@ -233,7 +233,8 @@ That is [`examples/open-meteo/static-targets.yaml`](../examples/open-meteo/stati
 shortened; the configuration with its collector is
 [`config.yaml`](../examples/open-meteo/config.yaml) beside it, and the two run
 together as
-`prometheus-universal-exporter --config.file=examples/open-meteo/config.yaml --static-targets-file=examples/open-meteo/static-targets.yaml`.
+`prometheus-universal-exporter --config.file=examples/open-meteo/config.yaml --static-targets-file=examples/open-meteo/static-targets.yaml`,
+which `make run EXAMPLE=open-meteo` builds and runs.
 
 A merge key works inside a target's `request` too — `request: {<<: *request,
 timeout: 2s}` — and a `path` or `body` it brings in replaces the collector's
@@ -632,10 +633,13 @@ run another collector on what it fetched.
 
 ## Status page
 
-For people who have no Prometheus to ask, the exporter serves a page of the
-static targets at the static targets path followed by `/status`,
-`/static-targets/status` by default; the landing page links it. It has a row
-per target:
+For people who have no Prometheus to ask, the exporter serves a status page
+at the static targets path followed by `/status`, `/static-targets/status` by
+default; the landing page links it. It shows the static targets first, then
+the recent probes and how the OTLP export is going, which
+[Status page](ENDPOINTS.md#status-page) in Endpoints describes with the page
+as a whole. The static targets section has a row per
+target:
 
 - its name, collector, target and labels, its interval, and whether it is
   exported over OTLP. The target is shown as its `target` label and the log
@@ -693,10 +697,11 @@ static targets endpoint: a target brought back under its name is
 `not yet scraped`, with no failures and no error, until its first scrape.
 
 The page shows nothing the endpoint's series and the log do not: it is
-protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
-only, and is not found (`404`) while no static target is configured. In
-allocator mode it shows the targets the allocator gave this replica, and says
-so: each replica has a page of its own. It moves with
+protected by `web.basic_auth` like every endpoint and answers `GET` and `HEAD`
+only. While no static target is configured it is served all the same, for its
+recent probes, and its static targets section says that none are configured.
+In allocator mode it shows the targets the allocator gave this replica, and
+says so: each replica has a page of its own. It moves with
 `--web.static-targets-path`, so a `--web.self-metrics-path` on it is refused.
 
 ## Exporting over OTLP

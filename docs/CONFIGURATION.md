@@ -3480,8 +3480,8 @@ the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
 `otlp` block with `enabled: false`, which is kept unchecked, do both take a
 negative one. Unchecked is of the whole block, to both: switched off, it may
 hold a `compression` that is neither `gzip` nor `none`, a negative
-`max_pending_points`, `unready_after_failures` or `batch_max_size` and a
-`batch_max_bytes` under its least, as it may an endpoint that
+`max_pending_points`, `unready_after_failures` or `batch_max_size`, an
+`unready_after_failures` over 1000, and a `batch_max_bytes` under its least, as it may an endpoint that
 is no URL, and only what is not of a key's type at all — text for a number, a
 list for text — is refused there. What is written negative is negative
 however small: `-0.4ns`,
@@ -5398,7 +5398,7 @@ when the exporter should be sent probes, and `503` when it should not, with one
   current endpoint failed in a row, retries included (see
   [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
   is off by default, since an exporter whose exports fail still answers
-  probes.
+  probes, and at most 1000.
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.

@@ -407,7 +407,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
 			waitOutShutdownDelay(*shutdownDelay)
 		}
-		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
+		logger.Info(shutdownMessage(manager.Get().OTLP), "shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
 		// No static target scrape and no periodic export starts from here;
@@ -480,4 +480,15 @@ func newLogger(level string, out io.Writer) *slog.Logger {
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
 	slog.SetDefault(logger)
 	return logger
+}
+
+// shutdownMessage is the line the graceful shutdown begins with: the probes in
+// progress are finished, and, when OTLP export is on, the last export is sent.
+// It names the export only then, as FlushOTLP sends one only then: an exporter
+// without OTLP said it would send an export it never sends.
+func shutdownMessage(otlp model.OTLPConfig) string {
+	if otlp.Enabled && otlp.Endpoint != "" {
+		return "shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once"
+	}
+	return "shutting down: finishing the probes in progress; a second signal exits at once"
 }

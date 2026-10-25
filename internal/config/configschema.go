@@ -705,7 +705,7 @@ func configSchemaRules() map[string]map[string]any {
 		"otlp.max_pending_points":                  {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
 		"otlp.batch_max_size":                      {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
 		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB, which the exporter checks of a size written as text, in quotes or with a unit, when the configuration loads; 0, like the key left out, is the default, 4MiB."},
-		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
+		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000."},
 		"otlp.probe_attributes":                    {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":     {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
@@ -756,8 +756,9 @@ func configSchemaRules() map[string]map[string]any {
 // (enabledSwitchRule), whose timeout and interval, once it is on, are not
 // negative, whose compression is then one of its values, whose
 // max_pending_points, unready_after_failures and batch_max_size are then not
-// negative, whose batch_max_bytes, written as a number, is then 0 or at
-// least its least, and whose headers' names are then header names
+// negative, whose unready_after_failures is then at most its most, whose
+// batch_max_bytes, written as a number, is then 0 or at least its least, and
+// whose headers' names are then header names
 // (headerNames), as the exporter checks them then (validateOTLP); a size
 // written as text the exporter alone holds to its least, as it does
 // limits.max_output_bytes (leastOutputRule). Switched off, the block is
@@ -793,9 +794,10 @@ func otlpSchemaRule() map[string]any {
 	rule["then"] = map[string]any{"properties": map[string]any{
 		"timeout": notNegative, "interval": notNegative,
 		"compression":        map[string]any{"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone})},
-		"max_pending_points": fromZero, "unready_after_failures": fromZero, "batch_max_size": fromZero,
-		"batch_max_bytes": map[string]any{"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": model.MinOTLPBatchMaxBytes}}},
-		"headers":         map[string]any{"propertyNames": headerNames()},
+		"max_pending_points": fromZero, "batch_max_size": fromZero,
+		"unready_after_failures": map[string]any{"minimum": 0, "maximum": model.MaxOTLPUnreadyAfterFailures},
+		"batch_max_bytes":        map[string]any{"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": model.MinOTLPBatchMaxBytes}}},
+		"headers":                map[string]any{"propertyNames": headerNames()},
 	}}
 	return rule
 }

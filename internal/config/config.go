@@ -1037,8 +1037,11 @@ func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	case o.BatchMaxBytes < model.MinOTLPBatchMaxBytes:
 		return fmt.Errorf("otlp.batch_max_bytes is %d bytes, under the least, 64KiB; set at least 64KiB, or leave it out, or 0, for the default, 4MiB", o.BatchMaxBytes)
 	}
-	if o.UnreadyAfterFailures < 0 {
+	switch {
+	case o.UnreadyAfterFailures < 0:
 		return errors.New("otlp.unready_after_failures must not be negative")
+	case o.UnreadyAfterFailures > model.MaxOTLPUnreadyAfterFailures:
+		return fmt.Errorf("otlp.unready_after_failures is %d, over the most, %d", o.UnreadyAfterFailures, model.MaxOTLPUnreadyAfterFailures)
 	}
 	switch o.Compression {
 	case "":

@@ -744,7 +744,39 @@ and the source MUST list the opt-in types.
   `make build-request-types`, which `make ci` includes, MUST run the same
   commands. `make build` MUST build the main package into
   `bin/prometheus-universal-exporter`, with the tags of `REQUEST_TYPES`, and
-  the documentation that gives it MUST say where the binary lands. CI MUST
+  the documentation that gives it MUST say where the binary lands, and MUST
+  warn when `./prometheus-universal-exporter` or `./pue-allocator`, which
+  a plain `go build` leaves in the repository root and `.gitignore` MUST
+  ignore, is there. `make run EXAMPLE=<name>` MUST build as `make build`
+  does, with the opt-in request types the example's files name on a
+  `type: <name>` line added to `OPT_IN_REQUEST_TYPES`, so that the binary
+  it runs is never older than the tree, and MUST then print the URL of the
+  landing page, of `/static-targets/status` for every example, saying it
+  shows the static targets' last scrapes for an example with static targets
+  and the recent probes always, and of the first probe that the comment
+  opening the example's configuration gives as `curl '<url>/probe?<query>'`,
+  on `HOST:PORT`, when the collector it names is one of the example's (none
+  otherwise) and its target is one a local run can reach — a host of
+  `localhost`, `127.0.0.1` or `[::1]`, or a DNS name with a dot that is no
+  placeholder: not one whose first label ends in `-host`, not an IP address
+  but the loopback ones, not under `example.com`, `example.net`,
+  `example.org` or the top-level domains `example`, `invalid`, `test`,
+  `local`, `localhost`, `internal`, `lan`, `home`, `corp` or `svc` — and
+  otherwise a hint, the same probe with `<your target>` for its target, and
+  run `bin/prometheus-universal-exporter` with
+  the example's configuration, its static target file when it has one, the
+  listen address `HOST:PORT`, `127.0.0.1:8080` unless the command line sets
+  them, and the flags of `ARGS`. A bare IPv6 `HOST` MUST be bracketed, in
+  the listen address and the URLs (`[::1]:8080`), an already bracketed one
+  kept; for `HOST=0.0.0.0` and `HOST=::` the URLs MUST be on `localhost`
+  and `[::1]`, which a browser on the same machine can open, and the run
+  MUST say the exporter listens on every interface; an empty `HOST` MUST
+  fail with a message before anything is built. An example's name MUST come from the tree
+  (`tools/run-example.sh`): a directory under `examples/` is named by the
+  directory, `examples/config.<name>.<anything>.yaml` by `<name>`, and a
+  name two examples share MUST fail; `make run` without `EXAMPLE` MUST list
+  the names and exit non-zero, and an unknown name MUST fail before
+  anything is built. `make ci` MUST NOT reach `run`. CI MUST
   also vet, build and test (the `internal/fetch` package) a build with every
   opt-in `sql` driver, which `make build-sql-drivers` and
   `make test-sql-drivers`, which `make ci` includes, MUST run the same; CI
@@ -7366,8 +7398,8 @@ Recommended behavior:
   and `PUT`, and no other. It MUST show when the last reload that put
   something in force did, and what it changed, as § 24.1a says it, and
   before the first that the exporter has not been reloaded since it
-  started. With static targets in force it MUST link the static targets'
-  status page (§ 42.14a), and without them MUST NOT. Only `/` itself MUST be
+  started. It MUST link the status page (§ 42.14a), with static targets in
+  force or without them. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
@@ -7412,8 +7444,10 @@ Recommended behavior:
   which never makes the exporter unready over OTLP: an exporter whose exports
   fail still answers probes, and a Kubernetes pod that is not ready stops
   receiving them. The failures MUST be counted per endpoint, so a reload that
-  changes `otlp.endpoint` starts the count again, and a negative value MUST be
-  rejected. A `503` body MUST name each reason on a line of its
+  changes `otlp.endpoint` starts the count again, and a negative value, or
+  one over 1000, MUST be rejected: the status page keeps when each failure
+  of a run ended, up to the most the threshold may be, to say when the
+  exporter became unready under any threshold (§ 42.14a). A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration. A rejected reload of the configuration or of the
@@ -8448,8 +8482,8 @@ that is switched on, the schemas MUST refuse only there, under a rule that
 goes by `enabled` being `true`. Of the `otlp` block that is a negative
 `timeout` or `interval`, a `compression` that is neither `gzip` nor `none`,
 a negative `max_pending_points`, `unready_after_failures` or
-`batch_max_size`, and a `batch_max_bytes` written as a number under its
-least; the rest of what the exporter checks of the block — the endpoint, the
+`batch_max_size`, an `unready_after_failures` over 1000, and a
+`batch_max_bytes` written as a number under its least; the rest of what the exporter checks of the block — the endpoint, the
 headers, the `tls` files, the least interval, `service.name` among the
 attributes, a `batch_max_bytes` under its least written as text — no schema
 can tell. What is not of a key's type at all — text for a number, a list for
@@ -9222,6 +9256,9 @@ probes in progress, 15 seconds by default, longer than a typical scrape timeout;
 refused as a malformed command line. When it runs out, the connections still
 open MUST be closed, which MUST be logged with the timeout, before the last
 OTLP export (§ 42.1a) and a clean exit.
+The line logged as the graceful shutdown begins MUST name the last OTLP
+export only when OTLP export is enabled with an endpoint, the only case in
+which one is sent.
 
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
@@ -10502,7 +10539,7 @@ Test the built container image for:
   Kubernetes can verify `runAsNonRoot`; a test MUST check that the image's
   `USER` is numeric and that the chart's `podSecurityContext` runs the same user.
 
-The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
+The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile. The build stage MUST declare its build arguments (`VERSION`, `REVISION`, `TARGETOS`, `TARGETARCH`, `REQUEST_TYPES`, `OPT_IN_REQUEST_TYPES`, `SQL_DRIVERS`) after `go mod download`, not before it: every `RUN` after an `ARG` depends on its value, and `REVISION` changes with every commit, so an earlier declaration would make the module download miss the layer cache on every build. A test MUST check that no build-stage `ARG` precedes the module download.
 
 ## 34.31 End-to-end scenario matrix
 
@@ -10655,8 +10692,12 @@ otherwise, and a test MUST run the step that sets them.
 CI MAY run its checks in parallel jobs, and SHOULD run its slowest — the race
 suite and the tests of each single-type selection — beside the rest rather
 than after it. The linters (gofmt, golangci-lint and gopls) MUST run in a job
-of their own, the builds (vet, the default build, darwin's, the image's and
-those with the opt-in drivers and request types) in another, and each
+of their own, the builds (vet, the default build, darwin's and those with the
+opt-in drivers and request types) in another, the image's build in a third,
+which MUST keep the image's layers in the GitHub Actions cache between runs,
+the exporter's race suite in two, one for `internal/exporter` and one for
+the rest of the exporter's side, whose two package lists MUST together be
+that side, each package once, and each
 single-type selection's vet and build in that selection's job of the
 single-type matrix, not in a loop in one job: the job that runs the
 repository's checks and the exporter's tests MUST NOT also run them. Each job
@@ -10670,7 +10711,10 @@ leaves unused is reported nowhere else. `make lint-request-types`, which
 naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
-environment, and MUST gate its steps on that filter's outputs rather than with
+environment; a job that sets up and runs neither Go nor Python, as the
+image's build, MUST start with the same first of them, checkout, the filter
+and the step of the outputs its steps read, and nothing of the rest. Every
+job MUST gate its steps on that filter's outputs rather than with
 a job-level condition, so that a job with nothing to do still succeeds under
 its own name; a test MUST keep those setups identical, and MUST keep the
 matrix of the single-type tests naming every request type of the tree.
@@ -18813,10 +18857,13 @@ Tests MUST show:
 
 ## 34.101 The race suite's limit and the size of a test's input under the race detector
 
-- `ci.yml` runs the race detector in one step for each side, the
-  exporter's and the allocator's, whose command is
+- `ci.yml` runs the race detector in one step for the allocator's side and
+  in two for the exporter's, one of `internal/exporter` alone
+  (`exporter-core`) and one of the rest of the side (`exporter-rest`), whose
+  two lists `tools/ci-packages.sh` prints together are the exporter's side,
+  each package once; every step's command is
   `go test -race -count=2 -shuffle=on -timeout <limit> $packages` with a
-  limit of at least twenty minutes, the side's packages listed by
+  limit of at least twenty minutes, the packages listed by
   `tools/ci-packages.sh` before it, under the condition of the side's
   filter output, and the `test` target of the Makefile runs that very
   command over `./...`: a Makefile without the limit, or with another, fails
@@ -24249,11 +24296,14 @@ Driver panics in database/sql's own goroutines, the TLS files of each Vertica co
 
 The race run and each request type's run in jobs of their own beside the test job, with one setup (§ 42.12):
 
-- ci.yml runs the race suite in a job of its own (`race`) and each request
-  type's tests in a job of a matrix (`request-types`), beside the `test` job;
+- ci.yml runs the race suite in two jobs of its own (`race` and
+  `race-rest`) and each request type's tests in a job of a matrix
+  (`request-types`), beside the `test` job;
   every job of ci.yml other than `test` starts with `test`'s setup steps, the
   helm setup alone left out, equal to them in their order, has `test`'s env
-  and machine, runs each of its own steps under the condition of the go,
+  and machine, or, when none of its steps sets up or runs Go or Python, as
+  `image`'s, starts with the setup's checkout, filter and step `changes`
+  alone and has `test`'s machine, runs each of its own steps under the condition of the go,
   exporter or allocator filter output, and no job of ci.yml has a job-level
   `if`: a copy of a setup step
   that differs, a missing environment or a job-level `if` fails the test.
@@ -24541,7 +24591,7 @@ The exporter's tests and the target allocator's run when a file each needs chang
 - The patterns are read as paths-filter reads them: `**` across any number
   of directories, none among them, `*` within one name.
 - ci.yml's job test runs `test/repository` under the go output and the
-  exporter's packages under the exporter output; the race job and the
+  exporter's packages under the exporter output; the two race jobs and the
   request types' matrix run the exporter's packages under the exporter
   output; the allocator job, which starts with the setup of test, runs the
   allocator's packages once and under the race detector under the allocator
@@ -25985,9 +26035,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `-ldflags`, the revision among them, from the values the image's build is
   given (§ 42.12).
 - CI's job build builds the code for darwin on amd64 and arm64, linking both
-  commands, and builds the image from the Dockerfile with `docker build`,
-  pushing nothing, both under the go filter, which matches every file the
-  image's build reads (§ 42.12).
+  commands, and its job image builds the image from the Dockerfile with
+  `docker/build-push-action` after buildx's setup, pushing nothing, loaded,
+  with the Actions cache (`type=gha`, `mode=max`) read and written, and runs
+  its `--version` against the commit, all under the go filter, which
+  matches every file the image's build reads (§ 42.12).
 - A regex histogram rule with labels `a` and `b` reading
   `"x\xfeb\xffy  5\nx y 7\n"` makes two histograms, `{a="x�b�y"}`
   of count 1 and sum 5 and `{a="x",b="y"}` of count 1 and sum 7, where the
@@ -26485,8 +26537,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `${{ matrix.type }}`, and `make build-request-types` runs the same commands
   in a loop naming every type (TestCIBuildsEveryRequestTypeOnItsOwn).
 - CI's job test runs no linter and no build: gofmt, golangci-lint and gopls
-  run in the job lint, and vet, the default, darwin's, the image's and the
-  opt-in builds in the job build (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
+  run in the job lint, vet, the default, darwin's and the opt-in builds in
+  the job build, and the image's in the job image (TestTheTestJobLeavesTheLintersAndBuildsToJobsOfTheirOwn).
 
 ## 34.184 The opt-in tcp request type
 
@@ -27206,6 +27258,212 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the one with `tls: {}` are down, not answered from its cache entry; a
   probe naming `tls`, `cert_file` and `key_file` parameters is not answered
   with the certificate.
+
+## 34.204 The image and the race suite in jobs of their own
+
+- CI builds the image in a job of its own, `image`, not in `build`: with
+  `docker/build-push-action` after `docker/setup-buildx-action`, pushing
+  nothing, loaded into the runner's docker with the tag the next step runs,
+  given `VERSION=0.0.0-ci` and the commit as `REVISION`, its layers read
+  from and written to the Actions cache (`type=gha`, `type=gha,mode=max`),
+  and then runs its `--version` and finds the commit in it, every step
+  after the setup under the go filter and none publishing; a workflow that
+  builds it in `build` with `docker build` fails the test
+  (TestCIBuildsForMacOSAndBuildsTheImage).
+- A job of ci.yml none of whose steps sets up Go or Python or runs go,
+  python3, pip or make starts with `test`'s checkout, filter and step
+  `changes` alone and is not held to `test`'s env; one that runs `go` after
+  only those steps, or whose step `changes` differs from `test`'s, fails the
+  test, and ci.yml has at least seven jobs beside `test`
+  (TestTheGoJobsOfCIStartWithTheSetupOfTest).
+- ci.yml runs the race suite in one step for `allocator`, one for
+  `exporter-core` and one for `exporter-rest`, by one command, each under
+  its side's filter output; `tools/ci-packages.sh exporter-core` lists
+  `internal/exporter` alone, and it and `exporter-rest` together list the
+  exporter's side, each package once; the single exporter step of before
+  fails the test (TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn).
+
+## 34.205 make run of an example
+
+- `make run` is a `.PHONY` target that runs `$(MAKE) --no-print-directory
+  build OPT_IN_REQUEST_TYPES=…` and then `tools/run-example.sh run
+  '$(EXAMPLE)' '$(HOST)' '$(PORT)' $(ARGS)`, `make ci` does not reach it,
+  and the Makefile sets `EXAMPLE`, `HOST = 127.0.0.1`, `PORT = 8080` and
+  `ARGS` with `=` (§ 35).
+- Every example configuration of the tree is named, by its directory under
+  `examples/` or by `<name>` of `examples/config.<name>.*.yaml`, with no
+  name shared, and `tools/run-example.sh files <name>` gives its
+  configuration and, for a directory with one, its static target file;
+  open-meteo, metar, tcp and ecb are among the names, and an unknown name
+  fails, listing the names.
+- `make run` without `EXAMPLE` fails with a usage line and lists every
+  example's name and files, building nothing.
+- For every example, the opt-in types `tools/run-example.sh opt-in-types`
+  adds are exactly the opt-in types of the tree its collectors' requests
+  name; tcp with `redis,tcp` given gives `redis,tcp`; `make -n run
+  EXAMPLE=tcp` builds with `request-type-tags.sh '' '' 'tcp'`; and `make -n
+  run` with an unknown example fails before any `go build`.
+- `tools/run-example.sh run`, in a copy of the tree with a `bin/` binary
+  that prints its arguments, prints the landing page's URL, the status
+  page's, for the static targets' last scrapes and the recent probes for
+  open-meteo and for the recent probes for ecb, and ecb's probe URL from its
+  opening comment, but none for a copy of ecb whose comment names a
+  collector it does not have, then runs the binary with
+  `--config.file`, `--web.listen-address=127.0.0.1:9115`, the static target
+  file for open-meteo alone, and the extra flag.
+- `make build` runs `tools/run-example.sh check-root-binaries $(APP)
+  $(ALLOCATOR)`, which warns of a `./prometheus-universal-exporter` in the
+  directory and of no binary that is not there, and `.gitignore` ignores
+  `/prometheus-universal-exporter` and `/pue-allocator`.
+- README.md has a "Try it" section giving `make run EXAMPLE=open-meteo
+  PORT=9115`, the status page's URL and `bin/prometheus-universal-exporter`,
+  and docs/DEVELOPMENT.md lists `make run`.
+- The reader of the files the repository tests read leaves out `bin/`, make's
+  build output, as it does `.git` and `vendor`, so a test naming `bin` for
+  a directory of its own does not make a built binary a file the go filter
+  must match.
+
+## 34.206 Recent probes on the status page
+
+- Probes of eight collectors and targets are answered success, failed with
+  the target's 500, refused by `allowed_targets` (`403`), rejected by
+  `max_concurrent_probes` (`503`), success then `cached`, success then
+  `stale result served`, and failed then `backing off`: the status page's
+  JSON has a row for each with its result, the status answered, its series,
+  its probes oldest first and its error, the failing rows first in order of
+  collector and target, under a summary of 8 rows and 5 failing; the HTML has
+  the section, the summary and each mark of the strip (§ 42.14a).
+- Two identical probes share one trip: both are recorded, one marked shared.
+- A key probed 15 times keeps its last 10 probes; with 500 keys kept, a new
+  key forgets the one probed least recently, not the one probed again.
+- A probe whose target holds a user, a password and a token in its query,
+  and one whose parameters hold markup over 300 bytes and a `param_token`:
+  no credential is shown in the HTML or the JSON, the parameter is cut, the
+  token's value withheld, the error quoting the target's markup is shown, and
+  every value is escaped on the page.
+- A debug probe, a probe of an unknown collector and one with a malformed
+  `timeout` record nothing.
+- A reload that removes one collector and changes another leaves the recent
+  probes of the third alone, and a probe of the removed collector that read
+  the configuration before the reload, recording after it, records nothing.
+- Without static targets the status page is served, saying none are
+  configured and that no probe has been answered, its JSON has empty
+  `static_targets` and `probes` arrays, and the landing page links it.
+- The JSON has `probe_keys`, `failing_probe_keys` and `probes`, each row
+  with `collector`, `target`, `result`, `failing`, `shared`, `last_probe`,
+  `last_probe_age_seconds`, `duration_seconds`, `status`, `series` and its
+  `probes`, each with `at`.
+
+## 34.207 OTLP export on the status page
+
+- With OTLP export off the status page's OTLP section says so in one line,
+  and the JSON's `otlp` is `{"enabled": false}` alone; the test fails when
+  the section is missing or carries more (§ 42.14a).
+- An OTLP export that gets through is shown with when it began, its age and
+  duration, `success`, 1 request and the data points the endpoint received,
+  the last success at its time, no failures, and the points pending before
+  and after; the endpoint, `http/json`, the interval and what the exports
+  carry (the probes, the 1 static target of 2 with `export_via_otlp`, the
+  self-metrics) are shown; the test fails when any of them is missing.
+- An OTLP export to an endpoint with `user:pass@` and a `token` query
+  parameter that fails with a network error is shown `failed`, with the
+  error quoting the URL, its retries, the endpoint as
+  `redacted:redacted@…?token=<redacted>`, and the summary line at the top
+  saying OTLP export is failing; neither the JSON, the page nor the log
+  holds the password or the token, and the tenant `<b>acme</b>` is escaped.
+  An export that then gets through ends the failures and keeps the error
+  and its time. The test fails when the warning logs the token (the
+  network error not redacted where the export is sent).
+- Against an endpoint that refuses (400), then answers 503 past a
+  `max_pending_points` of 10, then takes an export with 2 data points
+  rejected, the section's points dropped, retries and exports equal
+  `http_exporter_otlp_points_dropped_total`,
+  `http_exporter_otlp_export_retries_total` and
+  `http_exporter_otlp_exports_total`, the dropped by why are 3 or more
+  refused, 2 rejected, 2 over the bound and none at shutdown, adding up, the
+  last export is `partial success` with 2 rejected, and the points pending
+  are those waiting.
+- With `otlp.unready_after_failures: 2` the section shows `ready` before any
+  export and after 1 failed export, `unready` since the second failed
+  export's end, as `/ready` answers 503, with the summary line saying the
+  exporter is unready, and `ready` again once an export gets through.
+- A reload that points OTLP at another endpoint shows the new endpoint at
+  once, with no last export, success, failures or error of the old one, the
+  failed exports since the start still counted, and the new endpoint's own
+  export after it.
+- The JSON's `otlp` object has exactly the documented fields, its
+  `last_export`, `points_dropped_by_reason` and `exported` theirs; in
+  allocator mode the section says the exports are this replica's.
+- The failure log of 1,000 probes (200 under the race detector) of failing
+  8 KiB targets holds at most 1536 bytes a probe, measured with the server
+  kept alive through both measurements, so the recent probes the server
+  holds are not counted as the failure log's; the test fails under the race
+  detector when the server may be collected between them.
+- The recent probes of 1,000 probes (200 under the race detector) of failing
+  8 KiB targets with an 8 KiB probe parameter keep 500 keys, each with its
+  target cut to 512 bytes, its parameters to 512 and its error to 2000, and
+  hold at most 3.5 KiB a key; the test fails when a key's target is a slice
+  of the 8 KiB one.
+
+## 34.208 make run's URLs and OTLP unreadiness after a reload
+
+- `tools/run-example.sh run`, in a copy of the tree with a `bin/` binary
+  that prints its arguments, prints the status page's URL for every
+  example: for open-meteo for the static targets' last scrapes and the
+  recent probes, for ecb, which has no static targets, for the recent
+  probes; it prints ecb's first probe URL from the comment opening its
+  configuration on `HOST:PORT`, and none for a copy of ecb whose comment
+  names a collector the configuration does not have
+  (TestRunExampleRunsTheBinOfMakeBuild); the script before printed no
+  status page URL for ecb and no probe URL.
+- After 4 failed exports under `otlp.unready_after_failures: 3`, each
+  ending a minute after the last on a test clock, the OTLP section shows
+  `unready` since the third's end; reloads to 2, 1 and 4 show `unready`
+  since the second's, the first's and the fourth's end at once, and to 5
+  and 1000 `ready`, as `/ready` answers 503 and 200; a fifth failure under
+  5 shows `unready` since its end
+  (TestTheStatusPageFollowsAReloadOfTheOTLPUnreadyThreshold); before, the
+  section showed no `unready_since` after the reloads to 2, 1 and 4.
+- A run of 1,500 failed exports keeps 1,000 failure ends, the most
+  `otlp.unready_after_failures` may be, the 1,000th the time unready since
+  under 1000, and a success keeps none
+  (TestARunOfOTLPFailuresKeepsBoundedTimes).
+- `otlp.unready_after_failures` of -1 and 1001 is refused, the latter as
+  over the most, 1000, and both are taken in a block with `enabled: false`;
+  0, 1 and 1000 are taken (TestOTLPUnreadyAfterFailuresHasAMost); the
+  schemas refuse 1001 only in a block that is switched on, as the exporter
+  does, and take 1000 in either (TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock).
+
+## 34.209 The image's module layer, readiness on the page and make run's hosts
+
+- The Dockerfile's build stage declares no `ARG` (`VERSION`, `REVISION`,
+  `TARGETOS`, `TARGETARCH` among them) before `go mod download`, so a new
+  commit's `REVISION` leaves the module download's layer cached.
+- While the exporter shuts down, `/ready` answers 503, and the status page's
+  OTLP readiness says `unready` for "the exporter is shutting down", in the
+  JSON as `"readiness": "unready"` and `"unready_reasons"`, with no
+  `unready_since`; after OTLP failures the row gives the failures' reason too.
+- `tools/run-example.sh run` prints filebeat's probe as a hint with
+  `<your target>`, its target `filebeat-host` being a placeholder, and ecb's
+  and metar's probe URLs as before; the target check takes localhost,
+  127.0.0.1, `[::1]` and public DNS names, and refuses names without a dot,
+  `-host` names, non-loopback addresses and names under `example.com`,
+  `.example`, `.local`, `.internal`, `.svc`.
+- `tools/run-example.sh run` brackets a bare IPv6 `HOST` in the listen address
+  and the URLs, keeps a bracketed one, opens `localhost` and `[::1]` for
+  `HOST=0.0.0.0` and `HOST=::` and says the exporter listens on every
+  interface, and refuses an empty `HOST`; `make -n run EXAMPLE=ecb HOST=`
+  fails without building.
+
+## 34.210 The shutdown names the last OTLP export only when one is sent
+
+- The line the graceful shutdown begins with names the last OTLP export with
+  OTLP export enabled and an endpoint, and not without an otlp block, with
+  one switched off or with no endpoint
+  (TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent).
+- An exporter without OTLP export logs nothing of OTLP from a SIGTERM to its
+  exit (TestASIGHUPDuringTheShutdownDoesNotEndIt), and one with it says it
+  sends the last export (TestOTLPExportsThroughTheShutdownDelay).
 
 # 35. Documentation requirements
 
@@ -29386,9 +29644,10 @@ metrics with its labels, or its stale result, and its health result — at
 
 The endpoint MUST be served, empty, without a static target document.
 
-The exporter MUST serve a status page of the static targets at the static
-targets path followed by `/status`, `/static-targets/status` by default, for
-people who cannot ask Prometheus:
+The exporter MUST serve a status page at the static targets path followed by
+`/status`, `/static-targets/status` by default, for people who cannot ask
+Prometheus: a section of the static targets, then one of the recent probes,
+then one of the OTLP export. Of the static targets:
 
 - It MUST have one row per static target in force, with its name, its
   collector, its target as its health series show it (with any credential
@@ -29421,9 +29680,10 @@ people who cannot ask Prometheus:
 - `?format=json` MUST serve the same rows and summary as JSON; another
   `format` MUST be answered `400`.
 - In allocator mode the page MUST say that it shows the targets the
-  allocator gave this replica.
-- Without a static target in force the page MUST answer `404`; a reload that
-  adds targets MUST make it served without a restart.
+  allocator gave this replica, and the probes this replica answered.
+- The page MUST be served with or without static targets in force; without
+  them its static targets section MUST say that none are configured, and the
+  JSON MUST have an empty `static_targets` array.
 - It MUST answer `GET` and `HEAD`, and `405` otherwise with `Allow: GET,
   HEAD`, and MUST be protected by `web.basic_auth` like every endpoint but
   `/health` and `/ready`.
@@ -29438,6 +29698,94 @@ people who cannot ask Prometheus:
 - A self-metrics path equal to the status page's path MUST make the exporter
   exit with status 2, as a self-metrics path equal to the static targets
   path does.
+
+Of the recent probes:
+
+- Every `/probe` the exporter answers MUST be recorded under its collector,
+  its target as the logs show it (with any credential withheld) and its probe
+  parameters that change the request, each value with what reads as a
+  credential masked, withheld whole when its parameter's name reads as a
+  credential, and cut; forwarded headers MUST NOT be shown. A probe answered
+  from the response cache MUST be recorded as `cached`, and one answered by
+  another probe's trip (§ 42.13a) MUST be recorded and marked shared. A
+  debug probe MUST NOT be recorded, nor a probe answered `400`, nor one whose
+  caller went away before it was answered.
+- Each probe MUST be recorded with when it began, how long it took, its
+  result — `success`, `cached`, `failed`, `refused by policy` (`403`),
+  `rejected by limit` (`503`), `stale result served` or `backing off` — the
+  HTTP status the exporter answered, the series it gave and its error, shown
+  and cut as a static target's error is.
+- The last 10 probes of each collector and target MUST be kept, and no more
+  than 500 collectors and targets: a new one MUST make the one probed least
+  recently forgotten. A target MUST be cut to 512 bytes and the parameters to
+  512 bytes in all.
+- The page MUST have a row per collector and target with its latest probe's
+  details, the results of its kept probes as a strip, oldest first, and the
+  error of the latest failed probe kept with when it began; the rows failing
+  their latest probe (any result but `success` and `cached`) MUST come first,
+  each part in order of collector, target and parameters, under a summary
+  line with the number of rows and of those failing. Every value MUST be
+  HTML-escaped.
+- `?format=json` MUST give `probe_keys`, `failing_probe_keys` and `probes`,
+  an array with an object per row and, in it, the row's probes, oldest first.
+- A reload MUST forget the recent probes of every collector it removes or
+  changes, with the rest of the state kept per collector, and a probe of the
+  old definition that ends after the reload MUST record nothing.
+
+Of the OTLP export:
+
+- With OTLP export off (`otlp.enabled` false, or no endpoint) the section
+  MUST say so in one line, and the JSON's `otlp` MUST be `{"enabled":
+  false}` alone.
+- With it on, the section MUST show the endpoint with the URL's userinfo
+  withheld and the values of query parameters named like credentials masked,
+  as a target is shown, and MUST NOT show `otlp.headers`; the protocol, `http/json`;
+  `otlp.interval`; and what the exports carry: the probes' results, the
+  number of static targets with `export_via_otlp`, and the self-metrics.
+- It MUST show the last export to the endpoint: when it began, how long ago,
+  how long it took, its result — `success`, `failed`, or `partial success`
+  when the endpoint took it and rejected data points in its
+  `partialSuccess`, with how many — the requests of it sent, the data points
+  they carried and its retries; when the last export that got through
+  ended, or that none has; and the failed exports in a row. With
+  `otlp.unready_after_failures` set it MUST show the readiness `/ready`
+  answers (§ 23), from the same reasons, not from the failed exports alone:
+  `ready`, or `unready` with the reasons `/ready` gives, in the JSON as
+  `unready_reasons`, so that it says unready while the exporter shuts down;
+  and, when the failed exports are among the reasons, when the failed export
+  that made it so ended — the Nth of the current run of
+  failures under `otlp.unready_after_failures` N, whenever N was set: a
+  reload that lowers N to the run's length or under MUST show the end of the
+  new Nth failure at once, and one that raises it over the run's length
+  `ready`. It MUST keep for that the end of each failure of the run up to
+  the most N may be, 1000, and no more, whatever the run's length.
+- It MUST show the error of the last failed export, one of which the
+  endpoint refused a request included, with when that export began, kept
+  through later successes, shown as a static target's error is: every URL's
+  credentials withheld, masked again for what reads as a credential, and cut
+  to the bound of a failure's text (§ 25). The error MUST NOT show the
+  endpoint's userinfo or a credential in its query, and neither MUST the
+  warning that logs it.
+- It MUST show the data points waiting for the next export and
+  `otlp.max_pending_points`; and, since the start, the data points dropped,
+  in all and by why (refused, rejected in a `partialSuccess`, over
+  `otlp.max_pending_points`, of the last export at shutdown), the retries,
+  and the exports that succeeded and failed. These MUST be the counters
+  `http_exporter_otlp_points_dropped_total`,
+  `http_exporter_otlp_export_retries_total` and
+  `http_exporter_otlp_exports_total` are read from, and MUST equal them.
+- What the page keeps of its own MUST be one record of the endpoint in
+  force: the last export, the last failure's error and the ends of the
+  current run's failures up to 1000, bounded whatever the exports. A reload that changes `otlp.endpoint` MUST show the new endpoint
+  at once, without the old endpoint's last export, last success, failures
+  or error, until the new endpoint's own export; the numbers since the start
+  MUST go on.
+- While the last export failed, a line at the top of the page MUST say OTLP
+  export is failing, with the failed exports in a row and whether the
+  exporter is unready.
+- In allocator mode the section MUST say the exports are this replica's.
+- Every value MUST be HTML-escaped, and `?format=json` MUST give the section
+  as `otlp`.
 
 Every replica of the exporter scrapes every static target; running static
 targets with more than one replica, or with autoscaling, contacts each target

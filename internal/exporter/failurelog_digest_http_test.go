@@ -25,6 +25,13 @@ import (
 // is remembered. It held some 16 KiB a probe: the key held the target, and
 // the collector's name, read from the query, the whole request line. Over
 // 1,000 probes, 200 under the race detector.
+//
+// The server is kept alive through both measurements: what is measured is
+// what forgetting the failures frees. Once the server was last used to
+// forget them, the collector freed the whole server between the two, and
+// with it whatever else it holds of the probes — the recent probes the
+// status page shows (recentprobes.go), some 450 bytes a probe and 880
+// under the race detector — which was counted as the failure log's.
 func TestTheFailureLogHoldsLittleOfProbesOfLongFailingTargets(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "down", http.StatusInternalServerError)
@@ -59,6 +66,7 @@ func TestTheFailureLogHoldsLittleOfProbesOfLongFailingTargets(t *testing.T) {
 	if entries != probes {
 		t.Fatalf("%d failures are remembered of %d probes", entries, probes)
 	}
+	runtime.KeepAlive(server)
 	held := int64(remembered.HeapAlloc) - int64(forgotten.HeapAlloc)
 	if perProbe := held / int64(probes); perProbe > 1536 {
 		t.Errorf("the failure log holds %d bytes for each of %d probes of 8 KiB failing targets, want at most 1536", perProbe, probes)

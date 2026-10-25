@@ -10,6 +10,9 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
+make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
+                #   configuration and static targets on 127.0.0.1:8080; PORT=, HOST= and ARGS= change
+                #   that, the opt-in types the example needs are added, and EXAMPLE= alone lists the examples
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make lint-request-types  # golangci-lint for each request type built on its own
@@ -22,6 +25,30 @@ make ci         # what CI runs, one after another: fmt-check, lint, lint-request
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
+
+The binaries `make build` makes are in `bin/`, and `make run` always builds
+before it runs, so the binary that runs is never one built before a pull. A
+plain `go build .` leaves `./prometheus-universal-exporter` in the repository
+root instead, ignored by git and soon older than `bin/`'s; `make build` warns
+while one is there. An example is a directory under `examples/`, named by the
+directory, such as `open-meteo`, or `examples/config.<name>.<format>-test.yaml`,
+named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
+files and the opt-in request types an example needs (a `type: tcp` line, for
+`examples/tcp`) from the tree. Before it runs the binary it prints the
+landing page's URL, the status page's, which every example has (its recent
+probes fill as soon as anything probes), and the first probe URL that the
+comment opening the configuration gives as `curl '…/probe?…'`, when the
+collector it names is one of the example's and its target is one a local run
+can reach: `localhost`, `127.0.0.1`, `[::1]`, or a DNS name with a dot that is
+no placeholder (a first label ending in `-host`, an address of one network, or
+a name under `example.com` or a top-level domain such as `example`, `local`,
+`internal` or `svc`, are placeholders). For a placeholder, such as filebeat's
+`filebeat-host`, it prints the probe with `<your target>` in its place.
+`HOST` is `127.0.0.1` so that an example is reachable from this machine alone;
+`HOST=0.0.0.0` or `HOST=::` serves it to the network, and the URLs printed are
+then on `localhost` or `[::1]`, which a browser on this machine can open. An
+IPv6 `HOST` may be given bare or in brackets (`HOST=::1`); an empty `HOST=`
+fails before anything is built.
 
 ## Code layout
 
@@ -2253,13 +2280,13 @@ docs. `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every
 string literal of `test/repository`'s Go files that names an existing path
 of the repository, from its root, and fails for a file no pattern of the
 `go` output matches: a file those tests read whose change alone skipped them
-would merge unchecked. When it fails, add the file to the `go` output in all
-four jobs. Under the same output, `test` also builds the code for `darwin` on
+would merge unchecked. When it fails, add the file to the `go` output in
+every job. Under the same output, `build` builds the code for `darwin` on
 `amd64` and `arm64`, linking both commands, since the release builds archives
-for macOS from it, and builds the image from the `Dockerfile` with
-`docker build`, pushing nothing, and runs its `--version` to see the
-revision it was given; a change that breaks either fails on its pull request
-rather than at release time. The Helm lint/template
+for macOS from it, and `image` builds the image from the `Dockerfile` with
+`docker/build-push-action`, pushing nothing, loads it and runs its
+`--version` to see the revision it was given; a change that breaks either
+fails on its pull request rather than at release time. The Helm lint/template
 checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
 files the chart steps render. A change under `charts/` runs the Go checks
 because the template guard above lives there and is worth least on exactly
@@ -2296,8 +2323,14 @@ add its directory or the file to the side's list in every job.
 CI runs in jobs side by side, so it takes about as long as its longest job:
 `lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
 and the opt-in request types') and gopls; `build` runs `go vet`, the default
-build, darwin's, the image's, and the builds with the opt-in sql drivers and
-request types with their tests; `race` runs the exporter's race suite;
+build, darwin's, and the builds with the opt-in sql drivers and request types
+with their tests; `image` builds the image, its layers read from and written
+to the GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a
+change to the sources alone downloads no module and installs nothing in the
+runtime stage again; `race` runs the race suite of `internal/exporter`, which
+has by far the most tests, and `race-rest` that of every other package of the
+exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
+which together list the side once each, as a test checks);
 `request-types`, a matrix over the request types (its checks are named
 `test (<type>)`), vets, builds and lints each type on its own under the `go`
 output and runs the exporter's tests with it under `exporter`; `allocator` runs the
@@ -2310,7 +2343,10 @@ tests (under `exporter`) and the chart steps; a test fails when it runs a
 linter or a build again. Each of the other jobs starts with `test`'s setup
 steps but helm's, written out again, and
 `TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
-`test`'s, so change them in every job at once. They gate their steps on the changed-path filter's outputs rather than
+`test`'s, so change them in every job at once. `image` runs no Go and no
+Python, which the `Dockerfile` brings, so it starts with the first three of
+them alone, checkout, the filter and the step `changes`, and the test holds
+a job to the whole setup as soon as it sets up or runs Go or Python. They gate their steps on the changed-path filter's outputs rather than
 with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over

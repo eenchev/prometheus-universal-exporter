@@ -79,8 +79,8 @@ collector, target and parameters:
   shown as the static targets' errors are: the log's text, with every URL's
   credentials withheld, its userinfo too where the text only quotes the URL,
   anything else that reads as a credential masked, and cut to 2000 bytes. A
-  probe that panicked shows `the probe panicked; the exporter's log has the
-  panic`: the panic's own text is only in the log.
+  probe that panicked shows `the scrape panicked; the exporter's log has the
+  panic`, the text it was answered: the panic's own text is only in the log.
 
 A row is failing when its latest probe did not succeed: `success` and
 `cached` are the successes. A summary line says how many collectors and
@@ -94,6 +94,14 @@ differ only past the cut, or in what is withheld, share a row. The errors
 kept take at most 500 × 10 × 2000 bytes, 10 MB, and far less in practice: a
 probe failing as the one before keeps the one text. The bounds are fixed;
 there is no flag for them.
+
+Every probe answered is recorded, a cache hit as much as any, so recording
+one is kept cheap: the row of a probe is remembered by the probe's cache key,
+and a probe like one before it, as nearly every probe is, finds its row by
+that key without its parameters being sorted and redacted again. Up to 1,024
+such keys are remembered, each with its row's collector, target and
+parameters bounded as above, under 1.1 MB in all; when that is full they are
+forgotten together and remembered again as probes come.
 
 A reload forgets the recent probes of every collector it removes or changes,
 as it does the rest of what is kept per collector; a probe of the old

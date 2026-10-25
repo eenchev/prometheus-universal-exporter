@@ -61,14 +61,14 @@ func TestAPanickingDebugProbeGivesBackItsSlot(t *testing.T) {
 		if r.Code != http.StatusOK {
 			t.Fatalf("answered %d: %s", r.Code, r.Body)
 		}
-		assertContains(t, r.Body.String(), "A probe would have answered 500: probe failed: internal error: boom", "probe panicked")
+		assertContains(t, r.Body.String(), "A probe would have answered 500: probe failed: "+errScrapePanicked.Error(), "panic=boom")
 		if n := server.trips.count("broken"); n != 0 {
 			t.Fatalf("%d slots still taken after a debug probe panicked", n)
 		}
 	}
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/static-targets?debug=broken", nil))
-	assertContains(t, recorder.Body.String(), "The scrape would have published target up 0: the scrape failed: internal error: boom")
+	assertContains(t, recorder.Body.String(), "The scrape would have published target up 0: "+errScrapePanicked.Error(), "panic=boom")
 	if n := server.trips.count("broken"); n != 0 {
 		t.Fatalf("%d slots still taken after a debug scrape panicked", n)
 	}

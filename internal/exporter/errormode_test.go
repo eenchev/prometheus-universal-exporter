@@ -65,7 +65,7 @@ func modeCollector(name, mode string) model.Collector {
 
 // modeServer validates the configuration exactly as startup would, and builds
 // the server on the current default logger so testutil.CaptureLogs sees its lines.
-func modeServer(t *testing.T, collectors ...model.Collector) *Server {
+func modeServer(t testing.TB, collectors ...model.Collector) *Server {
 	t.Helper()
 	cfg := &model.Config{Collectors: collectors}
 	if err := config.Validate(cfg); err != nil {

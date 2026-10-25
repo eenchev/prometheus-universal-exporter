@@ -1732,7 +1732,13 @@ of objects, one a row, of its columns by name. Its keys:
   which takes none, the name and every address it resolves to MUST be held
   before the connection, a name whose addresses cannot be looked up MUST
   fail the scrape before it, as the driver would look it up itself, and the
-  documentation MUST say so. The exporter's dialer MUST make TCP
+  documentation MUST say so. The `vertica` driver answers a server's
+  file-transfer requests (load a file, check files, load from standard
+  input) on any statement, which the exporter, not holding the connection,
+  cannot refuse: the documentation MUST say that a server at a `vertica`
+  target can read any file the exporter's process can, and that such
+  collectors are to be held by `allowed_targets` to servers the operator
+  trusts. The exporter's dialer MUST make TCP
   connections alone, refusing any other network a driver asks for (UDP to
   the SQL Server Browser) with a sentence saying so. `snowflake`
   MUST make no request to a host other than the account's: its platform
@@ -1819,8 +1825,19 @@ of objects, one a row, of its columns by name. Its keys:
   documentation MUST require an account that can only read. `args` MUST be
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
-  into the statement quoted as a literal of its type, as `vertica`'s does in
-  a `COPY ... FROM LOCAL` statement, and the documentation MUST say which;
+  into the statement quoted as a literal of its type, and the documentation
+  MUST say which. A `vertica` statement its driver would not prepare, and
+  so would write the values into, doubling a `'` and leaving a `\` as it
+  is, MUST be refused at load: any `COPY`, its first word as the driver
+  reads the text (outside quotes, quoted identifiers, `--` and unnested
+  `/* */` comments and dollar quotes, as written and as its lexer rewrites
+  it) or as the server does (after blanks and comments, nesting or not),
+  the message of a `COPY ... FROM LOCAL` saying that it reads a file of the
+  exporter's host at every scrape and is sent with its values written into
+  it; and a statement the driver takes for a function's DDL or an `EXECUTE`
+  grant on one (`CREATE`, `ALTER` or `DROP FUNCTION`, `GRANT` or `REVOKE
+  EXECUTE ON FUNCTION`, by its own `UDSFAnalyzer`). The driver's URL MUST
+  set `use_prepared_statements=1`, which no option overrides;
   `postgres` MUST send every statement with the extended protocol, `mysql`
   MUST NOT allow several statements in one, and a `vertica` statement holding
   a `;` followed by anything but blanks and comments, outside quotes, quoted
@@ -1828,7 +1845,15 @@ of objects, one a row, of its columns by name. Its keys:
   several, MUST be refused at load — decided by the exporter's own reading,
   which knows no blocks, as well as by the driver's splitting, since the
   driver sends a statement whose `;` it takes to stand in a `BEGIN ... END`
-  or similar block to the server whole, and the server runs every part. A `{{param_...}}` placeholder in
+  or similar block to the server whole, and the server runs every part. The
+  exporter's reading MUST count the most statements of any way the server
+  may read the text as well as the driver's: a `$` inside a word as part of
+  it, not the start of a dollar quote; a `\` in an `E'...'`, and in every
+  `'...'` with `standard_conforming_strings` off, escaping the next
+  character; block comments nesting or not; and only ASCII white space as
+  blank. A `vertica` statement the driver's lexer fails on (a `?` right
+  after a quote it begins a string at, which panics it) MUST be refused at
+  load, never panic the load. A `{{param_...}}` placeholder in
   `statement` MUST be refused at load; one in `database` MUST be filled only
   with letters, digits and `_ - . $`, refused otherwise before anything is
   sent.
@@ -3023,8 +3048,12 @@ a value missing, a script that failed). What an error is to the trip — a
 refusal, a credential refused, a rule's failure under `fail`, a deadline —
 MUST be read before it is cut. A trip that ran out of its budget MUST still
 say so, after the bounded error. The text of a panic a probe or a scrape
-recovered from MUST be bounded alike in the answer, in a debug report and in
-the log; its stack is logged as it was.
+recovered from MUST be bounded alike in a debug report and in the log; its
+stack is logged as it was. A probe that panicked MUST be answered `500` with
+the fixed text `probe failed: the scrape panicked; the exporter's log has the
+panic`, never the panic's text: its caller keeps the answer as the scrape's
+error, out of the exporter's hands, and a panic says whatever its code had at
+hand, a target's URL with its password as much as anything.
 
 That bound loses what an error says after a long part, so where an error of
 those stages says why after a part the target, the scraper or a script can
@@ -11228,7 +11257,8 @@ exporter's prefixes (`--web.`, `--log.`, `--config.`, `--probe.`, `--python.`,
   a collector with no fingerprint share none.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
-- A panic in the shared work answers with `500` and leaves nothing in flight.
+- A panic in the shared work answers with `500` and the fixed text of a
+  probe that panicked, and leaves nothing in flight.
 - A panic in a static target scrape is logged and exports that target as down,
   and the other targets are scraped as usual.
 
@@ -20970,11 +21000,11 @@ Tests MUST show:
   more than 400 of them, and for more than 400 it is the first clashes as they
   were, the rest counted, recognised with the mark for the count.
 - A probe, a debug probe, a debug scrape and a static target's scrape that
-  panic with a megabyte of text answer `probe failed: internal error: ` and
-  its first 2,000 bytes to its length, report the same in the line that says
-  what would have been answered or published, and log it as `panic` in four
-  lines, the stack beside it in three; a panic that says `boom` is reported as
-  it was.
+  panic with a megabyte of text log it as `panic` in four lines, its first
+  2,000 bytes to its length, the stack beside it in three; the debug reports
+  show the same in their log, and the probe and the line that says what would
+  have been answered or published the fixed text of a probe that panicked; a
+  panic that says `boom` is reported as it was.
 - The failure log remembers a failure reported to it unbounded by the first
   2,000 bytes of what it is recognised by, ending `... (# bytes)`: an error of
   a megabyte and then of half a megabyte are one failure, counted twice, one
@@ -27508,6 +27538,70 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   non-zero rather than print part of the list and succeed
   (TestRunExampleListFailsWhereTheTreeIsRefused).
 
+## 34.212 A panicked probe's answer, cheap probe recording and fuzzed Vertica splitting
+
+- A probe that panics with a text quoting `https://user:hunter2@host` is
+  answered `500` with the fixed text `probe failed: the scrape panicked; the
+  exporter's log has the panic`; a debug probe's and a debug scrape's report
+  show the panic with the userinfo withheld (`redacted:redacted`), and the
+  exporter's log has it as it was (TestAPanickedProbeAnswersAFixedError).
+- Recording a probe with two parameters like the probe before it allocates
+  at most twice (it allocated 24 times, sorting and redacting the parameters
+  again); its row shows the parameters as before, a probe whose parameter is
+  named like a credential is recorded under the key its parameters make,
+  `password=<redacted>`, and no more than 1,024 probe keys are remembered
+  (TestRecordingAProbeLikeOneBeforeItCostsALookup; BenchmarkNoteProbe).
+- A vertica statement the server reads as several though the driver reads
+  it as one is refused at load: `SELECT E'\''; COMMIT; --'`, the same with
+  `'a\''` (standard_conforming_strings off), `SELECT a$b$; COMMIT; SELECT
+  $b$x$b$`, `SELECT 1 AS x$$; COMMIT; SELECT $$x$$` and `SELECT 1 /* /* */
+  ' */; COMMIT; SELECT '1'`; `SELECT E'it\'s' AS one`, `SELECT a$b AS one`,
+  a nested comment and a dollar quote holding a `;` are taken; the driver
+  splits none of the refused ones
+  (TestAVerticaStatementTheServerReadsAsSeveralIsRefused).
+- A vertica statement the driver's lexer panics on, `'?` and a `'?'` at the
+  start of a line after a `--` comment, is refused at load saying the lexer
+  fails on it, where the load panicked; `SELECT '?' AS one, ? AS two` is
+  taken (TestAVerticaStatementTheDriversLexerFailsOnIsRefused).
+- With the vertica tag, the seeds of FuzzVerticaStatementSplitting, the
+  cases of the vertica statement tests and those above, hold for any text:
+  the check never panics; a text the driver splits, as written or lexed, or
+  verticaParts or a reading of the server's (standard strings or not,
+  comments nesting or not) finds several statements in, is refused; two
+  statements whole in every reading joined by `;`, `; ` or a line of `;`
+  are refused. Fuzzing it found the lexer's panic, a `$` inside a word read
+  as a dollar quote, and a lone no-break space byte taken for a blank
+  (FuzzVerticaStatementSplitting).
+
+## 34.213 Vertica statements the driver would not prepare
+
+- With the vertica tag, against a stand-in Vertica server that records what
+  the real driver sends it, a probe value ending in `\` is bound to a
+  prepared statement and never sent inside its text: `SELECT ? AS one`,
+  `SELECT 'copy' AS one, ? AS two`, `SELECT 1 AS copy, ? AS two` and a
+  `COPY ... FROM LOCAL` inside a comment are prepared as written with the
+  value bound; `COPY ... FROM LOCAL` in upper and lower case, with `--` and
+  `/* */` comments, with two files and a trailing `;`, behind a quoted
+  identifier, and hidden from a nesting server in `/* /* */ COPY t FROM
+  LOCAL 'f' */ SELECT ? AS one` are refused at load saying `COPY ... FROM
+  LOCAL`, where the driver sent them with the value written in (`SELECT 'x\'
+  AS one`); `COPY ... FROM STDIN` and a `COPY` from a server file are
+  refused as a COPY that loads rows; `CREATE OR REPLACE FUNCTION` and `GRANT
+  EXECUTE ON FUNCTION` are refused as a function's DDL the driver sends
+  unprepared (TestAVerticaProbeValueIsBoundNeverWrittenIntoTheStatement).
+- With the vertica tag, FuzzVerticaStatementSplitting also runs the whole
+  load check on every text without a panic, and refuses any text after
+  `COPY ` and after `/* /* */ COPY t FROM LOCAL '/f' */ `; its seeds hold
+  the COPY cases above (FuzzVerticaStatementSplitting).
+
+## 34.214 The vertica driver's file transfers, documented
+
+- docs/SQL.md's limitations say that the vertica driver answers a server's
+  file-transfer requests, that a server at a `vertica` target can read any
+  file the exporter's process can, and that `vertica` collectors are to be
+  held by `allowed_targets` to trusted servers
+  (TestSQLDocumentationSaysAVerticaServerCanReadTheExportersFiles).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -29286,8 +29380,9 @@ rate-limited endpoint.
   probe's client going away MUST NOT fail the others. It MUST be cancelled when
   every probe waiting on it has gone, and a probe arriving after that MUST start
   a new request rather than join the cancelled one.
-- A panic in the shared work MUST answer the waiting probes with `500` rather
-  than stop the exporter.
+- A panic in the shared work MUST answer the waiting probes with `500` and
+  the fixed text of a probe that panicked (§ 6.1a) rather than stop the
+  exporter.
 - It MUST be on by default, and a collector MUST be able to turn it off with
   `coalesce: false`, for a target that must see every probe as a request.
 - Static targets (§ 42.14) are scraped once per interval by the exporter
@@ -29762,11 +29857,19 @@ Of the recent probes:
   `rejected by limit` (`503`), `stale result served` or `backing off` — the
   HTTP status the exporter answered, the series it gave and its error, shown
   and cut as a static target's error is; a probe that panicked MUST be shown
-  with a fixed error, as a static target's scrape that panicked is.
+  with the fixed error it was answered, the one a static target's scrape that
+  panicked is shown with.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to
   512 bytes in all.
+- Recording a probe MUST NOT redact or sort its parameters again, or make
+  its probe key's query again, when a probe with the same cache key
+  (§ 42.13) was recorded before: the key it is recorded under MUST be
+  remembered by the cache key, for no more than 1,024 cache keys, so that a
+  probe like one before it, a cache hit included, is recorded without an
+  allocation. What is shown MUST be what the parameters make, the redaction
+  and the cuts included.
 - The page MUST have a row per collector and target with its latest probe's
   details, the results of its kept probes as a strip, oldest first, and the
   error of the latest failed probe kept with when it began; the rows failing
@@ -30895,8 +30998,10 @@ The exporter MUST log one `info` line per debug probe served, naming the
 collector and the target.
 A debug probe or debug scrape MUST give back its trip slot however its trip
 ends; a panic in it MUST be recovered, logged at `error` with its stack, and
-reported as `500: probe failed: internal error: <panic>` (a debug scrape:
-`target up 0`, the scrape failed with that internal error).
+reported as the `500` with the fixed text a probe that panicked is answered
+(a debug scrape: `target up 0` with that text), and the report's log MUST
+show the panic's text with what reads as a credential, a URL's userinfo
+among it, withheld (`fetch.RedactText`), redacted before it is cut.
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names read as a credential's
@@ -31052,8 +31157,7 @@ fill the response cache, reading it only as a debug probe does, share a trip, re
 but for one `info` line per run, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be
-reported as `500: probe failed: internal error: <panic>` and logged with its
-stack, and a fetch MUST give back its trip slot however it ends.
+reported as a debug probe that panics is, and logged with its stack, and a fetch MUST give back its trip slot however it ends.
 
 Every run MUST be counted in
 `http_exporter_debug_runs_total{kind, result}`, from 0: `kind` is `probe`,

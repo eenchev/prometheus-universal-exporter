@@ -53,8 +53,9 @@ func (s *Server) staticTargetsStatusEndpoint() string {
 	return s.staticTargetsEndpoint() + staticTargetsStatusSuffix
 }
 
-// errScrapePanicked is the failure of a scrape that panicked, as the status
-// page shows it: the panic and its stack are in the log.
+// errScrapePanicked is the failure of a scrape or a probe that panicked, as
+// the status page shows it and a probe answers it: the panic and its stack
+// are in the log.
 var errScrapePanicked = errors.New("the scrape panicked; the exporter's log has the panic")
 
 // staticScrapeStatus is how one scrape of a static target went, as it ends.

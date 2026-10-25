@@ -3,7 +3,6 @@ package exporter
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -20,7 +19,7 @@ func TestAPanicInSharedWorkIsContained(t *testing.T) {
 	result, shared, err := flights.do(context.Background(), flightKey{probe: "key"}, func(context.Context) *probeResult {
 		panic("boom")
 	})
-	if err != nil || shared || result.status != http.StatusInternalServerError || !strings.Contains(string(result.body), "internal error: boom") || result.ok {
+	if err != nil || shared || result.status != http.StatusInternalServerError || string(result.body) != "probe failed: "+errScrapePanicked.Error()+"\n" || result.ok {
 		t.Fatalf("result=%+v shared=%t err=%v", result, shared, err)
 	}
 	if flights.inFlight() != 0 {

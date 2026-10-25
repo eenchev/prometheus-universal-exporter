@@ -397,8 +397,8 @@ func TestAPanickedProbeShowsAFixedError(t *testing.T) {
 		t.Fatalf("the panicking probe answered %d: %s", r.Code, r.Body)
 	}
 	row := probeRows(t, server)["broken panics://data"]
-	if row.Result != probeFailed || row.LastError != probePanickedText {
-		t.Errorf("the panicked probe's row is %+v; want failed with %q", row, probePanickedText)
+	if row.Result != probeFailed || row.LastError != errScrapePanicked.Error() {
+		t.Errorf("the panicked probe's row is %+v; want failed with %q", row, errScrapePanicked)
 	}
 	body := getPage(t, server, "/static-targets/status")
 	for _, text := range []string{body, statusJSONText(t, server)} {
@@ -407,6 +407,45 @@ func TestAPanickedProbeShowsAFixedError(t *testing.T) {
 		}
 	}
 	if !strings.Contains(logs.String(), "boom") {
+		t.Fatalf("the panic is not in the log:\n%s", logs.String())
+	}
+}
+
+// A probe that panics is answered a fixed text, since its caller keeps the
+// answer as the scrape's error out of the exporter's hands: the panic says
+// whatever its code had at hand, a URL with its password here. A debug
+// report, an operator's tool, shows the panic with the URL's userinfo
+// withheld, and the exporter's log has it as it was.
+func TestAPanickedProbeAnswersAFixedError(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	fetch.RequestTypes["panics"] = &fetch.RequestType{
+		Name:         "panics",
+		Fields:       []string{"path"},
+		TargetFields: []string{"path"},
+		Validate:     func(*model.Collector) error { return nil },
+		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+			panic("boom at https://user:hunter2@host/x")
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
+	broken := testutil.Collector("broken", "text")
+	broken.Request = model.RequestConfig{Type: "panics", Path: "/data"}
+	static := model.StaticTarget{Name: "broken", Collector: "broken", Target: "panics://data"}
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{broken}}, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{static}})
+	server.SetDebug(DebugFull)
+	r := probeOnce(t, server, probeOf("broken", "panics://data"), nil)
+	if r.Code != http.StatusInternalServerError || r.Body.String() != "probe failed: "+errScrapePanicked.Error()+"\n" {
+		t.Fatalf("the panicking probe answered %d: %q", r.Code, r.Body)
+	}
+	for _, report := range []string{
+		debugProbeGet(t, server, "collector=broken&debug=true&target=panics://data").Body.String(),
+		getPath(server, http.MethodGet, "/static-targets?debug=broken").Body.String(),
+	} {
+		if strings.Contains(report, "hunter2") || !strings.Contains(report, "boom at https://redacted:redacted@host/x") {
+			t.Errorf("the debug report shows the panic so:\n%s", report)
+		}
+	}
+	if !strings.Contains(logs.String(), "boom at https://user:hunter2@host/x") {
 		t.Fatalf("the panic is not in the log:\n%s", logs.String())
 	}
 }
@@ -451,5 +490,61 @@ func TestTheRecentProbesWithholdAURLsUserinfo(t *testing.T) {
 		if shown := shownStatusError(err); strings.Contains(shown, "hunter2") || strings.Contains(shown, "abc") || !strings.Contains(shown, "db.example") {
 			t.Errorf("the error %q is shown as %q", err, shown)
 		}
+	}
+}
+
+// noteProbeLikeOneBefore records, as a probe does, a probe of collector c
+// with two parameters, like the probe before it.
+func noteProbeLikeOneBefore(server *Server, read configRead, c *model.Collector) func() {
+	overrides := fetch.RequestOverrides{Params: map[string]string{"tenant": "acme", "region": "eu-west-1"}}
+	target := "http://db.internal/x"
+	query := probeKeyQuery(c.Name, target, overrides)
+	key := probeCacheKey(c, target, query, nil)
+	p := recentProbe{at: time.Now(), result: probeCached, status: http.StatusOK, series: 3}
+	return func() { server.noteProbe(read, server.recent.keyOf(key, c, target, query), p) }
+}
+
+// Recording a probe like one before it, as nearly every probe is, a cache
+// hit as much as any, costs a lookup of the key it is recorded under, not
+// the sorting and the redaction of its parameters again: those were two
+// dozen allocations and some microseconds on every probe. The key is the
+// one made from the parameters, and what is remembered of the keys is
+// bounded.
+func TestRecordingAProbeLikeOneBeforeItCostsALookup(t *testing.T) {
+	c := testutil.Collector("text", "text")
+	server := modeServer(t, c)
+	read := server.readAt(server.reconcile().generation)
+	record := noteProbeLikeOneBefore(server, read, &c)
+	record()
+	if allocs := alloctest.AllocsAtMost(100, 2, record); allocs > 2 {
+		t.Errorf("recording a probe like one before it allocates %v times, want at most 2", allocs)
+	}
+	row := probeRows(t, server)["text http://db.internal/x"]
+	if row.Params != "region=eu-west-1 tenant=acme" || len(row.Probes) != recentProbesPerKey {
+		t.Errorf("the probes are recorded as %+v", row)
+	}
+	for i := range recentProbeKeysShown + 10 {
+		target := fmt.Sprintf("http://t%d.example/?password=hunter2", i)
+		query := probeKeyQuery(c.Name, target, fetch.RequestOverrides{Params: map[string]string{"password": "hunter2"}})
+		key := server.recent.keyOf(probeCacheKey(&c, target, query, nil), &c, target, query)
+		if want := recentProbeKeyFor(&c, target, query); key != want || key.params != "password="+fetch.Redacted {
+			t.Fatalf("the probe is recorded under %+v, want %+v", key, want)
+		}
+	}
+	if n := len(server.recent.shown); n > recentProbeKeysShown {
+		t.Errorf("%d keys are remembered, more than %d", n, recentProbeKeysShown)
+	}
+}
+
+// BenchmarkNoteProbe is the recording of a probe with two parameters like
+// the probe before it, for the status page, which every probe answered
+// pays.
+func BenchmarkNoteProbe(b *testing.B) {
+	c := testutil.Collector("text", "text")
+	server := modeServer(b, c)
+	record := noteProbeLikeOneBefore(server, server.readAt(server.reconcile().generation), &c)
+	b.ReportAllocs()
+	for b.Loop() {
+		record()
 	}
 }

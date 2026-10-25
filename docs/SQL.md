@@ -119,10 +119,32 @@ driver's own placeholders for the values in `args`:
 `args` are sent to the database as values, never as SQL: `postgres`,
 `mysql`, `sqlserver`, `oracle`, `snowflake` and `vertica` bind them to the
 placeholders at the server, while `clickhouse`'s driver writes each into the
-statement before sending it, quoted as a literal of its type, as `vertica`'s
-does in a `COPY ... FROM LOCAL` statement. Either way a probe parameter in one
-cannot change the statement, whatever it holds. A placeholder in `statement` itself is a
-startup error: a value from the probe goes in `args`.
+statement before sending it, quoted as a literal of its type. Either way a
+probe parameter in one cannot change the statement, whatever it holds. A
+placeholder in `statement` itself is a startup error: a value from the probe
+goes in `args`.
+
+`vertica`'s driver writes the values into the text, too, of a statement it
+does not prepare, doubling a `'` but leaving a `\` as it is — which, in an
+`E'...'` or with `standard_conforming_strings` off, escapes the quote that
+closes the value, so a value ending in `\` would end the string at the next
+quote and the rest would be SQL. So a `vertica` statement the driver would
+not prepare is a startup error:
+
+- any `COPY`. A `COPY ... FROM LOCAL` is the one the driver sends
+  unprepared, and it would read a file of the exporter's host into the
+  database at every scrape; every `COPY` loads rows into a table, which no
+  metrics query does and the read-only transaction is there to refuse. The
+  exporter finds the `COPY` as the driver does — the first word outside
+  quotes, comments and dollar quotes, block comments not nested, so that
+  `/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?` is a `COPY ... FROM LOCAL` to
+  it, though a `SELECT` to the server — and as the server does, in any case;
+- a function's DDL or an `EXECUTE` grant on one — `CREATE`, `ALTER` or
+  `DROP FUNCTION`, `GRANT` or `REVOKE EXECUTE ON FUNCTION` — which the driver
+  sends unprepared, with no value bound.
+
+Every other statement is prepared at the server, the exporter setting the
+driver's `use_prepared_statements=1`, and its values are bound to it.
 
 **Read-only.** The statement runs read-only where the database can make it
 so:
@@ -151,7 +173,16 @@ since vertica-sql-go 1.3.9 the driver does not split at a `;` it takes to
 stand inside a `BEGIN ... END`, `CASE`, `IF`, `LOOP` or `WHILE` block, and
 sends such text to the server whole, which runs every statement in it — even
 `SELECT 1 AS begin; COMMIT`. A `//` is not a comment to either, so a `;`
-followed by `// ...` is refused too.
+followed by `// ...` is refused too. The exporter reads the text every way
+the server may, which is not always the driver's way, and refuses it if any
+reading finds several statements: a `$` inside a word is part of it, not a
+dollar quote (`SELECT a$b$; COMMIT; SELECT $b$x$b$` is three statements); a
+`\` escapes the next character in an `E'...'`, and in every `'...'` where
+`standard_conforming_strings` is off (`SELECT E'\''; COMMIT; --'` is two);
+block comments may nest; and only ASCII white space is blank. A statement
+the driver's lexer fails on — a `?` right after a quote at the start of the
+text or of a line after a `--` comment, as in `'?'` — is a startup error
+too, since the driver would fail on it at every scrape.
 The other drivers send what is written, and a statement of several parts is the database's to run
 or refuse: another reason for an account that can only read.
 
@@ -535,6 +566,21 @@ label name the drivers a build has; of a build without the `sql` type,
   deadline came`, and the connection is given up, closed when the driver's
   call returns, while the server runs the statement to its end. Bound it at
   the server, with the resource pool's `RUNTIMECAP`.
+- **Vertica's driver does what the server asks of the exporter's files.**
+  vertica-sql-go answers the server's file-transfer requests on any
+  statement, prepared or not, and the exporter cannot stop it, the driver
+  dialing by itself and taking no connection the exporter could watch: a
+  request to load a file makes it open whatever path the server names and
+  send its contents, a request to check files makes it say which paths exist
+  and how large they are, and a request to load from standard input makes it
+  read the exporter's. So a server that answers at a `vertica` target can
+  read any file the exporter's process can read — its credential files, a
+  Kubernetes service account token, its configuration. Point `vertica`
+  collectors only at servers you trust, in `allowed_targets` (see
+  [Restricting targets](REQUESTS.md#restricting-targets)), never at targets a
+  probe's caller may choose freely, and run the exporter with no more files
+  readable than it needs. The type is opt-in (`SQL_DRIVERS=vertica`), so a
+  build without it has no such driver.
 - **SQL Server routing is refused.** A server that answers the login by
   sending the connection to another server — Azure SQL's `Redirect`
   connection policy, read-only routing in an availability group — names a

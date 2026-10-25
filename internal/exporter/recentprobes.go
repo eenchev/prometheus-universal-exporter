@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"container/list"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +50,9 @@ const (
 	recentProbeTargetBytes = 512
 	recentProbeParamBytes  = 64
 	recentProbeParamsBytes = 512
+	// recentProbeKeysShown bounds how many probes' keys are remembered as
+	// the page shows them (recentProbes.shown).
+	recentProbeKeysShown = 1024
 )
 
 // The results a probe is shown with.
@@ -98,10 +102,52 @@ type recentProbes struct {
 	entries map[recentProbeKey]*recentProbeEntry
 	// order has the keys, the one probed most recently at the front.
 	order *list.List
+
+	// shown remembers the key each probe key (probeCacheKey) is recorded
+	// under, so that a probe like one before it, as nearly every probe is,
+	// is recorded at the cost of a lookup: making the key sorts the
+	// parameters and runs the redaction's patterns over each value, some
+	// microseconds and two dozen allocations on every probe, a cache hit
+	// included. The key cannot be made later, when the page is shown, from
+	// the parameters as they came: the redaction is what makes probes whose
+	// values differ only in a credential one key, one row, and one of the
+	// recentProbeKeys. A probe key fixes the collector, the target and the
+	// parameters, so what it is remembered with is never wrong; it holds at
+	// most recentProbeKeysShown keys, each bounded as a key is, and is
+	// emptied when full rather than kept in order, since remembering it
+	// again costs only the work it saves. It has a lock of its own, read
+	// for a lookup, so that probes do not wait on each other for it.
+	shownMu sync.RWMutex
+	shown   map[string]recentProbeKey
 }
 
 func newRecentProbes() *recentProbes {
-	return &recentProbes{entries: map[recentProbeKey]*recentProbeEntry{}, order: list.New()}
+	return &recentProbes{entries: map[recentProbeKey]*recentProbeEntry{}, order: list.New(), shown: map[string]recentProbeKey{}}
+}
+
+// keyOf is the key a probe of collector c of target, shown as logTarget,
+// with the probe key probeKey made of query (probeKeyQuery), is recorded
+// under. An empty probeKey, of a collector that could not be fingerprinted,
+// is no identity to remember the key by.
+func (r *recentProbes) keyOf(probeKey string, c *model.Collector, logTarget string, query url.Values) recentProbeKey {
+	if probeKey != "" {
+		r.shownMu.RLock()
+		key, ok := r.shown[probeKey]
+		r.shownMu.RUnlock()
+		if ok {
+			return key
+		}
+	}
+	key := recentProbeKeyFor(c, logTarget, query)
+	if probeKey != "" {
+		r.shownMu.Lock()
+		if len(r.shown) >= recentProbeKeysShown {
+			clear(r.shown)
+		}
+		r.shown[probeKey] = key
+		r.shownMu.Unlock()
+	}
+	return key
 }
 
 // record keeps p as the latest probe of key, for a probe that read its
@@ -166,12 +212,12 @@ func (r *recentProbes) snapshot() []recentProbeEntry {
 }
 
 // recentProbeKeyFor is the key of a probe of collector c of target, shown
-// as logTarget, with overrides.
-func recentProbeKeyFor(c *model.Collector, logTarget string, overrides fetch.RequestOverrides) recentProbeKey {
+// as logTarget, with the request query makes (probeKeyQuery).
+func recentProbeKeyFor(c *model.Collector, logTarget string, query url.Values) recentProbeKey {
 	return recentProbeKey{
 		collector: c.Name,
 		target:    model.CutTo(logTarget, recentProbeTargetBytes, false),
-		params:    shownProbeParams(overrides),
+		params:    shownProbeParams(query),
 	}
 }
 
@@ -183,14 +229,14 @@ func recentProbeKeyFor(c *model.Collector, logTarget string, overrides fetch.Req
 // a credential is withheld, anything in a value that reads as one masked
 // (fetch.RedactText, which withholds a URL's userinfo too),
 // and each value cut to recentProbeParamBytes. Forwarded headers are not
-// shown: they are the caller's, and may carry credentials.
-func shownProbeParams(o fetch.RequestOverrides) string {
-	query := probeKeyQuery("", "", o)
-	query.Del("target")
-	query.Del("collector")
+// shown: they are the caller's, and may carry credentials. query is the
+// probe's key's (probeKeyQuery), which is read, not changed.
+func shownProbeParams(query url.Values) string {
 	names := make([]string, 0, len(query))
 	for name := range query {
-		names = append(names, name)
+		if name != "target" && name != "collector" {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	shown := make([]string, 0, len(names))
@@ -238,8 +284,8 @@ func (p *probeResult) recentProbe(start time.Time, shared bool) recentProbe {
 	return out
 }
 
-// noteProbe records p as the latest probe of key, for a probe that read its
-// collector as read says.
+// noteProbe records p as the latest probe of key (recentProbes.keyOf), for
+// a probe that read its collector as read says.
 func (s *Server) noteProbe(read configRead, key recentProbeKey, p recentProbe) {
 	s.recent.record(read, key, p)
 }

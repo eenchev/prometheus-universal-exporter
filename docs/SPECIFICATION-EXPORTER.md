@@ -27645,6 +27645,99 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   held by `allowed_targets` to trusted servers
   (TestSQLDocumentationSaysAVerticaServerCanReadTheExportersFiles).
 
+## 34.215 Per-type knowledge in the registry and the Requester interface
+
+- The non-test Go files of package `main`, `internal/config`,
+  `internal/decode`, `internal/exporter` and `internal/transform` hold no
+  `RequestType<Name>` constant and no string literal that is the name of a
+  request type of `internal/fetch/requesttype_<name>.go`, but for the
+  allowlist's words meaning something else (the graphite decoder, the
+  `http` scheme and reload trigger, `tcp` as a network or a setting's value,
+  `sql` as the rows' format), each held to the exact number of times its
+  file has it; on the code before the core read the registry it fails,
+  naming each list and switch (TestCorePackagesNameNoRequestType).
+- The check finds a `RequestType<Name>` constant, a literal the allowlist
+  does not hold for its file and an allowlist entry its file no longer
+  matches, and passes a word that is no type's name and an allowed literal
+  (TestTheCoreTypeNameCheckFindsANamedType).
+- Every registered request type has a `Requester`
+  (TestEveryRequestKeyBelongsToAType).
+- The self-metric families only some collectors have follow the types'
+  registrations: the login and rate limit families are of the built types
+  among http and graphite (TestTheLoginFamiliesAreThoseOfTheTypesThatLogIn,
+  TestAProbeRefusedByTheRateLimitIsCounted).
+
+## 34.216 Each request type's own configuration
+
+- No field of `model.RequestConfig`, the request block's common part, but
+  `type` is a key that fewer than two request types take, the types read
+  from the registrations of every `internal/fetch/requesttype_<name>.go`,
+  built or not; on the code before each type had its own struct it fails,
+  naming every key of one type, such as `request.send` taken by `tcp` alone
+  (TestTheCommonPartHoldsNoKeyOfOneType).
+- A key of another request type's own, written under a built type, is
+  refused with the message of a key the type does not take, `collector "c"
+  sets request.<key>, which does not apply to request.type "<type>"`, both
+  for a type the build carries and for one it left out, whose key the
+  catalogue holds; the key written as left out (`""`, `false`, `0`, `~`) is
+  not refused (TestAKeyOfAnotherTypesOwnIsRefusedWhetherTheBuildHasTheTypeOrNot).
+- A key of no type is refused as the decoder refuses an unknown key, `field
+  sned not found in type model.RequestConfig`, and a text key of a type's
+  own written as a list as the decoder refuses a list where text belongs,
+  whether the build has the type or not
+  (TestARequestBlockRefusesAnUnknownKeyAndAWrongKind).
+- No own key of a request type is a key of the common part or another
+  type's, and each built type's own keys are those the catalogue gives it
+  (TestEveryOwnKeyIsOneTypesAlone).
+- `internal/fetch/requestkeys_catalogue.go` holds each built type's own keys
+  with the Go types of their fields and their schemas as they are made now,
+  and, in the build with every request type, is the file that build writes;
+  a schema changed in the catalogue alone fails it
+  (TestTheRequestKeyCatalogueIsCurrent).
+- The configuration schema has a property for every key the request block
+  reads, its common part's, every built type's own and those of the types
+  the build left out, and none other (TestConfigSchemaCoversEveryKey).
+- Each leaf of a request type's own keys, set on its own, changes the cache
+  key of a collector of the type, as every setting of the common part does
+  (TestEverySettingChangesTheCacheKey).
+
+## 34.217 The new request type scaffold
+
+- `make new-request-type` run on a copy of the tree (the files git knows of,
+  the vendored modules linked, built with `-trimpath` so the build cache
+  serves what the copy shares with the tree) refuses `http`, `Zz-demo`,
+  `9zz` and no name before writing anything, then adds the opt-in `zzdemo`
+  and the default `zzdefault`, each printing a checklist naming
+  `TODO(<name>)`, writes their files, tests (internal/fetch,
+  internal/exporter, the schema rows) and pages, only the opt-in one's page
+  with "Building with"; the copy builds and vets in the default build, vets
+  with every opt-in type and builds and vets with each new type alone, the
+  generated tests pass in the default build, with every opt-in type and
+  with their type alone, and the tests comparing the lists of the types pass in
+  it: the selection constraints, the guard, the default build's
+  registrations, the unused-parameter refusals, the request key catalogue,
+  the marked lists, the type pages, CI's and the Makefile's loops and opt-in
+  builds, `make ci`'s commands, the schema comparisons' constraint and the
+  committed schemas, the common part, the schema rows' completeness, and the documentation's links and
+  index. It runs in the default build only, not under `-short` or the race
+  detector; without the script it fails
+  (TestANewRequestTypeIsWiredByTheScaffold).
+- The Makefile's `new-request-type` runs `tools/new-request-type.sh` with
+  `NAME` and, when `OPT_IN` is set, `opt-in`; `make ci` does not reach it;
+  the make targets of docs/DEVELOPMENT.md list it as not part of `make ci`,
+  and its "Adding a request type" names the command, the script,
+  `TODO(<name>)`, `make schemas` and the test that runs it
+  (TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI).
+- The builds of one request type whose linked modules are checked are those
+  of every type of the tree, read from `internal/fetch/requesttype_*.go`
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules); a type with an empty
+  `Fields`, as a new one has, is read as taking no key of the common part
+  (TestSentencesNameTheRequestTypesThatTakeAKey,
+  TestTheCommonPartHoldsNoKeyOfOneType); and a type whose collector has no
+  path and no placeholder in a key of its own is expected to fill its label
+  values alone, without naming it
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

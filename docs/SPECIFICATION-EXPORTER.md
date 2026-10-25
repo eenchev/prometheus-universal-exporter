@@ -1732,7 +1732,13 @@ of objects, one a row, of its columns by name. Its keys:
   which takes none, the name and every address it resolves to MUST be held
   before the connection, a name whose addresses cannot be looked up MUST
   fail the scrape before it, as the driver would look it up itself, and the
-  documentation MUST say so. The exporter's dialer MUST make TCP
+  documentation MUST say so. The `vertica` driver answers a server's
+  file-transfer requests (load a file, check files, load from standard
+  input) on any statement, which the exporter, not holding the connection,
+  cannot refuse: the documentation MUST say that a server at a `vertica`
+  target can read any file the exporter's process can, and that such
+  collectors are to be held by `allowed_targets` to servers the operator
+  trusts. The exporter's dialer MUST make TCP
   connections alone, refusing any other network a driver asks for (UDP to
   the SQL Server Browser) with a sentence saying so. `snowflake`
   MUST make no request to a host other than the account's: its platform
@@ -27587,6 +27593,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   load check on every text without a panic, and refuses any text after
   `COPY ` and after `/* /* */ COPY t FROM LOCAL '/f' */ `; its seeds hold
   the COPY cases above (FuzzVerticaStatementSplitting).
+
+## 34.214 The vertica driver's file transfers, documented
+
+- docs/SQL.md's limitations say that the vertica driver answers a server's
+  file-transfer requests, that a server at a `vertica` target can read any
+  file the exporter's process can, and that `vertica` collectors are to be
+  held by `allowed_targets` to trusted servers
+  (TestSQLDocumentationSaysAVerticaServerCanReadTheExportersFiles).
 
 # 35. Documentation requirements
 

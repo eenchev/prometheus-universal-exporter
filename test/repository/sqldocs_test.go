@@ -78,3 +78,31 @@ func TestSQLDocumentationExamples(t *testing.T) {
 		t.Errorf("%v\n%s", err, connections)
 	}
 }
+
+// The vertica driver answers a server's file-transfer requests on any
+// statement and the exporter cannot refuse them, so a server at a vertica
+// target can read the exporter's files. docs/SQL.md's limitations say so,
+// and say to hold vertica collectors to trusted servers with
+// allowed_targets: a page that dropped it would leave the risk unstated.
+func TestSQLDocumentationSaysAVerticaServerCanReadTheExportersFiles(t *testing.T) {
+	doc := read(t, "docs/SQL.md")
+	_, limitations, ok := strings.Cut(doc, "\n## Limitations\n")
+	if !ok {
+		t.Fatal("docs/SQL.md has no Limitations section")
+	}
+	limitations, _, _ = strings.Cut(limitations, "\n## ")
+	bullet := ""
+	for part := range strings.SplitSeq(limitations, "\n- ") {
+		if strings.HasPrefix(part, "**Vertica's driver does what the server asks of the exporter's files.**") {
+			bullet = strings.Join(strings.Fields(part), " ")
+		}
+	}
+	if bullet == "" {
+		t.Fatal("docs/SQL.md's limitations do not say that the vertica driver answers a server's file-transfer requests")
+	}
+	for _, want := range []string{"open whatever path the server names", "standard input", "can read any file the exporter's process can read", "`allowed_targets`", "servers you trust"} {
+		if !strings.Contains(bullet, want) {
+			t.Errorf("the vertica file-transfer limitation does not say %q:\n%s", want, bullet)
+		}
+	}
+}

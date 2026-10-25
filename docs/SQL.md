@@ -566,6 +566,21 @@ label name the drivers a build has; of a build without the `sql` type,
   deadline came`, and the connection is given up, closed when the driver's
   call returns, while the server runs the statement to its end. Bound it at
   the server, with the resource pool's `RUNTIMECAP`.
+- **Vertica's driver does what the server asks of the exporter's files.**
+  vertica-sql-go answers the server's file-transfer requests on any
+  statement, prepared or not, and the exporter cannot stop it, the driver
+  dialing by itself and taking no connection the exporter could watch: a
+  request to load a file makes it open whatever path the server names and
+  send its contents, a request to check files makes it say which paths exist
+  and how large they are, and a request to load from standard input makes it
+  read the exporter's. So a server that answers at a `vertica` target can
+  read any file the exporter's process can read — its credential files, a
+  Kubernetes service account token, its configuration. Point `vertica`
+  collectors only at servers you trust, in `allowed_targets` (see
+  [Restricting targets](REQUESTS.md#restricting-targets)), never at targets a
+  probe's caller may choose freely, and run the exporter with no more files
+  readable than it needs. The type is opt-in (`SQL_DRIVERS=vertica`), so a
+  build without it has no such driver.
 - **SQL Server routing is refused.** A server that answers the login by
   sending the connection to another server — Azure SQL's `Redirect`
   connection policy, read-only routing in an availability group — names a

@@ -773,8 +773,12 @@ and the source MUST list the opt-in types.
   MUST say the exporter listens on every interface; an empty `HOST` MUST
   fail with a message before anything is built. An example's name MUST come from the tree
   (`tools/run-example.sh`): a directory under `examples/` is named by the
-  directory, `examples/config.<name>.<anything>.yaml` by `<name>`, and a
-  name two examples share MUST fail; `make run` without `EXAMPLE` MUST list
+  directory, its configuration being its `config.yaml` and its other YAML
+  files its static target file and collector files, which MUST NOT be
+  taken for a second configuration, `examples/config.<name>.<anything>.yaml`
+  by `<name>`, and a name two examples share MUST fail, as MUST every use
+  of the script, `list` among them, while the tree has a directory of YAML
+  without a `config.yaml` or with two static target files; `make run` without `EXAMPLE` MUST list
   the names and exit non-zero, and an unknown name MUST fail before
   anything is built. `make ci` MUST NOT reach `run`. CI MUST
   also vet, build and test (the `internal/fetch` package) a build with every
@@ -10588,12 +10592,18 @@ reading the source of the listed files.
 
 Whether or not its service is probed for real, every example under
 `examples/` MUST be covered by the default suite, at any depth: an example
-may be one file or a directory holding a configuration and the static target
-file that goes with it. The tests that check every example — against the
-committed schemas, that it loads, and that its scripts satisfy the contract —
-MUST take their list from the directory tree rather than from a file name
-pattern or a written list, telling a configuration from a static target file
-by its content, and MUST fail on a YAML file there that is neither. An
+may be one file or a directory holding a configuration, its `config.yaml`,
+with the static target file and the collector files that go with it. The
+tests that check every example — against the committed schemas, that it
+loads, and that its scripts satisfy the contract — MUST take their list from
+the directory tree rather than from a file name pattern or a written list,
+telling a configuration from a static target file by its content, and MUST
+fail on a YAML file there that is neither. In a directory the configuration
+MUST be `config.yaml` alone: any other file of collectors there or below is a
+collector file, checked as its configuration loads it and never as an
+example of its own, and the tests MUST fail on one the configuration's
+`collector_files` does not name, and on a directory of YAML without a
+`config.yaml`. An
 example's static target file MUST be valid against the configuration in its
 directory, as startup checks the two. An example of an opt-in request type
 (`examples/tcp`) MUST be loaded, and checked against the schema the build

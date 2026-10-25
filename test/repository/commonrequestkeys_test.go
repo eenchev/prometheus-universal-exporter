@@ -16,7 +16,6 @@ var pendingCommonKeys = []string{
 	"rpc", "message", "metadata", "descriptors", "protoset_file", "proto_files", "proto_import_paths",
 	"passphrase_file", "known_hosts_file", "keepalive_interval", "keepalive_count_max", "idle_timeout", "max_open_connections",
 	"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections",
-	"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server",
 }
 
 // The common part of a collector's request block, model.RequestConfig's

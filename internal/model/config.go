@@ -277,23 +277,6 @@ type RequestConfig struct {
 	ServiceName string            `yaml:"service_name,omitempty"`
 	MaxRows     int               `yaml:"max_rows,omitempty"`
 	Connections *SQLConnections   `yaml:"connections,omitempty"`
-	// Resource, Group and Version belong to the kubernetes type: the
-	// objects listed, by the plural name of their resource, its API group,
-	// "" for the core group, and its version, v1 when left out.
-	// Namespaces, AllNamespaces, LabelSelector and FieldSelector say which
-	// of them are listed, MaxObjects how many a listing may hold, 0 for the
-	// default, and APIServer the API server's URL when the exporter does not
-	// list its own cluster's (fetch/requesttype_kubernetes.go). Left out of
-	// a collector written as YAML when empty, as the sql keys are.
-	Resource      string   `yaml:"resource,omitempty"`
-	Group         string   `yaml:"group,omitempty"`
-	Version       string   `yaml:"version,omitempty"`
-	Namespaces    []string `yaml:"namespaces,omitempty"`
-	AllNamespaces bool     `yaml:"all_namespaces,omitempty"`
-	LabelSelector string   `yaml:"label_selector,omitempty"`
-	FieldSelector string   `yaml:"field_selector,omitempty"`
-	MaxObjects    int      `yaml:"max_objects,omitempty"`
-	APIServer     string   `yaml:"api_server,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -384,16 +367,6 @@ var (
 	LoginTypes      = []string{"json", "oauth2"}
 	LoginAuthStyles = []string{"header", "params"}
 )
-
-// KubernetesNamePattern is what a kubernetes collector's request.resource,
-// request.version and each of its request.namespaces are made of: a DNS
-// label, lower case (RFC 1123), of at most 63 characters, as Kubernetes
-// names them. The exporter and the schema hold them to it alike.
-const KubernetesNamePattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-
-// KubernetesGroupPattern is what a kubernetes collector's request.group is
-// made of: a DNS subdomain, lower case, of at most 253 characters.
-const KubernetesGroupPattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how

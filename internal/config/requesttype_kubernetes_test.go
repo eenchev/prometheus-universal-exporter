@@ -18,7 +18,7 @@ func TestKubernetesDecoderAndTransform(t *testing.T) {
 	base := func() model.Collector {
 		return model.Collector{
 			Name:      "kube",
-			Request:   model.RequestConfig{Type: fetch.RequestTypeKubernetes, Resource: "pods"},
+			Request:   model.RequestConfig{Type: fetch.RequestTypeKubernetes, Own: fetch.KubernetesConfig{Resource: "pods"}},
 			Transform: model.TransformConfig{Type: "jq"},
 			Metrics:   []model.MetricRule{{Name: "v", Expression: ".count"}},
 		}
@@ -65,7 +65,7 @@ func TestKubernetesDecoderAndTransform(t *testing.T) {
 func TestAKubernetesCollectorOfSecretsIsRefusedAtLoad(t *testing.T) {
 	c := model.Collector{
 		Name:      "secrets",
-		Request:   model.RequestConfig{Type: fetch.RequestTypeKubernetes, Resource: "secrets", AllNamespaces: true},
+		Request:   model.RequestConfig{Type: fetch.RequestTypeKubernetes, Own: fetch.KubernetesConfig{Resource: "secrets", AllNamespaces: true}},
 		Transform: model.TransformConfig{Type: "jq"},
 		Metrics:   []model.MetricRule{{Name: "v", Expression: ".count"}},
 	}

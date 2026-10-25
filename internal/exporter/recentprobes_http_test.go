@@ -492,3 +492,59 @@ func TestTheRecentProbesWithholdAURLsUserinfo(t *testing.T) {
 		}
 	}
 }
+
+// noteProbeLikeOneBefore records, as a probe does, a probe of collector c
+// with two parameters, like the probe before it.
+func noteProbeLikeOneBefore(server *Server, read configRead, c *model.Collector) func() {
+	overrides := fetch.RequestOverrides{Params: map[string]string{"tenant": "acme", "region": "eu-west-1"}}
+	target := "http://db.internal/x"
+	query := probeKeyQuery(c.Name, target, overrides)
+	key := probeCacheKey(c, target, query, nil)
+	p := recentProbe{at: time.Now(), result: probeCached, status: http.StatusOK, series: 3}
+	return func() { server.noteProbe(read, server.recent.keyOf(key, c, target, query), p) }
+}
+
+// Recording a probe like one before it, as nearly every probe is, a cache
+// hit as much as any, costs a lookup of the key it is recorded under, not
+// the sorting and the redaction of its parameters again: those were two
+// dozen allocations and some microseconds on every probe. The key is the
+// one made from the parameters, and what is remembered of the keys is
+// bounded.
+func TestRecordingAProbeLikeOneBeforeItCostsALookup(t *testing.T) {
+	c := testutil.Collector("text", "text")
+	server := modeServer(t, c)
+	read := server.readAt(server.reconcile().generation)
+	record := noteProbeLikeOneBefore(server, read, &c)
+	record()
+	if allocs := alloctest.AllocsAtMost(100, 2, record); allocs > 2 {
+		t.Errorf("recording a probe like one before it allocates %v times, want at most 2", allocs)
+	}
+	row := probeRows(t, server)["text http://db.internal/x"]
+	if row.Params != "region=eu-west-1 tenant=acme" || len(row.Probes) != recentProbesPerKey {
+		t.Errorf("the probes are recorded as %+v", row)
+	}
+	for i := range recentProbeKeysShown + 10 {
+		target := fmt.Sprintf("http://t%d.example/?password=hunter2", i)
+		query := probeKeyQuery(c.Name, target, fetch.RequestOverrides{Params: map[string]string{"password": "hunter2"}})
+		key := server.recent.keyOf(probeCacheKey(&c, target, query, nil), &c, target, query)
+		if want := recentProbeKeyFor(&c, target, query); key != want || key.params != "password="+fetch.Redacted {
+			t.Fatalf("the probe is recorded under %+v, want %+v", key, want)
+		}
+	}
+	if n := len(server.recent.shown); n > recentProbeKeysShown {
+		t.Errorf("%d keys are remembered, more than %d", n, recentProbeKeysShown)
+	}
+}
+
+// BenchmarkNoteProbe is the recording of a probe with two parameters like
+// the probe before it, for the status page, which every probe answered
+// pays.
+func BenchmarkNoteProbe(b *testing.B) {
+	c := testutil.Collector("text", "text")
+	server := modeServer(b, c)
+	record := noteProbeLikeOneBefore(server, server.readAt(server.reconcile().generation), &c)
+	b.ReportAllocs()
+	for b.Loop() {
+		record()
+	}
+}

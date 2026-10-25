@@ -29774,6 +29774,13 @@ Of the recent probes:
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to
   512 bytes in all.
+- Recording a probe MUST NOT redact or sort its parameters again, or make
+  its probe key's query again, when a probe with the same cache key
+  (§ 42.13) was recorded before: the key it is recorded under MUST be
+  remembered by the cache key, for no more than 1,024 cache keys, so that a
+  probe like one before it, a cache hit included, is recorded without an
+  allocation. What is shown MUST be what the parameters make, the redaction
+  and the cuts included.
 - The page MUST have a row per collector and target with its latest probe's
   details, the results of its kept probes as a strip, oldest first, and the
   error of the latest failed probe kept with when it began; the rows failing

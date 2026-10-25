@@ -465,7 +465,11 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		rec.commit(refused)
 	}
 	forwarded := forwardedHeaders(r, c.Request)
-	key := s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
+	keyQuery := probeKeyQuery(name, target, overrides)
+	key := s.probeCacheKey(cfg, c, target, keyQuery, forwarded)
+	// recentKey is what the status page records the probe under, made from
+	// the probe's key once it is known to be answered.
+	recentKey := func() recentProbeKey { return s.recent.keyOf(key, c, logTarget, keyQuery) }
 	var cacheKey string
 	if model.UsesCache(c) {
 		cacheKey = key
@@ -479,7 +483,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true, false)
-			s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), recentProbe{
+			s.noteProbe(rec.read, recentKey(), recentProbe{
 				at: start, duration: time.Since(start), result: probeCached,
 				status: http.StatusOK, series: len(answer.Metrics),
 			})
@@ -518,7 +522,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// the collector, and no new request tracked.
 		finish(result.ok, result.refused || result.abandoned)
 		if !result.abandoned {
-			s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), result.recentProbe(start, false))
+			s.noteProbe(rec.read, recentKey(), result.recentProbe(start, false))
 		}
 		result.writeTo(w, r)
 		return
@@ -548,7 +552,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
 	}
 	finish(result.ok, result.refused)
-	s.noteProbe(rec.read, recentProbeKeyFor(c, logTarget, overrides), result.recentProbe(start, shared))
+	s.noteProbe(rec.read, recentKey(), result.recentProbe(start, shared))
 	result.writeTo(w, r)
 }
 

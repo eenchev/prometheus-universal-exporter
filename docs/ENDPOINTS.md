@@ -95,6 +95,14 @@ kept take at most 500 × 10 × 2000 bytes, 10 MB, and far less in practice: a
 probe failing as the one before keeps the one text. The bounds are fixed;
 there is no flag for them.
 
+Every probe answered is recorded, a cache hit as much as any, so recording
+one is kept cheap: the row of a probe is remembered by the probe's cache key,
+and a probe like one before it, as nearly every probe is, finds its row by
+that key without its parameters being sorted and redacted again. Up to 1,024
+such keys are remembered, each with its row's collector, target and
+parameters bounded as above, under 1.1 MB in all; when that is full they are
+forgotten together and remembered again as probes come.
+
 A reload forgets the recent probes of every collector it removes or changes,
 as it does the rest of what is kept per collector; a probe of the old
 definition that ends after the reload records nothing. A collector a reload

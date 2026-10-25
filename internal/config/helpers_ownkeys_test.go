@@ -31,3 +31,18 @@ func setOwnKey(c *model.Collector, key string, value any) {
 		c.Request.Own = own.Interface()
 	}
 }
+
+// ownKey is the value of key of c's request, a key of its type's own
+// struct, and nil when its type has no such key or c's request holds none.
+func ownKey(c *model.Collector, key string) any {
+	if c.Request.Own == nil {
+		return nil
+	}
+	own := reflect.ValueOf(c.Request.Own)
+	for i := 0; i < own.NumField(); i++ {
+		if name, _, _ := strings.Cut(own.Type().Field(i).Tag.Get("yaml"), ","); name == key {
+			return own.Field(i).Interface()
+		}
+	}
+	return nil
+}

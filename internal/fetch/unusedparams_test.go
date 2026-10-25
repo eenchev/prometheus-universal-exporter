@@ -89,12 +89,6 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "query") {
 			c.Request.Query = map[string]string{"set": "{{param_query:x}}"}
 		}
-		if slices.Contains(fields, "message") {
-			c.Request.Message = `{"a": {{param_message:x|json}}}`
-		}
-		if slices.Contains(fields, "metadata") {
-			c.Request.Metadata = map[string]string{"x-set": "{{param_metadata:x}}"}
-		}
 		if slices.Contains(fields, "database") {
 			c.Request.Database = "{{param_database:x}}"
 		}

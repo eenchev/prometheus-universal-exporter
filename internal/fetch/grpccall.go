@@ -114,15 +114,15 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	if retried == nil {
 		retried = grpcDefaultRetryCodes
 	}
-	accepted := c.Request.AcceptCodes
+	accepted := grpcRequest(c).AcceptCodes
 	if overrides.AcceptCodes != nil {
 		accepted = overrides.AcceptCodes
 	}
 	limit := responseLimit(c)
 
-	reflection := reflectedKey{conn: key, service: strings.SplitN(c.Request.RPC, "/", 2)[0]}
+	reflection := reflectedKey{conn: key, service: strings.SplitN(grpcRequest(c).RPC, "/", 2)[0]}
 	method := func() (grpcMethod, error) {
-		if c.Request.Descriptors != descriptorsReflection {
+		if grpcRequest(c).Descriptors != descriptorsReflection {
 			return staticMethod(c)
 		}
 		// The reflection question carries the call's metadata, credentials
@@ -132,7 +132,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		if err != nil {
 			return grpcMethod{}, reflectionError(ctx, err)
 		}
-		return findMethod(files, c.Request.RPC, "the server's reflection answer")
+		return findMethod(files, grpcRequest(c).RPC, "the server's reflection answer")
 	}
 	encode := func() (grpcMethod, *dynamicpb.Message, error) {
 		m, err := method()
@@ -279,7 +279,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// that does not decode, may be the server's schema having changed
 		// since it was asked: it is asked again, once, and the call made
 		// again. This is not one of the retries.
-		if c.Request.Descriptors == descriptorsReflection && !refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
+		if grpcRequest(c).Descriptors == descriptorsReflection && !refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
 			refreshed = true
 			reflectionAnswers.forget(reflection)
 			resolved = false
@@ -335,7 +335,7 @@ func renderAnswer(out *dynamicpb.Message, types *dynamicpb.Types) ([]byte, error
 // grpcMessage is the JSON message a call sends: the probe's or the static
 // target's, else the collector's with its placeholders filled in, else {}.
 func grpcMessage(c *model.Collector, overrides RequestOverrides) (string, error) {
-	message := c.Request.Message
+	message := grpcRequest(c).Message
 	if overrides.Message != nil {
 		message = *overrides.Message
 	} else if HasPathParams(message) {
@@ -357,7 +357,7 @@ func grpcMessage(c *model.Collector, overrides RequestOverrides) (string, error)
 // or HTTP/2 reserves is not sent.
 func grpcOutgoing(c *model.Collector, overrides RequestOverrides, forwarded http.Header) (metadata.MD, error) {
 	md := metadata.MD{}
-	values, err := renderedValues(c.Request.Metadata, "header", "request.metadata.", overrides.Params)
+	values, err := renderedValues(grpcRequest(c).Metadata, "header", "request.metadata.", overrides.Params)
 	if err != nil {
 		return nil, err
 	}

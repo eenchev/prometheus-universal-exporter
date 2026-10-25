@@ -1111,7 +1111,7 @@ func TestRedirectTrustedHostsEntries(t *testing.T) {
 	}
 	for _, other := range []model.RequestConfig{
 		{Type: RequestTypeLocalFile, Root: t.TempDir(), RedirectTrustedHosts: []string{"x"}},
-		{Type: RequestTypeGRPC, RPC: "grpc.health.v1.Health/Check", RedirectTrustedHosts: []string{"x"}},
+		{Type: RequestTypeGRPC, RedirectTrustedHosts: []string{"x"}},
 	} {
 		if RequestTypes[other.Type] == nil {
 			continue

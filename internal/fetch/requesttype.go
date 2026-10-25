@@ -186,6 +186,11 @@ type RequestType struct {
 	// report the last one (GRPCStatusCode). Unset, it is the other way
 	// round.
 	StatusCodes bool
+	// NamedFiles says which files a collector's request names that checking
+	// it reads when the configuration loads, such as grpc's descriptor
+	// files, for the watch of the configuration to stamp (NamedFiles).
+	// Unset, it names none.
+	NamedFiles func(c *model.Collector) []string
 	// ReadFiles says which paths checking a collector's request looked at on
 	// disk, the files the request names and those that reading them led to,
 	// and gives a mark of that reading (ReadFiles). Unset, checking a
@@ -210,6 +215,10 @@ type RequestType struct {
 	// ConnectionPools reports, of a collector, what the type's pools of
 	// connections hold now (PoolStats). Unset, the type keeps no pools.
 	ConnectionPools func(collector string) PoolStats
+	// Policy gives what a collector's request lets through that only some
+	// types have, as --dry-run shows it beside what every type's does
+	// (RequestPolicy). Unset, nothing.
+	Policy func(c *model.Collector) RequestPolicy
 	// Logins reports how many logins a collector's request.login made and
 	// how many of them failed (login.go). Unset, the type does not log in.
 	Logins func(collector string) (made, failed uint64)
@@ -303,6 +312,22 @@ func CollectorLogins(requestType, collector string) (made, failed uint64) {
 	return 0, 0
 }
 
+// RequestPolicy is what a collector's request lets through that only some
+// request types have (RequestType.Policy): the gRPC status codes, other
+// than OK, whose calls are answers.
+type RequestPolicy struct {
+	AcceptCodes []string
+}
+
+// CollectorPolicy is what the request of c lets through that only its type
+// has (RequestType.Policy); nothing for a type without it.
+func CollectorPolicy(c *model.Collector) RequestPolicy {
+	if rt := requestTypeOf(c); rt != nil && rt.Policy != nil {
+		return rt.Policy(c)
+	}
+	return RequestPolicy{}
+}
+
 // PoolStats is what a collector's pools of connections hold: the
 // connections idle in them, how many targets they are open to, how
 // many keepalive checks of a connection failed, and the rows the last
@@ -378,6 +403,18 @@ func CollectorConnectionLimit(requestType, collector string) (waited, failed uin
 		return rt.ConnectionLimit(collector)
 	}
 	return 0, 0
+}
+
+// NamedFiles returns the files a collector's request names that checking it
+// reads when the configuration loads (RequestType.NamedFiles): for a grpc
+// collector, its request.protoset_file and request.proto_files, which its
+// method and message are checked against. The collector need not have been
+// validated, its request.type being taken as ReadFiles takes it.
+func NamedFiles(c *model.Collector) []string {
+	if rt := RequestTypes[strings.ToLower(strings.TrimSpace(c.Request.Type))]; rt != nil && rt.NamedFiles != nil {
+		return rt.NamedFiles(c)
+	}
+	return nil
 }
 
 // ReadFiles returns the paths that checking a collector's request looked at

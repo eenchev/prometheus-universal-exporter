@@ -43,7 +43,7 @@ func TestTheKeysOfOtherTypesDoNotApplyToHTTP(t *testing.T) {
 		}
 	})
 	t.Run("grpc's accept_codes", func(t *testing.T) {
-		http := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, AcceptCodes: []string{"NOT_FOUND"}}}
+		http := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, Foreign: []string{"accept_codes"}}}
 		if err := ValidateRequest(&http); err == nil || !strings.Contains(err.Error(), "does not apply") {
 			t.Fatalf("%v", err)
 		}

@@ -33,7 +33,9 @@ import (
 func protosetCollector(t *testing.T) model.Collector {
 	t.Helper()
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(t.TempDir(), "queue.pb"), false)
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Descriptors, r.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(t.TempDir(), "queue.pb"), false)
+	})
 	return c
 }
 

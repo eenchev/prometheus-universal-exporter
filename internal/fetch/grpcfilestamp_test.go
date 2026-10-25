@@ -337,8 +337,7 @@ func TestADataSwapToFilesOfTheSameTimeAndSizeIsCompiledAtTheNextCall(t *testing.
 	root := filepath.Dir(paths["svc.proto"])
 	collector := func(rpc string) *model.Collector {
 		return &model.Collector{Name: "kube", Request: model.RequestConfig{
-			Type: RequestTypeGRPC, RPC: "k.api.S/" + rpc, Descriptors: descriptorsProto,
-			ProtoFiles: []string{paths["svc.proto"]}, ProtoImportPaths: []string{root},
+			Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "k.api.S/" + rpc, Descriptors: descriptorsProto, ProtoFiles: []string{paths["svc.proto"]}, ProtoImportPaths: []string{root}},
 		}}
 	}
 	if _, err := staticMethod(collector("Get")); err != nil {
@@ -374,7 +373,7 @@ func TestADataSwapOfAProtosetIsReadAtTheNextCall(t *testing.T) {
 	paths, publish := kubeProtos(t, map[string]string{"queue.pb": string(raw)})
 	reads := countDescriptorReads(t)
 	c := &model.Collector{Name: "kube", Request: model.RequestConfig{
-		Type: RequestTypeGRPC, RPC: "acme.queue.v1.QueueService/GetStats", Descriptors: descriptorsProtoset, ProtosetFile: paths["queue.pb"],
+		Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "acme.queue.v1.QueueService/GetStats", Descriptors: descriptorsProtoset, ProtosetFile: paths["queue.pb"]},
 	}}
 	if _, err := staticMethod(c); err != nil {
 		t.Fatal(err)
@@ -446,7 +445,7 @@ func TestAChmodOfADescriptorFileIsSeenAtTheNextCall(t *testing.T) {
 	set := writeProtosetOf(t)
 	reads := countDescriptorReads(t)
 	ps := &model.Collector{Name: "set", Request: model.RequestConfig{
-		Type: RequestTypeGRPC, RPC: "acme.queue.v1.QueueService/GetStats", Descriptors: descriptorsProtoset, ProtosetFile: set,
+		Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "acme.queue.v1.QueueService/GetStats", Descriptors: descriptorsProtoset, ProtosetFile: set},
 	}}
 	if _, err := staticMethod(ps); err != nil {
 		t.Fatal(err)

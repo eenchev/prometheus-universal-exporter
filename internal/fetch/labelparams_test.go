@@ -401,8 +401,8 @@ func TestACollectorWithoutLabelPlaceholdersIsCheckedAsItWas(t *testing.T) {
 				c.Request.Body = `{"service": {{param_service|json}}, "limit": {{param_limit:10|number}}}`
 				c.Request.Headers = map[string]string{"X-Tenant": "{{param_tenant}}", "Accept": "text/plain"}
 				c.Request.Query = map[string]string{"region": "{{param_region:eu}}"}
-				c.Request.Message = `{"queue": {{param_queue:orders|json}}}`
-				c.Request.Metadata = map[string]string{"x-tenant": "{{param_meta:default}}"}
+				setOwnKey(&c, "message", `{"queue": {{param_queue:orders|json}}}`)
+				setOwnKey(&c, "metadata", map[string]string{"x-tenant": "{{param_meta:default}}"})
 				setOwnKey(&c, "targets", []string{"app.{{param_host:web}}.requests", "cpu.load"})
 			}
 			collectors = append(collectors, c)

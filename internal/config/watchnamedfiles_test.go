@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -286,19 +287,26 @@ func TestAReloadDuringACertificateRotationRecovers(t *testing.T) {
 
 // The files watched for a refused configuration are the ones loading it
 // opens: the TLS files of an enabled OTLP export, the credential files of
-// the exporter's own enabled authentication, and a collector's descriptor
-// files. A collector's credential and TLS files are read at a request, and
+// the exporter's own enabled authentication, and a grpc collector's
+// descriptor files. A collector's credential and TLS files are read at a request, and
 // refuse no configuration.
 func TestTheFilesAConfigurationNamesAndTheLoadOpens(t *testing.T) {
 	c := &model.Config{
 		OTLP: model.OTLPConfig{Enabled: true, TLS: model.TLSConfig{CAFile: "/tls/ca.pem", CertFile: "/tls/tls.crt", KeyFile: "/tls/tls.key"}},
 		Web:  model.WebConfig{BasicAuth: &model.ExporterBasicAuth{Enabled: true, UsernameFile: "/auth/username", PasswordFile: "/auth/password"}},
 		Collectors: []model.Collector{
-			{Name: "a", Request: model.RequestConfig{ProtosetFile: "/proto/a.protoset", BearerTokenFile: "/run/token", TLS: model.TLSConfig{CAFile: "/collector/ca.pem"}}},
-			{Name: "b", Request: model.RequestConfig{ProtoFiles: []string{"/proto/b.proto", "/proto/common.proto"}, BasicAuthFile: &model.BasicAuthFile{Username: "/run/u", Password: "/run/p"}}},
+			{Name: "a", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, BearerTokenFile: "/run/token", TLS: model.TLSConfig{CAFile: "/collector/ca.pem"}}},
+			{Name: "b", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, BasicAuthFile: &model.BasicAuthFile{Username: "/run/u", Password: "/run/p"}}},
 		},
 	}
+	setOwnKey(&c.Collectors[0], "protoset_file", "/proto/a.protoset")
+	setOwnKey(&c.Collectors[1], "proto_files", []string{"/proto/b.proto", "/proto/common.proto"})
 	want := []string{"/tls/ca.pem", "/tls/tls.crt", "/tls/tls.key", "/auth/username", "/auth/password", "/proto/a.protoset", "/proto/b.proto", "/proto/common.proto"}
+	if fetch.RequestTypes[fetch.RequestTypeGRPC] == nil {
+		// The descriptor files are a grpc collector's own keys, which a
+		// build without grpc does not read.
+		want = want[:5]
+	}
 	if got := namedFiles(c); !slices.Equal(got, want) {
 		t.Fatalf("named files %v, want %v", got, want)
 	}

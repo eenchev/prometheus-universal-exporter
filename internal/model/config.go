@@ -208,9 +208,6 @@ type RequestConfig struct {
 	// AcceptStatus is the HTTP statuses whose answers are decoded, such as
 	// [200, 503] or ["2xx", 503]; every 2xx when empty.
 	AcceptStatus []string `yaml:"accept_status"`
-	// AcceptCodes is the gRPC status codes, other than OK, whose calls are
-	// answers rather than failures, such as [NOT_FOUND].
-	AcceptCodes []string `yaml:"accept_codes"`
 	// Root and MaxAge belong to the localfile type: the directory it may read
 	// under, and how old a file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
@@ -221,19 +218,6 @@ type RequestConfig struct {
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
-	// RPC, Message, Metadata and the descriptor keys belong to the grpc
-	// type: the method called, package.Service/Method; the request message
-	// in the protobuf JSON mapping; the request metadata; and where the
-	// message types come from — reflection, protoset (ProtosetFile) or
-	// proto (ProtoFiles, compiled with ProtoImportPaths). See
-	// fetch/requesttype_grpc.go.
-	RPC              string            `yaml:"rpc"`
-	Message          string            `yaml:"message"`
-	Metadata         map[string]string `yaml:"metadata"`
-	Descriptors      string            `yaml:"descriptors"`
-	ProtosetFile     string            `yaml:"protoset_file"`
-	ProtoFiles       []string          `yaml:"proto_files"`
-	ProtoImportPaths []string          `yaml:"proto_import_paths"`
 	// Username and the credential files belong to the types that log in
 	// as an account: sshfile, the account a file is read as on the remote
 	// host, with its private key or password; sql, redis and ldap, with

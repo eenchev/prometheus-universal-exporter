@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -249,13 +250,13 @@ func TestTheFilesTheCheckOfATargetFileOpens(t *testing.T) {
 	inForce := &model.Config{
 		OTLP: model.OTLPConfig{Enabled: true, TLS: model.TLSConfig{CAFile: "/tls/ca.pem"}},
 		Collectors: []model.Collector{
-			{Name: "set", Request: model.RequestConfig{ProtosetFile: "/proto/a.protoset", BearerTokenFile: "/run/token"}},
-			{Name: "sources", Request: model.RequestConfig{ProtoFiles: []string{"/proto/b.proto", "/proto/common.proto"}}},
-			{Name: "unused", Request: model.RequestConfig{ProtosetFile: "/proto/unused.protoset"}},
-			{Name: "plain", Request: model.RequestConfig{ProtosetFile: "/proto/plain.protoset"}},
+			{Name: "set", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, BearerTokenFile: "/run/token", Own: fetch.GRPCConfig{ProtosetFile: "/proto/a.protoset"}}},
+			{Name: "sources", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, Own: fetch.GRPCConfig{ProtoFiles: []string{"/proto/b.proto", "/proto/common.proto"}}}},
+			{Name: "unused", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, Own: fetch.GRPCConfig{ProtosetFile: "/proto/unused.protoset"}}},
+			{Name: "plain", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, Own: fetch.GRPCConfig{ProtosetFile: "/proto/plain.protoset"}}},
 		},
 	}
-	candidate := &model.Config{Collectors: []model.Collector{{Name: "set", Request: model.RequestConfig{ProtosetFile: "/proto/next.protoset"}}}}
+	candidate := &model.Config{Collectors: []model.Collector{{Name: "set", Request: model.RequestConfig{Type: fetch.RequestTypeGRPC, Own: fetch.GRPCConfig{ProtosetFile: "/proto/next.protoset"}}}}}
 	message := model.TargetRequestConfig{Message: `{"queue": "orders"}`}
 	file := &model.StaticTargetFile{Targets: []model.StaticTarget{
 		{Name: "a", Collector: "set", Request: model.TargetRequestConfig{Message: "{}", BearerTokenFile: "/run/target-token"}},

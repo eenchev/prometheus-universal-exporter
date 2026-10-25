@@ -121,7 +121,9 @@ network.
 - The optional hooks, function fields left nil by a type without the
   capability: a target a probe may leave out (`OptionalTarget`), the checks
   of a static target's request (`CheckOverride`, `CheckTargetRequest`), the
-  files read at a request (`CheckFiles`, `ReadFiles`), connections kept
+  files read at a request or at the load (`CheckFiles`, `ReadFiles`,
+  `NamedFiles`), what `--dry-run` shows of its request's policy (`Policy`),
+  connections kept
   across scrapes (`Follow`, `CloseConnections`, `Connections`,
   `ConnectionLimit`, `ConnectionPools`) and logins (`Logins`). They stay
   fields rather than methods of `Requester` so that a type without the

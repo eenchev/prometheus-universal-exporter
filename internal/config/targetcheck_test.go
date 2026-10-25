@@ -140,7 +140,7 @@ func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
 		if r.IntN(12) == 0 {
 			c.Request.Type = "unregistered"
 		}
-		c.Request.ProtosetFile = fmt.Sprintf("/proto/%d-%d.protoset", mark, i)
+		setOwnKey(c, "protoset_file", fmt.Sprintf("/proto/%d-%d.protoset", mark, i))
 		c.Request.Path = oneOf(r, "", "", "/status", "/tenants/{{param_tenant}}", "/tenants/{{param_tenant:acme}}", "/tenants/{{param_tenant}}/{{param_zone:eu}}")
 		if r.IntN(5) == 0 {
 			c.Request.Headers = map[string]string{"X-Token": "{{param_token}}"}
@@ -153,7 +153,7 @@ func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
 			c.Request.Body = oneOf(r, `{"t": {{param_tenant|json}}}`, "{{param_zone:eu}}", "{{param_tenant")
 		}
 		if r.IntN(6) == 0 {
-			c.Request.Message = oneOf(r, `{"t": {{param_tenant:acme|json}}}`, `{"t": {{param_tenant|form}}}`)
+			setOwnKey(c, "message", oneOf(r, `{"t": {{param_tenant:acme|json}}}`, `{"t": {{param_tenant|form}}}`))
 		}
 		if r.IntN(6) == 0 {
 			setOwnKey(c, "targets", oneOf(r, []string{"servers.{{param_zone:eu}}.load"}, []string{"servers.{{param_tenant"}))

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	vertigo "github.com/vertica/vertica-sql-go"
 	verticalog "github.com/vertica/vertica-sql-go/logger"
@@ -43,7 +44,7 @@ func init() {
 		connect:   connectVertica,
 		run:       sqlReadOnlyTx(nil),
 		readOnly:  "transaction",
-		statement: verticaSingleStatement,
+		statement: verticaStatement,
 	})
 }
 
@@ -67,6 +68,183 @@ func (verticaLog) Write(prefix, name, msg string) {
 }
 
 func (verticaLog) Close() {}
+
+// verticaStatement refuses a statement the vertica driver would not run as
+// one statement prepared on the server, its args bound to it: one that
+// holds more than one (verticaSingleStatement), and one the driver sends
+// unprepared, as text (verticaUnprepared).
+func verticaStatement(statement string) error {
+	if err := verticaSingleStatement(statement); err != nil {
+		return err
+	}
+	return verticaUnprepared(statement)
+}
+
+// verticaUnprepared refuses a statement the driver sends with the simple
+// query protocol rather than preparing it (connection.go PrepareContext,
+// stmt.go QueryContextRaw): a COPY ... FROM LOCAL, which the driver finds
+// by its own reading of the text as the lexer rewrote it (stmt.go
+// isLocalCopyStatement, analyzeLocalCopyStatement, topLevelSQLTokens), and
+// a function's DDL or an EXECUTE grant on one, which it finds by its
+// UDSFAnalyzer in the text as written (newStmt). The driver writes the args
+// of such a statement into its text (stmt.go interpolate, formatArg),
+// doubling a ' and leaving a \ as it is, which, in an E'...' or with
+// standard_conforming_strings off, escapes the closing quote, so that a
+// probe's value ending in a \ ends the string at the next quote and what
+// follows is SQL. Every other statement, a single one (the URL sets
+// use_prepared_statements=1, which no option overrides), is prepared, and
+// its args are bound to it as values (stmt.go bindAndExecute). A COPY is
+// refused however the driver or the server reads it, since a COPY loads
+// rows into a table, which no metrics query does and the read-only
+// transaction is there to refuse, and a COPY ... FROM LOCAL would read a
+// file of the exporter's host into the database at every scrape.
+func verticaUnprepared(statement string) error {
+	lexed, _ := verticaLex(statement)
+	isCopy, local := false, false
+	for _, text := range []string{statement, lexed} {
+		if words := verticaDriverWords(text); len(words) > 0 && words[0] == "COPY" {
+			isCopy = true
+			for i := 1; i+1 < len(words); i++ {
+				local = local || words[i] == "FROM" && words[i+1] == "LOCAL"
+			}
+		}
+		for _, nested := range []bool{false, true} {
+			isCopy = isCopy || strings.EqualFold(verticaFirstWord(text, nested), "COPY")
+		}
+	}
+	switch {
+	case local:
+		return errors.New("request.statement is a COPY ... FROM LOCAL, which would read a file of the exporter's host into the database at every scrape, " +
+			"and which the vertica driver sends unprepared, writing the args into its text, where a value ending in a \\ can end a string early; " +
+			"a sql collector runs a query, such as a SELECT")
+	case isCopy:
+		return errors.New("request.statement is a COPY, which loads rows into a table, as the read-only transaction is there to refuse; " +
+			"a sql collector runs a query, such as a SELECT")
+	case vertigo.NewUDSFAnalyzer().ShouldTreatAsAtomicUnit(statement):
+		return errors.New("request.statement is one the vertica driver takes for a function's DDL or an EXECUTE grant on one " +
+			"(CREATE, ALTER or DROP FUNCTION, GRANT or REVOKE EXECUTE ON FUNCTION), which it sends unprepared, with no arg bound to it, " +
+			"and the read-only transaction refuses; a sql collector runs a query, such as a SELECT")
+	}
+	return nil
+}
+
+// verticaDriverWords are the words of statement, in upper case, as the
+// driver reads them to find a COPY ... FROM LOCAL (stmt.go
+// topLevelSQLTokens): runs of ASCII letters, digits and _ outside '...'
+// and "..." (a doubled quote inside), -- to the end of the line, /* ... */
+// (not nested) and $tag$ ... $tag$, a tag's bytes taken for runes, as the
+// driver takes them (readDollarTag, isDollarTagRune). A word after a quote
+// or a comment counts as much as one before it, as it does to the driver,
+// whose first word decides the protocol whatever the server makes of the
+// text: "/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?" is a SELECT to a
+// server that nests comments, and a COPY ... FROM LOCAL to the driver.
+func verticaDriverWords(statement string) []string {
+	var words []string
+	start := -1
+	flush := func(i int) {
+		if start >= 0 {
+			words = append(words, strings.ToUpper(statement[start:i]))
+			start = -1
+		}
+	}
+	for i := 0; i < len(statement); i++ {
+		ch := statement[i]
+		switch {
+		case ch == '\'' || ch == '"':
+			flush(i)
+			for i++; i < len(statement); i++ {
+				if statement[i] == ch {
+					if i+1 < len(statement) && statement[i+1] == ch {
+						i++
+						continue
+					}
+					break
+				}
+			}
+		case ch == '-' && i+1 < len(statement) && statement[i+1] == '-':
+			flush(i)
+			for i < len(statement) && statement[i] != '\n' && statement[i] != '\r' {
+				i++
+			}
+		case ch == '/' && i+1 < len(statement) && statement[i+1] == '*':
+			flush(i)
+			end := strings.Index(statement[i+2:], "*/")
+			if end < 0 {
+				i = len(statement)
+			} else {
+				i += 2 + end + 1
+			}
+		case ch == '$' && verticaDriverDollarTag(statement[i:]) != "":
+			flush(i)
+			tag := verticaDriverDollarTag(statement[i:])
+			if end := strings.Index(statement[i+len(tag):], tag); end < 0 {
+				i = len(statement)
+			} else {
+				i += len(tag) + end + len(tag) - 1
+			}
+		case ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '_':
+			if start < 0 {
+				start = i
+			}
+		default:
+			flush(i)
+		}
+	}
+	flush(len(statement))
+	return words
+}
+
+// verticaDriverDollarTag is the $tag$ s begins with as the driver reads one
+// (stmt.go readDollarTag): letters and digits, each byte taken for the
+// rune of its value, and _, or "".
+func verticaDriverDollarTag(s string) string {
+	for j := 1; j < len(s); j++ {
+		r := rune(s[j])
+		if s[j] == '$' {
+			return s[:j+1]
+		}
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			break
+		}
+	}
+	return ""
+}
+
+// verticaFirstWord is the word statement begins with as the server reads
+// it, after blanks and comments, block comments nested or not: letters,
+// digits, _, $ and the bytes of multi-byte characters.
+func verticaFirstWord(statement string, nested bool) string {
+	i := 0
+	for i < len(statement) {
+		switch ch := statement[i]; {
+		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v':
+			i++
+		case ch == '-' && i+1 < len(statement) && statement[i+1] == '-':
+			for i < len(statement) && statement[i] != '\n' && statement[i] != '\r' {
+				i++
+			}
+		case ch == '/' && i+1 < len(statement) && statement[i+1] == '*':
+			depth := 1
+			for i += 2; i < len(statement) && depth > 0; i++ {
+				switch {
+				case nested && statement[i] == '/' && i+1 < len(statement) && statement[i+1] == '*':
+					depth++
+					i++
+				case statement[i] == '*' && i+1 < len(statement) && statement[i+1] == '/':
+					depth--
+					i++
+				}
+			}
+		default:
+			end := i
+			for end < len(statement) && verticaWordByte(statement[end]) {
+				end++
+			}
+			return statement[i:end]
+		}
+	}
+	return ""
+}
 
 // verticaSingleStatement refuses a statement that holds more than one. The
 // driver splits what it is given (vertica-sql-go stmt.go, newStmt and

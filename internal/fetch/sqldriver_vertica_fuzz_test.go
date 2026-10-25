@@ -12,7 +12,9 @@ import (
 // verticaFuzzSeeds are the statements of
 // TestAVerticaStatementHoldingMoreThanOneIsRefused, and those that hide a ;
 // from the driver and from a reading that knows less of Vertica's SQL than
-// its server: an extended string's \', a $ inside a word, a nested comment.
+// its server: an extended string's \', a $ inside a word, a nested comment;
+// and COPY statements the driver would send unprepared, the args written
+// into their text, or the server would run, refused as COPY.
 var verticaFuzzSeeds = []string{
 	"COMMIT; SELECT 1 AS one",
 	"SELECT 1 AS one; COMMIT",
@@ -55,6 +57,12 @@ var verticaFuzzSeeds = []string{
 	"SELECT 1 AS x$$; COMMIT",
 	"SELECT 1 AS one /* /* */ */",
 	"SELECT 'a\\''; COMMIT; --'",
+	"COPY t FROM LOCAL '/f' DELIMITER ?",
+	"copy /* c */ t -- d\n from LOCAL '/f' delimiter ?",
+	"/* /* */ COPY t FROM LOCAL '/f' */ SELECT ? AS one",
+	`"x" COPY t FROM LOCAL '/f' DELIMITER ?`,
+	"COPY t FROM STDIN",
+	"SELECT 1 AS copy, ? AS two",
 }
 
 // FuzzVerticaStatementSplitting holds the refusal of a vertica statement
@@ -66,7 +74,9 @@ var verticaFuzzSeeds = []string{
 // strings or not, finds more than one statement; two statements joined by a
 // ; are refused. The one normalisation there is, the driver's lexer, is
 // read as the driver splits it, once: it is not idempotent ("@A@A" is
-// "?@A", then "??"), and a text it fails on is refused. Its seeds run as a test in every build with the
+// "?@A", then "??"), and a text it fails on is refused. A text after a COPY,
+// as the driver or the server reads one, is refused (verticaStatement),
+// whatever it is. Its seeds run as a test in every build with the
 // vertica driver (go test -tags sql_driver_vertica -run=^$
 // -fuzz=FuzzVerticaStatementSplitting ./internal/fetch/ fuzzes it).
 func FuzzVerticaStatementSplitting(f *testing.F) {
@@ -77,6 +87,12 @@ func FuzzVerticaStatementSplitting(f *testing.F) {
 	f.Add("SELECT 1 -- c\n", "/* d */ SELECT 2")
 	f.Fuzz(func(t *testing.T, statement, other string) {
 		checkVerticaRefusal(t, statement)
+		_ = verticaStatement(statement)
+		for _, copied := range []string{"COPY " + statement, "/* /* */ COPY t FROM LOCAL '/f' */ " + statement} {
+			if verticaStatement(copied) == nil {
+				t.Fatalf("%q, a COPY to the driver, is let through", copied)
+			}
+		}
 		// Two statements, each one whole whatever the server's reading,
 		// joined by a ;.
 		if verticaWholeStatement(statement) && verticaWholeStatement(other) {

@@ -1819,8 +1819,19 @@ of objects, one a row, of its columns by name. Its keys:
   documentation MUST require an account that can only read. `args` MUST be
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
-  into the statement quoted as a literal of its type, as `vertica`'s does in
-  a `COPY ... FROM LOCAL` statement, and the documentation MUST say which;
+  into the statement quoted as a literal of its type, and the documentation
+  MUST say which. A `vertica` statement its driver would not prepare, and
+  so would write the values into, doubling a `'` and leaving a `\` as it
+  is, MUST be refused at load: any `COPY`, its first word as the driver
+  reads the text (outside quotes, quoted identifiers, `--` and unnested
+  `/* */` comments and dollar quotes, as written and as its lexer rewrites
+  it) or as the server does (after blanks and comments, nesting or not),
+  the message of a `COPY ... FROM LOCAL` saying that it reads a file of the
+  exporter's host at every scrape and is sent with its values written into
+  it; and a statement the driver takes for a function's DDL or an `EXECUTE`
+  grant on one (`CREATE`, `ALTER` or `DROP FUNCTION`, `GRANT` or `REVOKE
+  EXECUTE ON FUNCTION`, by its own `UDSFAnalyzer`). The driver's URL MUST
+  set `use_prepared_statements=1`, which no option overrides;
   `postgres` MUST send every statement with the extended protocol, `mysql`
   MUST NOT allow several statements in one, and a `vertica` statement holding
   a `;` followed by anything but blanks and comments, outside quotes, quoted

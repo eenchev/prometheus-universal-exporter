@@ -119,10 +119,32 @@ driver's own placeholders for the values in `args`:
 `args` are sent to the database as values, never as SQL: `postgres`,
 `mysql`, `sqlserver`, `oracle`, `snowflake` and `vertica` bind them to the
 placeholders at the server, while `clickhouse`'s driver writes each into the
-statement before sending it, quoted as a literal of its type, as `vertica`'s
-does in a `COPY ... FROM LOCAL` statement. Either way a probe parameter in one
-cannot change the statement, whatever it holds. A placeholder in `statement` itself is a
-startup error: a value from the probe goes in `args`.
+statement before sending it, quoted as a literal of its type. Either way a
+probe parameter in one cannot change the statement, whatever it holds. A
+placeholder in `statement` itself is a startup error: a value from the probe
+goes in `args`.
+
+`vertica`'s driver writes the values into the text, too, of a statement it
+does not prepare, doubling a `'` but leaving a `\` as it is — which, in an
+`E'...'` or with `standard_conforming_strings` off, escapes the quote that
+closes the value, so a value ending in `\` would end the string at the next
+quote and the rest would be SQL. So a `vertica` statement the driver would
+not prepare is a startup error:
+
+- any `COPY`. A `COPY ... FROM LOCAL` is the one the driver sends
+  unprepared, and it would read a file of the exporter's host into the
+  database at every scrape; every `COPY` loads rows into a table, which no
+  metrics query does and the read-only transaction is there to refuse. The
+  exporter finds the `COPY` as the driver does — the first word outside
+  quotes, comments and dollar quotes, block comments not nested, so that
+  `/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?` is a `COPY ... FROM LOCAL` to
+  it, though a `SELECT` to the server — and as the server does, in any case;
+- a function's DDL or an `EXECUTE` grant on one — `CREATE`, `ALTER` or
+  `DROP FUNCTION`, `GRANT` or `REVOKE EXECUTE ON FUNCTION` — which the driver
+  sends unprepared, with no value bound.
+
+Every other statement is prepared at the server, the exporter setting the
+driver's `use_prepared_statements=1`, and its values are bound to it.
 
 **Read-only.** The statement runs read-only where the database can make it
 so:

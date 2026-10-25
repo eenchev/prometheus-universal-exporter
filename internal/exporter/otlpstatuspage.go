@@ -9,7 +9,7 @@ import (
 
 // The status page's OTLP section says whether exports get through: the
 // endpoint, its last export and its last success, the failures in a row
-// and the readiness they make, the last failure's error, and what waits,
+// and the readiness, as /ready answers it, the last failure's error, and what waits,
 // what was dropped and what was retried. It reads the counters the
 // self-metrics read (otlpStatus) and the points pending, and keeps of its
 // own only what nothing else did: the last export's details and the last
@@ -53,12 +53,15 @@ type OTLPStatusDetails struct {
 	LastSuccess string          `json:"last_success,omitempty"`
 	Failures    int             `json:"consecutive_failures"`
 	// UnreadyAfter is otlp.unready_after_failures, and Readiness, with it
-	// set, ready or unready, since UnreadySince.
-	UnreadyAfter int    `json:"unready_after_failures,omitempty"`
-	Readiness    string `json:"readiness,omitempty"`
-	UnreadySince string `json:"unready_since,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
-	LastErrorAt  string `json:"last_error_at,omitempty"`
+	// set, what /ready answers: ready, or unready for UnreadyReasons, the
+	// reasons /ready gives, and since UnreadySince when the failed exports
+	// are what made it so.
+	UnreadyAfter   int      `json:"unready_after_failures,omitempty"`
+	Readiness      string   `json:"readiness,omitempty"`
+	UnreadyReasons []string `json:"unready_reasons,omitempty"`
+	UnreadySince   string   `json:"unready_since,omitempty"`
+	LastError      string   `json:"last_error,omitempty"`
+	LastErrorAt    string   `json:"last_error_at,omitempty"`
 	// Pending are the data points waiting for the next export, MaxPending
 	// otlp.max_pending_points.
 	Pending    int `json:"pending_points"`
@@ -185,11 +188,14 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 		d.LastErrorAt = h.failedAt.UTC().Format(time.RFC3339)
 	}
 	if d.UnreadyAfter > 0 {
-		// The rule /ready answers by (notReadyReasons).
+		// What /ready answers, from the same reasons, not from the failed
+		// exports alone: the exporter is also unready while it shuts down
+		// and, in allocator mode, before its first bundle. Read after
+		// o.mu is released, which notReadyReasons takes.
 		d.Readiness = "ready"
-		if d.Failures >= d.UnreadyAfter {
-			d.Readiness = "unready"
-			if !unreadySince.IsZero() {
+		if reasons := s.notReadyReasons(); len(reasons) > 0 {
+			d.Readiness, d.UnreadyReasons = "unready", reasons
+			if reasons[0] != shuttingDownReason && d.Failures >= d.UnreadyAfter && !unreadySince.IsZero() {
 				d.UnreadySince = unreadySince.UTC().Format(time.RFC3339)
 			}
 		}

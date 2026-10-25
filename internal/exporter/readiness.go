@@ -27,10 +27,13 @@ import (
 // never include an error's text: /ready is not authenticated, and an error can
 // quote a path, a URL or a line of the configuration.
 
+// shuttingDownReason is the one reason /ready gives while the exporter stops.
+const shuttingDownReason = "the exporter is shutting down"
+
 // notReadyReasons lists why the exporter is not ready, empty when it is.
 func (s *Server) notReadyReasons() []string {
 	if s.stopping.Load() {
-		return []string{"the exporter is shutting down"}
+		return []string{shuttingDownReason}
 	}
 	var reasons []string
 	if s.manager.Awaiting() {

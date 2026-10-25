@@ -152,9 +152,11 @@ With [OTLP export](OTLP.md) on, the section shows:
   data points they carried and the retries it made;
 - when the last export that got through ended, or `never`;
 - the failed exports in a row, and, with `otlp.unready_after_failures` set,
-  the readiness they make: `ready`, or `unready` since the end of the
-  failed export that made it so, as `/ready` answers (see
-  [Readiness](CONFIGURATION.md#readiness));
+  the readiness as `/ready` answers it, from the same reasons: `ready`, or
+  `unready` with the reasons `/ready` gives — the failed exports, the
+  exporter shutting down, or in allocator mode no configuration yet — and,
+  when the failed exports made it so, since the end of the failed export
+  that did (see [Readiness](CONFIGURATION.md#readiness));
 - the error of the last failed export and when that export began, kept
   after exports get through again, as a static target's is: the log's text,
   with every URL's credentials withheld, anything else that reads as a
@@ -207,9 +209,13 @@ export is off, and otherwise:
 ```
 
 `failing` says the last export failed. `last_export`, `last_success`,
-`last_error`, `last_error_at`, `unready_after_failures`, `readiness` and
-`unready_since` are left out when there is nothing to say: `readiness`
-without `otlp.unready_after_failures`, and `unready_since` while ready.
+`last_error`, `last_error_at`, `unready_after_failures`, `readiness`,
+`unready_reasons` and `unready_since` are left out when there is nothing to
+say: `readiness` without `otlp.unready_after_failures`, `unready_reasons`
+while ready, and `unready_since` unless the failed exports are among the reasons (never
+while shutting down, the one reason then). `unready_reasons` are
+the lines of `/ready`'s body, such as `["the exporter is shutting down"]` or
+`["the last 3 OTLP exports failed"]`.
 `unready_since` is when the failed export ended that made the exporter
 unready, the Nth of the current run of failures under
 `otlp.unready_after_failures` N, whenever N was set: a reload that lowers it

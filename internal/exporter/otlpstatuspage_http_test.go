@@ -320,7 +320,7 @@ func TestTheStatusPageShowsTheReadinessOTLPFailuresMake(t *testing.T) {
 	if code, _ := ready(t, server); code != http.StatusServiceUnavailable {
 		t.Errorf("/ready answers %d while the page says unready", code)
 	}
-	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="bad">unready</span> since `+d.UnreadySince, "OTLP export is failing: the last 2 exports failed, and the exporter is unready.")
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="bad">unready</span> since `+d.UnreadySince+`: the last 2 OTLP exports failed`, "OTLP export is failing: the last 2 exports failed, and the exporter is unready.")
 
 	endpoint.mu.Lock()
 	endpoint.statuses = []int{http.StatusOK}
@@ -329,6 +329,27 @@ func TestTheStatusPageShowsTheReadinessOTLPFailuresMake(t *testing.T) {
 	if d := otlpDetails(t, server); d.Readiness != "ready" || d.UnreadySince != "" {
 		t.Errorf("after an export got through the readiness is shown as %q since %q", d.Readiness, d.UnreadySince)
 	}
+}
+
+// The readiness is what /ready answers, not what the failed exports alone
+// make: while the exporter shuts down /ready answers 503 with no failed
+// export, and the page says unready, and why, as /ready does.
+func TestTheStatusPagesReadinessIsUnreadyWhileShuttingDown(t *testing.T) {
+	endpoint := newOTLPEndpoint(t, http.StatusOK)
+	server := otlpServer(t, endpoint.server.URL)
+	server.manager.Get().OTLP.UnreadyAfterFailures = 2
+	server.BeginShutdown()
+	if code, body := ready(t, server); code != http.StatusServiceUnavailable || !strings.Contains(body, shuttingDownReason) {
+		t.Fatalf("/ready answers %d %q while shutting down", code, body)
+	}
+	d := otlpDetails(t, server)
+	if d.Readiness != "unready" || !slices.Equal(d.UnreadyReasons, []string{shuttingDownReason}) || d.UnreadySince != "" || d.Failures != 0 {
+		t.Errorf("while shutting down the readiness is shown as %q for %q since %q", d.Readiness, d.UnreadyReasons, d.UnreadySince)
+	}
+	if raw := rawOTLPSection(t, server); string(raw["readiness"]) != `"unready"` || string(raw["unready_reasons"]) != `["`+shuttingDownReason+`"]` {
+		t.Errorf("the JSON says readiness %s for %s", raw["readiness"], raw["unready_reasons"])
+	}
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="bad">unready</span>: `+shuttingDownReason)
 }
 
 // A reload that changes otlp.unready_after_failures during a run of

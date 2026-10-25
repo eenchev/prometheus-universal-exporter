@@ -455,7 +455,7 @@ table.facts th { background: none; font-weight: 600; white-space: nowrap; }
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 {{- if .UnreadyAfter}}
-<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
+<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
 {{- end}}
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>

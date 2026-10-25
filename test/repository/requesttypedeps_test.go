@@ -110,9 +110,9 @@ func optInRequestTypes(t *testing.T) []string {
 }
 
 // Each request type's own modules are linked by a build that carries the
-// type and by no other: every build of one type, as REQUEST_TYPES names
-// it, links the gRPC and protobuf modules only when the type is grpc, the
-// SSH and SFTP modules only when it is sshfile, and the AWS SDK only when
+// type and by no other: every build of one type of the tree, as
+// REQUEST_TYPES names it, links the gRPC and protobuf modules only when the
+// type is grpc, the SSH and SFTP modules only when it is sshfile, and the AWS SDK only when
 // it is s3file; a build of graphite, http and localfile together links none
 // of them, nor does one of dns, tlscert and kubernetes, or of redis, tcp or
 // ldap alone, which need nothing outside the standard library; and the default
@@ -123,7 +123,7 @@ func optInRequestTypes(t *testing.T) []string {
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range []string{"dns", "graphite", "grpc", "http", "kubernetes", "ldap", "localfile", "redis", "s3file", "sql", "sshfile", "tcp", "tlscert", "graphite,http,localfile", "dns,kubernetes,ldap,redis,tcp,tlscert"} {
+	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,kubernetes,ldap,redis,tcp,tlscert") {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestType string

@@ -98,10 +98,11 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 			continue
 		}
 		filled := TemplatedFields(&c)
-		// A dns, tlscert or kubernetes collector has no placeholder in its
-		// request, and fills its label values alone.
+		// A collector of a type with neither a path nor a placeholder in a
+		// key of its own, as a dns, tlscert or kubernetes collector, has no
+		// placeholder in its request, and fills its label values alone.
 		least := 2
-		if name == RequestTypeDNS || name == RequestTypeTLSCert || name == RequestTypeKubernetes {
+		if !slices.Contains(fields, "path") && ownPlaceholders[name] == nil {
 			least = 1
 		}
 		if len(filled) < least {

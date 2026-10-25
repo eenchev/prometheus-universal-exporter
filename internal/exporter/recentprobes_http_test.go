@@ -397,8 +397,8 @@ func TestAPanickedProbeShowsAFixedError(t *testing.T) {
 		t.Fatalf("the panicking probe answered %d: %s", r.Code, r.Body)
 	}
 	row := probeRows(t, server)["broken panics://data"]
-	if row.Result != probeFailed || row.LastError != probePanickedText {
-		t.Errorf("the panicked probe's row is %+v; want failed with %q", row, probePanickedText)
+	if row.Result != probeFailed || row.LastError != errScrapePanicked.Error() {
+		t.Errorf("the panicked probe's row is %+v; want failed with %q", row, errScrapePanicked)
 	}
 	body := getPage(t, server, "/static-targets/status")
 	for _, text := range []string{body, statusJSONText(t, server)} {
@@ -407,6 +407,45 @@ func TestAPanickedProbeShowsAFixedError(t *testing.T) {
 		}
 	}
 	if !strings.Contains(logs.String(), "boom") {
+		t.Fatalf("the panic is not in the log:\n%s", logs.String())
+	}
+}
+
+// A probe that panics is answered a fixed text, since its caller keeps the
+// answer as the scrape's error out of the exporter's hands: the panic says
+// whatever its code had at hand, a URL with its password here. A debug
+// report, an operator's tool, shows the panic with the URL's userinfo
+// withheld, and the exporter's log has it as it was.
+func TestAPanickedProbeAnswersAFixedError(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	fetch.RequestTypes["panics"] = &fetch.RequestType{
+		Name:         "panics",
+		Fields:       []string{"path"},
+		TargetFields: []string{"path"},
+		Validate:     func(*model.Collector) error { return nil },
+		Fetch: func(context.Context, string, *model.Collector, fetch.RequestOverrides, http.Header) (*fetch.HTTPResponse, error) {
+			panic("boom at https://user:hunter2@host/x")
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "panics") })
+	broken := testutil.Collector("broken", "text")
+	broken.Request = model.RequestConfig{Type: "panics", Path: "/data"}
+	static := model.StaticTarget{Name: "broken", Collector: "broken", Target: "panics://data"}
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{broken}}, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{static}})
+	server.SetDebug(DebugFull)
+	r := probeOnce(t, server, probeOf("broken", "panics://data"), nil)
+	if r.Code != http.StatusInternalServerError || r.Body.String() != "probe failed: "+errScrapePanicked.Error()+"\n" {
+		t.Fatalf("the panicking probe answered %d: %q", r.Code, r.Body)
+	}
+	for _, report := range []string{
+		debugProbeGet(t, server, "collector=broken&debug=true&target=panics://data").Body.String(),
+		getPath(server, http.MethodGet, "/static-targets?debug=broken").Body.String(),
+	} {
+		if strings.Contains(report, "hunter2") || !strings.Contains(report, "boom at https://redacted:redacted@host/x") {
+			t.Errorf("the debug report shows the panic so:\n%s", report)
+		}
+	}
+	if !strings.Contains(logs.String(), "boom at https://user:hunter2@host/x") {
 		t.Fatalf("the panic is not in the log:\n%s", logs.String())
 	}
 }

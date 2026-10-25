@@ -5366,8 +5366,11 @@ failures go to its report, not to the exporter's log, which records only one
 [`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
 and [the probe's deadline](#probe-deadlines) apply as they do to any probe.
 A trip that panics — a bug, in a request type, a decoder or a transform — is
-reported as the `500` a probe would have answered, with the panic's message,
-and logged with its stack; its slot is given back as after any other trip.
+reported as the `500` a probe would have answered, `probe failed: the scrape
+panicked; the exporter's log has the panic`, with the panic's message in the
+report's log, a URL's userinfo and anything else that reads as a credential
+in it withheld; it is logged with its stack, and its slot is given back as
+after any other trip.
 
 Below `--web.debug=full`, `debug=true` is answered `403`, before the target
 is contacted. When `web.basic_auth` is configured, a debug probe needs the

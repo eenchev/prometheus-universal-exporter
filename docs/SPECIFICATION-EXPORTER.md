@@ -3023,8 +3023,12 @@ a value missing, a script that failed). What an error is to the trip — a
 refusal, a credential refused, a rule's failure under `fail`, a deadline —
 MUST be read before it is cut. A trip that ran out of its budget MUST still
 say so, after the bounded error. The text of a panic a probe or a scrape
-recovered from MUST be bounded alike in the answer, in a debug report and in
-the log; its stack is logged as it was.
+recovered from MUST be bounded alike in a debug report and in the log; its
+stack is logged as it was. A probe that panicked MUST be answered `500` with
+the fixed text `probe failed: the scrape panicked; the exporter's log has the
+panic`, never the panic's text: its caller keeps the answer as the scrape's
+error, out of the exporter's hands, and a panic says whatever its code had at
+hand, a target's URL with its password as much as anything.
 
 That bound loses what an error says after a long part, so where an error of
 those stages says why after a part the target, the scraper or a script can
@@ -11228,7 +11232,8 @@ exporter's prefixes (`--web.`, `--log.`, `--config.`, `--probe.`, `--python.`,
   a collector with no fingerprint share none.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
-- A panic in the shared work answers with `500` and leaves nothing in flight.
+- A panic in the shared work answers with `500` and the fixed text of a
+  probe that panicked, and leaves nothing in flight.
 - A panic in a static target scrape is logged and exports that target as down,
   and the other targets are scraped as usual.
 
@@ -20970,11 +20975,11 @@ Tests MUST show:
   more than 400 of them, and for more than 400 it is the first clashes as they
   were, the rest counted, recognised with the mark for the count.
 - A probe, a debug probe, a debug scrape and a static target's scrape that
-  panic with a megabyte of text answer `probe failed: internal error: ` and
-  its first 2,000 bytes to its length, report the same in the line that says
-  what would have been answered or published, and log it as `panic` in four
-  lines, the stack beside it in three; a panic that says `boom` is reported as
-  it was.
+  panic with a megabyte of text log it as `panic` in four lines, its first
+  2,000 bytes to its length, the stack beside it in three; the debug reports
+  show the same in their log, and the probe and the line that says what would
+  have been answered or published the fixed text of a probe that panicked; a
+  panic that says `boom` is reported as it was.
 - The failure log remembers a failure reported to it unbounded by the first
   2,000 bytes of what it is recognised by, ending `... (# bytes)`: an error of
   a megabyte and then of half a megabyte are one failure, counted twice, one
@@ -29286,8 +29291,9 @@ rate-limited endpoint.
   probe's client going away MUST NOT fail the others. It MUST be cancelled when
   every probe waiting on it has gone, and a probe arriving after that MUST start
   a new request rather than join the cancelled one.
-- A panic in the shared work MUST answer the waiting probes with `500` rather
-  than stop the exporter.
+- A panic in the shared work MUST answer the waiting probes with `500` and
+  the fixed text of a probe that panicked (§ 6.1a) rather than stop the
+  exporter.
 - It MUST be on by default, and a collector MUST be able to turn it off with
   `coalesce: false`, for a target that must see every probe as a request.
 - Static targets (§ 42.14) are scraped once per interval by the exporter
@@ -29762,7 +29768,8 @@ Of the recent probes:
   `rejected by limit` (`503`), `stale result served` or `backing off` — the
   HTTP status the exporter answered, the series it gave and its error, shown
   and cut as a static target's error is; a probe that panicked MUST be shown
-  with a fixed error, as a static target's scrape that panicked is.
+  with the fixed error it was answered, the one a static target's scrape that
+  panicked is shown with.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to
@@ -30895,8 +30902,10 @@ The exporter MUST log one `info` line per debug probe served, naming the
 collector and the target.
 A debug probe or debug scrape MUST give back its trip slot however its trip
 ends; a panic in it MUST be recovered, logged at `error` with its stack, and
-reported as `500: probe failed: internal error: <panic>` (a debug scrape:
-`target up 0`, the scrape failed with that internal error).
+reported as the `500` with the fixed text a probe that panicked is answered
+(a debug scrape: `target up 0` with that text), and the report's log MUST
+show the panic's text with what reads as a credential, a URL's userinfo
+among it, withheld (`fetch.RedactText`), redacted before it is cut.
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names read as a credential's
@@ -31052,8 +31061,7 @@ fill the response cache, reading it only as a debug probe does, share a trip, re
 but for one `info` line per run, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be
-reported as `500: probe failed: internal error: <panic>` and logged with its
-stack, and a fetch MUST give back its trip slot however it ends.
+reported as a debug probe that panics is, and logged with its stack, and a fetch MUST give back its trip slot however it ends.
 
 Every run MUST be counted in
 `http_exporter_debug_runs_total{kind, result}`, from 0: `kind` is `probe`,

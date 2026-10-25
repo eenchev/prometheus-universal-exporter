@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -169,30 +170,38 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 	}
 }
 
-// panicText is what a recovered panic said, as the answer and the log give
-// it: no more than the text of any failure may be (model.MaxFailureBytes).
-// A panic is raised with whatever its code had at hand, which may be a value
-// of the response as long as the response.
+// panicText is what a recovered panic said, as the log gives it: no more
+// than the text of any failure may be (model.MaxFailureBytes). A panic is
+// raised with whatever its code had at hand, which may be a value of the
+// response as long as the response.
 func panicText(recovered any) string {
 	return model.CutTo(fmt.Sprint(recovered), model.MaxFailureBytes, false)
 }
 
-// probePanickedText is the error of a probe that panicked, as the status
-// page shows it: the panic and its stack are in the log.
-const probePanickedText = "the probe panicked; the exporter's log has the panic"
+// redactedPanicText is what a recovered panic said, as a debug report shows
+// it: an operator's tool may show the panic, but not a credential it quotes,
+// which fetch.RedactText withholds as it does in any text the exporter did
+// not write. The text is redacted before it is cut, so that a cut cannot
+// leave the start of a password the redaction no longer recognises.
+func redactedPanicText(recovered any) string {
+	return model.CutTo(fetch.RedactText(fmt.Sprint(recovered)), model.MaxFailureBytes, false)
+}
 
 func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlight, work func(context.Context) *probeResult) {
 	defer func() {
 		// The work runs on its own goroutine, where a panic would take the
 		// whole exporter down rather than one request as it would in a handler.
 		if recovered := recover(); recovered != nil {
+			// The answer and the status page say only that it panicked, as
+			// for a static target's scrape: a panic says whatever its code
+			// had at hand, a target's URL with its password as much as
+			// anything, which no redaction is written for, and the caller
+			// keeps the answer as the scrape's error, out of the exporter's
+			// hands. The panic and its stack are in the log.
 			recorder := newProbeRecorder()
-			http.Error(recorder, "probe failed: internal error: "+panicText(recovered), http.StatusInternalServerError)
+			http.Error(recorder, "probe failed: "+errScrapePanicked.Error(), http.StatusInternalServerError)
 			flight.result = recorder.result(false)
-			// The status page shows a fixed text, as for a static target's
-			// scrape (errScrapePanicked): a panic says whatever its code had
-			// at hand, which no redaction is written for.
-			flight.result.failure = probePanickedText
+			flight.result.failure = errScrapePanicked.Error()
 			slog.Default().Error("probe panicked", "panic", panicText(recovered), "stack", string(debug.Stack()))
 		}
 		f.mu.Lock()

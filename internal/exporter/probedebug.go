@@ -520,11 +520,14 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 			stack := string(debug.Stack())
 			// The stack goes to the exporter's log, where a bug is reported
 			// from; the report says what happened.
-			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", panicText(recovered))
+			// The report says what a probe would have answered, which is the
+			// fixed text of probeFlights.run, and shows the panic in its log
+			// with what reads as a credential withheld.
+			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", redactedPanicText(recovered))
 			s.logger.Error("debug "+p.kind.String()+" panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", panicText(recovered), "stack", stack)
-			verdict, answer, ok = "500: probe failed: internal error: "+panicText(recovered), nil, false
+			verdict, answer, ok = "500: probe failed: "+errScrapePanicked.Error(), nil, false
 			if p.static != nil {
-				verdict = "target up 0: the scrape failed: internal error: " + panicText(recovered)
+				verdict = "target up 0: " + errScrapePanicked.Error()
 			}
 		}
 	}()

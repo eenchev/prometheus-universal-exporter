@@ -159,13 +159,13 @@ func TestAFileIsRefusedForTheClashesItNamesAndTheRestCounted(t *testing.T) {
 	}
 }
 
-// A probe, a debug probe and a static target's scrape that panic with a
-// megabyte of text are answered, reported and logged with its first 2,000
-// bytes and its length: the 500 a probe is answered, the line of a debug
-// report that says what a probe would have answered and a scrape would have
-// published, and the panic of each log line. They were the megabyte each.
-// The stack is logged beside it as it was, and a panic of a few words is
-// reported as it was.
+// A debug probe and a static target's scrape that panic with a megabyte of
+// text are reported and logged with its first 2,000 bytes and its length:
+// the panic of the report's log and of each line of the exporter's log. They
+// were the megabyte each. The stack is logged beside it as it was, and a
+// panic of a few words is reported as it was. A probe is answered a fixed
+// text whatever the panic said, and so is a debug report's line that says
+// what a probe would have answered or a scrape would have published.
 func TestAPanicOfAMegabyteIsReportedWithinTheBound(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	said := "boom"
@@ -197,13 +197,13 @@ func TestAPanicOfAMegabyteIsReportedWithinTheBound(t *testing.T) {
 			want = text[:model.MaxFailureBytes-len(mark)] + mark
 		}
 		logs.Reset()
-		if body := get("/probe?collector=broken&target=panics://data"); body != "probe failed: internal error: "+want+"\n" {
+		if body := get("/probe?collector=broken&target=panics://data"); body != "probe failed: "+errScrapePanicked.Error()+"\n" {
 			t.Errorf("a probe that panics with %d bytes is answered %d, %.80q ... %q", len(text), len(body), body, body[max(0, len(body)-40):])
 		}
-		if report := get("/probe?collector=broken&debug=true&target=panics://data"); !strings.Contains(report, "A probe would have answered 500: probe failed: internal error: "+want+".\n") || len(report) > 4*model.MaxFailureBytes+2000 {
+		if report := get("/probe?collector=broken&debug=true&target=panics://data"); !strings.Contains(report, "A probe would have answered 500: probe failed: "+errScrapePanicked.Error()+".\n") || !strings.Contains(report, want[:min(len(want), 100)]) || len(report) > 4*model.MaxFailureBytes+2000 {
 			t.Errorf("a debug probe that panics with %d bytes reports %d bytes: %.600s", len(text), len(report), report)
 		}
-		if report := get("/static-targets?debug=broken"); !strings.Contains(report, "The scrape would have published target up 0: the scrape failed: internal error: "+want+".\n") || len(report) > 4*model.MaxFailureBytes+2000 {
+		if report := get("/static-targets?debug=broken"); !strings.Contains(report, "The scrape would have published target up 0: "+errScrapePanicked.Error()+".\n") || !strings.Contains(report, want[:min(len(want), 100)]) || len(report) > 4*model.MaxFailureBytes+2000 {
 			t.Errorf("a debug scrape that panics with %d bytes reports %d bytes: %.600s", len(text), len(report), report)
 		}
 		server.scrapeTarget(t.Context(), server.manager.Get(), static)

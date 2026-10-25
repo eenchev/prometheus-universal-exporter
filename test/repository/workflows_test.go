@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -863,14 +866,25 @@ func everyPackage(command string) string {
 // the step changes, checkout, the filter and the outputs its steps read,
 // and nothing of the rest: its machine is test's, and the environment, which
 // is for the Go tests, is not required of it. A job that sets up Go or
-// Python, or runs go, python3, pip or make, has the whole setup.
+// Python, or runs either in any shape (setsUpGoOrPython), has the whole
+// setup.
 func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 	const path = ".github/workflows/ci.yml"
-	all := workflowSteps(t, path)
+	jobs, _ := workflowDocument(t, path)["jobs"].(map[string]any)
+	for _, problem := range goJobSetupProblems(workflowSteps(t, path), jobs) {
+		t.Error(problem)
+	}
+}
+
+// goJobSetupProblems is what TestTheGoJobsOfCIStartWithTheSetupOfTest finds
+// wrong with ci.yml's jobs, given each job's steps and definition.
+func goJobSetupProblems(all map[string][]map[string]any, jobs map[string]any) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	test := all["test"]
 	download := stepIndex(test, "go mod download")
 	if download < 0 {
-		t.Fatal("ci.yml's job test no longer runs go mod download, where its setup steps end")
+		return []string{"ci.yml's job test no longer runs go mod download, where its setup steps end"}
 	}
 	var setup []map[string]any
 	for _, step := range test[:download+1] {
@@ -879,19 +893,18 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 		}
 	}
 	if len(setup) < 8 {
-		t.Fatalf("only %d setup steps were read from ci.yml's job test; the reader has stopped finding them", len(setup))
+		return []string{fmt.Sprintf("only %d setup steps were read from ci.yml's job test; the reader has stopped finding them", len(setup))}
 	}
 	common := slices.IndexFunc(setup, func(step map[string]any) bool { return step["id"] == "changes" }) + 1
 	if common < 3 {
-		t.Fatal("ci.yml's job test has no step changes after its checkout and filter, where the setup a job without Go needs ends")
+		return []string{"ci.yml's job test has no step changes after its checkout and filter, where the setup a job without Go needs ends"}
 	}
-	jobs, _ := workflowDocument(t, path)["jobs"].(map[string]any)
 	testJob, _ := jobs["test"].(map[string]any)
 	others := 0
-	for name, raw := range jobs {
-		definition, _ := raw.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(jobs)) {
+		definition, _ := jobs[name].(map[string]any)
 		if _, ok := definition["if"]; ok {
-			t.Errorf("ci.yml's job %s has a job-level `if`; gate its steps with `if: steps.changes.outputs.go == 'true'` instead", name)
+			report("ci.yml's job %s has a job-level `if`; gate its steps with `if: steps.changes.outputs.go == 'true'` instead", name)
 		}
 		if name == "test" {
 			continue
@@ -903,17 +916,17 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 			want = setup[:common]
 		}
 		if len(steps) <= len(want) {
-			t.Errorf("ci.yml's job %s has %d steps, not test's %d setup steps and its own after them", name, len(steps), len(want))
+			report("ci.yml's job %s has %d steps, not test's %d setup steps and its own after them", name, len(steps), len(want))
 			continue
 		}
 		for index, step := range want {
 			if !reflect.DeepEqual(steps[index], step) {
-				t.Errorf("ci.yml's job %s has step %d\n%s\nwhere test's setup has\n%s", name, index+1, yamlText(steps[index]), yamlText(step))
+				report("ci.yml's job %s has step %d\n%s\nwhere test's setup has\n%s", name, index+1, yamlText(steps[index]), yamlText(step))
 			}
 		}
 		for _, step := range steps[len(want):] {
 			if condition := step["if"]; !slices.Contains([]any{sideCondition("go"), sideCondition("exporter"), sideCondition("allocator")}, condition) {
-				t.Errorf("ci.yml's job %s runs a step under the condition %v, not that of the go, exporter or allocator filter:\n%s", name, condition, yamlText(step))
+				report("ci.yml's job %s runs a step under the condition %v, not that of the go, exporter or allocator filter:\n%s", name, condition, yamlText(step))
 			}
 		}
 		keys := []string{"env", "runs-on"}
@@ -922,30 +935,82 @@ func TestTheGoJobsOfCIStartWithTheSetupOfTest(t *testing.T) {
 		}
 		for _, key := range keys {
 			if !reflect.DeepEqual(definition[key], testJob[key]) {
-				t.Errorf("ci.yml's job %s has the %s %v, but test has %v", name, key, definition[key], testJob[key])
+				report("ci.yml's job %s has the %s %v, but test has %v", name, key, definition[key], testJob[key])
 			}
 		}
 	}
 	// The linters, the builds, the image, the two race jobs, the request
 	// types' matrix and the allocator's job.
 	if others < 7 {
-		t.Errorf("ci.yml has %d jobs beside test; the linters, the builds, the image, the two race runs, the request types' tests and the allocator's tests were meant to have one each", others)
+		report("ci.yml has %d jobs beside test; the linters, the builds, the image, the two race runs, the request types' tests and the allocator's tests were meant to have one each", others)
+	}
+	return problems
+}
+
+// A step of the image's job that runs Go or Python in any of the shapes
+// ci.yml's run scripts take — after a variable's assignment, after && or in
+// $(…), through a script of tools/ that runs go — makes the job need test's
+// whole setup, and the job without it fails the check; the image's job as
+// it is, which runs only docker, passes it.
+func TestAJobThatRunsGoInAnyShapeNeedsTheWholeSetup(t *testing.T) {
+	const path = ".github/workflows/ci.yml"
+	jobs, _ := workflowDocument(t, path)["jobs"].(map[string]any)
+	all := workflowSteps(t, path)
+	if problems := goJobSetupProblems(all, jobs); len(problems) != 0 {
+		t.Fatalf("ci.yml as it is fails the check: %v", problems)
+	}
+	image := all["image"]
+	for _, run := range []string{
+		`tags="$(sh tools/request-type-tags.sh http)" && go vet -tags "$tags" ./...`,
+		`CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./...`,
+		`packages="$(sh tools/ci-packages.sh exporter)"`,
+		`echo "$(go env GOVERSION)"`,
+		"docker run --rm prometheus-universal-exporter:ci --version; python3 tools/ci-passed.py",
+		"ls | pip install -r test/python/requirements.txt",
+		"true || make lint",
+		"version=`/usr/local/go/bin/go version`",
+		"set -eu\ngofmt -l .",
+	} {
+		mutated := maps.Clone(all)
+		mutated["image"] = append(slices.Clone(image), map[string]any{"name": "Runs Go", "if": sideCondition("go"), "run": run})
+		if !slices.ContainsFunc(goJobSetupProblems(mutated, jobs), func(problem string) bool { return strings.Contains(problem, "job image ") }) {
+			t.Errorf("the image's job passes the check with a step running %q and no setup of Go or Python", run)
+		}
 	}
 }
 
-// setsUpGoOrPython reports whether a step sets up Go or Python, or runs go,
-// python3, pip or make, which a job does only after test's whole setup.
+// goOrPythonWords are the words of a run script that run Go or Python, or
+// the tools that need them.
+var goOrPythonWords = []string{"go", "gofmt", "gopls", "golangci-lint", "govulncheck", "python", "python3", "pip", "pip3", "make"}
+
+// setsUpGoOrPython reports whether a step sets up Go or Python, or runs
+// either, which a job does only after test's whole setup.
+//
+// A run script is not parsed as a shell would: its commands hide behind
+// assignments (CGO_ENABLED=0 go build), &&, ;, pipes, $(…) and backticks,
+// and behind the scripts of tools/, which run go (ci-packages.sh runs go
+// list) or python3. So a step counts as running Go or Python when any word
+// of its script, split at every character that cannot be part of a command's
+// name, is one of goOrPythonWords or ends in .py, or when the script names
+// anything under tools/. A comment or an argument that happens to be such a
+// word errs the safe way: the job is held to the whole setup.
 func setsUpGoOrPython(step map[string]any) bool {
-	if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "actions/setup-go@") || strings.HasPrefix(uses, "actions/setup-python@") {
-		return true
-	}
-	run, _ := step["run"].(string)
-	for line := range strings.SplitSeq(run, "\n") {
-		if first, _, _ := strings.Cut(strings.TrimSpace(line), " "); slices.Contains([]string{"go", "python3", "pip", "make"}, first) {
+	uses, _ := step["uses"].(string)
+	for _, action := range []string{"actions/setup-go@", "actions/setup-python@", "golangci/golangci-lint-action@"} {
+		if strings.HasPrefix(uses, action) {
 			return true
 		}
 	}
-	return false
+	run, _ := step["run"].(string)
+	if strings.Contains(run, "tools/") {
+		return true
+	}
+	words := strings.FieldsFunc(run, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_.+-", r)
+	})
+	return slices.ContainsFunc(words, func(word string) bool {
+		return slices.Contains(goOrPythonWords, word) || strings.HasSuffix(word, ".py")
+	})
 }
 
 // test ran every check one after another and took a quarter of an hour, the

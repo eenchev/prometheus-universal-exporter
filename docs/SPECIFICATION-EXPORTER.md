@@ -27270,8 +27270,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   after the setup under the go filter and none publishing; a workflow that
   builds it in `build` with `docker build` fails the test
   (TestCIBuildsForMacOSAndBuildsTheImage).
-- A job of ci.yml none of whose steps sets up Go or Python or runs go,
-  python3, pip or make starts with `test`'s checkout, filter and step
+- A job of ci.yml none of whose steps sets up Go or Python, or has in its
+  script go, python3, pip, make or the like as a word or a script of
+  `tools/`, starts with `test`'s checkout, filter and step
   `changes` alone and is not held to `test`'s env; one that runs `go` after
   only those steps, or whose step `changes` differs from `test`'s, fails the
   test, and ci.yml has at least seven jobs beside `test`

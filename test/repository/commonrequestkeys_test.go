@@ -12,7 +12,7 @@ import (
 // pendingCommonKeys are the keys of one request type that are still fields
 // of the common part, until the type's own struct holds them.
 var pendingCommonKeys = []string{
-	"method", "body", "pagination", "accept_codes", "targets", "from", "until",
+	"method", "body", "pagination", "accept_codes",
 	"rpc", "message", "metadata", "descriptors", "protoset_file", "proto_files", "proto_import_paths",
 	"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections",
 }

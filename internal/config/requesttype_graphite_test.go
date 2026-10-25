@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -40,7 +41,8 @@ func TestAGraphiteCollectorLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := cfg.Collectors[0]
-	if c.Decoder.Type != "graphite" || c.Request.Path != "/render" || c.Request.From != "-15min" || c.Request.Until != "now" || time.Duration(c.Response.Graphite.MaxAge) != 2*time.Minute {
+	window := c.Request.Own.(fetch.GraphiteConfig)
+	if c.Decoder.Type != "graphite" || c.Request.Path != "/render" || window.From != "-15min" || window.Until != "now" || time.Duration(c.Response.Graphite.MaxAge) != 2*time.Minute {
 		t.Fatalf("collector %+v", c)
 	}
 	if len(cfg.Warnings) != 0 {

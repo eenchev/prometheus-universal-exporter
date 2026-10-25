@@ -16,11 +16,25 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// A graphite collector's placeholders are in its targets.
+func init() {
+	ownPlaceholders[RequestTypeGraphite] = func(c *model.Collector) {
+		c.Request.Own = GraphiteConfig{Targets: []string{"app.{{param_target:x}}.cpu"}}
+	}
+}
+
+// editGraphite edits a graphite collector's own keys.
+func editGraphite(c *model.Collector, edit func(*GraphiteConfig)) {
+	r := graphiteRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
+
 // graphiteCollector asks the render API for the given expressions.
 func graphiteCollector(targets ...string) model.Collector {
 	return model.Collector{
 		Name:      "graphite",
-		Request:   model.RequestConfig{Type: RequestTypeGraphite, Targets: targets},
+		Request:   model.RequestConfig{Type: RequestTypeGraphite, Own: GraphiteConfig{Targets: targets}},
 		Transform: model.TransformConfig{Type: "jq"},
 	}
 }
@@ -42,7 +56,7 @@ func TestGraphiteRequestURL(t *testing.T) {
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Request.Path != "/render" || c.Request.From != "-15min" || c.Request.Until != "now" || RequestMethodFor(&c, RequestOverrides{}) != http.MethodGet {
+	if c.Request.Path != "/render" || graphiteRequest(&c).From != "-15min" || graphiteRequest(&c).Until != "now" || RequestMethodFor(&c, RequestOverrides{}) != http.MethodGet {
 		t.Fatalf("defaults: %+v", c.Request)
 	}
 	u := graphiteURL(t, &c, RequestOverrides{})
@@ -62,7 +76,8 @@ func TestGraphiteRequestURL(t *testing.T) {
 	}
 
 	c = graphiteCollector("a.b")
-	c.Request.Path, c.Request.From, c.Request.Until = "/graphite/render", " -1h ", "-5min"
+	c.Request.Path = "/graphite/render"
+	editGraphite(&c, func(r *GraphiteConfig) { r.From, r.Until = " -1h ", "-5min" })
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}
@@ -229,20 +244,32 @@ func TestGraphiteRequestValidation(t *testing.T) {
 		edit func(*model.Collector)
 		want string
 	}{
-		"no targets":        {func(c *model.Collector) { c.Request.Targets = nil }, "has no request.targets"},
-		"an empty target":   {func(c *model.Collector) { c.Request.Targets = []string{"a.b", " "} }, `request.targets[1] " ": is empty`},
-		"an open bracket":   {func(c *model.Collector) { c.Request.Targets = []string{"sumSeries(a.b"} }, "has a ( that is never closed"},
-		"a stray bracket":   {func(c *model.Collector) { c.Request.Targets = []string{"a.b)"} }, "has a ) that closes nothing"},
-		"crossed brackets":  {func(c *model.Collector) { c.Request.Targets = []string{"f(a.{b,c)}"} }, "has a ) that closes nothing"},
-		"an open quote":     {func(c *model.Collector) { c.Request.Targets = []string{"alias(a.b, 'x)"} }, "has a ' that is never closed"},
-		"a line break":      {func(c *model.Collector) { c.Request.Targets = []string{"a.b\nc.d"} }, "control character"},
-		"a bad placeholder": {func(c *model.Collector) { c.Request.Targets = []string{"a.{{param_}}"} }, "is not a path parameter"},
-		"its own query":     {func(c *model.Collector) { c.Request.Query = map[string]string{"Target": "x"} }, "sets request.query Target, which a graphite collector sets itself"},
-		"format":            {func(c *model.Collector) { c.Request.Query = map[string]string{"format": "csv"} }, "format always json"},
-		"a spaced window":   {func(c *model.Collector) { c.Request.From = "-5 min" }, `request.from: "-5 min" has a space in it`},
-		"an http key":       {func(c *model.Collector) { c.Request.Method = "POST" }, `request.method, which does not apply to request.type "graphite"`},
-		"a body":            {func(c *model.Collector) { c.Request.Body = "x" }, `request.body, which does not apply`},
-		"a localfile key":   {func(c *model.Collector) { c.Request.Root = "/tmp" }, `request.root, which does not apply`},
+		"no targets": {func(c *model.Collector) { editGraphite(c, func(r *GraphiteConfig) { r.Targets = nil }) }, "has no request.targets"},
+		"an empty target": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"a.b", " "} })
+		}, `request.targets[1] " ": is empty`},
+		"an open bracket": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"sumSeries(a.b"} })
+		}, "has a ( that is never closed"},
+		"a stray bracket": {func(c *model.Collector) { editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"a.b)"} }) }, "has a ) that closes nothing"},
+		"crossed brackets": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"f(a.{b,c)}"} })
+		}, "has a ) that closes nothing"},
+		"an open quote": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"alias(a.b, 'x)"} })
+		}, "has a ' that is never closed"},
+		"a line break": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"a.b\nc.d"} })
+		}, "control character"},
+		"a bad placeholder": {func(c *model.Collector) {
+			editGraphite(c, func(r *GraphiteConfig) { r.Targets = []string{"a.{{param_}}"} })
+		}, "is not a path parameter"},
+		"its own query":   {func(c *model.Collector) { c.Request.Query = map[string]string{"Target": "x"} }, "sets request.query Target, which a graphite collector sets itself"},
+		"format":          {func(c *model.Collector) { c.Request.Query = map[string]string{"format": "csv"} }, "format always json"},
+		"a spaced window": {func(c *model.Collector) { editGraphite(c, func(r *GraphiteConfig) { r.From = "-5 min" }) }, `request.from: "-5 min" has a space in it`},
+		"an http key":     {func(c *model.Collector) { c.Request.Method = "POST" }, `request.method, which does not apply to request.type "graphite"`},
+		"a body":          {func(c *model.Collector) { c.Request.Body = "x" }, `request.body, which does not apply`},
+		"a localfile key": {func(c *model.Collector) { c.Request.Root = "/tmp" }, `request.root, which does not apply`},
 		"basic and bearer": {func(c *model.Collector) {
 			c.Request.BearerToken = "t"
 			c.Request.BasicAuth = &model.BasicAuth{Username: "u"}
@@ -330,7 +357,7 @@ func TestGraphiteWindowProbeParameters(t *testing.T) {
 // as it is for an http one (TestRequestMaxResponseBytesCanRaiseTheLimit).
 func TestANegativeMaxResponseBytesIsRefusedForAGraphiteCollector(t *testing.T) {
 	negative := model.Collector{Name: "n", Request: model.RequestConfig{Type: RequestTypeGraphite, MaxResponseBytes: -1}}
-	negative.Request.Targets = []string{"a.b"}
+	editGraphite(&negative, func(r *GraphiteConfig) { r.Targets = []string{"a.b"} })
 	if err := ValidateRequest(&negative); err == nil || !strings.Contains(err.Error(), "max_response_bytes must not be negative") {
 		t.Errorf("%s: %v", RequestTypeGraphite, err)
 	}

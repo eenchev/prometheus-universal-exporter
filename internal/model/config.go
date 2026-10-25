@@ -221,12 +221,6 @@ type RequestConfig struct {
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
-	// Targets, From and Until belong to the graphite type: the Graphite
-	// expressions asked of the render API, each sent as a target parameter,
-	// and the window they are rendered over (fetch/requesttype_graphite.go).
-	Targets []string `yaml:"targets"`
-	From    string   `yaml:"from"`
-	Until   string   `yaml:"until"`
 	// RPC, Message, Metadata and the descriptor keys belong to the grpc
 	// type: the method called, package.Service/Method; the request message
 	// in the protobuf JSON mapping; the request metadata; and where the

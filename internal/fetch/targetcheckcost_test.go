@@ -91,7 +91,7 @@ func paramsCorpusCollector(t *testing.T, r *rand.Rand) model.Collector {
 	c.Request.Query = pick(r, nil, nil, map[string]string{"region": "{{param_region:eu}}"}, map[string]string{"bad": "{{param_region:${X}}}"})
 	c.Request.Message = pick(r, "", "", `{"q": {{param_queue:orders|json}}}`, `{"q": {{param_queue|form}}}`)
 	c.Request.Metadata = pick(r, nil, nil, map[string]string{"x-t": "{{param_meta:d}}"}, map[string]string{"x-t": "{{param_tenant}}"})
-	c.Request.Targets = pick(r, nil, nil, []string{"app.{{param_host:web}}.requests", "cpu.load"}, []string{"{{param_host"})
+	setOwnKey(&c, "targets", pick(r, nil, nil, []string{"app.{{param_host:web}}.requests", "cpu.load"}, []string{"{{param_host"}))
 	if err := readLabels(&c); err != nil {
 		t.Fatal(err)
 	}

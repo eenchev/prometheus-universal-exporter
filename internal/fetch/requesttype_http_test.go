@@ -20,7 +20,7 @@ import (
 func TestTheKeysOfOtherTypesDoNotApplyToHTTP(t *testing.T) {
 	t.Run("graphite's targets", func(t *testing.T) {
 		// The graphite keys are graphite's alone.
-		h := model.Collector{Name: "web", Request: model.RequestConfig{Type: RequestTypeHTTP, Targets: []string{"a"}}}
+		h := model.Collector{Name: "web", Request: model.RequestConfig{Type: RequestTypeHTTP, Foreign: []string{"targets"}}}
 		if err := ValidateRequest(&h); err == nil || !strings.Contains(err.Error(), `request.targets, which does not apply to request.type "http"`) {
 			t.Fatalf("an http collector with targets: err=%v", err)
 		}

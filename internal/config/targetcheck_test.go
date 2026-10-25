@@ -156,7 +156,7 @@ func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
 			c.Request.Message = oneOf(r, `{"t": {{param_tenant:acme|json}}}`, `{"t": {{param_tenant|form}}}`)
 		}
 		if r.IntN(6) == 0 {
-			c.Request.Targets = oneOf(r, []string{"servers.{{param_zone:eu}}.load"}, []string{"servers.{{param_tenant"})
+			setOwnKey(c, "targets", oneOf(r, []string{"servers.{{param_zone:eu}}.load"}, []string{"servers.{{param_tenant"}))
 		}
 		if r.IntN(3) == 0 {
 			c.Request.Retry = model.RetryConfig{Attempts: r.IntN(4), Backoff: model.Duration(oneOf(r, 0, time.Second, 20*time.Second, 40*time.Second))}

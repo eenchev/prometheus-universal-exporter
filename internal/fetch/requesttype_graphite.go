@@ -64,6 +64,23 @@ const (
 // of the URL room.
 const graphitePostAbove = 2048
 
+// GraphiteConfig is a graphite collector's own request keys: the Graphite
+// expressions asked of the render API, each sent as a target parameter,
+// and the window they are rendered over.
+type GraphiteConfig struct {
+	Targets []string `yaml:"targets"`
+	From    string   `yaml:"from"`
+	Until   string   `yaml:"until"`
+}
+
+// graphiteRequest is a graphite collector's own request keys: the zero
+// GraphiteConfig of a collector built in code whose request has not been
+// validated, which sets them (ValidateRequest).
+func graphiteRequest(c *model.Collector) GraphiteConfig {
+	own, _ := c.Request.Own.(GraphiteConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeGraphite,
@@ -73,9 +90,10 @@ func init() {
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
-			"targets", "from", "until",
 			"allowed_targets", "denied_targets", "accept_status", "login", "rate_limit",
 		},
+		Config:   GraphiteConfig{},
+		KeyRules: graphiteKeyRules,
 		Overrides: []string{
 			"path", "timeout", "insecure_skip_verify",
 			"follow_redirects", "enable_http2", "retry_attempts", "retry_backoff",
@@ -142,7 +160,8 @@ func (graphiteRequester) Method(c *model.Collector, overrides RequestOverrides) 
 // always GET, and is left unset, since request.method is not graphite's to
 // set: a configuration validated again must not read as one that sets it.
 func validateGraphiteRequest(x *model.Collector) error {
-	if len(x.Request.Targets) == 0 {
+	own := graphiteRequest(x)
+	if len(own.Targets) == 0 {
 		return fmt.Errorf("collector %q has no request.targets; a graphite collector asks the render API for the series of at least one Graphite expression, such as app.*.requests.count", x.Name)
 	}
 	for _, name := range model.SortedKeys(x.Request.Query) {
@@ -155,7 +174,7 @@ func validateGraphiteRequest(x *model.Collector) error {
 	for _, window := range []struct {
 		key   string
 		value *string
-	}{{"from", &x.Request.From}, {"until", &x.Request.Until}} {
+	}{{"from", &own.From}, {"until", &own.Until}} {
 		*window.value = strings.TrimSpace(*window.value)
 		if err := checkGraphiteWindow(*window.value); err != nil {
 			return fmt.Errorf("collector %q request.%s: %w", x.Name, window.key, err)
@@ -164,24 +183,25 @@ func validateGraphiteRequest(x *model.Collector) error {
 	if x.Request.Path == "" {
 		x.Request.Path = "/render"
 	}
-	if x.Request.From == "" {
-		x.Request.From = graphiteDefaultFrom
+	if own.From == "" {
+		own.From = graphiteDefaultFrom
 	}
-	if x.Request.Until == "" {
-		x.Request.Until = graphiteDefaultUntil
+	if own.Until == "" {
+		own.Until = graphiteDefaultUntil
 	}
+	x.Request.Own = own
 	// The connection's rules, and the placeholders of the path, the headers,
 	// the query and the targets, are http's.
 	if err := validateHTTPRequest(x); err != nil {
 		return err
 	}
 	x.Request.Method = ""
-	for i, expression := range x.Request.Targets {
+	for i, expression := range own.Targets {
 		if err := checkGraphiteExpression(withoutPlaceholders(expression)); err != nil {
 			return fmt.Errorf("collector %q request.targets[%d] %q: %w", x.Name, i, expression, err)
 		}
 	}
-	if err := refuseRepeatedExpressions(x.Request.Targets); err != nil {
+	if err := refuseRepeatedExpressions(own.Targets); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	return nil
@@ -234,7 +254,7 @@ func checkGraphiteTargetRequest(c *model.Collector, t *model.StaticTarget) error
 func graphiteMethod(c *model.Collector, overrides RequestOverrides) string {
 	targets := overrides.Targets
 	if targets == nil {
-		targets = c.Request.Targets
+		targets = graphiteRequest(c).Targets
 	}
 	size := 0
 	for _, expression := range targets {
@@ -251,10 +271,11 @@ func graphiteMethod(c *model.Collector, overrides RequestOverrides) string {
 // until replace the collector's; the collector's targets have their
 // placeholders filled in.
 func graphiteQuery(c *model.Collector, overrides RequestOverrides) (url.Values, error) {
+	own := graphiteRequest(c)
 	targets := overrides.Targets
 	if targets == nil {
-		targets = make([]string, 0, len(c.Request.Targets))
-		for i, expression := range c.Request.Targets {
+		targets = make([]string, 0, len(own.Targets))
+		for i, expression := range own.Targets {
 			if HasPathParams(expression) {
 				rendered, err := templateField{fmt.Sprintf("request.targets[%d]", i), expression, "graphite"}.render(overrides.Params)
 				if err != nil {
@@ -265,7 +286,7 @@ func graphiteQuery(c *model.Collector, overrides RequestOverrides) (url.Values, 
 			targets = append(targets, expression)
 		}
 	}
-	from, until := c.Request.From, c.Request.Until
+	from, until := own.From, own.Until
 	if overrides.From != "" {
 		from = strings.TrimSpace(overrides.From)
 	}
@@ -361,7 +382,7 @@ var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
 func graphiteTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
 	var out []templateField
 	if overrides.Targets == nil {
-		for i, target := range c.Request.Targets {
+		for i, target := range graphiteRequest(c).Targets {
 			if HasPathParams(target) {
 				out = append(out, templateField{fmt.Sprintf("request.targets[%d]", i), target, "graphite"})
 			}
@@ -377,4 +398,14 @@ func escapeGraphiteValue(where, name, value string) (string, error) {
 		return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . : @ %% + ~, since it lands inside a Graphite expression, where anything else could change the expression", where, name, value)
 	}
 	return value, nil
+}
+
+// graphiteKeyRules is what the configuration schema says of a graphite
+// collector's own keys.
+func graphiteKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"targets": {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
+		"from":    {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
+		"until":   {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
+	}
 }

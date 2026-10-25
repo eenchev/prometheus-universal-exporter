@@ -95,9 +95,6 @@ func TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType(t *testing.
 		if slices.Contains(fields, "metadata") {
 			c.Request.Metadata = map[string]string{"x-set": "{{param_metadata:x}}"}
 		}
-		if slices.Contains(fields, "targets") {
-			c.Request.Targets = []string{"app.{{param_target:x}}.cpu"}
-		}
 		if slices.Contains(fields, "database") {
 			c.Request.Database = "{{param_database:x}}"
 		}

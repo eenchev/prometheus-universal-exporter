@@ -403,7 +403,7 @@ func TestACollectorWithoutLabelPlaceholdersIsCheckedAsItWas(t *testing.T) {
 				c.Request.Query = map[string]string{"region": "{{param_region:eu}}"}
 				c.Request.Message = `{"queue": {{param_queue:orders|json}}}`
 				c.Request.Metadata = map[string]string{"x-tenant": "{{param_meta:default}}"}
-				c.Request.Targets = []string{"app.{{param_host:web}}.requests", "cpu.load"}
+				setOwnKey(&c, "targets", []string{"app.{{param_host:web}}.requests", "cpu.load"})
 			}
 			collectors = append(collectors, c)
 		}

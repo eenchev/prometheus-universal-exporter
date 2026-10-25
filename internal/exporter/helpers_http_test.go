@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -198,4 +199,27 @@ func installConfig(server *Server, cfg *model.Config) {
 	manager := config.NewManager(cfg, "", server.logger)
 	manager.SetTargets("", server.manager.StaticTargetFile())
 	server.manager = manager
+}
+
+// familyTypes are the built request types whose collectors have a family of
+// requestTypeFamilies, as their registrations give it, sorted.
+func familyTypes(family string) []string {
+	var types []string
+	for _, name := range fetch.BuiltRequestTypes() {
+		if typeHasFamily(name, family) {
+			types = append(types, name)
+		}
+	}
+	return types
+}
+
+// builtOf are those of the types, given sorted, this build carries.
+func builtOf(types ...string) []string {
+	var built []string
+	for _, name := range types {
+		if fetch.RequestTypes[name] != nil {
+			built = append(built, name)
+		}
+	}
+	return built
 }

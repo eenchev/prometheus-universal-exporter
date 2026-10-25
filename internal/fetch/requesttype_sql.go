@@ -73,9 +73,16 @@ func init() {
 			"max_rows", "max_response_bytes", "connections",
 			"allowed_targets", "denied_targets",
 		},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
-		Validate:           validateSQLRequest,
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
+		Validate:     validateSQLRequest,
+		Rows:         true,
+		TargetHint: func(c *model.Collector) string {
+			if c.Request.Driver == SQLDriverSnowflake {
+				return "the Snowflake account identifier"
+			}
+			return "the database server, host or host:port"
+		},
 		Fetch:              fetchSQL,
 		CheckTarget:        checkSQLTarget,
 		CheckTargetRequest: checkSQLTargetRequest,

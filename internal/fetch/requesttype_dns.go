@@ -50,7 +50,14 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Validate:     validateDNSRequest,
-		Fetch:        fetchDNS,
+		JSONAnswer:   true,
+		TargetHint: func(c *model.Collector) string {
+			if c.Request.RecordType == "PTR" {
+				return "the IP address to resolve"
+			}
+			return "the name to resolve"
+		},
+		Fetch: fetchDNS,
 		CheckTarget: func(c *model.Collector, target string, _ bool) error {
 			_, err := parseDNSTarget(c, target)
 			return err

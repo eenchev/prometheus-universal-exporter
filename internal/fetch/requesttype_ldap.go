@@ -60,11 +60,15 @@ import (
 
 func init() {
 	registerRequestType(&RequestType{
-		Name:               RequestTypeLDAP,
-		Fields:             []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "bind_dn", "password_file", "tls"},
-		Validate:           validateLDAPRequest,
+		Name:         RequestTypeLDAP,
+		Fields:       []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "bind_dn", "password_file", "tls"},
+		Validate:     validateLDAPRequest,
+		JSONAnswer:   true,
+		// ldap is said letter by letter.
+		Article:            "an",
+		TargetHint:         func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
 		Fetch:              fetchLDAP,
 		CheckTarget:        checkLDAPTarget,
 		CheckTargetRequest: checkLDAPTargetRequest,

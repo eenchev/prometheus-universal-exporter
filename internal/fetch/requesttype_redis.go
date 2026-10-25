@@ -71,6 +71,8 @@ func init() {
 		Overrides:          []string{"timeout", PathParamPrefix},
 		TargetFields:       []string{"timeout", "username", "password_file", "tls"},
 		Validate:           validateRedisRequest,
+		JSONAnswer:         true,
+		TargetHint:         func(*model.Collector) string { return "host, host:port or rediss://host:port" },
 		Fetch:              fetchRedis,
 		CheckTarget:        checkRedisTarget,
 		CheckTargetRequest: checkRedisTargetRequest,

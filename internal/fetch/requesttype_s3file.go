@@ -65,10 +65,12 @@ func init() {
 			"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file",
 			"allowed_targets", "denied_targets",
 		},
-		Overrides:    []string{"path", "timeout", PathParamPrefix},
-		TargetFields: []string{"path", "timeout"},
-		Validate:     validateS3FileRequest,
-		Fetch:        fetchS3File,
+		Overrides:      []string{"path", "timeout", PathParamPrefix},
+		TargetFields:   []string{"path", "timeout"},
+		Validate:       validateS3FileRequest,
+		FileExtensions: true,
+		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
+		Fetch:          fetchS3File,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseS3Target(target)
 			return err

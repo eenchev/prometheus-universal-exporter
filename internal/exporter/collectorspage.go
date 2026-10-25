@@ -80,43 +80,17 @@ func configuredCredentials(c *model.Collector) []string {
 	return out
 }
 
+// targetHint says what a target of the collector is, as its request type
+// says it (fetch.RequestType.TargetHint), and whether it may be left out.
 func targetHint(c *model.Collector, required bool) string {
 	hint := "target"
-	switch c.Request.Type {
-	case fetch.RequestTypeHTTP:
-		hint = "http://host:port"
-	case fetch.RequestTypeGraphite:
-		hint = "http://graphite:8080"
-	case fetch.RequestTypeGRPC:
-		hint = "host:port"
-	case "localfile":
-		hint = "a file or directory under its root"
-	case fetch.RequestTypeSSHFile:
-		hint = "host or host:port"
-	case fetch.RequestTypeS3File:
-		hint = "the bucket, or s3://bucket"
-	case fetch.RequestTypeSQL:
-		hint = "the database server, host or host:port"
-		if c.Request.Driver == fetch.SQLDriverSnowflake {
-			hint = "the Snowflake account identifier"
+	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
+		if rt.NoTarget {
+			return "none: leave it out"
 		}
-	case fetch.RequestTypeDNS:
-		hint = "the name to resolve"
-		if c.Request.RecordType == "PTR" {
-			hint = "the IP address to resolve"
+		if rt.TargetHint != nil {
+			hint = rt.TargetHint(c)
 		}
-	case fetch.RequestTypeTLSCert:
-		hint = "host or host:port"
-	case fetch.RequestTypeRedis:
-		hint = "host, host:port or rediss://host:port"
-	case fetch.RequestTypeTCP:
-		hint = "host:port"
-	case fetch.RequestTypeLDAP:
-		hint = "host, host:port or ldaps://host:port"
-	case fetch.RequestTypeKubernetes:
-		// A kubernetes collector lists what its configuration names, and
-		// takes no target at all.
-		return "none: leave it out"
 	}
 	if !required {
 		hint += " (optional)"

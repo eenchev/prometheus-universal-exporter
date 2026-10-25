@@ -70,6 +70,10 @@ func init() {
 		Validate:       validateKubernetesRequest,
 		Fetch:          fetchKubernetes,
 		OptionalTarget: true,
+		// A kubernetes collector lists what its configuration names, and
+		// takes no target at all.
+		NoTarget:   true,
+		JSONAnswer: true,
 		CheckTarget: func(c *model.Collector, target string, static bool) error {
 			if strings.TrimSpace(target) == "" {
 				return nil

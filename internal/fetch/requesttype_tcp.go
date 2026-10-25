@@ -67,6 +67,7 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "tls"},
 		Validate:     validateTCPRequest,
+		TargetHint:   func(*model.Collector) string { return "host:port" },
 		Fetch:        fetchTCP,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseTCPTarget(target)

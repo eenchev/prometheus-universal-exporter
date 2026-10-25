@@ -34,6 +34,7 @@ func init() {
 		},
 		URLPath:     true,
 		Revalidates: true,
+		DebugPage:   true,
 		Validate: func(c *model.Collector) error {
 			if err := validateHTTPRequest(c); err != nil {
 				return err
@@ -47,7 +48,8 @@ func init() {
 			}
 			return checkHTTPTargetTLS(t)
 		},
-		Fetch: fetchHTTP,
+		Fetch:      fetchHTTP,
+		TargetHint: func(*model.Collector) string { return "http://host:port" },
 		// The files of a login and of a target's own tls block; the
 		// tokens request.login keeps, and its counts (login.go).
 		CheckFiles:       checkHTTPFiles,

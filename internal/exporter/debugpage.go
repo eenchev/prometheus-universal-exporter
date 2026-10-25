@@ -304,9 +304,10 @@ func debugSameOrigin(r *http.Request) error {
 
 // refusedOnDebugPage refuses, before it is checked, a collector written on
 // the debug page that the page does not run: Python, a request type other
-// than http, and an http collector that names a file of the server's.
+// than http, the one the page writes (fetch.RequestType.DebugPage), and an
+// http collector that names a file of the server's.
 func refusedOnDebugPage(x *model.Collector) error {
-	if kind := strings.ToLower(strings.TrimSpace(x.Request.Type)); kind != "" && kind != fetch.RequestTypeHTTP {
+	if kind := strings.ToLower(strings.TrimSpace(x.Request.Type)); kind != "" && !onDebugPage(kind) {
 		return fmt.Errorf("collector %q uses request.type %s; a collector written on the debug page is an http collector, since the other types read files, hosts and databases with the server's own credentials. Write it with request.type http to try its decoder and rules on a pasted response, or run a configured collector by name", x.Name, kind)
 	}
 	if runsPython(x) {
@@ -336,6 +337,15 @@ func refusedOnDebugPage(x *model.Collector) error {
 	return nil
 }
 
+// onDebugPage reports whether a collector written on the debug page may be
+// of the request type, and another collector read what one of it fetches:
+// http's, which reads nothing of the server's but what its configuration
+// names (fetch.RequestType.DebugPage).
+func onDebugPage(requestType string) bool {
+	rt := fetch.RequestTypes[requestType]
+	return rt != nil && rt.DebugPage
+}
+
 // debugPageCollector is a configured collector as the page offers it.
 type debugPageCollector struct {
 	Name, RequestType string
@@ -347,7 +357,7 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, _ *http.Request) {
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
-		if c.Request.Type == fetch.RequestTypeHTTP {
+		if onDebugPage(c.Request.Type) {
 			page.HTTPCollectors = append(page.HTTPCollectors, c.Name)
 		}
 	}
@@ -493,7 +503,7 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		if p.edited || through.Name != c.Name {
 			// Another collector reads what the target's fetches: the
 			// target's request, read by the collector run.
-			if through.Request.Type != fetch.RequestTypeHTTP {
+			if !onDebugPage(through.Request.Type) {
 				return p, nil, http.StatusBadRequest, fmt.Errorf("static target %q is scraped through collector %q, a %s collector; another collector reads what an http collector fetches only. Run collector %q itself on it", static.static.Name, through.Name, through.Request.Type, through.Name)
 			}
 			static.collector, static.requester, static.generation = c, through, p.generation
@@ -519,7 +529,7 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		case p.edited:
 			return p, nil, http.StatusBadRequest, errors.New("a collector written on the debug page makes no request of its own: name in request_from the configured collector to fetch the target through")
 		}
-		if (p.edited || requester.Name != c.Name) && requester.Request.Type != fetch.RequestTypeHTTP {
+		if (p.edited || requester.Name != c.Name) && !onDebugPage(requester.Request.Type) {
 			return p, nil, http.StatusBadRequest, fmt.Errorf("collector %q in request_from is a %s collector; another collector reads what an http collector fetches only", requester.Name, requester.Request.Type)
 		}
 		target := ""

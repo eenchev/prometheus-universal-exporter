@@ -55,6 +55,8 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Validate:     validateTLSCertRequest,
+		JSONAnswer:   true,
+		TargetHint:   func(*model.Collector) string { return "host or host:port" },
 		Fetch:        fetchTLSCert,
 		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
 			_, err := parseTLSCertTarget(target)

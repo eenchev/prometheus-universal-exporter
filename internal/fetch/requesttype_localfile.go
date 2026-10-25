@@ -65,6 +65,8 @@ func init() {
 		Validate:       validateLocalFileRequest,
 		Fetch:          fetchLocalFile,
 		OptionalTarget: true,
+		FileExtensions: true,
+		TargetHint:     func(*model.Collector) string { return "a file or directory under its root" },
 		CheckTarget: func(c *model.Collector, target string, _ bool) error {
 			_, err := localFileTargetDir(c, target)
 			return err

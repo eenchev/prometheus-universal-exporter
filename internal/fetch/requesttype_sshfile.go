@@ -68,6 +68,8 @@ func init() {
 			"username", "private_key_file", "passphrase_file", "password_file",
 		},
 		Validate:           validateSSHFileRequest,
+		FileExtensions:     true,
+		TargetHint:         func(*model.Collector) string { return "host or host:port" },
 		Fetch:              fetchSSHFile,
 		CheckTarget:        checkSSHTarget,
 		CheckTargetRequest: checkSSHTargetRequest,

@@ -89,6 +89,10 @@ func init() {
 		CloseConnections: sshConns.closeAll,
 		Connections:      sshConns.collectorConnections,
 		ConnectionLimit:  sshConns.limitCounts,
+		Families: []string{
+			"http_exporter_sshfile_connections", "http_exporter_sshfile_connects_total",
+			"http_exporter_sshfile_limit_waits_total", "http_exporter_sshfile_limit_failures_total",
+		},
 	})
 }
 

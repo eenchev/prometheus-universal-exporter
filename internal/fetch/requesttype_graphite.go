@@ -88,6 +88,7 @@ func init() {
 			"accept_status", "login", "rate_limit", "tls",
 		},
 		URLPath:            true,
+		Revalidates:        true,
 		Validate:           validateGraphiteRequest,
 		CheckTarget:        checkHTTPTarget,
 		Query:              graphiteQuery,

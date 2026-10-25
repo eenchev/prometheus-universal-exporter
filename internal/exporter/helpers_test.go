@@ -35,6 +35,29 @@ func registerFixtureType(t *testing.T) {
 	t.Cleanup(func() { delete(fetch.RequestTypes, "fixture") })
 }
 
+// familyTypes are the built request types whose collectors have a family of
+// requestTypeFamilies, as their registrations give it, sorted.
+func familyTypes(family string) []string {
+	var types []string
+	for _, name := range fetch.BuiltRequestTypes() {
+		if typeHasFamily(name, family) {
+			types = append(types, name)
+		}
+	}
+	return types
+}
+
+// builtOf are those of the types, given sorted, this build carries.
+func builtOf(types ...string) []string {
+	var built []string
+	for _, name := range types {
+		if fetch.RequestTypes[name] != nil {
+			built = append(built, name)
+		}
+	}
+	return built
+}
+
 func fixtureCollector() model.Collector {
 	c := testutil.Collector("fixed", "text")
 	c.Request = model.RequestConfig{Type: "fixture", Path: "/data"}

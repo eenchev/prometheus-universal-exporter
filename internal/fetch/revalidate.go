@@ -71,20 +71,15 @@ func revalidationFrom(ctx context.Context) *CachedResponse {
 }
 
 // Revalidable reports whether a request of c, with overrides, is one whose
-// response can be revalidated: an http or graphite request that fetches one
-// response with GET or HEAD. A paginated collector's response is many
+// response can be revalidated: a request of a type that says so
+// (RequestType.Revalidates), http and graphite, that fetches one response
+// with GET or HEAD. A paginated collector's response is many
 // responses merged, of which no one validator speaks. Another method is
 // left alone: a matching If-None-Match on it asks for 412 Precondition
 // Failed, not 304 (RFC 9110 § 13.1.2), and a graphite request too long for a
 // URL is sent as a POST (requesttype_graphite.go).
 func Revalidable(c *model.Collector, overrides RequestOverrides) bool {
-	switch c.Request.Type {
-	case RequestTypeHTTP:
-		if c.Request.Pagination != nil {
-			return false
-		}
-	case RequestTypeGraphite:
-	default:
+	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || c.Request.Pagination != nil {
 		return false
 	}
 	method := RequestMethodFor(c, overrides)

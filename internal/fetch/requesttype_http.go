@@ -32,7 +32,8 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_status", "login", "rate_limit", "tls",
 		},
-		URLPath: true,
+		URLPath:     true,
+		Revalidates: true,
 		Validate: func(c *model.Collector) error {
 			if err := validateHTTPRequest(c); err != nil {
 				return err

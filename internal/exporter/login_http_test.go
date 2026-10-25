@@ -94,10 +94,10 @@ func TestAProbeLogsInAndCountsItsLogins(t *testing.T) {
 // A collector without request.login has the login families at 0, and a
 // collector of a type that does not log in has none.
 func TestTheLoginFamiliesAreThoseOfTheTypesThatLogIn(t *testing.T) {
-	if only := requestTypeFamilies["http_exporter_logins_total"]; !slices.Equal(only, []string{"http", "graphite"}) {
+	if only := familyTypes("http_exporter_logins_total"); !slices.Equal(only, builtOf("graphite", "http")) {
 		t.Errorf("http_exporter_logins_total is of %v, want http and graphite", only)
 	}
-	if only := requestTypeFamilies["http_exporter_login_failures_total"]; !slices.Equal(only, []string{"http", "graphite"}) {
+	if only := familyTypes("http_exporter_login_failures_total"); !slices.Equal(only, builtOf("graphite", "http")) {
 		t.Errorf("http_exporter_login_failures_total is of %v, want http and graphite", only)
 	}
 	server := modeServer(t, testutil.Collector("plain", "text"))

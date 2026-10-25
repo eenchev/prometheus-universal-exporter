@@ -89,6 +89,11 @@ func init() {
 		Connections:        sqlPools.collectorConnections,
 		ConnectionLimit:    sqlPools.limitCounts,
 		ConnectionPools:    sqlPools.collectorPools,
+		Families: []string{
+			"http_exporter_sql_connections", "http_exporter_sql_idle_connections", "http_exporter_sql_targets",
+			"http_exporter_sql_connects_total", "http_exporter_sql_keepalive_failures_total",
+			"http_exporter_sql_limit_waits_total", "http_exporter_sql_limit_failures_total", "http_exporter_sql_rows",
+		},
 	})
 }
 

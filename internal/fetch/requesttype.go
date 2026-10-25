@@ -134,9 +134,11 @@ type RequestType struct {
 	// URLPath says the type's path is a URL path, joined onto the target,
 	// which can hold no query or fragment; localfile's is a file's.
 	URLPath bool
-	// StatusCodes says the type retries by gRPC status code: request.retry
-	// takes codes, and not non_idempotent, which is about HTTP methods.
-	// Unset, it is the other way round.
+	// StatusCodes says the type's answers carry gRPC status codes: it
+	// retries by them, so request.retry takes codes, and not
+	// non_idempotent, which is about HTTP methods, and its collectors
+	// report the last one (GRPCStatusCode). Unset, it is the other way
+	// round.
 	StatusCodes bool
 	// ReadFiles says which paths checking a collector's request looked at on
 	// disk, the files the request names and those that reading them led to,
@@ -165,6 +167,78 @@ type RequestType struct {
 	// Logins reports how many logins a collector's request.login made and
 	// how many of them failed (login.go). Unset, the type does not log in.
 	Logins func(collector string) (made, failed uint64)
+
+	// What the rest of the exporter knows of the type, which it reads from
+	// here rather than naming the type, so a new type says it in its own
+	// registration and nothing outside its files lists it.
+
+	// Families are the per-collector self-metric families only the
+	// collectors of this type have, beyond those its other settings give
+	// it: http_exporter_targets_refused_total with the target lists
+	// (Takes("allowed_targets")), the pagination families with
+	// request.pagination, the login families with Logins, the rate limit
+	// families with request.rate_limit and
+	// http_exporter_scrape_grpc_status_code with StatusCodes.
+	Families []string
+	// Revalidates says an expired cached response of the type may be
+	// revalidated with a conditional request (Revalidable).
+	Revalidates bool
+	// TargetHint says what a target of the type is, for the collectors
+	// page. Unset, "target".
+	TargetHint func(c *model.Collector) string
+	// NoTarget says the type takes no target at all: it reads what its
+	// configuration names, and the collectors page says to leave the
+	// target out.
+	NoTarget bool
+	// DebugPage says a collector written on the debug page may be of this
+	// type, and that another collector may read what one of this type
+	// fetches (request_from).
+	DebugPage bool
+	// JSONAnswer says the exporter makes the type's answer, a JSON document,
+	// so its decoder is json and its transform one that reads JSON.
+	JSONAnswer bool
+	// Decoder is the decoder a collector of the type uses when its
+	// decoder.type is left out, rather than one chosen for each response.
+	Decoder string
+	// Rows says the type's answer is rows its driver read, value by value,
+	// with no body to decode.
+	Rows bool
+	// FileExtensions says the type reads files, whose extension, rather
+	// than a Content-Type, chooses the decoder of one left to choose.
+	FileExtensions bool
+	// Article is the article the type's name is read with in messages.
+	// Unset, "an" before a vowel and "a" otherwise.
+	Article string
+	// SchemaRule is what the configuration schema holds a collector of the
+	// type to beyond its keys: its required keys and the rules between
+	// them, as Validate holds them. Unset, nothing more.
+	SchemaRule func() map[string]any
+	// UnusedParams words the refusal of probe parameters that nothing of a
+	// collector uses (CheckPathParams), naming the places a placeholder of
+	// the type can stand in (unusedParamsIn). Unset, they are http's: the
+	// path, the body and the header and query values.
+	UnusedParams func(c *model.Collector, overrides RequestOverrides, unused string) error
+	// Templates lists the templated parts of a collector's request that are
+	// the type's own, beyond the body, header and query values every type
+	// may hold (requestTemplates). Unset, it has none.
+	Templates func(c *model.Collector, overrides RequestOverrides) []templateField
+}
+
+// Takes reports whether the type accepts the request key.
+func (rt *RequestType) Takes(key string) bool {
+	return slices.Contains(rt.Fields, key)
+}
+
+// TypeArticle is the article the name of the request type is read with in
+// messages (RequestType.Article).
+func TypeArticle(name string) string {
+	if rt := RequestTypes[name]; rt != nil && rt.Article != "" {
+		return rt.Article
+	}
+	if strings.ContainsAny(name[:min(len(name), 1)], "aeiou") {
+		return "an"
+	}
+	return "a"
 }
 
 // CollectorLogins reports how many logins a collector of requestType made

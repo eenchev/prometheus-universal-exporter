@@ -208,7 +208,7 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for _, file := range []string{"examples/open-meteo/config.yaml", "examples/open-meteo/static-targets.yaml", "examples/config.ecb.xml-test.yaml"} {
+	for _, file := range []string{"examples/open-meteo/config.yaml", "examples/open-meteo/static-targets.yaml", "examples/config.ecb.xml-test.yaml", "examples/config.filebeat.json-test.yaml", "examples/metar/config.yaml", "examples/metar/static-targets.yaml"} {
 		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(file)), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -248,6 +248,25 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 			"arg: --web.listen-address=127.0.0.1:9115",
 			"arg: --log.level=debug",
 		},
+		// filebeat's comment probes a placeholder host, filebeat-host, which
+		// a local run cannot reach: a hint, with the reader's target.
+		"filebeat": {
+			"Open http://127.0.0.1:9115/ for the landing page",
+			"Open http://127.0.0.1:9115/static-targets/status for the recent probes.",
+			"Probe it with http://127.0.0.1:9115/probe?collector=filebeat&target=<your target>: the example's target, http://filebeat-host:5066, is a placeholder for yours.",
+			"arg: --config.file=examples/config.filebeat.json-test.yaml",
+			"arg: --web.listen-address=127.0.0.1:9115",
+			"arg: --log.level=debug",
+		},
+		"metar": {
+			"Open http://127.0.0.1:9115/ for the landing page",
+			"Open http://127.0.0.1:9115/static-targets/status for the static targets' last scrapes and the recent probes.",
+			"Open http://127.0.0.1:9115/probe?collector=metar&target=https://tgftp.nws.noaa.gov&param_station=EGLL for a probe.",
+			"arg: --config.file=examples/metar/config.yaml",
+			"arg: --web.listen-address=127.0.0.1:9115",
+			"arg: --static-targets-file=examples/metar/static-targets.yaml",
+			"arg: --log.level=debug",
+		},
 		"stale": {
 			"Open http://127.0.0.1:9115/ for the landing page",
 			"Open http://127.0.0.1:9115/static-targets/status for the recent probes.",
@@ -264,7 +283,7 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 		}
 		var lines []string
 		for line := range strings.Lines(string(out)) {
-			if strings.HasPrefix(line, "Open ") || strings.HasPrefix(line, "arg: ") {
+			if strings.HasPrefix(line, "Open ") || strings.HasPrefix(line, "Probe ") || strings.HasPrefix(line, "arg: ") {
 				lines = append(lines, strings.TrimSuffix(line, "\n"))
 			}
 		}
@@ -278,6 +297,121 @@ func TestRunExampleRunsTheBinOfMakeBuild(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// The probe URL a run prints is one a local run can reach: its target is
+// localhost, 127.0.0.1 or [::1], or a DNS name with a dot that is no
+// placeholder; for any other the run prints a hint with the reader's target
+// in its place, as for filebeat's filebeat-host.
+func TestRunExamplePrintsAProbeURLOnlyForAReachableTarget(t *testing.T) {
+	script := read(t, "tools/run-example.sh")
+	start := strings.Index(script, "probe_target_is_local() {")
+	end := strings.Index(script[max(start, 0):], "\n}\n")
+	if start < 0 || end < 0 {
+		t.Fatal("tools/run-example.sh no longer has probe_target_is_local")
+	}
+	function := script[start : start+end+3]
+	for query, want := range map[string]bool{
+		"collector=a&target=http://localhost:5066":                    true,
+		"collector=a&target=localhost:11211":                          true,
+		"collector=a&target=http://127.0.0.1:9100/x":                  true,
+		"collector=a&target=http://[::1]:9100":                        true,
+		"collector=a&target=https://www.ecb.europa.eu":                true,
+		"collector=a&target=https://tgftp.nws.noaa.gov&param_x=1":     true,
+		"collector=a&target=https://API.Frankfurter.dev.":             true,
+		"collector=a&target=http://filebeat-host:5066":                false,
+		"collector=a&target=http://db-host.corp.acme.io":              false,
+		"collector=a&target=http://filebeat:5066":                     false,
+		"collector=a&target=https://otel.example.com":                 false,
+		"collector=a&target=https://api.example":                      false,
+		"collector=a&target=http://u:p@kibana.svc.cluster.local:5601": false,
+		"collector=a&target=http://es.logging.svc":                    false,
+		"collector=a&target=http://nas.local":                         false,
+		"collector=a&target=http://vault.internal:8200":               false,
+		"collector=a&target=http://10.0.0.7:9100":                     false,
+		"collector=a&target=http://[2001:db8::1]:9100":                false,
+		"collector=a": false,
+	} {
+		out, err := exec.Command("sh", "-c", function+"\nprobe_target_is_local \"$1\"", "sh", query).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", query, err, out)
+		}
+		if got := strings.TrimSpace(string(out)) == "yes"; got != want {
+			t.Errorf("%s: a probe URL printed is %v, want %v", query, got, want)
+		}
+	}
+}
+
+// HOST is where the exporter listens and the host of the URLs printed: a
+// bare IPv6 address is bracketed for both, as Go's listen address and a URL
+// need it, an already bracketed one kept; 0.0.0.0 and :: listen on every
+// interface, which the run says, and the URLs open localhost and [::1], what
+// a browser on the same machine can open; an empty HOST fails before make run
+// builds anything.
+func TestRunExampleTakesEveryHost(t *testing.T) {
+	script, err := filepath.Abs("tools/run-example.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "examples"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "examples", "config.ecb.xml-test.yaml"), []byte(read(t, "examples/config.ecb.xml-test.yaml")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "prometheus-universal-exporter"), []byte("#!/bin/sh\nfor a in \"$@\"; do echo \"arg: $a\"; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]struct{ listen, url, everyInterface string }{
+		"127.0.0.1": {"127.0.0.1:9115", "http://127.0.0.1:9115/", ""},
+		"localhost": {"localhost:9115", "http://localhost:9115/", ""},
+		"::1":       {"[::1]:9115", "http://[::1]:9115/", ""},
+		"[::1]":     {"[::1]:9115", "http://[::1]:9115/", ""},
+		"fe80::1":   {"[fe80::1]:9115", "http://[fe80::1]:9115/", ""},
+		"0.0.0.0":   {"0.0.0.0:9115", "http://localhost:9115/", "The exporter listens on every interface, 0.0.0.0:9115; on this machine it is http://localhost:9115/."},
+		"::":        {"[::]:9115", "http://[::1]:9115/", "The exporter listens on every interface, [::]:9115; on this machine it is http://[::1]:9115/."},
+		"[::]":      {"[::]:9115", "http://[::1]:9115/", "The exporter listens on every interface, [::]:9115; on this machine it is http://[::1]:9115/."},
+	} {
+		cmd := exec.Command("sh", script, "run", "ecb", host, "9115")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("HOST=%s: %v: %s", host, err, out)
+			continue
+		}
+		text := string(out)
+		for _, line := range []string{
+			"arg: --web.listen-address=" + want.listen + "\n",
+			"Open " + want.url + " for the landing page",
+			"Open " + want.url + "static-targets/status ",
+			"Open " + want.url + "probe?collector=ecb_reference_rates",
+		} {
+			if !strings.Contains(text, line) {
+				t.Errorf("HOST=%s gives no %q:\n%s", host, line, text)
+			}
+		}
+		if got := strings.Contains(text, "every interface"); got != (want.everyInterface != "") || want.everyInterface != "" && !strings.Contains(text, want.everyInterface+"\n") {
+			t.Errorf("HOST=%s: want the note %q:\n%s", host, want.everyInterface, text)
+		}
+	}
+	cmd := exec.Command("sh", script, "run", "ecb", "", "9115")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "HOST is empty") || strings.Contains(string(out), "arg: ") || strings.Contains(string(out), "http://") {
+		t.Errorf("an empty HOST gave %v:\n%s", err, out)
+	}
+	// make run checks HOST before it builds: under -n, make runs the line
+	// that calls $(MAKE), so the check runs and nothing is built.
+	out, err := runMake(t, t.TempDir(), "-n", "run", "EXAMPLE=ecb", "HOST=")
+	if err == nil || !strings.Contains(out, "HOST is empty") || strings.Contains(out, "go build") {
+		t.Errorf("make -n run EXAMPLE=ecb HOST= built or succeeded (%v):\n%s", err, out)
+	}
+	if out, err := runMake(t, t.TempDir(), "-n", "run", "EXAMPLE=ecb", "HOST=::1"); err != nil || !strings.Contains(out, "go build") {
+		t.Errorf("make -n run EXAMPLE=ecb HOST=::1 does not build (%v):\n%s", err, out)
 	}
 }
 

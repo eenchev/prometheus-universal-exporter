@@ -756,10 +756,22 @@ and the source MUST list the opt-in types.
   and the recent probes always, and of the first probe that the comment
   opening the example's configuration gives as `curl '<url>/probe?<query>'`,
   on `HOST:PORT`, when the collector it names is one of the example's (none
-  otherwise), and run `bin/prometheus-universal-exporter` with
+  otherwise) and its target is one a local run can reach — a host of
+  `localhost`, `127.0.0.1` or `[::1]`, or a DNS name with a dot that is no
+  placeholder: not one whose first label ends in `-host`, not an IP address
+  but the loopback ones, not under `example.com`, `example.net`,
+  `example.org` or the top-level domains `example`, `invalid`, `test`,
+  `local`, `localhost`, `internal`, `lan`, `home`, `corp` or `svc` — and
+  otherwise a hint, the same probe with `<your target>` for its target, and
+  run `bin/prometheus-universal-exporter` with
   the example's configuration, its static target file when it has one, the
   listen address `HOST:PORT`, `127.0.0.1:8080` unless the command line sets
-  them, and the flags of `ARGS`. An example's name MUST come from the tree
+  them, and the flags of `ARGS`. A bare IPv6 `HOST` MUST be bracketed, in
+  the listen address and the URLs (`[::1]:8080`), an already bracketed one
+  kept; for `HOST=0.0.0.0` and `HOST=::` the URLs MUST be on `localhost`
+  and `[::1]`, which a browser on the same machine can open, and the run
+  MUST say the exporter listens on every interface; an empty `HOST` MUST
+  fail with a message before anything is built. An example's name MUST come from the tree
   (`tools/run-example.sh`): a directory under `examples/` is named by the
   directory, `examples/config.<name>.<anything>.yaml` by `<name>`, and a
   name two examples share MUST fail; `make run` without `EXAMPLE` MUST list
@@ -10524,7 +10536,7 @@ Test the built container image for:
   Kubernetes can verify `runAsNonRoot`; a test MUST check that the image's
   `USER` is numeric and that the chart's `podSecurityContext` runs the same user.
 
-The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
+The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile. The build stage MUST declare its build arguments (`VERSION`, `REVISION`, `TARGETOS`, `TARGETARCH`, `REQUEST_TYPES`, `OPT_IN_REQUEST_TYPES`, `SQL_DRIVERS`) after `go mod download`, not before it: every `RUN` after an `ARG` depends on its value, and `REVISION` changes with every commit, so an earlier declaration would make the module download miss the layer cache on every build. A test MUST check that no build-stage `ARG` precedes the module download.
 
 ## 34.31 End-to-end scenario matrix
 
@@ -29702,9 +29714,12 @@ Of the OTLP export:
   `partialSuccess`, with how many — the requests of it sent, the data points
   they carried and its retries; when the last export that got through
   ended, or that none has; and the failed exports in a row. With
-  `otlp.unready_after_failures` set it MUST show the readiness they make, by
-  the rule `/ready` answers by (§ 23): `ready`, or `unready` with when
-  the failed export that made it so ended — the Nth of the current run of
+  `otlp.unready_after_failures` set it MUST show the readiness `/ready`
+  answers (§ 23), from the same reasons, not from the failed exports alone:
+  `ready`, or `unready` with the reasons `/ready` gives, in the JSON as
+  `unready_reasons`, so that it says unready while the exporter shuts down;
+  and, when the failed exports are among the reasons, when the failed export
+  that made it so ended — the Nth of the current run of
   failures under `otlp.unready_after_failures` N, whenever N was set: a
   reload that lowers N to the run's length or under MUST show the end of the
   new Nth failure at once, and one that raises it over the run's length

@@ -38,8 +38,17 @@ files and the opt-in request types an example needs (a `type: tcp` line, for
 landing page's URL, the status page's, which every example has (its recent
 probes fill as soon as anything probes), and the first probe URL that the
 comment opening the configuration gives as `curl '…/probe?…'`, when the
-collector it names is one of the example's. `HOST` is `127.0.0.1` so that an example is
-reachable from this machine alone; `HOST=0.0.0.0` serves it to the network.
+collector it names is one of the example's and its target is one a local run
+can reach: `localhost`, `127.0.0.1`, `[::1]`, or a DNS name with a dot that is
+no placeholder (a first label ending in `-host`, an address of one network, or
+a name under `example.com` or a top-level domain such as `example`, `local`,
+`internal` or `svc`, are placeholders). For a placeholder, such as filebeat's
+`filebeat-host`, it prints the probe with `<your target>` in its place.
+`HOST` is `127.0.0.1` so that an example is reachable from this machine alone;
+`HOST=0.0.0.0` or `HOST=::` serves it to the network, and the URLs printed are
+then on `localhost` or `[::1]`, which a browser on this machine can open. An
+IPv6 `HOST` may be given bare or in brackets (`HOST=::1`); an empty `HOST=`
+fails before anything is built.
 
 ## Code layout
 

@@ -7,6 +7,7 @@
 #   sh tools/run-example.sh list                       # name and files, one example a line
 #   sh tools/run-example.sh files open-meteo           # its configuration, then its static target file, if it has one
 #   sh tools/run-example.sh opt-in-types tcp redis     # tcp,redis: the example's opt-in types and those given
+#   sh tools/run-example.sh check-host ::1                # fails for an empty HOST, before make run builds
 #   sh tools/run-example.sh run open-meteo 127.0.0.1 9115 --log.level=debug
 #   sh tools/run-example.sh check-root-binaries prometheus-universal-exporter pue-allocator
 #
@@ -105,7 +106,77 @@ probe_query() {
 	fi
 }
 
+# probe_target_is_local prints yes when the target of the probe query $1 is
+# one a local run can reach as the comment gives it: a host of localhost,
+# 127.0.0.1 or [::1], or a DNS name with a dot that is no placeholder. A
+# comment of an exporter of something the reader runs names it by a made-up
+# host, such as filebeat-host; the URL would only send them to a probe that
+# fails. A placeholder is a name without a dot, one whose first label ends in
+# -host, an IP address but the loopback ones (an address is of one network),
+# or a name under example.com, example.net, example.org, or the top-level
+# domains example, invalid, test, local, localhost, internal, lan, home, corp
+# or svc (cluster.local is under local).
+probe_target_is_local() {
+	target=$(printf '%s\n' "$1" | tr '&' '\n' | sed -n 's/^target=//p' | head -n 1)
+	case "$target" in *://*) target=${target#*://} ;; esac
+	target=${target%%/*}
+	target=${target##*@}
+	case "$target" in
+	\[*) target=${target%%]*}] ;;
+	*) target=${target%%:*} ;;
+	esac
+	target=$(printf '%s' "$target" | tr 'A-Z' 'a-z')
+	target=${target%.}
+	case "$target" in
+	localhost | 127.0.0.1 | '[::1]') echo yes; return 0 ;;
+	*.*) ;;
+	*) return 0 ;;
+	esac
+	case "$target" in
+	*[!0-9.]*) ;;
+	*) return 0 ;;
+	esac
+	first=${target%%.*}
+	case "$first" in *-host) return 0 ;; esac
+	case "$target" in
+	example.com | *.example.com | example.net | *.example.net | example.org | *.example.org) return 0 ;;
+	*.example | *.invalid | *.test | *.local | *.localhost | *.internal | *.lan | *.home | *.corp | *.svc) return 0 ;;
+	esac
+	echo yes
+}
+
+# listen_host prints the address part of --web.listen-address for HOST $1: a
+# bare IPv6 address in brackets, as Go wants it ([::1]:8080, not ::1:8080),
+# one already in brackets as it is, anything else as it is. An empty HOST is
+# refused: the URLs printed would have no host, and the exporter would listen
+# on every interface, which an example run should not do unasked.
+listen_host() {
+	case "$1" in
+	'')
+		echo "run-example: HOST is empty; set it to the address to listen on, such as HOST=127.0.0.1, HOST=::1, or HOST=0.0.0.0 for every interface" >&2
+		exit 2
+		;;
+	\[*\]) printf '%s\n' "$1" ;;
+	*:*) printf '[%s]\n' "$1" ;;
+	*) printf '%s\n' "$1" ;;
+	esac
+}
+
+# url_host prints the host of the URLs to open for the listen address host
+# $1: a browser on the same machine cannot open 0.0.0.0 or [::], the
+# addresses of every interface, so those are opened as localhost and [::1].
+url_host() {
+	case "$1" in
+	0.0.0.0) echo localhost ;;
+	'[::]') echo '[::1]' ;;
+	*) printf '%s\n' "$1" ;;
+	esac
+}
+
 case "${1:-}" in
+check-host)
+	listen_host "${2:-}" >/dev/null
+	;;
 list)
 	examples | sort | awk -F '\t' '{ printf "  %-16s %s%s\n", $1, $2, ($3 == "" ? "" : " " $3) }'
 	;;
@@ -145,11 +216,15 @@ run)
 		exit 2
 	fi
 	line=$(example "$2")
-	host=$3
+	listen=$(listen_host "$3")
+	host=$(url_host "$listen")
 	port=$4
 	shift 4
 	config=$(printf '%s\n' "$line" | cut -f2)
 	targets=$(printf '%s\n' "$line" | cut -f3)
+	if [ "$host" != "$listen" ]; then
+		echo "The exporter listens on every interface, $listen:$port; on this machine it is http://$host:$port/."
+	fi
 	echo "Open http://$host:$port/ for the landing page and its collectors."
 	# The status page is served for every example: with static targets it
 	# leads with their last scrapes, and its recent probes fill as soon as
@@ -161,10 +236,16 @@ run)
 		echo "Open http://$host:$port/static-targets/status for the recent probes."
 	fi
 	query=$(probe_query "$config")
-	if [ -n "$query" ]; then
+	if [ -n "$query" ] && [ -n "$(probe_target_is_local "$query")" ]; then
 		echo "Open http://$host:$port/probe?$query for a probe."
+	elif [ -n "$query" ]; then
+		# The comment's target is a placeholder: the query with the
+		# reader's own target in its place.
+		hint=$(printf '%s\n' "$query" | tr '&' '\n' | sed 's/^target=.*/target=<your target>/' | paste -s -d '&' -)
+		placeholder=$(printf '%s\n' "$query" | tr '&' '\n' | sed -n 's/^target=//p' | head -n 1)
+		echo "Probe it with http://$host:$port/probe?$hint: the example's target, $placeholder, is a placeholder for yours."
 	fi
-	set -- "--config.file=$config" "--web.listen-address=$host:$port" "$@"
+	set -- "--config.file=$config" "--web.listen-address=$listen:$port" "$@"
 	echo "bin/$app $*"
 	exec "bin/$app" "$@"
 	;;
@@ -179,7 +260,7 @@ check-root-binaries)
 	done
 	;;
 *)
-	echo "usage: sh tools/run-example.sh list | files NAME | opt-in-types NAME [TYPES] | run NAME HOST PORT [FLAGS...] | check-root-binaries BINARY..." >&2
+	echo "usage: sh tools/run-example.sh check-host HOST | list | files NAME | opt-in-types NAME [TYPES] | run NAME HOST PORT [FLAGS...] | check-root-binaries BINARY..." >&2
 	exit 2
 	;;
 esac

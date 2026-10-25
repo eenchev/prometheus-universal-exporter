@@ -27,7 +27,8 @@ with the example's configuration and static targets. Open
 <http://127.0.0.1:9115/> for the landing page and
 <http://127.0.0.1:9115/static-targets/status> for the targets' last scrapes
 and the recent probes; every example has the status page, and the command
-also prints a probe URL when the example's configuration gives one.
+also prints a probe URL when the example's configuration gives one whose
+target a local run can reach (a hint with `<your target>` for a placeholder).
 `make run` alone lists the examples; `make build` builds into `bin/` too.
 
 ## How it works

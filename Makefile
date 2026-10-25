@@ -48,9 +48,10 @@ build:
 # examples/ by its name, such as open-meteo, or examples/config.<name>.*.yaml
 # by <name>, such as ecb; `make run` alone lists them. The exporter listens on
 # HOST:PORT, this machine alone by default, as an example is something to try
-# out, not to serve; ARGS adds flags, such as ARGS=--log.level=debug. Set with
-# = rather than ?=, so that only the command line sets them: zsh exports HOST
-# as the machine's name, which ?= would take.
+# out, not to serve; an IPv6 HOST may be bare (::1) or bracketed. ARGS adds
+# flags, such as ARGS=--log.level=debug. Set with = rather than ?=, so that
+# only the command line sets them: zsh exports HOST as the machine's name,
+# which ?= would take.
 EXAMPLE =
 HOST = 127.0.0.1
 PORT = 8080
@@ -66,7 +67,8 @@ run:
 		sh tools/run-example.sh list >&2; \
 		exit 2; \
 	fi
-	@types="$$(sh tools/run-example.sh opt-in-types '$(EXAMPLE)' '$(OPT_IN_REQUEST_TYPES)')" && \
+	@sh tools/run-example.sh check-host '$(HOST)' && \
+		types="$$(sh tools/run-example.sh opt-in-types '$(EXAMPLE)' '$(OPT_IN_REQUEST_TYPES)')" && \
 		$(MAKE) --no-print-directory build OPT_IN_REQUEST_TYPES="$$types"
 	@sh tools/run-example.sh run '$(EXAMPLE)' '$(HOST)' '$(PORT)' $(ARGS)
 

@@ -29668,9 +29668,12 @@ then one of the OTLP export. Of the static targets:
   `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
   MUST leave the error of the last failed scrape, and when it began, as they
   were. The error MUST be the text the
-  log has, with every URL's credentials already withheld, masked again for
-  what reads as a credential, and cut to the bound of a failure's text
-  (§ 25); nothing else of a target's answer MAY be shown.
+  log has, with every URL's credentials withheld, masked again for what
+  reads as a credential, a URL's userinfo (`scheme://user:password@`)
+  anywhere in it among that, and cut to the bound of a failure's text
+  (§ 25); nothing else of a target's answer MAY be shown. A scrape that
+  panicked MUST be shown with a fixed error saying so; the panic's text MUST
+  NOT be shown, only logged.
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
@@ -29704,8 +29707,9 @@ Of the recent probes:
 - Every `/probe` the exporter answers MUST be recorded under its collector,
   its target as the logs show it (with any credential withheld) and its probe
   parameters that change the request, each value with what reads as a
-  credential masked, withheld whole when its parameter's name reads as a
-  credential, and cut; forwarded headers MUST NOT be shown. A probe answered
+  credential masked, a URL's userinfo in it among that, withheld whole when
+  its parameter's name reads as a credential, and cut; forwarded headers
+  MUST NOT be shown. A probe answered
   from the response cache MUST be recorded as `cached`, and one answered by
   another probe's trip (§ 42.13a) MUST be recorded and marked shared. A
   debug probe MUST NOT be recorded, nor a probe answered `400`, nor one whose
@@ -29714,7 +29718,8 @@ Of the recent probes:
   result — `success`, `cached`, `failed`, `refused by policy` (`403`),
   `rejected by limit` (`503`), `stale result served` or `backing off` — the
   HTTP status the exporter answered, the series it gave and its error, shown
-  and cut as a static target's error is.
+  and cut as a static target's error is; a probe that panicked MUST be shown
+  with a fixed error, as a static target's scrape that panicked is.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to

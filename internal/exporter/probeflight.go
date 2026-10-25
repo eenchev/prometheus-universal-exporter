@@ -177,6 +177,10 @@ func panicText(recovered any) string {
 	return model.CutTo(fmt.Sprint(recovered), model.MaxFailureBytes, false)
 }
 
+// probePanickedText is the error of a probe that panicked, as the status
+// page shows it: the panic and its stack are in the log.
+const probePanickedText = "the probe panicked; the exporter's log has the panic"
+
 func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlight, work func(context.Context) *probeResult) {
 	defer func() {
 		// The work runs on its own goroutine, where a panic would take the
@@ -185,7 +189,10 @@ func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlig
 			recorder := newProbeRecorder()
 			http.Error(recorder, "probe failed: internal error: "+panicText(recovered), http.StatusInternalServerError)
 			flight.result = recorder.result(false)
-			flight.result.failure = shownFailureText("internal error: " + panicText(recovered))
+			// The status page shows a fixed text, as for a static target's
+			// scrape (errScrapePanicked): a panic says whatever its code had
+			// at hand, which no redaction is written for.
+			flight.result.failure = probePanickedText
 			slog.Default().Error("probe panicked", "panic", panicText(recovered), "stack", string(debug.Stack()))
 		}
 		f.mu.Lock()

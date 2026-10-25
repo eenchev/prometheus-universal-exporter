@@ -180,7 +180,8 @@ func recentProbeKeyFor(c *model.Collector, logTarget string, overrides fetch.Req
 // the key, since they make other requests: tenants, paths. A value is no
 // secret by contract (it may fill a label value, § 42.10c), but one may
 // still have been sent as one: the value of a parameter whose name reads as
-// a credential is withheld, anything in a value that reads as one masked,
+// a credential is withheld, anything in a value that reads as one masked
+// (fetch.RedactText, which withholds a URL's userinfo too),
 // and each value cut to recentProbeParamBytes. Forwarded headers are not
 // shown: they are the caller's, and may carry credentials.
 func shownProbeParams(o fetch.RequestOverrides) string {

@@ -33,9 +33,9 @@ import (
 //   - A header's value is withheld when its name reads as a credential's
 //     (CredentialName).
 //   - Text the exporter did not write, such as an error page, has what reads
-//     as a credential in it masked (RedactText), by the same rule for a
-//     name: a key or field whose name CredentialName says reads as a
-//     credential's has its value masked.
+//     as a credential in it masked (RedactText), a URL's userinfo among
+//     it, by the same rule for a name: a key or field whose name
+//     CredentialName says reads as a credential's has its value masked.
 //   - An error that quotes a URL, as Go's HTTP client quotes the one it
 //     requested, quotes it with its userinfo withheld and its query values
 //     masked (RedactURLErrors).
@@ -296,6 +296,10 @@ var textCredentials = []struct {
 	{regexp.MustCompile(`(?i)\b(bearer|basic|digest)\s+[A-Za-z0-9._~+/=-]{8,}`), "${1} " + Redacted},
 	// A JSON Web Token, wherever it stands.
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`), Redacted},
+	// A URL's userinfo, as in https://user:password@host: the userinfo is
+	// all of the authority up to its last @, as url.Parse reads it, so a
+	// password with an @ of its own is withheld whole.
+	{regexp.MustCompile(`\b([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#"'<>]*@`), "${1}" + redactedUser.String() + "@"},
 }
 
 // textField is a key or a field's name in text and what follows it up to
@@ -307,9 +311,9 @@ var textValue = regexp.MustCompile(`^[^\s"'&,;}<>]+`)
 
 // RedactText masks what reads as a credential in text the exporter did not
 // write, such as an error page's body it logs the start of: a bearer or
-// basic credential, a JSON Web Token, and the value of a key or field whose
-// name reads as a credential's (CredentialName, the rule a header's and a
-// query parameter's name are held to). It errs towards masking: a word that
+// basic credential, a JSON Web Token, a URL's userinfo, and the value of a
+// key or field whose name reads as a credential's (CredentialName, the rule
+// a header's and a query parameter's name are held to). It errs towards masking: a word that
 // only looks like a credential's value may be masked too.
 func RedactText(text string) string {
 	for _, c := range textCredentials {

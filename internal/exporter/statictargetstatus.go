@@ -26,9 +26,12 @@ import (
 // the exporter's log already show, read by whoever may read the endpoints:
 // the same Basic Auth protects it. A target is shown as its health series
 // and the log show it (fetch.DisplayTarget), with any credential in it
-// withheld, and an error as the log has it, its URLs already redacted where
-// the fetch made it, masked once more for anything reading as a credential
-// (fetch.RedactText) and cut to model.MaxFailureBytes. What is kept of each
+// withheld, and an error as the log has it, the URLs it quotes redacted
+// (fetch.RedactURLErrors, which the fetch has mostly done already), masked
+// once more for anything reading as a credential, a URL's userinfo among it
+// (fetch.RedactText), and cut to model.MaxFailureBytes. A probe's error is
+// shown by the same rule (shownStatusError), and so is a panic's: by a fixed
+// text, the panic itself being only in the log. What is kept of each
 // static target is one record, replaced by its next scrape, so the page
 // holds no more than the targets are many; what is kept of the probes is
 // bounded apart (recentprobes.go). The path is the static targets path's,
@@ -121,7 +124,7 @@ func shownStatusError(err error) string {
 	if err == nil {
 		return "the scrape failed"
 	}
-	return shownFailureText(boundedTripFailure(err).Error())
+	return shownFailureText(boundedTripFailure(fetch.RedactURLErrors(err)).Error())
 }
 
 // The results a row shows.

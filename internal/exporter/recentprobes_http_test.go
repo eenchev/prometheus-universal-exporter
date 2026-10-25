@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -444,8 +445,8 @@ func TestTheRecentProbesWithholdAURLsUserinfo(t *testing.T) {
 		t.Errorf("the row is %+v; want its error and parameter shown, the passwords withheld", row)
 	}
 	for _, err := range []error{
-		fmt.Errorf("fetching https://reader:hunter2@db.example/x: refused"),
-		&url.Error{Op: "Get", URL: "https://reader:hunter2@db.example/x?token=abc", Err: fmt.Errorf("refused")},
+		errors.New("fetching https://reader:hunter2@db.example/x: refused"),
+		&url.Error{Op: "Get", URL: "https://reader:hunter2@db.example/x?token=abc", Err: errors.New("refused")},
 	} {
 		if shown := shownStatusError(err); strings.Contains(shown, "hunter2") || strings.Contains(shown, "abc") || !strings.Contains(shown, "db.example") {
 			t.Errorf("the error %q is shown as %q", err, shown)

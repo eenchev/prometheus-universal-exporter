@@ -84,3 +84,46 @@ func TestDocsNameThePythonTheImageShips(t *testing.T) {
 	}
 	t.Logf("%d mentions of the base image checked", found)
 }
+
+// make new-request-type adds a request type to the tree, and changes the
+// tree, so make ci, which checks it, must not reach it. It runs the script
+// with the name and, with OPT_IN set, as an opt-in type; the make targets of
+// docs/DEVELOPMENT.md list it, and its "Adding a request type" says what it
+// writes and what it leaves.
+func TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI(t *testing.T) {
+	prerequisites, recipes := makefileRules(t)
+	recipe, ok := recipes["new-request-type"]
+	if !ok {
+		t.Fatal("the Makefile has no new-request-type target")
+	}
+	if !strings.Contains(recipe, "sh tools/new-request-type.sh '$(NAME)' $(if $(OPT_IN),opt-in,)") {
+		t.Errorf("make new-request-type does not run tools/new-request-type.sh with NAME and OPT_IN:\n%s", recipe)
+	}
+	reached, queue := map[string]bool{}, []string{"ci"}
+	for len(queue) > 0 {
+		target := queue[0]
+		queue = queue[1:]
+		if !reached[target] {
+			reached[target] = true
+			queue = append(queue, prerequisites[target]...)
+		}
+	}
+	if reached["new-request-type"] {
+		t.Error("make ci reaches new-request-type, which changes the tree")
+	}
+	page := read(t, "docs/DEVELOPMENT.md")
+	block, _, _ := strings.Cut(page, "\n## Code layout\n")
+	if !regexp.MustCompile(`(?m)^make new-request-type NAME=<name> \[OPT_IN=1\] +# .*not part of make ci$`).MatchString(block) {
+		t.Error("the make targets of docs/DEVELOPMENT.md do not list make new-request-type NAME=<name> [OPT_IN=1] as not part of make ci")
+	}
+	_, section, ok := strings.Cut(page, "\n### Adding a request type\n")
+	if !ok {
+		t.Fatal("docs/DEVELOPMENT.md has no \"### Adding a request type\"")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	for _, want := range []string{"make new-request-type NAME=", "OPT_IN=1", "`tools/new-request-type.sh`", "`TODO(<name>)`", "`make schemas`", "`TestANewRequestTypeIsWiredByTheScaffold`"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("docs/DEVELOPMENT.md's \"Adding a request type\" does not say %s", want)
+		}
+	}
+}

@@ -762,6 +762,23 @@ and the source MUST list the opt-in types.
   type as any other. The Dockerfile's `REQUEST_TYPES`, `SQL_DRIVERS` and
   `OPT_IN_REQUEST_TYPES` build arguments and the Makefile's variables of
   those names MUST all use it.
+- `make new-request-type NAME=<name>`, with `OPT_IN=1` for an opt-in type,
+  MUST add a request type to the tree with `tools/new-request-type.sh`,
+  POSIX `sh`, `sed` and `awk` that macOS's run: it MUST refuse a name that
+  is not lowercase letters and digits starting with a letter, or that is a
+  type of the tree, before it writes anything; and it MUST write the type's
+  file, under its constraint, with a `Requester` whose `Fetch` answers that
+  the type is not implemented yet and an empty struct of its own keys, the
+  type's tests in `internal/fetch`, `internal/exporter` and its table of
+  schema rows, which pass, and `docs/<NAME>.md` with the sections of the
+  other types' pages, and add the type to every list in the tree that names
+  each type, then run `make schemas`. Each place left to a person MUST say `TODO(<name>)`, and
+  the script MUST end by printing what is left. A test MUST run it on a
+  copy of the tree, for an opt-in type and a type of every build, and find
+  that the copy builds and vets in the default build, with every opt-in
+  type and with each new type alone, that the generated tests pass, and
+  that the tests comparing the lists of the types pass. `make ci` MUST NOT
+  run it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
   log line, as `sql_drivers`, empty in a build without the type.

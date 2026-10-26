@@ -4,21 +4,27 @@
 # and the wiring that names every type, so that a new type is this command
 # and then its logic, its documentation and its tests.
 #
-#   sh tools/new-request-type.sh <name>          # a type of every build
-#   sh tools/new-request-type.sh <name> opt-in   # an opt-in type
+#   sh tools/new-request-type.sh <name>                  # a type of every build
+#   sh tools/new-request-type.sh <name> opt-in           # an opt-in type
+#   sh tools/new-request-type.sh <name> default SSHExec  # its Go name given
 #
-# make new-request-type NAME=<name> [OPT_IN=1] runs it. The name is
-# lowercase letters and digits, starting with a letter, and no type of the
-# tree already. It writes internal/fetch/requesttype_<name>.go, its tests
-# in internal/fetch and internal/exporter, its table of schema rows in
-# test/repository and docs/<NAME>.md; adds the type to the lists of
+# make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>] runs it.
+# The name is lowercase letters and digits, starting with a letter, and no
+# type of the tree already. The Go name is how the type's identifiers spell
+# it, RequestType<GoName> and <GoName>Config: the name with its first letter
+# in capitals when it is not given, and otherwise the name with the letters
+# of an initialism in capitals, as Go writes them (SSHExec for sshexec), the
+# same letters in the same order. It writes
+# internal/fetch/requesttype_<name>.go, its tests in internal/fetch and
+# internal/exporter, its table of schema rows in test/repository and
+# docs/<NAME>.md; adds the type to the lists of
 # internal/fetch/requesttype.go, the guard of requesttype_none.go, the loops
 # and the opt-in lists of the Makefile and .github/workflows/ci.yml, the
 # lists the documentation marks <!-- request-types -->, the indexes of the
-# README and docs/CONFIGURATION.md, spec § 35's list of pages and the
-# tables of the repository tests that name every type; runs make schemas;
-# and prints what is left to write by hand. Each place it writes that a
-# person has to finish says TODO(<name>).
+# README and docs/CONFIGURATION.md, spec § 35's list of pages, the tables of
+# the repository tests that name every type and the pages whose static
+# targets they read; runs make schemas; and prints what is left to write by
+# hand. Each place it writes that a person has to finish says TODO(<name>).
 #
 # It is POSIX sh with POSIX sed and awk, as macOS has them, and needs go,
 # gofmt and make. Run it from the repository root.
@@ -26,6 +32,7 @@ set -eu
 
 name="${1:-}"
 mode="${2:-}"
+goName="${3:-}"
 
 fail() {
 	echo "new-request-type: $*" >&2
@@ -51,6 +58,14 @@ esac
 first=$(printf '%s' "$name" | cut -c1 | tr 'a-z' 'A-Z')
 rest=$(printf '%s' "$name" | cut -c2-)
 Title="${first}${rest}"
+if [ -n "$goName" ]; then
+	case "$goName" in
+	[A-Z]*) ;;
+	*) fail "the Go name \"$goName\" does not start with a capital letter, as an exported identifier does" ;;
+	esac
+	[ "$(printf '%s' "$goName" | tr 'A-Z' 'a-z')" = "$name" ] || fail "the Go name \"$goName\" is not \"$name\" with some of its letters in capitals"
+	Title="$goName"
+fi
 NAME=$(printf '%s' "$name" | tr 'a-z' 'A-Z')
 for file in "docs/${NAME}.md" "internal/fetch/requesttype_${name}_test.go" "internal/exporter/requesttype_${name}_test.go" \
 	"test/repository/schemakeys_${name}_test.go" "test/repository/schemakeys_${name}rows_test.go"; do
@@ -81,6 +96,7 @@ need internal/fetch/optinkeys_test.go '^//go:build '
 need internal/fetch/optinkeys_check_test.go '^//go:build '
 need internal/fetch/unusedparams_test.go '^var unusedRefusals = '
 need test/repository/schemakeys_fullbuild_test.go 'slices.Concat(httpSchemaKeys(),.*)) {$'
+need test/repository/docfacts_test.go '^func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet('
 
 # The opt-in types as the Makefile builds them, before this one joins.
 oldOptIn=$(sed -n "s/^	tags=\"\$\$(sh tools\/request-type-tags.sh '' '' \([a-z0-9,]*\)).*/\1/p" Makefile | sed -n 1p)
@@ -420,8 +436,10 @@ shown in logs and labels.
 
 ## Static targets
 
-TODO(@name@): what a static target of the type is, and the keys its
-`request` may set.
+A [static target](STATIC-TARGETS.md) of a `@name@` collector may set
+`timeout` under its `request`. TODO(@name@): what a static target of the
+type is, and every other key its `request` may set, each named in this
+paragraph, as a test of the pages reads the type's TargetFields here.
 
 ## Limits
 
@@ -629,6 +647,14 @@ for table in "test/repository/readmesources_test.go readmeSourceNames {\"TODO(${
 	'
 	gofmt -w "$file"
 done
+
+# The pages whose Static targets section names the keys a target of the type
+# may set.
+rewrite test/repository/docfacts_test.go awk -v entry="		{\"docs/${NAME}.md\", \"internal/fetch/requesttype_${name}.go\"}," '
+	/^func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet\(/ { inTest = 1 }
+	inTest && $0 == "	} {" { print entry; inTest = 0 }
+	{ print }
+'
 
 # The tables of the schemas' constrained keys, every type's.
 rewrite test/repository/schemakeys_fullbuild_test.go awk -v name="$name" '

@@ -620,7 +620,8 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp` and `ldap` are implemented;
+`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
+implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -677,9 +678,10 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments want in the
-binary: `s3file`, for the AWS SDK it links, and `redis`, `tcp` and `ldap`, which
+binary: `s3file`, for the AWS SDK it links, `redis`, `tcp` and `ldap`, which
 link nothing outside the standard library but reach servers most
-deployments of the exporter do not have. No build MAY carry one unless asked for it by its tag,
+deployments of the exporter do not have, and `sshexec`, which runs commands
+on the hosts it reaches. No build MAY carry one unless asked for it by its tag,
 and the source MUST list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
@@ -729,11 +731,15 @@ and the source MUST list the opt-in types.
 - A library only one type uses MUST be imported only by files behind that
   type's constraint, so a build without the type does not link it; a test
   MUST list the packages a build of each other type links and find none of
-  it. The gRPC and protobuf modules are `grpc`'s alone, and
-  `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` `sshfile`'s: only files
-  behind the `sshfile` constraint MAY import them, the stand-in SSH server of
-  its tests (`internal/sshtest`) included, and the test MUST also find each
-  type's modules in a build of that type and in the default build. The
+  it. The gRPC and protobuf modules are `grpc`'s alone,
+  `golang.org/x/crypto/ssh` is `sshfile`'s and `sshexec`'s, and
+  `github.com/pkg/sftp` `sshfile`'s alone: only files behind a constraint
+  naming the types that use one MAY import it, the stand-in SSH server of
+  their tests (`internal/sshtest`) included, and the test MUST also find
+  each type's modules in a build of that type and in the default build. What
+  `sshfile` and `sshexec` share — the SSH connection, its keys and its
+  target — MUST live in files built with either, which import no SFTP, so
+  that a build of one carries none of the other's own code. The
   database drivers are `sql`'s, each imported only by its own file (§ 5.1,
   `sql`), and the test MUST find none of them in a build without `sql`, the
   three default drivers and none of the opt-in ones in a build with it, the
@@ -2558,6 +2564,109 @@ types at build time): only a build asked for it carries it. Its keys:
   list what a scrape would fail on as warnings of the `config` check.
 - A static target MAY set `timeout` and its own `tls` block (§ 42.14); a
   probe MAY set `timeout` and `param_<name>`.
+
+#### `sshexec`
+
+An `sshexec` collector runs one command the configuration fixes on the
+probe's `target`, a remote host, over SSH, and hands what the command wrote
+to stdout, as it wrote it, to the decoder and the transform as an `http`
+collector's body is handed to them. It is an opt-in type (§ 5.1, Selecting
+request types at build time): only a build asked for it carries it. Its
+connection MUST be `sshfile`'s, kept apart from `sshfile`'s connections.
+Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `command` | none | **Required.** A list: the program, then its arguments. The program an absolute path or a bare name, with no `/` otherwise, no placeholder and no control character, not blanks alone. No word with a NUL. At most 64 KiB together. `{{param_name}}` placeholders in the arguments, without filters. |
+| `success_exit_codes` | `[0]` | The exit statuses that are a success, each from 0 to 255; a list replaces `[0]`. |
+| `username`, `private_key_file`, `passphrase_file`, `password_file`, `known_hosts_file`, `keepalive_interval`, `keepalive_count_max`, `idle_timeout`, `max_open_connections` | as `sshfile` | With `sshfile`'s rules. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- The keys the two types share MUST be keys of the request block's common
+  part, with one description in the schema naming both types, and their
+  errors MUST name the collector's type where `sshfile`'s name `sshfile`.
+- A scrape MUST send the command as one line in which every word of the
+  list is written in single quotes, a `'` in it as `'\''`, so that a POSIX
+  shell, which sshd hands the line to, makes each the one word it is in the
+  list, whatever it holds: a test MUST run the line through `/bin/sh` and
+  find an argument with blanks, quotes, `$`, a backquote, a glob and a `;`
+  unchanged.
+- A placeholder of an argument MUST be filled from the probe's parameter, or
+  its default, and its value MUST hold only ASCII letters, digits and `. _ -
+  : / @ + = , %`, as `tcp`'s `send`; a value holding any other character
+  MUST be refused with `400` before anything is sent, naming the argument,
+  the parameter and the character, and a default holding one MUST be
+  refused at load. A value that would begin its argument with `-`, nothing
+  of the argument written before it, and a value with `..` as a path
+  component — `..` itself, or one beginning with `../`, ending with `/..`
+  or holding `/../` — MUST be refused alike, naming the argument, the
+  parameter and why; a `-` after what the configuration wrote in the
+  argument, and a `..` within a name, MUST be taken. `tcp`'s `send` MUST NOT
+  take these two rules. A probe parameter that no placeholder of an
+  argument or of a label value names MUST be refused, the refusal naming
+  `request.command`.
+- A scrape MUST open one SSH session on the connection kept to the host,
+  run the command in it with no environment, terminal or input, and read its
+  stdout against the response limit as it arrives: once past the limit the
+  scrape MUST fail as a limit exceeded, the command sent `KILL` and its
+  session closed. Of stderr the first 2 KiB MUST be kept, the rest read and
+  dropped. A session that cannot be opened because the connection was lost
+  MUST be opened once more on a new connection; once the exec request has
+  been written the command MUST NOT be sent again, even when the
+  connection is lost before the host answers it, and the scrape MUST fail
+  saying the command may have run. The client MUST send the end of stdin at
+  once, so a command reading it reads nothing and does not wait.
+- The exit status MUST decide: 0, or with `success_exit_codes` one it lists,
+  is a success, whose stdout is the body; any other status, a signal, or a
+  session ended without a status MUST fail the scrape, saying the host and
+  the status (`exited with N`, and, with `success_exit_codes`, that it does
+  not list it) or the signal (`was killed by signal NAME`), and the start of
+  stderr, at most 1 KiB of it, with what reads as a credential masked as in
+  any text the target wrote, or that it wrote nothing there. The start of
+  stderr MUST be in the log, a debug probe's report and the status page
+  alone: the `502` a probe is answered MUST say the host and the status or
+  the signal, and that stderr is in the exporter's log, a debug probe's
+  report and the status page, and MUST NOT hold any of stderr.
+- At the scrape's deadline, 30 seconds without one, or when it is
+  cancelled, the scrape MUST fail at once, send the command `KILL` and
+  close its session. When the session has not ended two seconds later, as
+  OpenSSH leaves a forced command's, which it refuses signals and keeps
+  open while the command lives, the connection MUST be retired, not
+  closed: no scrape MUST open a session on it any more, the scrapes whose
+  sessions run on it MUST be let finish, and it MUST be closed when the
+  last of those has ended; a warning MUST be logged once for each
+  connection retired.
+- The answer MUST be the body, with no status and no `Content-Type`; the
+  decoder MUST be `decoder.type`, or the one the transform implies, or what
+  the body reads as. A failed scrape MUST be reported in the `ssh` stage.
+- The target MUST be `sshfile`'s, checked and held to the target lists as
+  `sshfile`'s is, a refused host answered `403` and counted in
+  `http_exporter_targets_refused_total`.
+- A debug probe's request section MUST show `EXEC`, the host as
+  `ssh://host:port`, the user, the command line as it was sent in an
+  `Ssh-Command` header, and whether the connection was made for the probe
+  or kept, and as its outcome the exit status or the signal, the bytes read
+  and the start of stderr, masked, or the error; no credential. The verbose
+  `url` label MUST be `ssh://host:port`, and `http_method` MUST be `EXEC`.
+- `--dry-run` MUST read the collector's files, and a static target's own
+  credential files, as `sshfile`'s.
+- A static target MAY set `timeout`, `username`, `private_key_file`,
+  `passphrase_file` and `password_file`, with `sshfile`'s rules, and nothing
+  of the command; a probe MAY set `timeout` and `param_<name>`.
+- The documentation MUST have a security section: a dedicated account, a
+  key restricted in `authorized_keys`, a forced command, saying that the
+  server then ignores the configured command and hands it to the forced
+  command in `SSH_ORIGINAL_COMMAND`, with a wrapper that allows a short list
+  of command lines, and that no shell metacharacter reaches the host
+  unquoted; that the account needs a real login shell, since sshd runs
+  every command, a forced one too, with `$SHELL -c`, and an account whose
+  shell is `nologin` or `false` fails every scrape; that a placeholder's
+  value may not begin its argument with `-` or have `..` as a path
+  component, recommending `--` before the arguments placeholders fill in a
+  command that takes options; that stderr is not answered to a probe's
+  caller; that a forced command is not ended at the deadline, recommending
+  `timeout` in the wrapper or the command; and it MUST say why `env` is not
+  supported.
 
 #### `ldap`
 
@@ -6897,6 +7006,10 @@ http_exporter_sshfile_connections
 http_exporter_sshfile_connects_total
 http_exporter_sshfile_limit_waits_total
 http_exporter_sshfile_limit_failures_total
+http_exporter_sshexec_connections
+http_exporter_sshexec_connects_total
+http_exporter_sshexec_limit_waits_total
+http_exporter_sshexec_limit_failures_total
 http_exporter_sql_connections
 http_exporter_sql_idle_connections
 http_exporter_sql_targets
@@ -6954,7 +7067,11 @@ scrapes that waited for room at the collector's `max_open_connections`, and
 those that failed there, `0` for a collector without the limit. The four
 MUST be exported over OTLP as every other self-metric, and the counts MUST
 start at 0 at the exporter's shutdown and be forgotten with a collector a
-reload removes.
+reload removes. `http_exporter_sshexec_connections`,
+`http_exporter_sshexec_connects_total`,
+`http_exporter_sshexec_limit_waits_total` and
+`http_exporter_sshexec_limit_failures_total` MUST be the same of `sshexec`
+collectors, and exist only for them.
 `http_exporter_sql_connections`, `http_exporter_sql_idle_connections` and
 `http_exporter_sql_targets`, gauges, and `http_exporter_sql_connects_total`,
 `http_exporter_sql_keepalive_failures_total`,
@@ -8876,7 +8993,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
-`s3file`, `redis`, `tcp` or `ldap` collector MAY set `request.allowed_targets`
+`s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -27838,6 +27955,115 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   where its anchor has it; `model.InFileOrder` puts keys the order lacks
   after the others, in their own order.
 
+## 34.220 The opt-in sshexec request type
+
+- An sshexec collector runs its command over SSH with a private key and
+  answers its stdout as the body, raw: no status, no Content-Type, nothing
+  wrapped around it; the stand-in server (internal/sshtest) receives the
+  command line with every word in single quotes.
+- Exit status 0 is a success and 1 fails the scrape, `exited with 1, and
+  wrote nothing to stderr`; with success_exit_codes [0, 1] a 1 succeeds, a 2
+  fails saying the list does not hold it, [1] makes 0 fail, and 255 fails.
+- A failed command's error holds the start of its stderr with a password
+  in it masked, a stderr of 10 KiB is kept to 2 KiB and shown to 1 KiB with
+  its length, and a command ended by a signal says `was killed by signal
+  TERM`.
+- A command line run through /bin/sh hands the program every word
+  unchanged: blanks, a quote and double quotes, $HOME, a backquote, a glob,
+  `; rm -rf /`, a line break, an empty word and a filled placeholder.
+- A probe's placeholder value holding `;`, a blank, a quote, `$(...)` or a
+  line break is refused before any connection is made, naming the argument
+  and the parameter; a name's characters are taken. Through the exporter
+  the probe is answered 400.
+- A command whose stdout grows past max_response_bytes fails the scrape as a
+  limit exceeded, and the command is ended on the host.
+- At the scrape's deadline the scrape returns at once, saying it was
+  running the command on the host, and the command is sent KILL and ended.
+- A host presenting a key known_hosts_file does not hold for it is refused,
+  and nothing is run.
+- denied_targets naming the host, and allowed_targets not naming it, refuse
+  the scrape before any connection; through the exporter a refused target
+  is answered 403 and counted in http_exporter_targets_refused_total.
+- A static target with a password_file of its own runs the command where
+  the collector's own missing key could not; a static target's path, a
+  lone passphrase_file, a placeholder in a file key and a key written with
+  blanks alone are refused.
+- A debug probe's request section shows EXEC, ssh://host:port, the user,
+  the command line as sent in Ssh-Command, new and then reused, and the
+  outcome `exited with 0, read N bytes; stderr: ...` with a token in stderr
+  masked; through the exporter its report shows no private key.
+- The url label is ssh://host:port, the http_method EXEC, and a target with
+  a path is refused naming request.command.
+- The configuration's rules: a command required; the program blank, a
+  relative path, a placeholder or a control character refused; a NUL in an
+  argument, a default with `;` or a blank, a command over 64 KiB, an exit
+  status outside 0 to 255 refused; username, known_hosts_file and a
+  credential required, keepalive_count_max at least 1, root refused as
+  another type's key; an absolute or bare program, quotes in an argument,
+  exit codes and connection keys taken.
+- A probe of an sshexec collector through a regex transform reads the
+  output; a status of success_exit_codes succeeds with its output; the
+  collector's http_exporter_sshexec_connections and connects_total read 1
+  after two probes on one kept connection, its limit counters 0, and its
+  verbose scrapes carry ssh://host:port and EXEC.
+- An sshexec collector's output is read by a python transform, its label
+  values filled from the probe's parameters.
+- The refusal of an unused probe parameter by an sshexec collector names the
+  arguments of its request.command and its label values.
+- The keys of an sshexec collector get one verdict from the schema and the
+  exporter: username, known_hosts_file, password_file, passphrase_file and
+  the target lists' entries.
+- A build of sshexec alone links golang.org/x/crypto/ssh and not
+  github.com/pkg/sftp, a build of sshfile alone both, and no other single
+  type either.
+- The chart README's SSH exec collectors example renders, mounting the
+  private key and known_hosts at the paths its collector names.
+- The pages whose Static targets section names every key a target may set
+  include docs/SSHEXEC.md.
+- The scaffold refuses a Go name that is not the type's name with capitals
+  in it, or does not start with a capital; given GO_NAME=ZZDemo it spells the
+  type's constant RequestTypeZZDemo and its tests' names with ZZDemo, and it
+  adds the new type's page to the pages whose Static targets section is
+  read, which names timeout.
+
+## 34.221 sshexec: no options or climbs from probes, stderr kept from the caller, retired connections
+
+- A probe's placeholder value that begins its argument with `-`
+  (`--files0-from=/etc/passwd`, `-`, or `-x` after a placeholder filled
+  empty) or has `..` as a path component (`..`, `../../etc/shadow`,
+  `app/..`, `app/../../etc`) is refused, naming the argument, the parameter
+  and why, by the scrape and by the parameter check a probe is answered 400
+  by, before any connection; `-x` after `--unit=`, `a..b`, `..app/x.../...`
+  and `-y` after a filled placeholder are taken; a default `-x` at the start
+  of an argument and a default `../etc` are refused at load, and a default
+  `-1d` after `--since=` is taken. Through the exporter a probe value
+  `--help` or `../x` is answered 400 naming the parameter.
+- A failed command's error holds its stderr, and model.CallerText of it,
+  wrapped, says the host and the exit status and that stderr is in the
+  exporter's log, a debug probe's report and the status page, without
+  stderr; an unmarked error is shown whole, and the marked error reads and
+  is recognised as the one it marks.
+- Through the exporter, a probe of a command that exits with 1 and writes
+  a line of /etc/passwd to stderr is answered 502 with the status and where
+  stderr is, and no stderr; the log, a debug probe's report and the status
+  page show the line.
+- A command the stand-in server will not end at the deadline — its signals
+  refused, its session's close not sent, as OpenSSH leaves a forced
+  command — fails its scrape at the deadline and is sent KILL; a scrape
+  whose command runs on the same connection meanwhile completes; a later
+  scrape makes a new connection while the retired one stays open; the
+  retired connection is closed once that scrape's command has ended.
+- A stand-in server that drops the connection right after it takes the
+  exec request sees the command once, and the scrape fails saying the
+  command is not sent again.
+- A command that copies its stdin to stdout, as cat does, answers an empty
+  output at once.
+- The schema's descriptions of request.username, private_key_file,
+  password_file, passphrase_file and known_hosts_file name every request
+  type whose registration takes the key.
+- A tcp collector whose send begins with a placeholder sends `-1`,
+  `../..` and `a/../b` unchanged: sshexec's argument rules are not send's.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -27879,8 +28105,8 @@ The repository MUST include documentation covering:
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
-    `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md` and `ldap` in
-    `docs/LDAP.md`, with `localfile` and `grpc` above and `http` in
+    `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
+    `ldap` in `docs/LDAP.md` and `sshexec` in `docs/SSHEXEC.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

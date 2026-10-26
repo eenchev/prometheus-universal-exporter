@@ -29,6 +29,8 @@ func ownKeyValue(goType string) (set, unset string) {
 		return "{a: b}", "~"
 	case "[]string":
 		return "[x]", "~"
+	case "[]int":
+		return "[3]", "~"
 	}
 	if strings.HasPrefix(goType, "*") {
 		// A block, such as sql's connections or http's pagination.

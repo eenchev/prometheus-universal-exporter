@@ -157,6 +157,12 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_sshfile_connects_total", model.CounterMetricType, "SSH connections this sshfile collector's scrapes made: the first to a host, and each made again after one broke, was closed idle or by keepalives, or had a file change.", nil},
 	{"http_exporter_sshfile_limit_waits_total", model.CounterMetricType, "Scrapes of this sshfile collector that waited for room at its request.max_open_connections before they had a connection; 0 without the limit.", nil},
 	{"http_exporter_sshfile_limit_failures_total", model.CounterMetricType, "Scrapes of this sshfile collector that failed at its request.max_open_connections: every connection it may open was held by a read or being made when their deadline came.", nil},
+	// An sshexec collector's connections are kept as an sshfile
+	// collector's are, and counted apart, by families of its own.
+	{"http_exporter_sshexec_connections", model.GaugeMetricType, "SSH connections this sshexec collector's scrapes use that are open now; a connection collectors with the same host and settings share is counted for each of them.", nil},
+	{"http_exporter_sshexec_connects_total", model.CounterMetricType, "SSH connections this sshexec collector's scrapes made: the first to a host, and each made again after one broke, was closed idle or by keepalives, or had a file change.", nil},
+	{"http_exporter_sshexec_limit_waits_total", model.CounterMetricType, "Scrapes of this sshexec collector that waited for room at its request.max_open_connections before they had a connection; 0 without the limit.", nil},
+	{"http_exporter_sshexec_limit_failures_total", model.CounterMetricType, "Scrapes of this sshexec collector that failed at its request.max_open_connections: every connection it may open was held by a command or being made when their deadline came.", nil},
 	// The pools of connections a sql collector keeps are the collector's,
 	// one to a target, so they have no per-request value either.
 	{"http_exporter_sql_connections", model.GaugeMetricType, "Database connections this sql collector's pools have open now, in use or idle, across its targets.", nil},
@@ -198,6 +204,10 @@ var requestTypeFamilies = map[string]func(rt *fetch.RequestType, family string) 
 	"http_exporter_sshfile_connects_total":             ownFamily,
 	"http_exporter_sshfile_limit_waits_total":          ownFamily,
 	"http_exporter_sshfile_limit_failures_total":       ownFamily,
+	"http_exporter_sshexec_connections":                ownFamily,
+	"http_exporter_sshexec_connects_total":             ownFamily,
+	"http_exporter_sshexec_limit_waits_total":          ownFamily,
+	"http_exporter_sshexec_limit_failures_total":       ownFamily,
 	"http_exporter_sql_connections":                    ownFamily,
 	"http_exporter_sql_idle_connections":               ownFamily,
 	"http_exporter_sql_targets":                        ownFamily,
@@ -409,6 +419,22 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			return float64(waited)
 		},
 		"http_exporter_sshfile_limit_failures_total": func(name string) float64 {
+			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(failed)
+		},
+		"http_exporter_sshexec_connections": func(name string) float64 {
+			open, _ := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(open)
+		},
+		"http_exporter_sshexec_connects_total": func(name string) float64 {
+			_, made := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(made)
+		},
+		"http_exporter_sshexec_limit_waits_total": func(name string) float64 {
+			waited, _ := fetch.CollectorConnectionLimit(requestTypes[name], name)
+			return float64(waited)
+		},
+		"http_exporter_sshexec_limit_failures_total": func(name string) float64 {
 			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
 			return float64(failed)
 		},

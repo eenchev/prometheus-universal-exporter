@@ -12,7 +12,10 @@ exporter cannot mount:
 - the output of a batch job on a host that is reachable only over SSH.
 
 The host needs nothing but an SSH server with its SFTP subsystem, which
-OpenSSH enables by default, and an account that can read the files.
+OpenSSH enables by default, and an account that can read the files. To run
+a command on the host and read its output instead, use
+[`sshexec`](SSHEXEC.md), which connects as `sshfile` does, with the same
+keys.
 
 ## A collector
 

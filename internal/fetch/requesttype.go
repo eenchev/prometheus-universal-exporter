@@ -25,7 +25,8 @@ import (
 // store that speaks its API, kubernetes lists objects from a Kubernetes API
 // server, redis reads INFO and read-only commands from a Redis or Valkey
 // server, tcp sends a line to a text-protocol service over TCP and reads
-// its answer, ldap searches an LDAP directory. The type is required rather than defaulted so that no configuration means
+// its answer, ldap searches an LDAP directory, sshexec runs a command on
+// another host over SSH. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common
@@ -61,13 +62,14 @@ const (
 	RequestTypeRedis      = "redis"
 	RequestTypeTCP        = "tcp"
 	RequestTypeLDAP       = "ldap"
+	RequestTypeSSHExec    = "sshexec"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links
@@ -75,12 +77,14 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestT
 // needs nothing outside the standard library, is kept out of the binary of
 // every deployment that has no Redis to read, as tcp, which needs nothing
 // outside it either, is of every deployment with no text-protocol service
-// to read, and ldap is of every one with no directory to search. A build
+// to read, and ldap is of every one with no directory to search; sshexec
+// runs commands on the hosts it reaches, which no build should do unless
+// asked. A build
 // carries one only when
 // asked, with its request_type_<name> tag, and its file is built
 // under that tag alone. A test keeps the list in step with the files'
 // constraints.
-var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP}
+var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose

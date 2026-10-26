@@ -10,7 +10,7 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
 make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
-make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap,sshexec adds s3file, redis, tcp, ldap and sshexec
 make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
                 #   configuration and static targets on 127.0.0.1:8080; PORT=, HOST= and ARGS= change
                 #   that, the opt-in types the example needs are added, and EXAMPLE= alone lists the examples
@@ -20,7 +20,7 @@ make lint-request-types  # golangci-lint for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
-make new-request-type NAME=<name> [OPT_IN=1]  # a new request type's files and wiring; not part of make ci
+make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>]  # a new request type's files and wiring; not part of make ci
 make ci         # what CI runs, one after another: fmt-check, lint, lint-request-types,
                 #   gopls-check, test, test-scaffold, vet, build-request-types, test-request-types,
                 #   the sql drivers' and the opt-in request types' builds, and helm-test
@@ -75,7 +75,7 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, and the rendezvous hash that decides a target's owner. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file`, `redis`, `tcp` and `ldap`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, `sshfile`'s connections and SFTP reads in `ssh*.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in `s3file`, `redis`, `tcp`, `ldap` and `sshexec`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
@@ -88,7 +88,7 @@ the ones above them in this list:
 | `internal/kubetest` | A stand-in Kubernetes API server for the tests of `internal/kubeapi` and of the `kubernetes` type: an HTTPS server answering a listing of the objects a test gave it a page at a time, as the limit asks, with continue tokens, refusing a request without the token of its service account directory with `401`, answering `403` and `404` as the API server does, slow to answer when told to, and recording the requests; it writes the service account directory and sets the environment of a pod. It imports nothing but the standard library. |
 | `internal/redistest` | A stand-in Redis server for the `redis` type's tests: a TCP or TLS server, its self-signed certificate written to a file, answering RESP2 commands as Redis and Valkey do — AUTH with or without a username against the password it was given, NOAUTH before it, SELECT of the databases 0 to 15, INFO of the sections a test gave it, all or one by name, and any other command with the raw reply the test set — with a hook that answers a command with any bytes, to play a broken, hostile or silent server, and the commands it was sent recorded. It imports the standard library alone; imported only by tests. |
 | `internal/ldaptest` | A stand-in LDAP server for the `ldap` type's tests: a TCP server, or a TLS one for `ldaps://`, its self-signed certificate written to a file, answering LDAPv3 messages in BER as a directory server does — a simple bind, anonymous or as an account it was given, `invalidCredentials` to a wrong password, StartTLS unless told to refuse it, and a search of the entries a test gave it by base, scope and filter, with the attributes asked for, a page at a time with the Simple Paged Results control unless told to ignore it, and continuation references — with a hook that answers a request with any bytes, to play a broken, hostile or silent server, and the requests it was sent recorded, each filter written back as RFC 4515 text. It imports the standard library alone; imported only by tests. |
-| `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the type's build tag, so a build without the type compiles no SSH code even for its tests. |
+| `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, and commands for the `sshexec` type's, run by the test's own function or by `/bin/sh`, with their exit statuses, signals and stderr, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the two types' build tags, so a build without them compiles no SSH code even for its tests. |
 
 A package's tests live beside it, unless they need more than it can import: a
 test that validates a whole configuration lives in `internal/config`, and one
@@ -365,14 +365,20 @@ two to the same lines and the same entries, a full log among them.
 ### Adding a request type
 
 ```sh
-make new-request-type NAME=memcache          # a type of every build
-make new-request-type NAME=memcache OPT_IN=1 # an opt-in type
+make new-request-type NAME=memcache                          # a type of every build
+make new-request-type NAME=memcache OPT_IN=1                 # an opt-in type
+make new-request-type NAME=sshexec OPT_IN=1 GO_NAME=SSHExec  # its Go name given
 ```
 
 runs `tools/new-request-type.sh`, POSIX `sh`, `sed` and `awk` as macOS has
 them, which refuses a name that is not lowercase letters and digits starting
 with a letter, or that is a type of the tree already, before it writes
-anything. For a new name it writes
+anything. `GO_NAME` is how the type's Go identifiers spell the name,
+`RequestType<GoName>`, `<GoName>Config` and its tests' names: the name with
+the letters of an initialism in capitals, as Go writes them, `SSHExec` for
+`sshexec`; left out, the name with its first letter in capitals,
+`Memcache`. One that is not the name's letters, in their order, or does
+not start with a capital, is refused. For a new name it writes
 
 - `internal/fetch/requesttype_<name>.go`, under the type's build constraint
   (an opt-in type's tag alone), with the registration: a
@@ -412,8 +418,10 @@ and a sentence in the others, and the build information's list of a default
 build; the README's index, the related pages of `docs/CONFIGURATION.md` and
 spec § 35's list of pages; and the tables of the repository's and the fetch
 tests that hold a value of each type, the words the READMEs name it with
-(`readmeSourceNames`, `chartSourceNames`) and its refusal of an unused probe
-parameter (`unusedRefusals`). Then it runs `make schemas`, since the
+(`readmeSourceNames`, `chartSourceNames`), its refusal of an unused probe
+parameter (`unusedRefusals`) and the pages whose Static targets section a
+test holds to the keys a target may set, its page among them, whose
+section names `timeout`. Then it runs `make schemas`, since the
 committed schemas list the types of a default build. The lists the tests
 read from the tree, the types of `internal/fetch/requesttype_*.go`, need
 no edit: `tools/request-type-tags.sh` finds a type by its file and its
@@ -904,7 +912,7 @@ A type the default build leaves out, `s3file`, `redis`, `tcp` or `ldap`, lives i
 
 as do the files only it needs (`s3source.go`, `redisresp.go`, `ldapber.go`,
 `ldapfilter.go`) and its tests, so a build carries it only when its tag is
-given: `sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
+given: `sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
 default build's types, and `REQUEST_TYPES` may name it like any type. Shared
 code it uses names its tag beside the others' (`filereads.go`,
 `localfile_directory.go`). Each type built on its own includes it, in the
@@ -1092,7 +1100,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes`, `s3file`, `redis`, `tcp` and `ldap`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap` and `sshexec`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
@@ -2387,7 +2395,7 @@ What is scanned is what ships and what the workflows run: the exporter, the
 package at the root, and the repository's tools (`. ./tools/...`), each with
 everything it imports. The packages only tests use — `internal/grpctest`, the
 stand-in gRPC server of the grpc tests, `internal/sshtest`, the stand-in SSH
-and SFTP server of the sshfile tests, `internal/testutil` with its
+and SFTP server of the sshfile and sshexec tests, `internal/testutil` with its
 `alloctest`, and `test/repository` — are left out, so an advisory for code
 that only a test reaches, such as the gRPC server the exporter never is, raises
 no warning; the price is that such an advisory is not reported at all. A test

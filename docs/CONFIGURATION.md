@@ -2617,6 +2617,15 @@ For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
 `password_file`, `start_tls`, `tls`, `max_response_bytes`,
 `allowed_targets` and `denied_targets` apply too. The decoder is `json`;
 its table is in [LDAP directories](LDAP.md#a-collector).
+
+For `sshexec`, in a build that [asks for it](SSHEXEC.md#building-with-sshexec),
+`command` is required, the program and its arguments as a list, with
+`username` and `known_hosts_file` and a private key or a password, as for
+`sshfile`; `success_exit_codes` names the exit statuses that are a success,
+`[0]` when left out, and `passphrase_file`, the connection's keepalive,
+idle and limit keys, `max_response_bytes`, `allowed_targets` and
+`denied_targets` apply too. The command's output is a body, read by any
+decoder; its table is in [Commands over SSH](SSHEXEC.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -2647,7 +2656,8 @@ since the collector lists what its configuration names. `redis` accepts
 `host:port` or a `redis://` or `rediss://` URL of it, and so does `ldap`,
 its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
 accepts `timeout` and `param_<name>`, and requires a `target`, the service,
-`host:port` with its port.
+`host:port` with its port. `sshexec` accepts `timeout` and
+`param_<name>`, and requires a `target`, the host, as `sshfile` does.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -2706,7 +2716,7 @@ their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
-links the AWS SDK, below, and the opt-in `redis`, `tcp` and `ldap` nothing outside it either. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, the opt-in `redis`, `tcp` and `ldap` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2714,9 +2724,11 @@ drivers](SQL.md#building-with-more-drivers)).
 
 An opt-in type is one no build carries unless asked, the default build and
 the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB, and `redis`, `tcp` and `ldap`, which need nothing outside the
+6.7 MB, `redis`, `tcp` and `ldap`, which need nothing outside the
 standard library and are left out of the builds of deployments with no Redis
-or text-protocol service to read, or directory to search.
+or text-protocol service to read, or directory to search, and `sshexec`,
+which runs commands on the hosts it reaches, and is in no build that does
+not ask to run them.
 `OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
 carries, whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like
 any type:
@@ -2725,17 +2737,18 @@ any type:
 make build OPT_IN_REQUEST_TYPES=s3file
 make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec)" .
 ```
 
 Its tag alone, `request_type_s3file`, `request_type_redis`,
-`request_type_tcp` or `request_type_ldap`, adds a type to a default build, and the tags together
+`request_type_tcp`, `request_type_ldap` or `request_type_sshexec`, adds a type to a default build, and the tags together
 each of them. A collector of an opt-in type is refused by a build without it
 with a message that says the type is opt-in and how to build with it
 ([Building with s3file](S3FILE.md#building-with-s3file), [Building with
 redis](REDIS.md#building-with-redis), [Building with
 tcp](TCP.md#building-with-tcp), [Building with
-ldap](LDAP.md#building-with-ldap)).
+ldap](LDAP.md#building-with-ldap), [Building with
+sshexec](SSHEXEC.md#building-with-sshexec)).
 
 ### When a metric cannot be extracted
 
@@ -5785,6 +5798,7 @@ nothing there.
 - [REDIS.md](REDIS.md) — the opt-in `redis` request type.
 - [TCP.md](TCP.md) — the opt-in `tcp` request type.
 - [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
+- [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

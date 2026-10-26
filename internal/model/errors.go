@@ -97,3 +97,38 @@ func JoinProblems(errs ...error) error {
 	}
 	return all
 }
+
+// operatorError is an error whose text holds what is for the exporter's
+// operator alone, such as what a remote command wrote to stderr: the log,
+// the debug report and the status page show the whole text, and the caller
+// of a probe, who may be anyone the probe endpoint answers, only caller.
+type operatorError struct {
+	err    error
+	caller string
+}
+
+func (e *operatorError) Error() string { return e.err.Error() }
+
+func (e *operatorError) Unwrap() error { return e.err }
+
+// WithOperatorDetail marks err as holding detail for the operator alone:
+// its text is unchanged, and CallerText shows caller in its place.
+func WithOperatorDetail(err error, caller string) error {
+	if err == nil {
+		return nil
+	}
+	return &operatorError{err: err, caller: caller}
+}
+
+// CallerText is the text of err as a probe's caller is answered it: the
+// text of an error WithOperatorDetail marked, wherever it is in the chain,
+// replaced by what the caller is shown of it, and the text around it, what
+// wraps it, as it is.
+func CallerText(err error) string {
+	text := err.Error()
+	var marked *operatorError
+	if errors.As(err, &marked) {
+		text = strings.Replace(text, marked.Error(), marked.caller, 1)
+	}
+	return text
+}

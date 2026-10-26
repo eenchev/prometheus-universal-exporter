@@ -65,20 +65,6 @@ func newSSHFixtureWith(t *testing.T, encrypted bool, hostKeys ...ssh.Signer) *ss
 	return f
 }
 
-// sshFileOwn edits an sshfile request's own keys.
-func sshFileOwn(r *model.RequestConfig, edit func(*SSHFileConfig)) {
-	own, _ := r.Own.(SSHFileConfig)
-	edit(&own)
-	r.Own = own
-}
-
-// editSSHFile edits an sshfile collector's own keys.
-func editSSHFile(c *model.Collector, edit func(*SSHFileConfig)) {
-	r := sshFileRequest(c)
-	edit(&r)
-	c.Request.Own = r
-}
-
 // collector is a validated sshfile collector of the fixture reading path
 // with its private key, changed by change first.
 func (f *sshFixture) collector(t *testing.T, name, path string, change ...func(*model.RequestConfig)) *model.Collector {
@@ -87,7 +73,7 @@ func (f *sshFixture) collector(t *testing.T, name, path string, change ...func(*
 		Name: name,
 		Request: model.RequestConfig{
 			Type: RequestTypeSSHFile, Root: f.root, Path: path,
-			Username: "metrics", PrivateKeyFile: f.keyFile, Own: SSHFileConfig{KnownHostsFile: f.knownHosts},
+			Username: "metrics", PrivateKeyFile: f.keyFile, KnownHostsFile: f.knownHosts,
 		},
 		Transform:     model.TransformConfig{Type: "prometheus"},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
@@ -181,7 +167,7 @@ func TestSSHFileAuthenticatesWithAPasswordAndAnEncryptedKey(t *testing.T) {
 		"password": func(r *model.RequestConfig) { r.PrivateKeyFile, r.PasswordFile = "", f.passwordFile },
 		"encrypted": func(r *model.RequestConfig) {
 			r.PrivateKeyFile = f.encryptedKey
-			sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = f.passphraseFile })
+			r.PassphraseFile = f.passphraseFile
 		},
 		"fallback": func(r *model.RequestConfig) { r.PrivateKeyFile, r.PasswordFile = stranger, f.passwordFile },
 	} {
@@ -209,7 +195,7 @@ func TestSSHFileCredentialFailuresSaySo(t *testing.T) {
 		"encrypted": {func(r *model.RequestConfig) { r.PrivateKeyFile = f.encryptedKey }, "is encrypted; name the file of its passphrase in request.passphrase_file"},
 		"passphrase": {func(r *model.RequestConfig) {
 			r.PrivateKeyFile = f.encryptedKey
-			sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = wrong })
+			r.PassphraseFile = wrong
 		}, "could not be decrypted with the passphrase in " + wrong},
 		"not a key": {func(r *model.RequestConfig) { r.PrivateKeyFile = notKey }, "request.private_key_file " + notKey + " is not a private key"},
 		"missing":   {func(r *model.RequestConfig) { r.PrivateKeyFile = filepath.Join(f.dir, "gone") }, "reading request.private_key_file"},
@@ -242,7 +228,7 @@ func TestSSHFileVerifiesTheHostKey(t *testing.T) {
 		"invalid":  {"this is no line\n", "cannot be read as known_hosts lines"},
 	} {
 		file := sshtest.WriteFile(t, f.dir, "known_"+strings.ReplaceAll(name, " ", "_"), tc.content)
-		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = file }) }), RequestOverrides{})
+		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = file }), RequestOverrides{})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err=%v, want it to say %q", name, err, tc.want)
 		}
@@ -265,7 +251,7 @@ func TestSSHFileAsksForTheHostKeyKnownHostsHas(t *testing.T) {
 	plain := sshtest.WriteFile(t, f.dir, "known_ed", f.server.KnownHostsLine(ed))
 	hashed := sshtest.WriteFile(t, f.dir, "known_hashed", knownhosts.Line([]string{knownhosts.HashHostname(knownhosts.Normalize(f.server.Addr))}, ed.PublicKey())+"\n")
 	for _, file := range []string{plain, hashed} {
-		if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = file }) }), RequestOverrides{}); err != nil {
+		if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = file }), RequestOverrides{}); err != nil {
 			t.Errorf("%s: %v", file, err)
 		}
 		sshConns.closeAll()
@@ -433,7 +419,7 @@ func TestSSHFileConnectsAgainAfterTheConnectionEnded(t *testing.T) {
 	waitEvent(t, events, "closed: ended")
 	restarted := sshtest.Start(t, sshtest.Options{Password: sshPassword, HostKeys: f.server.HostKeys})
 	c.Request.PrivateKeyFile, c.Request.PasswordFile = "", f.passwordFile
-	editSSHFile(c, func(r *SSHFileConfig) { r.KnownHostsFile = restarted.WriteKnownHosts(t, t.TempDir()) })
+	c.Request.KnownHostsFile = restarted.WriteKnownHosts(t, t.TempDir())
 	if _, err := FetchCollector(context.Background(), restarted.Addr, c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -479,10 +465,10 @@ func TestSSHFileKeepalivesCloseADeadConnection(t *testing.T) {
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	interval := model.Duration(20 * time.Millisecond)
 	most := 2
-	c := f.collector(t, "alive", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KeepaliveCountMax = &most }) })
+	c := f.collector(t, "alive", "app.prom", func(r *model.RequestConfig) { r.KeepaliveCountMax = &most })
 	// Past the check of the configuration, which refuses an interval under
 	// a second, so the test waits milliseconds for what takes seconds.
-	editSSHFile(c, func(r *SSHFileConfig) { r.KeepaliveInterval = &interval })
+	c.Request.KeepaliveInterval = &interval
 	events := sshEvents(t, f.server.Addr)
 	if _, err := f.fetch(c, RequestOverrides{}); err != nil {
 		t.Fatal(err)
@@ -506,15 +492,15 @@ func TestSSHFileIdleTimeout(t *testing.T) {
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	short := model.Duration(30 * time.Millisecond)
 	events := sshEvents(t, f.server.Addr)
-	if _, err := f.fetch(f.collector(t, "idle", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.IdleTimeout = &short }) }), RequestOverrides{}); err != nil {
+	if _, err := f.fetch(f.collector(t, "idle", "app.prom", func(r *model.RequestConfig) { r.IdleTimeout = &short }), RequestOverrides{}); err != nil {
 		t.Fatal(err)
 	}
 	waitEvent(t, events, "closed: idle")
 	never, interval := model.Duration(0), model.Duration(10*time.Millisecond)
-	kept := f.collector(t, "kept", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.IdleTimeout = &never }) })
+	kept := f.collector(t, "kept", "app.prom", func(r *model.RequestConfig) { r.IdleTimeout = &never })
 	// Past the check of the configuration, which refuses an interval under
 	// a second, so the test waits milliseconds for what takes seconds.
-	editSSHFile(kept, func(r *SSHFileConfig) { r.KeepaliveInterval = &interval })
+	kept.Request.KeepaliveInterval = &interval
 	if _, err := f.fetch(kept, RequestOverrides{}); err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +609,7 @@ func TestSSHFileTargets(t *testing.T) {
 		"[2001:db8::1]":           "[2001:db8::1]:22",
 		"2001:db8::1":             "[2001:db8::1]:22",
 	} {
-		a, err := parseSSHTarget(target)
+		a, err := parseSSHTarget(RequestTypeSSHFile, target)
 		if err != nil || a.hostPort != want {
 			t.Errorf("%q: %+v %v, want %s", target, a, err, want)
 		}
@@ -643,7 +629,7 @@ func TestSSHFileTargets(t *testing.T) {
 // in a file key or the username, and the connection settings in range.
 func TestSSHFileConfigurationRules(t *testing.T) {
 	valid := func() model.Collector {
-		return model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", Own: SSHFileConfig{KnownHostsFile: "/kh"}}}
+		return model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh"}}
 	}
 	negative, minusOne, zero := model.Duration(-time.Second), -1, 0
 	for name, tc := range map[string]struct {
@@ -653,24 +639,24 @@ func TestSSHFileConfigurationRules(t *testing.T) {
 		"no root":        {func(r *model.RequestConfig) { r.Root = "" }, "request.root is required for request.type sshfile"},
 		"relative root":  {func(r *model.RequestConfig) { r.Root = "srv" }, "must be an absolute path"},
 		"no username":    {func(r *model.RequestConfig) { r.Username = " " }, "request.username is required"},
-		"no known_hosts": {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = "" }) }, "request.known_hosts_file is required"},
+		"no known_hosts": {func(r *model.RequestConfig) { r.KnownHostsFile = "" }, "request.known_hosts_file is required"},
 		"no credential":  {func(r *model.RequestConfig) { r.PrivateKeyFile = "" }, "sets neither request.private_key_file nor request.password_file"},
 		"lone passphrase": {func(r *model.RequestConfig) {
 			r.PrivateKeyFile, r.PasswordFile = "", "/p"
-			sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = "/pp" })
+			r.PassphraseFile = "/pp"
 		}, "passphrase_file without request.private_key_file"},
 		"placeholder key": {func(r *model.RequestConfig) { r.PrivateKeyFile = "/k/{{param_x}}" }, "request.private_key_file \"/k/{{param_x}}\" has a placeholder"},
 		"placeholder hosts": {func(r *model.RequestConfig) {
-			sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = "/{{param_x}}" })
+			r.KnownHostsFile = "/{{param_x}}"
 		}, "request.known_hosts_file \"/{{param_x}}\" has a placeholder"},
 		"placeholder user": {func(r *model.RequestConfig) { r.Username = "{{param_x}}" }, "request.username \"{{param_x}}\" has a placeholder"},
 		"negative keepalive": {func(r *model.RequestConfig) {
-			sshFileOwn(r, func(o *SSHFileConfig) { o.KeepaliveInterval = &negative })
+			r.KeepaliveInterval = &negative
 		}, "request.keepalive_interval must not be negative"},
-		"negative idle": {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.IdleTimeout = &negative }) }, "request.idle_timeout must not be negative"},
-		"count 0":       {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KeepaliveCountMax = &zero }) }, "request.keepalive_count_max must be at least 1"},
+		"negative idle": {func(r *model.RequestConfig) { r.IdleTimeout = &negative }, "request.idle_timeout must not be negative"},
+		"count 0":       {func(r *model.RequestConfig) { r.KeepaliveCountMax = &zero }, "request.keepalive_count_max must be at least 1"},
 		"count -1": {func(r *model.RequestConfig) {
-			sshFileOwn(r, func(o *SSHFileConfig) { o.KeepaliveCountMax = &minusOne })
+			r.KeepaliveCountMax = &minusOne
 		}, "request.keepalive_count_max must be at least 1"},
 		"escaping path":      {func(r *model.RequestConfig) { r.Path = "../a.prom" }, "leads outside request.root"},
 		"absolute path":      {func(r *model.RequestConfig) { r.Path = "/a.prom" }, "must be relative to request.root"},
@@ -686,7 +672,7 @@ func TestSSHFileConfigurationRules(t *testing.T) {
 	}
 	c := valid()
 	c.Request.PasswordFile = "/p"
-	editSSHFile(&c, func(r *SSHFileConfig) { r.PassphraseFile = "/pp" })
+	c.Request.PassphraseFile = "/pp"
 	if err := ValidateRequest(&c); err != nil {
 		t.Errorf("a key with its passphrase and a password: %v", err)
 	}
@@ -694,7 +680,7 @@ func TestSSHFileConfigurationRules(t *testing.T) {
 	if settings.keepaliveInterval != 30*time.Second || settings.keepaliveCountMax != 3 || settings.idleTimeout != 5*time.Minute {
 		t.Errorf("defaults %+v", settings)
 	}
-	editSSHFile(&c, func(r *SSHFileConfig) { r.KeepaliveInterval, r.IdleTimeout = new(model.Duration), new(model.Duration) })
+	c.Request.KeepaliveInterval, c.Request.IdleTimeout = new(model.Duration), new(model.Duration)
 	if settings := sshSettingsOf(&c, RequestOverrides{}); settings.keepaliveInterval != 0 || settings.idleTimeout != 0 {
 		t.Errorf("0 must switch keepalives and the idle timeout off: %+v", settings)
 	}
@@ -704,7 +690,7 @@ func TestSSHFileConfigurationRules(t *testing.T) {
 // the collector's together, and its path and timeout; nothing else of the
 // type's, and no file key with a placeholder.
 func TestSSHFileStaticTargetRequest(t *testing.T) {
-	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", Own: SSHFileConfig{KnownHostsFile: "/kh"}}}
+	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh"}}
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,34 @@
+# The exporter scrapes these itself, every minute, and serves them together
+# on /static-targets: the disk and load of two hosts, and the state of two
+# units of one of them, each named for what it reads. legacy runs its
+# commands as another account, with a password of its own, which replaces
+# the collector's key; nothing of the command can be changed by a target.
+#
+#   make run EXAMPLE=sshexec
+#   curl http://localhost:8080/static-targets
+interval: 1m
+targets:
+  - name: db1_disk
+    collector: disk
+    target: db1.example.com
+  - name: db1_load
+    collector: load
+    target: db1.example.com
+  - name: legacy_disk
+    collector: disk
+    target: legacy.example.com:2222
+    request:
+      username: monitor
+      password_file: /etc/exporter/ssh/legacy-password
+  - name: db1_nginx
+    collector: unit
+    target: db1.example.com
+    labels:
+      unit: nginx.service
+  - name: db1_postgresql
+    collector: unit
+    target: db1.example.com
+    params:
+      param_unit: postgresql.service
+    labels:
+      unit: postgresql.service

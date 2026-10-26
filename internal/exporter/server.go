@@ -753,7 +753,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		refused.outcome, refused.failure = probeRefused, shownStatusError(result.err)
 		return refused
 	case result.failed():
-		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, result.stage, result.err), http.StatusBadGateway)
+		// What is for the operator alone, such as a remote command's
+		// stderr, stays in the log, the debug report and the status page.
+		http.Error(out, fmt.Sprintf("collector %s %s failed: %s", name, result.stage, model.CallerText(result.err)), http.StatusBadGateway)
 		failure := out.result(false)
 		failure.unauthorized = result.unauthorized
 		failure.failure = shownStatusError(result.err)

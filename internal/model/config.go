@@ -214,12 +214,27 @@ type RequestConfig struct {
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
 	// Username and the credential files belong to the types that log in
-	// as an account: sshfile, the account a file is read as on the remote
-	// host, with its private key or password; sql, redis and ldap, with
-	// theirs (fetch/requesttype_<name>.go).
+	// as an account: sshfile and sshexec, the account a file is read or a
+	// command runs as on the remote host, with its private key or
+	// password; sql, redis and ldap, with theirs
+	// (fetch/requesttype_<name>.go).
 	Username       string `yaml:"username"`
 	PrivateKeyFile string `yaml:"private_key_file"`
 	PasswordFile   string `yaml:"password_file"`
+	// The rest of the SSH connection's keys belong to the types that reach
+	// a host over SSH, sshfile and sshexec, which share how they connect
+	// (fetch/sshconn.go): the file of the passphrase the private key is
+	// decrypted with and the known_hosts file the host's key is verified
+	// against; the keepalive settings and the idle timeout of the
+	// connection kept to a host, nil for the default and 0 to switch each
+	// off; and the most connections the collector holds open at once, 0
+	// for no limit.
+	PassphraseFile     string    `yaml:"passphrase_file"`
+	KnownHostsFile     string    `yaml:"known_hosts_file"`
+	KeepaliveInterval  *Duration `yaml:"keepalive_interval"`
+	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
+	IdleTimeout        *Duration `yaml:"idle_timeout"`
+	MaxOpenConnections int       `yaml:"max_open_connections"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML

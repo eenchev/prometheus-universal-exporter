@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, or the searches of an LDAP directory, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, or Kubernetes objects listed from the API server — and objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, the output of a command run on another host over SSH, or the searches of an LDAP directory, in a build that asks for them. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,7 +10,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis`, `tcp` and `ldap` collectors in an image built with them
+* `grpc`, `graphite`, `dns` and `tlscert` collectors, and `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors in an image built with them
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
 * Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
@@ -19,7 +19,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Per-scrape overrides through `/probe` parameters, which monitors render as `params`
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
-* SSH keys, passwords and known hosts for `sshfile` collectors, from a Secret and the values
+* SSH keys, passwords and known hosts for `sshfile` and `sshexec` collectors, from a Secret and the values
 * Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
 * `list` permissions on the resources `kubernetes` collectors read, for the exporter's own ServiceAccount
 * Static targets the exporter scrapes itself and delivers over OTLP
@@ -465,6 +465,36 @@ and probe it with the server as the target, `/probe?collector=sftp_textfile&targ
 Rendering fails, naming what to set, when `sshAuth.enabled` is true and `secretName` is empty; when neither `privateKeyKey` nor `passwordKey` is set; when `passphraseKey` is set without `privateKeyKey`; when known hosts are given by neither `knownHosts` nor `knownHostsSecretKey`, or by both, since the one `known_hosts` file can come from one of them only; and when `knownHosts` holds no entry. The chart tells an entry by its shape alone: a line that is not a `#` comment and has at least three fields, a host, a key type and a key; whether the key is a valid one is the exporter's to say. The values schema refuses the same, and the templates refuse it again with the schema skipped.
 
 The files have mode `0400`. The kubelet makes them group-owned by the pod's `fsGroup` and lets that group read them, so the exporter, which runs as user and group 65532 with `fsGroup` 65532, reads them and no other user does; a `podSecurityContext` without that `fsGroup` leaves them unreadable to the exporter. The inline `knownHosts` lines are part of the pods' `checksum/config`, so changing them rolls the Deployment, as a configuration change does; a changed Secret reaches the mounted files without a restart, as the kubelet updates them in place. `sshAuth.mountPath` must be a path of its own, as `targetAuth.mountPath` must. With `networkPolicy.egress` rules, add one for the SSH servers' port, 22 by default.
+
+## SSH exec collectors
+
+An `sshexec` collector runs one fixed command on a host over SSH, such as `df -P` or a script of the host's own, and reads its output as a body. Its keys and its connection are an `sshfile` collector's, so [`sshAuth`](#ssh-file-collectors) mounts its private key or password and its `known_hosts` file the same way. The type is opt-in, as `tcp` is: build an image with it, `docker build --build-arg OPT_IN_REQUEST_TYPES=sshexec`, push it, and point `image.repository` and `image.tag` at it. A collector of the type in a release of the published image fails the configuration, saying the build does not include it.
+
+```yaml
+sshAuth:
+  enabled: true
+  secretName: exporter-ssh
+  privateKeyKey: id_ed25519
+  knownHostsSecretKey: known_hosts
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: disk
+          request:
+            type: sshexec
+            command: [df, -P, -k, /]
+            username: metrics
+            private_key_file: /var/run/prometheus-universal-exporter/ssh/private_key
+            known_hosts_file: /var/run/prometheus-universal-exporter/ssh/known_hosts
+          transform:
+            type: regex
+          metrics:
+            - name: node_filesystem_available_kilobytes
+              expression: '(?m)^\S+\s+\d+\s+\d+\s+(\d+)\s+\d+%\s+/$'
+```
+
+Probe it with the host as the target, `/probe?collector=disk&target=db1.example.com`. Give the key an account of its own on the host, restricted to the commands the collectors run with a forced command in its `authorized_keys`, as [Commands over SSH](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/SSHEXEC.md#security) shows; the command, its quoting and the exit statuses that count as success are there too. With `networkPolicy.egress` rules, add one for the SSH servers' port, 22 by default.
 
 ## SQL collectors
 

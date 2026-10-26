@@ -431,6 +431,8 @@ filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
 value](CONFIGURATION.md#long-label-values). A `python` script is not given
 the parameters; what it labels its series with is its own.
+
+`sshexec`, TODO(sshexec): say here what the list says of each other type.
 <!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or

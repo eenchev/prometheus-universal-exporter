@@ -835,7 +835,7 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
-          args: --build-tags request_type_ldap,request_type_redis,request_type_s3file,request_type_tcp
+          args: --build-tags request_type_ldap,request_type_redis,request_type_s3file,request_type_sshexec,request_type_tcp
         if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.
@@ -1061,8 +1061,8 @@ jobs:
       # its documentation run in a build with it.
       - name: Build and test with every opt-in request type
         run: |
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
+          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
         if: steps.changes.outputs.go == 'true'
   # The image the release publishes, built from the Dockerfile and pushed
   # nowhere, so a change that breaks its build fails here rather than in the
@@ -1838,6 +1838,7 @@ jobs:
           - redis
           - s3file
           - sql
+          - sshexec
           - sshfile
           - tcp
           - tlscert

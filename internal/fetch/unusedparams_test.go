@@ -28,6 +28,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeRedis:      `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.commands or its label values names them`,
 	RequestTypeTCP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.send or its label values names them`,
 	RequestTypeLDAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in the base or filter of its request.searches or its label values names them`,
+	RequestTypeSshexec:    `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

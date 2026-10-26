@@ -28,6 +28,7 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"redis":      {"Redis server", "Redis and Valkey servers"},
 	"tcp":        {"text protocol over TCP", "services that answer a line sent over TCP"},
 	"ldap":       {"LDAP directory", "LDAP directories"},
+	"sshexec":    {"TODO(sshexec)", "TODO(sshexec)"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

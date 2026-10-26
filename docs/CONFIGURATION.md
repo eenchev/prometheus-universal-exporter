@@ -2617,6 +2617,8 @@ For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
 `password_file`, `start_tls`, `tls`, `max_response_bytes`,
 `allowed_targets` and `denied_targets` apply too. The decoder is `json`;
 its table is in [LDAP directories](LDAP.md#a-collector).
+
+For `sshexec`, TODO(sshexec): say here what the list says of each other type.
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -2648,6 +2650,8 @@ since the collector lists what its configuration names. `redis` accepts
 its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
 accepts `timeout` and `param_<name>`, and requires a `target`, the service,
 `host:port` with its port.
+
+`sshexec`, TODO(sshexec): say here what the list says of each other type.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -5785,6 +5789,7 @@ nothing there.
 - [REDIS.md](REDIS.md) — the opt-in `redis` request type.
 - [TCP.md](TCP.md) — the opt-in `tcp` request type.
 - [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
+- [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

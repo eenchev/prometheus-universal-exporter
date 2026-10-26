@@ -160,6 +160,7 @@ which `--help` prints too.
 - [DNS](docs/DNS.md) — the `dns` request type: the A, AAAA, CNAME, MX, NS, TXT, SRV or PTR records of a name, from the system's resolver or a named server, as a JSON document.
 - [TLS certificates](docs/TLSCERT.md) — the `tlscert` request type: the certificates a server presents in a TLS handshake, their names, issuers and expiry, and whether the chain verifies.
 - [Kubernetes objects](docs/KUBERNETES.md) — the `kubernetes` request type: the objects of one resource, built in or custom, listed from the API server with the exporter's service account, as a JSON document, for metrics such as kube-state-metrics gives from configuration alone.
+- [The sshexec request type](docs/SSHEXEC.md) — the `sshexec` request type, in a build that asks for it: TODO(sshexec).
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.

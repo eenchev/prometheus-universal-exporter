@@ -1,4 +1,4 @@
-//go:build request_type_ldap || request_type_redis || request_type_s3file || request_type_tcp
+//go:build request_type_ldap || request_type_redis || request_type_s3file || request_type_sshexec || request_type_tcp
 
 package fetch
 

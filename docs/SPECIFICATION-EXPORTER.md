@@ -27798,6 +27798,46 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   placeholders are then not checked; without the registration it fails
   (TestAMessageTakesOnlyTheFiltersThatWriteJSON).
 
+## 34.219 The first refused request key in the file
+
+- An http collector's request block with several keys it may not set is
+  refused for the first in the file, in the configuration and in a
+  collector file: a key of another type before a key of the common part,
+  and the other way round; an unknown key before a key of another type
+  (refused as unknown) and after it (the key of another type, unknown keys
+  after it left out); keys of two types in the reverse of the types' order
+  and in it; a key of `retry` that applies to grpc alone before a key of
+  another type and after it, and before an unknown key; and keys of one
+  flow mapping, by column. It fails where the common part's keys were
+  refused first, then the other types' in the types' order, then retry's,
+  and an unknown key whatever came before it.
+- The validation of a decoded http collector refuses the first key in the
+  file in the same cases, and a collector built in code, which has no
+  order, keeps the order of the code.
+- The decoder leaves an unknown key after a key the type does not take to
+  the validation, and refuses one before it, and one after a key the type
+  takes, naming its line.
+- A static target's request is refused for its first key in the file,
+  loaded against its collector and checked alone: `username`, `message`
+  and `targets` in the reverse of the code's order and in it, and a key of
+  `retry` before another key and after it. It fails where the keys were
+  refused in the order of the code and retry's after every other.
+- A static target whose request keys were moved is no change to a reload,
+  and one whose timeout changed is one; it fails when the targets are
+  compared with their order.
+- A localfile collector reading one file with `max_files` and
+  `max_total_bytes` is refused naming the first in the file, in both
+  orders, twenty times each; it failed while a map gave the keys in no
+  order.
+- The debug page refuses a written collector that sets `tls.key_file`,
+  `tls.ca_file` and `bearer_token_file`, in that order, naming them in that
+  order, where it named them sorted.
+- A request block, a collector's and a static target's, keeps the order of
+  its keys, nested keys of a mapping it holds directly (`retry.codes`)
+  included, in a block and in a flow mapping, a key a merge key brings in
+  where its anchor has it; `model.InFileOrder` puts keys the order lacks
+  after the others, in their own order.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

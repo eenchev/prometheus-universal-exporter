@@ -186,8 +186,8 @@ test-external:
 # (tools/new-request-type.sh; docs/DEVELOPMENT.md, Adding a request type). It
 # changes the tree, so make ci does not run it.
 new-request-type:
-	@test -n '$(NAME)' || { echo "usage: make new-request-type NAME=<name> [OPT_IN=1]" >&2; exit 1; }
-	sh tools/new-request-type.sh '$(NAME)' $(if $(OPT_IN),opt-in,)
+	@test -n '$(NAME)' || { echo "usage: make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>]" >&2; exit 1; }
+	sh tools/new-request-type.sh '$(NAME)' $(if $(OPT_IN),opt-in,default) '$(GO_NAME)'
 
 # The committed JSON Schemas are generated from the configuration structs; a
 # test fails when one is out of date. Run this after changing a key. The

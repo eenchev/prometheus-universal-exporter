@@ -87,7 +87,8 @@ func TestDocsNameThePythonTheImageShips(t *testing.T) {
 
 // make new-request-type adds a request type to the tree, and changes the
 // tree, so make ci, which checks it, must not reach it. It runs the script
-// with the name and, with OPT_IN set, as an opt-in type; the make targets of
+// with the name, as an opt-in type with OPT_IN set and a type of every
+// build without, and with GO_NAME, the type's Go name; the make targets of
 // docs/DEVELOPMENT.md list it, and its "Adding a request type" says what it
 // writes and what it leaves.
 func TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI(t *testing.T) {
@@ -96,8 +97,8 @@ func TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI(t *testing.T) {
 	if !ok {
 		t.Fatal("the Makefile has no new-request-type target")
 	}
-	if !strings.Contains(recipe, "sh tools/new-request-type.sh '$(NAME)' $(if $(OPT_IN),opt-in,)") {
-		t.Errorf("make new-request-type does not run tools/new-request-type.sh with NAME and OPT_IN:\n%s", recipe)
+	if !strings.Contains(recipe, "sh tools/new-request-type.sh '$(NAME)' $(if $(OPT_IN),opt-in,default) '$(GO_NAME)'") {
+		t.Errorf("make new-request-type does not run tools/new-request-type.sh with NAME, OPT_IN and GO_NAME:\n%s", recipe)
 	}
 	reached, queue := map[string]bool{}, []string{"ci"}
 	for len(queue) > 0 {
@@ -113,15 +114,15 @@ func TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI(t *testing.T) {
 	}
 	page := read(t, "docs/DEVELOPMENT.md")
 	block, _, _ := strings.Cut(page, "\n## Code layout\n")
-	if !regexp.MustCompile(`(?m)^make new-request-type NAME=<name> \[OPT_IN=1\] +# .*not part of make ci$`).MatchString(block) {
-		t.Error("the make targets of docs/DEVELOPMENT.md do not list make new-request-type NAME=<name> [OPT_IN=1] as not part of make ci")
+	if !regexp.MustCompile(`(?m)^make new-request-type NAME=<name> \[OPT_IN=1\] \[GO_NAME=<GoName>\] +# .*not part of make ci$`).MatchString(block) {
+		t.Error("the make targets of docs/DEVELOPMENT.md do not list make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>] as not part of make ci")
 	}
 	_, section, ok := strings.Cut(page, "\n### Adding a request type\n")
 	if !ok {
 		t.Fatal("docs/DEVELOPMENT.md has no \"### Adding a request type\"")
 	}
 	section, _, _ = strings.Cut(section, "\n## ")
-	for _, want := range []string{"make new-request-type NAME=", "OPT_IN=1", "`tools/new-request-type.sh`", "`TODO(<name>)`", "`make schemas`", "`TestANewRequestTypeIsWiredByTheScaffold`"} {
+	for _, want := range []string{"make new-request-type NAME=", "OPT_IN=1", "GO_NAME=", "`tools/new-request-type.sh`", "`TODO(<name>)`", "`make schemas`", "`TestANewRequestTypeIsWiredByTheScaffold`"} {
 		if !strings.Contains(section, want) {
 			t.Errorf("docs/DEVELOPMENT.md's \"Adding a request type\" does not say %s", want)
 		}

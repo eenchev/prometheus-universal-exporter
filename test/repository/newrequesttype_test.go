@@ -61,6 +61,7 @@ var copyWiringTests = map[string][]string{
 		"TestEveryConstrainedKeyOfTheSchemasIsInATable",
 		"TestDocumentationLinksResolve",
 		"TestEveryDocumentationPageIsIndexed",
+		"TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet",
 	},
 }
 
@@ -112,14 +113,20 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	refused(`lowercase letters and digits only`, "Zz-demo")
 	refused(`it starts with a letter`, "9zz")
 	refused(`usage:`)
+	refused(`the Go name "ZZOther" is not "zzdemo" with some of its letters in capitals`, "zzdemo", "opt-in", "ZZOther")
+	refused(`the Go name "zZDemo" does not start with a capital letter`, "zzdemo", "opt-in", "zZDemo")
 	if out := run("git", "status", "--porcelain"); out != "" {
 		t.Fatalf("a refused name changed the copy:\n%s", out)
 	}
 
-	for _, c := range []struct{ name, optIn string }{{"zzdemo", "OPT_IN=1"}, {"zzdefault", ""}} {
+	// The opt-in type is given its Go name, an initialism's capitals in it,
+	// and the other is spelt as its name with a capital first.
+	for _, c := range []struct{ name, optIn, goName string }{{"zzdemo", "OPT_IN=1", "GO_NAME=ZZDemo"}, {"zzdefault", "", ""}} {
 		args := []string{"--no-print-directory", "new-request-type", "NAME=" + c.name}
-		if c.optIn != "" {
-			args = append(args, c.optIn)
+		for _, arg := range []string{c.optIn, c.goName} {
+			if arg != "" {
+				args = append(args, arg)
+			}
 		}
 		if out := run("make", args...); !strings.Contains(out, "TODO("+c.name+")") {
 			t.Errorf("make new-request-type NAME=%s printed no checklist of what is left:\n%s", c.name, out)
@@ -137,6 +144,12 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	}
 	if !strings.Contains(read(t, filepath.Join(dir, "docs/ZZDEMO.md")), "\n## Building with zzdemo\n") || strings.Contains(read(t, filepath.Join(dir, "docs/ZZDEFAULT.md")), "\n## Building with") {
 		t.Error("only the opt-in type's page says how to build with it")
+	}
+	if registry := read(t, filepath.Join(dir, "internal/fetch/requesttype.go")); !strings.Contains(registry, `RequestTypeZZDemo `) || !strings.Contains(registry, `RequestTypeZzdefault `) {
+		t.Error("the types' constants are not spelt by their Go names, ZZDemo and Zzdefault")
+	}
+	if pages := read(t, filepath.Join(dir, "test/repository/docfacts_test.go")); !strings.Contains(pages, `{"docs/ZZDEMO.md", "internal/fetch/requesttype_zzdemo.go"},`) || !strings.Contains(pages, `{"docs/ZZDEFAULT.md", "internal/fetch/requesttype_zzdefault.go"},`) {
+		t.Error("the new types' pages are not among those whose Static targets section is read")
 	}
 
 	tags := func(args ...string) string {
@@ -158,10 +171,10 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 		t.Helper()
 		var tests []string
 		for _, name := range names {
-			title := strings.ToUpper(name[:1]) + name[1:]
+			title := map[string]string{"zzdemo": "ZZDemo", "zzdefault": "Zzdefault"}[name]
 			tests = append(tests, "TestA"+title+"CollectorIsNotImplementedYet", "TestAProbeOfA"+title+"CollectorFailsUntilTheTypeIsWritten", "TestSchemaAndExporterAgreeOn"+title+"KeysWrittenEmpty")
 			if name == "zzdemo" {
-				tests = append(tests, "TestTheZzdemoTypesOptInKeysAreListed")
+				tests = append(tests, "TestTheZZDemoTypesOptInKeysAreListed")
 			}
 		}
 		out := run("go", "test", "-count=1", "-v", "-tags", build, "-run", "^("+strings.Join(tests, "|")+")$", "./internal/fetch/", "./internal/exporter/", "./test/repository/")

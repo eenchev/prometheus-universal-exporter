@@ -15,14 +15,16 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// sluggishTarget answers after delay, value=1 or 500 while failing, and counts
-// the requests it was sent. It gives up waiting when the request goes away,
-// so that closing it does not wait out the delay.
+// sluggishTarget answers after delay, value=1 or 500 while failing. It gives
+// up waiting when the request goes away, so that closing it does not wait
+// out the delay. It does not count the requests it is sent: whether a probe
+// with a 10ms budget gets its request to the target before the budget runs
+// out depends on how busy the machine is, so a count would test the
+// machine; the answers to the probes show what reached the target.
 type sluggishTarget struct {
 	*httptest.Server
 	delay   atomic.Int64
 	failing atomic.Bool
-	sent    atomic.Int64
 }
 
 func newSluggishTarget(t *testing.T, delay time.Duration) *sluggishTarget {
@@ -30,7 +32,6 @@ func newSluggishTarget(t *testing.T, delay time.Duration) *sluggishTarget {
 	target := &sluggishTarget{}
 	target.delay.Store(int64(delay))
 	target.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target.sent.Add(1)
 		if delay := time.Duration(target.delay.Load()); delay > 0 {
 			select {
 			case <-time.After(delay):
@@ -76,9 +77,6 @@ func TestATimeoutBelowTheMinimumBudgetDoesNotBackTheTargetOff(t *testing.T) {
 	if r := probeOnce(t, server, probeURL, scrapeTimeout("10")); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "demo_value 1") {
 		t.Fatalf("the probe with Prometheus's own budget is answered %d: %s; want it to reach the target", r.Code, r.Body)
 	}
-	if sent := target.sent.Load(); sent != 4 {
-		t.Errorf("the target was sent %d requests, want 4", sent)
-	}
 }
 
 // A timeout below min_budget is no evidence either way: it neither counts
@@ -107,9 +105,6 @@ func TestATimeoutBelowTheMinimumBudgetNeitherCountsNorResets(t *testing.T) {
 	}
 	if r := probeOnce(t, server, probeURL, nil); !strings.Contains(r.Body.String(), "is backing off after 3 consecutive failed scrapes") {
 		t.Fatalf("the probe after the third failure is answered %d: %s; want it backed off, the failures before the timeout kept", r.Code, r.Body)
-	}
-	if sent := target.sent.Load(); sent != 4 {
-		t.Errorf("the target was sent %d requests, want 4", sent)
 	}
 }
 

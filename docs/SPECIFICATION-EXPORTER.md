@@ -28026,6 +28026,44 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   adds the new type's page to the pages whose Static targets section is
   read, which names timeout.
 
+## 34.221 sshexec: no options or climbs from probes, stderr kept from the caller, retired connections
+
+- A probe's placeholder value that begins its argument with `-`
+  (`--files0-from=/etc/passwd`, `-`, or `-x` after a placeholder filled
+  empty) or has `..` as a path component (`..`, `../../etc/shadow`,
+  `app/..`, `app/../../etc`) is refused, naming the argument, the parameter
+  and why, by the scrape and by the parameter check a probe is answered 400
+  by, before any connection; `-x` after `--unit=`, `a..b`, `..app/x.../...`
+  and `-y` after a filled placeholder are taken; a default `-x` at the start
+  of an argument and a default `../etc` are refused at load, and a default
+  `-1d` after `--since=` is taken. Through the exporter a probe value
+  `--help` or `../x` is answered 400 naming the parameter.
+- A failed command's error holds its stderr, and model.CallerText of it,
+  wrapped, says the host and the exit status and that stderr is in the
+  exporter's log, a debug probe's report and the status page, without
+  stderr; an unmarked error is shown whole, and the marked error reads and
+  is recognised as the one it marks.
+- Through the exporter, a probe of a command that exits with 1 and writes
+  a line of /etc/passwd to stderr is answered 502 with the status and where
+  stderr is, and no stderr; the log, a debug probe's report and the status
+  page show the line.
+- A command the stand-in server will not end at the deadline — its signals
+  refused, its session's close not sent, as OpenSSH leaves a forced
+  command — fails its scrape at the deadline and is sent KILL; a scrape
+  whose command runs on the same connection meanwhile completes; a later
+  scrape makes a new connection while the retired one stays open; the
+  retired connection is closed once that scrape's command has ended.
+- A stand-in server that drops the connection right after it takes the
+  exec request sees the command once, and the scrape fails saying the
+  command is not sent again.
+- A command that copies its stdin to stdout, as cat does, answers an empty
+  output at once.
+- The schema's descriptions of request.username, private_key_file,
+  password_file, passphrase_file and known_hosts_file name every request
+  type whose registration takes the key.
+- A tcp collector whose send begins with a placeholder sends `-1`,
+  `../..` and `a/../b` unchanged: sshexec's argument rules are not send's.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

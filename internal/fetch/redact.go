@@ -368,7 +368,8 @@ func RedactURLErrors(err error) error {
 	if len(pairs) == 0 {
 		return err
 	}
-	return &redactedError{text: strings.NewReplacer(pairs...).Replace(err.Error()), err: err}
+	rewrite := strings.NewReplacer(pairs...)
+	return &redactedError{text: rewrite.Replace(err.Error()), err: err, rewrite: rewrite}
 }
 
 // walkErrors calls visit with err and every error it wraps. An error that is
@@ -396,7 +397,13 @@ func walkErrors(err error, visit func(error)) {
 type redactedError struct {
 	text string
 	err  error
+	// rewrite makes of a text of err's what text was made of err's.
+	rewrite *strings.Replacer
 }
 
 func (e *redactedError) Error() string { return e.text }
 func (e *redactedError) Unwrap() error { return e.err }
+
+// RewriteText is text, what a probe's caller is told of the wrapped error,
+// rewritten as the error's own text was (model.TextRewriter).
+func (e *redactedError) RewriteText(text string) string { return e.rewrite.Replace(text) }

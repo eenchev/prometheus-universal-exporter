@@ -2388,7 +2388,15 @@ keys:
   not taken, for `403` that the service account needs `list` on the
   resource and the chart's `kubernetesAccess.rules` that grant it, for
   `404` how to name a resource and that a cluster-scoped one is listed with
-  `all_namespaces`. The token MUST NOT appear in an error.
+  `all_namespaces`. The token MUST NOT appear in an error. The Status
+  object's message, or the body that is none, MUST be the operator's alone
+  (§ 19.4): a probe's caller MUST be answered the listing and the status,
+  `; what it said is in the exporter's log`, and the advice. A page that is
+  not a list MUST be answered to the caller without the API server's URL,
+  and a request that failed, unanswered, as `listing <resource>: the
+  request to the API server failed`, with `: context deadline exceeded` or
+  `: context canceled` when the scrape's end ended it, and `; why is in the
+  exporter's log`; the error MUST keep the URL and the network's words.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show each page's `GET` and URL, its
@@ -2750,8 +2758,11 @@ asked for it carries it. Its keys:
   be counted and MUST NOT be followed. An operation answered with a result
   other than `success` MUST fail the scrape with the operation, the
   result's name and number and the server's diagnostic message, the bind's
-  password written `***`; a notice of disconnection MUST fail it with the
-  server's reason.
+  password written `***`; a probe's caller MUST be answered a failed bind
+  with its DN withheld (`BIND [withheld; in the exporter's log] ***`), the
+  DN being the operator's account, and an anonymous bind as `BIND
+  anonymous`; a notice of disconnection MUST fail it with the server's
+  reason.
 - The answer MUST be a JSON document of `searches`, an object of each
   search's result under its name: `count`, the entries it matched across
   every page, `references`, the continuation references it answered, and,
@@ -6587,6 +6598,16 @@ written`, of a start that was stopped). An error over `model.MaxFailureBytes`
 MUST keep what the caller is told of it when it is cut (§ 25), cut to the
 same bound. The names of valid series are not values of the answer the
 failure withholds: a successful probe answers them.
+
+The addresses of the exporter's side of the network MUST be withheld from
+the caller of any request type's failed fetch, read from the errors' types
+as the failure log reads them (§ 25): the address a connection was made
+from (`*net.OpError`'s `Source`), the proxy a `proxyconnect` dialed, the
+name server a lookup asked (`*net.DNSError`'s `Server`), and the source
+address in a resolver's exchange or a gRPC status as those write it. The
+address the connection went to MUST stay. An error that rewrites the text
+of the one it wraps, as the redaction of URLs does, MUST tell the caller
+the wrapped error's caller text rewritten alike (`model.TextRewriter`).
 
 The exporter's log, a debug probe's report and, with `--web.debug=full`,
 the status page MUST show each failure whole.
@@ -28257,6 +28278,32 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the database answered error 1045 (SQLSTATE 28000); its message is in the
   exporter's log`; the exporter's log, and with `--web.debug=full` a debug
   probe's report, have the whole message.
+
+## 34.224 The Kubernetes API server's words, an LDAP bind's DN and the exporter's addresses withheld from a probe's caller
+
+- `TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller`: a reset
+  connection's source address and port, a refusing proxy's address, a
+  lookup's name server and the source in its exchange, and the source in a
+  gRPC status are answered to the caller as `[withheld; in the exporter's
+  log]`, the address the connection went to kept; the error reads as it did
+  and wraps what it wrapped; an error naming only the address the
+  connection went to is not marked.
+- `TestATargetThatResetsEveryConnectionIsOneFailureToTheLog`: each answer
+  has the reset with the source address withheld, the log line the whole
+  error.
+- `TestCallerTextOfATextRewriterIsTheRewrittenCallerText`: an error that
+  rewrites the text of what it wraps tells the caller the wrapped error's
+  caller text rewritten alike, wrapped again.
+- `TestAKubernetesListingsCallerIsNotToldWhatTheAPIServerSaid`: a listing
+  refused 403 is answered the listing, the status, `what it said is in the
+  exporter's log` and the advice, without the service account the message
+  names; a page that is no list without the API server's URL; and an
+  api_server that refuses connections `listing pods: the request to the API
+  server failed; why is in the exporter's log`, through the redaction of
+  the URL; each error keeps what the caller is not told.
+- `TestAnLDAPCollectorBindsWithItsDNAndPasswordFile`: a bind refused for a
+  wrong password is answered `BIND [withheld; in the exporter's log] ***:
+  the server answered invalidCredentials (49) ...`, without the DN.
 
 # 35. Documentation requirements
 

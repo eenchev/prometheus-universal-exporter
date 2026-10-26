@@ -427,7 +427,10 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 		err := listing.List(ctx, func(raw []byte) (string, error) {
 			var page kubernetesList
 			if err := json.Unmarshal(raw, &page); err != nil {
-				return "", fmt.Errorf("listing %s at %s: the answer is not a list: %w", kubernetesRequest(c).Resource, conn.server+listing.Path, err)
+				// The API server's address is the operator's, as below.
+				return "", model.WithOperatorDetail(
+					fmt.Errorf("listing %s at %s: the answer is not a list: %w", kubernetesRequest(c).Resource, conn.server+listing.Path, err),
+					fmt.Sprintf("listing %s: the answer is not a list: %s", kubernetesRequest(c).Resource, err))
 			}
 			doc.Kind, doc.APIVersion = strings.TrimSuffix(page.Kind, "List"), page.APIVersion
 			for _, item := range page.Items {
@@ -507,6 +510,21 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 		if errors.Is(err, kubeapi.ErrPageTooLarge) {
 			return model.MarkError(fmt.Errorf("%w, the response limit; narrow the listing, or raise max_response_bytes", err), model.ErrLimitExceeded)
 		}
+		// A request that failed names the API server's URL, which is the
+		// operator's — the cluster's own address, or api_server's — as is
+		// the address the exporter connected from: a probe's caller is told
+		// the request failed, and whether the scrape's deadline ended it.
+		var request *url.Error
+		if errors.As(err, &request) {
+			ended := ""
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				ended = ": " + context.DeadlineExceeded.Error()
+			case errors.Is(err, context.Canceled):
+				ended = ": " + context.Canceled.Error()
+			}
+			err = model.WithOperatorDetail(err, fmt.Sprintf("listing %s: the request to the API server failed%s; why is in the exporter's log", kubernetesRequest(c).Resource, ended))
+		}
 		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
 			return fmt.Errorf("%w: %w", err, ctx.Err())
 		}
@@ -523,16 +541,25 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 	if json.Unmarshal([]byte(status.Body), &apiStatus) == nil && apiStatus.Message != "" {
 		message = apiStatus.Message
 	}
-	what := fmt.Sprintf("listing %s (%s) %s answered %s: %s", kubernetesRequest(c).Resource, kubernetesAPIVersion(c), where, status.Status, message)
+	// What the API server said is the operator's: it names the service
+	// account, the namespaces and the resources it may not list, and of a
+	// body that is no Status, anything a proxy before it answered. A probe's
+	// caller is told the listing, the status and what to do about it.
+	listing := fmt.Sprintf("listing %s (%s) %s answered %s", kubernetesRequest(c).Resource, kubernetesAPIVersion(c), where, status.Status)
+	what, told := listing+": "+message, listing+"; what it said is in the exporter's log"
+	var hint string
 	switch status.Code {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("%s; the API server does not take the token: the service account's, or bearer_token_file's with api_server, is missing, expired or of another cluster", what)
+		hint = "; the API server does not take the token: the service account's, or bearer_token_file's with api_server, is missing, expired or of another cluster"
 	case http.StatusForbidden:
-		return fmt.Errorf("%s; the exporter's service account may not list them: grant it list on %s in group %q, with the chart's kubernetesAccess.rules (docs/KUBERNETES.md#permissions)", what, kubernetesRequest(c).Resource, kubernetesRequest(c).Group)
+		hint = fmt.Sprintf("; the exporter's service account may not list them: grant it list on %s in group %q, with the chart's kubernetesAccess.rules (docs/KUBERNETES.md#permissions)", kubernetesRequest(c).Resource, kubernetesRequest(c).Group)
 	case http.StatusNotFound:
-		return fmt.Errorf("%s; the API server has no such resource: check resource, its plural name, group and version against kubectl api-resources, and that a custom resource's definition is installed; a cluster-scoped resource, such as nodes, is listed with all_namespaces: true", what)
+		hint = "; the API server has no such resource: check resource, its plural name, group and version against kubectl api-resources, and that a custom resource's definition is installed; a cluster-scoped resource, such as nodes, is listed with all_namespaces: true"
 	}
-	return errors.New(what)
+	if message == "" {
+		return errors.New(listing + hint)
+	}
+	return model.WithOperatorDetail(errors.New(what+hint), told+hint)
 }
 
 // checkKubernetesFiles reads the files a collector naming api_server

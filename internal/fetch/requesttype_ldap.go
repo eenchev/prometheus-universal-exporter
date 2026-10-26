@@ -719,7 +719,15 @@ func ldapBind(ctx context.Context, session *ldapConn, label, dn, password string
 		err = result.err()
 	}
 	if err != nil {
-		err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
+		// The bind's DN is the operator's account, which a probe's caller is
+		// not told: the bind is shown to it as a value withheld.
+		bind := model.ShownAs(shown, shown)
+		if dn != "" {
+			bind = bind.ForCaller("BIND " + model.WithheldMark + " ***")
+		} else {
+			bind = bind.ForCaller(shown)
+		}
+		err = ldapFailure(ctx, model.Errorf("%s: %w", bind, err))
 		traceOutcome(ctx, "error: "+err.Error())
 		return err
 	}

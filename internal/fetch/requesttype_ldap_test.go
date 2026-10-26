@@ -170,6 +170,11 @@ func TestAnLDAPCollectorBindsWithItsDNAndPasswordFile(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "BIND cn=exporter,dc=example,dc=org ***: the server answered invalidCredentials (49): 80090308: LdapErr") || strings.Contains(err.Error(), "wrong-one") {
 		t.Errorf("a wrong password: %v", err)
 	}
+	// The bind's DN is the operator's account: a probe's caller is told
+	// the bind failed, and why, without it.
+	if told := model.CallerText(err); strings.Contains(told, "cn=exporter") || !strings.Contains(told, "BIND "+model.WithheldMark+" ***: the server answered invalidCredentials (49)") {
+		t.Errorf("a wrong password: the caller is told %q", told)
+	}
 	var binds []string
 	for _, r := range server.Requests() {
 		if r.Op == "BIND" {

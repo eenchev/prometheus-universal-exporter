@@ -93,3 +93,28 @@ func TestABoundedFailureKeepsWhatTheCallerIsShown(t *testing.T) {
 		t.Errorf("a bounded error with nothing to withhold is shown %.100q", got)
 	}
 }
+
+// An error that rewrites the text of the one it wraps, as a redaction of
+// its URLs does, says itself what a caller is told of it: the caller's text
+// of the wrapped error, rewritten as its own text was.
+func TestCallerTextOfATextRewriterIsTheRewrittenCallerText(t *testing.T) {
+	inner := fmt.Errorf("Get https://a/b?token=s: %w", WithOperatorDetail(errors.New("stderr: secret"), "the command failed"))
+	rewritten := &rewriter{err: inner, from: "token=s", to: "token=xxx"}
+	if rewritten.Error() != "Get https://a/b?token=xxx: stderr: secret" {
+		t.Fatalf("the error reads %q", rewritten)
+	}
+	if got := CallerText(fmt.Errorf("wrapped: %w", rewritten)); got != "wrapped: Get https://a/b?token=xxx: the command failed" {
+		t.Errorf("the caller is told %q", got)
+	}
+}
+
+type rewriter struct {
+	err      error
+	from, to string
+}
+
+func (e *rewriter) Error() string { return e.RewriteText(e.err.Error()) }
+
+func (e *rewriter) Unwrap() error { return e.err }
+
+func (e *rewriter) RewriteText(text string) string { return strings.ReplaceAll(text, e.from, e.to) }

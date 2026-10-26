@@ -130,6 +130,17 @@ the exporter's service account may not list them: grant it list on deployments
 in group "apps", with the chart's kubernetesAccess.rules
 ```
 
+That is the error the exporter's log and a debug probe's report show. What
+the API server said names the service account and the namespaces, so a
+probe's caller is told the listing, the status and the advice without it:
+`listing deployments (apps/v1) in the namespace shop answered 403
+Forbidden; what it said is in the exporter's log; the exporter's service
+account may not list them: ...`. The API server's URL is withheld from the
+caller as well: a request that could not reach it is answered `listing
+deployments: the request to the API server failed; why is in the
+exporter's log`. See
+[What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told).
+
 The Helm chart grants it with `kubernetesAccess`: the rules name each
 resource's `apiGroups` (`""` for the core group) and `resources`, the verb
 is always `list`, and the chart mounts the pods' token, which it does not

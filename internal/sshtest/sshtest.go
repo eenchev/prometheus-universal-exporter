@@ -1,14 +1,16 @@
-//go:build !select_request_types || request_type_sshfile
+//go:build !select_request_types || request_type_sshfile || request_type_sshexec
 
 // Package sshtest is an in-process SSH server with an SFTP subsystem, for the
-// sshfile request type's tests: it serves the exporter's own filesystem, so
-// a test writes files to a temporary directory and reads them over SFTP by
-// their absolute paths. It authenticates by public key and by password,
-// presents host keys the test chooses, and can stop answering, as a host
-// that lost power does, while its connections stay open.
+// sshfile request type's tests, which runs commands too, for the sshexec
+// type's: it serves the exporter's own filesystem, so a test writes files to
+// a temporary directory and reads them over SFTP by their absolute paths,
+// and it hands each command to the test's Options.Exec, which writes its
+// output and says its exit status. It authenticates by public key and by
+// password, presents host keys the test chooses, and can stop answering, as
+// a host that lost power does, while its connections stay open.
 //
-// Only tests import it, and it carries the type's build constraint, so a
-// build without the type compiles none of what it imports.
+// Only tests import it, and it carries the types' build constraint, so a
+// build without them compiles none of what it imports.
 package sshtest
 
 import (
@@ -26,6 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -72,6 +75,21 @@ type Options struct {
 	// files on it; it returns true when it served the session itself,
 	// which the server then closes.
 	SFTP func(n int, channel io.ReadWriter) bool
+	// Exec, when set, runs the command of each exec request, the command
+	// line as the client sent it: it writes the command's output to stdout
+	// and stderr and returns its exit status, which the server sends
+	// before it closes the session; a negative status -n says the command
+	// was ended by signal n, 9 or 15, which is sent as KILL or TERM. ctx
+	// ends when the client sends a signal or closes the session, as a
+	// remote command is ended then. Unset, an exec request is refused.
+	Exec func(ctx context.Context, command string, stdout, stderr io.Writer) int
+}
+
+// ExecRecord is an exec request the server took: the command line, and the
+// signals the client sent on its session, by name, such as "KILL".
+type ExecRecord struct {
+	Command string
+	Signals []string
 }
 
 // Server is a running server.
@@ -89,11 +107,16 @@ type Server struct {
 	// entries, and listed the entries of those answers.
 	readDirs, listed atomic.Int64
 	sftp             func(n int, channel io.ReadWriter) bool
-	maxSessions      int
-	closeDelay       time.Duration
-	gate             *gate
-	mu               sync.Mutex
-	conns            []net.Conn
+	exec             func(ctx context.Context, command string, stdout, stderr io.Writer) int
+	// execs are the exec requests taken, and ended counts the commands
+	// whose ctx ended before they returned.
+	execs       []*ExecRecord
+	ended       atomic.Int64
+	maxSessions int
+	closeDelay  time.Duration
+	gate        *gate
+	mu          sync.Mutex
+	conns       []net.Conn
 }
 
 // Start starts a server that serves until the test ends.
@@ -144,7 +167,7 @@ func Start(t testing.TB, options Options) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Addr: listener.Addr().String(), HostKeys: options.HostKeys, listener: listener, gate: newGate(), sftp: options.SFTP, maxSessions: options.MaxSessions, closeDelay: options.SessionCloseDelay}
+	s := &Server{Addr: listener.Addr().String(), HostKeys: options.HostKeys, listener: listener, gate: newGate(), sftp: options.SFTP, exec: options.Exec, maxSessions: options.MaxSessions, closeDelay: options.SessionCloseDelay}
 	go s.serve(config)
 	t.Cleanup(s.Close)
 	return s
@@ -180,6 +203,21 @@ func (s *Server) Open() int { return int(s.open.Load()) }
 
 // Sessions is how many sessions are open on the server's connections.
 func (s *Server) Sessions() int { return int(s.sessions.Load()) }
+
+// Execs are the exec requests the server has taken, in order, each a copy.
+func (s *Server) Execs() []ExecRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ExecRecord, len(s.execs))
+	for i, e := range s.execs {
+		out[i] = ExecRecord{Command: e.Command, Signals: slices.Clone(e.Signals)}
+	}
+	return out
+}
+
+// Ended is how many commands were ended, by a signal or the session's
+// close, before they returned.
+func (s *Server) Ended() int { return int(s.ended.Load()) }
 
 // ReadDirs is how many READDIR requests of SFTP the server answered with
 // directory entries, and Listed how many entries those answers held, "."
@@ -255,21 +293,71 @@ func (s *Server) handle(conn net.Conn, config *ssh.ServerConfig) {
 			// session is freed by serveSFTP as it closes the server's side,
 			// any other here.
 			served := false
+			var record *ExecRecord
+			ctx, cancel := context.WithCancel(context.Background())
 			defer func() {
+				cancel()
 				if !served {
 					done()
 				}
 			}()
 			for r := range sessionRequests {
-				ok := r.Type == "subsystem" && len(r.Payload) > 4 && string(r.Payload[4:]) == "sftp"
-				_ = r.Reply(ok, nil)
-				if ok && !served {
-					served = true
-					go s.serveSFTP(int(s.sftpSessions.Add(1)), channel, done)
+				switch {
+				case r.Type == "exec" && s.exec != nil && !served && record == nil:
+					var payload struct{ Command string }
+					if ssh.Unmarshal(r.Payload, &payload) != nil {
+						_ = r.Reply(false, nil)
+						continue
+					}
+					_ = r.Reply(true, nil)
+					record = &ExecRecord{Command: payload.Command}
+					s.mu.Lock()
+					s.execs = append(s.execs, record)
+					s.mu.Unlock()
+					go s.runExec(ctx, payload.Command, channel)
+				case r.Type == "signal" && record != nil:
+					var payload struct{ Signal string }
+					_ = ssh.Unmarshal(r.Payload, &payload)
+					s.mu.Lock()
+					record.Signals = append(record.Signals, payload.Signal)
+					s.mu.Unlock()
+					cancel()
+					if r.WantReply {
+						_ = r.Reply(true, nil)
+					}
+				default:
+					ok := r.Type == "subsystem" && len(r.Payload) > 4 && string(r.Payload[4:]) == "sftp" && record == nil
+					_ = r.Reply(ok, nil)
+					if ok && !served {
+						served = true
+						go s.serveSFTP(int(s.sftpSessions.Add(1)), channel, done)
+					}
 				}
 			}
 		}()
 	}
+}
+
+// runExec runs a command with Options.Exec and ends its session as sshd
+// does: the end of its output, its exit status, and the close.
+func (s *Server) runExec(ctx context.Context, command string, channel ssh.Channel) {
+	status := s.exec(ctx, command, channel, channel.Stderr())
+	if ctx.Err() != nil {
+		s.ended.Add(1)
+	}
+	_ = channel.CloseWrite()
+	if status < 0 {
+		name := map[int]string{9: "KILL", 15: "TERM"}[-status]
+		_, _ = channel.SendRequest("exit-signal", false, ssh.Marshal(struct {
+			Signal     string
+			CoreDumped bool
+			Error      string
+			Lang       string
+		}{name, false, "", ""}))
+	} else {
+		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status & 0xff)})) // #nosec G115 -- a status is 0 to 255
+	}
+	_ = channel.Close()
 }
 
 // serveSFTP serves the server's files on an SFTP session, unless
@@ -608,4 +696,23 @@ func (c *gatedConn) Write(b []byte) (int, error) {
 func (c *gatedConn) Close() error {
 	c.closeOnce.Do(func() { close(c.closed) })
 	return c.Conn.Close()
+}
+
+// Shell is an Options.Exec that runs each command line with /bin/sh -c, as
+// sshd runs one with the account's shell, so a test sees what a POSIX shell
+// makes of the line: its words, its quoting and its exit status. The
+// command is killed when ctx ends.
+func Shell(ctx context.Context, command string, stdout, stderr io.Writer) int {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) // #nosec G204 -- the command line of a test's own collector, run as sshd would
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit) && exit.ExitCode() >= 0:
+		return exit.ExitCode()
+	}
+	_, _ = io.WriteString(stderr, err.Error())
+	return 255
 }

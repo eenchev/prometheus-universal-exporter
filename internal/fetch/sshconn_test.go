@@ -92,7 +92,7 @@ func TestSSHFileTakesAHostCertifiedByAKnownAuthority(t *testing.T) {
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	line := "@cert-authority " + knownhosts.Normalize(f.server.Addr) + " " + string(ssh.MarshalAuthorizedKey(authority.PublicKey()))
 	file := sshtest.WriteFile(t, f.dir, "known_authority", f.server.KnownHostsLine(sshtest.NewEd25519Key(t))+line)
-	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = file }) }), RequestOverrides{}); err != nil {
+	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = file }), RequestOverrides{}); err != nil {
 		t.Errorf("a host certified by an @cert-authority of known_hosts_file: %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestSSHFileRefusesAHostThatNoLongerOffersTheKnownKeyType(t *testing.T) {
 	f := newSSHFixture(t)
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	stale := sshtest.WriteFile(t, f.dir, "known_stale", f.server.KnownHostsLine(sshtest.NewECDSAKey(t)))
-	_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = stale }) }), RequestOverrides{})
+	_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = stale }), RequestOverrides{})
 	if err == nil || !strings.Contains(err.Error(), "which is not the one request.known_hosts_file "+stale+" holds for it") || !strings.Contains(err.Error(), ssh.FingerprintSHA256(f.server.HostKeys[0].PublicKey())) {
 		t.Errorf("err=%v, want the presented key refused as not the known one, with its fingerprint", err)
 	}
@@ -215,7 +215,7 @@ func TestSSHFileAnswersKeyboardInteractiveWithThePassword(t *testing.T) {
 	right := sshtest.WriteFile(t, dir, "password", sshPassword+"\n")
 	wrong := sshtest.WriteFile(t, dir, "wrong", "not-the-password\n")
 	collector := func(password string) *model.Collector {
-		c := model.Collector{Name: "pam", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: root, Path: "app.prom", Username: "metrics", PasswordFile: password, Own: SSHFileConfig{KnownHostsFile: known}},
+		c := model.Collector{Name: "pam", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: root, Path: "app.prom", Username: "metrics", PasswordFile: password, KnownHostsFile: known},
 			Transform: model.TransformConfig{Type: "prometheus"}, ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}}
 		if err := ValidateRequest(&c); err != nil {
 			t.Fatal(err)
@@ -319,7 +319,7 @@ func TestSSHFileRefusesABackslashInAPath(t *testing.T) {
 	f := newSSHFixture(t)
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	escape := `..\..\outside.prom`
-	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: f.root, Path: escape, Username: "metrics", PrivateKeyFile: f.keyFile, Own: SSHFileConfig{KnownHostsFile: f.knownHosts}}}
+	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: f.root, Path: escape, Username: "metrics", PrivateKeyFile: f.keyFile, KnownHostsFile: f.knownHosts}}
 	if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), `request.path "..\\..\\outside.prom" has a backslash`) {
 		t.Errorf("request.path: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestSSHFileRefusesABackslashInAPath(t *testing.T) {
 // the key left out.
 func TestSSHFileRefusesBlankCredentialKeys(t *testing.T) {
 	valid := func() model.Collector {
-		return model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", Own: SSHFileConfig{KnownHostsFile: "/kh"}}}
+		return model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh"}}
 	}
 	for name, tc := range map[string]struct {
 		change func(*model.RequestConfig)
@@ -358,9 +358,9 @@ func TestSSHFileRefusesBlankCredentialKeys(t *testing.T) {
 	}{
 		"private key beside a password": {func(r *model.RequestConfig) { r.PrivateKeyFile, r.PasswordFile = " ", "/p" }, "request.private_key_file is written with blanks alone; name the file, or leave the key out"},
 		"password beside a key":         {func(r *model.RequestConfig) { r.PasswordFile = "\t" }, "request.password_file is written with blanks alone"},
-		"passphrase":                    {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = "  " }) }, "request.passphrase_file is written with blanks alone"},
+		"passphrase":                    {func(r *model.RequestConfig) { r.PassphraseFile = "  " }, "request.passphrase_file is written with blanks alone"},
 		"username":                      {func(r *model.RequestConfig) { r.Username = "  " }, "request.username is required"},
-		"known_hosts_file":              {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = " " }) }, "request.known_hosts_file is required"},
+		"known_hosts_file":              {func(r *model.RequestConfig) { r.KnownHostsFile = " " }, "request.known_hosts_file is required"},
 	} {
 		c := valid()
 		tc.change(&c.Request)
@@ -395,7 +395,7 @@ func TestSSHFileNamesAnEncryptedPKCS8Key(t *testing.T) {
 	passphrase := sshtest.WriteFile(t, f.dir, "passphrase", "pw\n")
 	_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) {
 		r.PrivateKeyFile = encrypted
-		sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = passphrase })
+		r.PassphraseFile = passphrase
 	}), RequestOverrides{})
 	if want := "request.private_key_file " + encrypted + " is an encrypted PKCS#8 key, which cannot be read; convert it to OpenSSH's format with ssh-keygen -p -f " + encrypted; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("err=%v, want %q", err, want)
@@ -412,7 +412,7 @@ func TestSSHFileKeepaliveIntervalIsAtLeastASecond(t *testing.T) {
 		time.Second:            "",
 	} {
 		d := model.Duration(interval)
-		c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", Own: SSHFileConfig{KnownHostsFile: "/kh", KeepaliveInterval: &d}}}
+		c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: "/srv/m", Path: "a.prom", Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh", KeepaliveInterval: &d}}
 		err := ValidateRequest(&c)
 		if (want == "") != (err == nil) || err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err=%v, want %q", interval, err, want)
@@ -481,10 +481,10 @@ func TestSSHFileWarningsOfItsFiles(t *testing.T) {
 		"not a key":     {func(r *model.RequestConfig) { r.PrivateKeyFile = notKey }, "is not a private key"},
 		"no passphrase": {func(r *model.RequestConfig) { r.PrivateKeyFile = f.encryptedKey }, "is encrypted; name the file of its passphrase"},
 		"missing passphrase": {func(r *model.RequestConfig) {
-			sshFileOwn(r, func(o *SSHFileConfig) { o.PassphraseFile = filepath.Join(f.dir, "gone") })
+			r.PassphraseFile = filepath.Join(f.dir, "gone")
 		}, "reading request.passphrase_file"},
 		"empty password": {func(r *model.RequestConfig) { r.PasswordFile = empty }, "request.password_file " + empty + " is empty"},
-		"no known host":  {func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = noLine }) }, "holds no host key"},
+		"no known host":  {func(r *model.RequestConfig) { r.KnownHostsFile = noLine }, "holds no host key"},
 	} {
 		changed := *c
 		tc.change(&changed.Request)
@@ -526,7 +526,7 @@ func sshLimitHosts(t *testing.T) (f *sshFixture, other *sshtest.Server, known st
 func TestSSHFileMaxOpenConnectionsClosesTheLeastRecentlyUsed(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "limited", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	closed := sshEvents(t, f.server.Addr)
 	for i, host := range []string{f.server.Addr, other.Addr, f.server.Addr} {
@@ -548,10 +548,10 @@ func TestSSHFileMaxOpenConnectionsClosesTheLeastRecentlyUsed(t *testing.T) {
 // same settings, as before the limit; a collector with a limit shares none.
 func TestSSHFileWithoutMaxOpenConnectionsKeepsEveryConnection(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
-	unlimited := f.collector(t, "unlimited", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = known }) })
-	also := f.collector(t, "also", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = known }) })
+	unlimited := f.collector(t, "unlimited", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = known })
+	also := f.collector(t, "also", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = known })
 	limited := f.collector(t, "limited", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 2 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 2
 	})
 	for _, c := range []*model.Collector{unlimited, also, limited} {
 		for _, host := range []string{f.server.Addr, other.Addr} {
@@ -576,7 +576,7 @@ func TestSSHFileWithoutMaxOpenConnectionsKeepsEveryConnection(t *testing.T) {
 func TestSSHFileMaxOpenConnectionsWaitsForAConnectionToBeFree(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "waiting", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	if _, err := FetchCollector(context.Background(), f.server.Addr, c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
@@ -631,7 +631,7 @@ func TestSSHFileMaxOpenConnectionsFollowsAReload(t *testing.T) {
 	known := sshtest.WriteFile(t, f.dir, "known_three", strings.Join([]string{f.server.KnownHostsLine(), other.KnownHostsLine(), third.KnownHostsLine()}, ""))
 	c := f.collector(t, "reloaded", "app.prom", func(r *model.RequestConfig) {
 		r.PasswordFile = f.passwordFile
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 3 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 3
 	})
 	for _, host := range []string{f.server.Addr, other.Addr} {
 		if _, err := FetchCollector(context.Background(), host, c, RequestOverrides{}, nil); err != nil {
@@ -639,7 +639,7 @@ func TestSSHFileMaxOpenConnectionsFollowsAReload(t *testing.T) {
 		}
 	}
 	lowered := *c
-	editSSHFile(&lowered, func(r *SSHFileConfig) { r.MaxOpenConnections = 1 })
+	lowered.Request.MaxOpenConnections = 1
 	sshConns.follow([]model.Collector{lowered}, nil)
 	if open, _ := sshConns.collectorConnections("reloaded"); open != 2 {
 		t.Errorf("open=%d after the reload, want both kept", open)
@@ -664,7 +664,7 @@ func TestSSHFileMaxOpenConnectionsFollowsAReload(t *testing.T) {
 func TestSSHFileMaxOpenConnectionsGivesUpAConnectionNoScrapeWaitsFor(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "stalled", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	events := sshEvents(t, f.server.Addr)
 	f.server.Freeze()
@@ -703,7 +703,7 @@ func TestSSHFileMaxOpenConnectionsGivesUpAConnectionNoScrapeWaitsFor(t *testing.
 func TestSSHFileMaxOpenConnectionsSaysWhatHoldsItsConnections(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "making", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	waiting := sshEvents(t, other.Addr)
 	f.server.Freeze()
@@ -811,7 +811,7 @@ func TestSSHFileGivesUpAConnectionBeingMadeAtShutdownAndReload(t *testing.T) {
 // A backslash is refused in request.root of an sshfile collector, as in its
 // request.path.
 func TestSSHFileRefusesABackslashInItsRoot(t *testing.T) {
-	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: `/srv\metrics`, Path: "app.prom", Username: "metrics", PrivateKeyFile: "/k", Own: SSHFileConfig{KnownHostsFile: "/known"}}}
+	c := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHFile, Root: `/srv\metrics`, Path: "app.prom", Username: "metrics", PrivateKeyFile: "/k", KnownHostsFile: "/known"}}
 	if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), `collector "c" request.root "/srv\\metrics" has a backslash`) {
 		t.Errorf("err=%v", err)
 	}
@@ -829,7 +829,7 @@ func passwordServer(t *testing.T, password, keyFile string, configure func(*ssh.
 	t.Cleanup(sshConns.closeAll)
 	c := model.Collector{Name: "pw", Request: model.RequestConfig{
 		Type: RequestTypeSSHFile, Root: root, Path: "app.prom", Username: "metrics", PrivateKeyFile: keyFile,
-		PasswordFile: sshtest.WriteFile(t, dir, "password", password+"\n"), Own: SSHFileConfig{KnownHostsFile: server.WriteKnownHosts(t, dir)},
+		PasswordFile: sshtest.WriteFile(t, dir, "password", password+"\n"), KnownHostsFile: server.WriteKnownHosts(t, dir),
 	}, Transform: model.TransformConfig{Type: "prometheus"}, ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}}
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
@@ -966,7 +966,7 @@ func TestSSHFileTakesAHostByItsPlainKeyWhenItsAuthorityIsNotKnown(t *testing.T) 
 		"a revoked authority":  {authorityLine(known) + f.server.KnownHostsLine(host) + "@revoked * " + string(ssh.MarshalAuthorizedKey(other.PublicKey())), "signed by the authority ssh-ed25519 " + authority + ", which request.known_hosts_file"},
 	} {
 		file := sshtest.WriteFile(t, f.dir, "known_"+strings.ReplaceAll(label, " ", "_"), test.lines)
-		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = file }) }), RequestOverrides{})
+		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = file }), RequestOverrides{})
 		switch {
 		case test.want == "" && err != nil:
 			t.Errorf("%s: %v", label, err)
@@ -993,7 +993,7 @@ func TestSSHFileRefusesAHostCertificateOfARevokedAuthority(t *testing.T) {
 		"host key":  {host, "presented a host certificate of the key ssh-ed25519 " + ssh.FingerprintSHA256(host.PublicKey()) + ", which request.known_hosts_file"},
 	} {
 		file := sshtest.WriteFile(t, f.dir, "known_revoked_"+strings.ReplaceAll(label, " ", "_"), trusted+"@revoked * "+string(ssh.MarshalAuthorizedKey(test.revoked.PublicKey())))
-		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = file }) }), RequestOverrides{})
+		_, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = file }), RequestOverrides{})
 		if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), "marks @revoked") {
 			t.Errorf("%s revoked: %v, want it to say %q and @revoked", label, err, test.want)
 		}
@@ -1012,11 +1012,11 @@ func TestSSHFileTakesABareWildcardAuthorityOnAnyPort(t *testing.T) {
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	key := string(ssh.MarshalAuthorizedKey(authority.PublicKey()))
 	bare := sshtest.WriteFile(t, f.dir, "known_bare", "@cert-authority * "+key)
-	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = bare }) }), RequestOverrides{}); err != nil {
+	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = bare }), RequestOverrides{}); err != nil {
 		t.Errorf("a bare * line, the host on a port other than 22: %v", err)
 	}
 	portless := sshtest.WriteFile(t, f.dir, "known_portless", "@cert-authority 127.0.0.1 "+key)
-	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = portless }) }), RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "which no @cert-authority line") {
+	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = portless }), RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "which no @cert-authority line") {
 		t.Errorf("a line of the host without its port, the host on another port: %v", err)
 	}
 }
@@ -1189,11 +1189,11 @@ func keptConn(address string) *sshConn {
 // scrape of a host replaces the connection kept to it.
 func changeKnownHosts(t *testing.T, c *model.Collector) {
 	t.Helper()
-	data, err := os.ReadFile(sshFileRequest(c).KnownHostsFile)
+	data, err := os.ReadFile(c.Request.KnownHostsFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sshFileRequest(c).KnownHostsFile, append(data, "# changed\n"...), 0o600); err != nil {
+	if err := os.WriteFile(c.Request.KnownHostsFile, append(data, "# changed\n"...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1225,7 +1225,7 @@ func stallAScrapeOf(t *testing.T, address string, c *model.Collector) (end func(
 func TestSSHFileGivesUpAReplacedConnectionNoScrapeWaitsFor(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "replaced", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	events := sshEvents(t, f.server.Addr)
 	f.server.Freeze()
@@ -1262,7 +1262,7 @@ func TestSSHFileGivesUpAReplacedConnectionNoScrapeWaitsFor(t *testing.T) {
 func TestSSHFileGivesUpAConnectionAReloadLeftWhenItsScrapeStopsWaiting(t *testing.T) {
 	f, other, known := sshLimitHosts(t)
 	c := f.collector(t, "reloaded", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = known, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = known, 1
 	})
 	events := sshEvents(t, f.server.Addr)
 	f.server.Freeze()
@@ -1274,7 +1274,7 @@ func TestSSHFileGivesUpAConnectionAReloadLeftWhenItsScrapeStopsWaiting(t *testin
 	}
 	moved := sshtest.WriteFile(t, f.dir, "known_moved", string(data))
 	reloaded := f.collector(t, "reloaded", "app.prom", func(r *model.RequestConfig) {
-		sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile, o.MaxOpenConnections = moved, 1 })
+		r.KnownHostsFile, r.MaxOpenConnections = moved, 1
 	})
 	sshConns.follow([]model.Collector{*reloaded}, nil)
 	ctx, endWaiting := testutil.DeadlineEndedByHand()
@@ -1375,13 +1375,13 @@ func TestSSHFileAsksAHostPinnedByItsLineForItsTypeBesideABareWildcardAuthority(t
 	f := newSSHFixture(t, certificate, ecHost)
 	testutil.WriteIn(t, f.root, "app.prom", sshPromFile)
 	known := sshtest.WriteFile(t, f.dir, "known_pinned", f.server.KnownHostsLine(ecHost)+"@cert-authority * "+string(ssh.MarshalAuthorizedKey(authority.PublicKey())))
-	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = known }) }), RequestOverrides{}); err != nil {
+	if _, err := f.fetch(f.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = known }), RequestOverrides{}); err != nil {
 		t.Errorf("the host's line and an unrelated bare * authority: %v", err)
 	}
 	alone := newSSHFixture(t, certificate)
 	testutil.WriteIn(t, alone.root, "app.prom", sshPromFile)
 	known = sshtest.WriteFile(t, alone.dir, "known_pinned", alone.server.KnownHostsLine(ecHost)+"@cert-authority * "+string(ssh.MarshalAuthorizedKey(authority.PublicKey())))
-	_, err := alone.fetch(alone.collector(t, "c", "app.prom", func(r *model.RequestConfig) { sshFileOwn(r, func(o *SSHFileConfig) { o.KnownHostsFile = known }) }), RequestOverrides{})
+	_, err := alone.fetch(alone.collector(t, "c", "app.prom", func(r *model.RequestConfig) { r.KnownHostsFile = known }), RequestOverrides{})
 	if want := "of the key ssh-ed25519 " + ssh.FingerprintSHA256(edHost.PublicKey()) + ", which is not the one the file holds for the host"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("the certificate alone: %v, want it to say %q", err, want)
 	}

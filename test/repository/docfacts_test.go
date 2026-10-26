@@ -115,7 +115,7 @@ func firstLine(text string) string {
 	return line
 }
 
-// The pages of the graphite, grpc, localfile, sshfile, s3file, redis, tcp and ldap request types say, in the
+// The pages of the graphite, grpc, localfile, sshfile, s3file, redis, tcp, ldap and sshexec request types say, in the
 // text that opens their "Static targets" section, every key a static target's
 // request block may set: the request type's TargetFields.
 func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet(t *testing.T) {
@@ -128,6 +128,7 @@ func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet(t *testing.T) {
 		{"docs/REDIS.md", "internal/fetch/requesttype_redis.go"},
 		{"docs/TCP.md", "internal/fetch/requesttype_tcp.go"},
 		{"docs/LDAP.md", "internal/fetch/requesttype_ldap.go"},
+		{"docs/SSHEXEC.md", "internal/fetch/requesttype_sshexec.go"},
 	} {
 		text := read(t, page.doc)
 		_, section, ok := strings.Cut(text, "\n## Static targets\n")

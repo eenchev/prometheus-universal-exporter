@@ -4,13 +4,10 @@ package fetch
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 
@@ -53,39 +50,15 @@ import (
 // import golang.org/x/crypto and github.com/pkg/sftp, all behind this type's
 // build constraint, so a build without the type does not link them.
 
-// SSHFileConfig is an sshfile collector's own request keys: the file of
-// the passphrase its private key is decrypted with and the known_hosts
-// file the host's key is verified against; the keepalive settings and the
-// idle timeout of the connection it keeps to a host, nil for the default
-// and 0 to switch each off; and the most connections the collector holds
-// open at once, 0 for no limit.
-type SSHFileConfig struct {
-	PassphraseFile     string          `yaml:"passphrase_file"`
-	KnownHostsFile     string          `yaml:"known_hosts_file"`
-	KeepaliveInterval  *model.Duration `yaml:"keepalive_interval"`
-	KeepaliveCountMax  *int            `yaml:"keepalive_count_max"`
-	IdleTimeout        *model.Duration `yaml:"idle_timeout"`
-	MaxOpenConnections int             `yaml:"max_open_connections"`
-}
-
-// sshFileRequest is an sshfile collector's own request keys: the zero
-// SSHFileConfig of a collector built in code whose request has not been
-// validated, which sets them (ValidateRequest).
-func sshFileRequest(c *model.Collector) SSHFileConfig {
-	own, _ := c.Request.Own.(SSHFileConfig)
-	return own
-}
-
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeSSHFile,
 		Fields: []string{
 			"root", "path", "files", "max_files", "max_total_bytes", "max_age", "max_response_bytes",
 			"username", "private_key_file", "password_file",
+			"passphrase_file", "known_hosts_file", "keepalive_interval", "keepalive_count_max", "idle_timeout", "max_open_connections",
 			"allowed_targets", "denied_targets",
 		},
-		Config:    SSHFileConfig{},
-		KeyRules:  sshFileKeyRules,
 		Overrides: []string{"path", "timeout", PathParamPrefix},
 		TargetFields: []string{
 			"path", "timeout",
@@ -93,12 +66,12 @@ func init() {
 		},
 		Requester:      sshFileRequester{},
 		FileExtensions: true,
-		TargetHint:     func(*model.Collector) string { return "host or host:port" },
+		TargetHint:     sshTargetHint,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},
 		SchemaRule:         sshFileSchemaRule,
-		CheckTargetRequest: checkSSHTargetRequest,
+		CheckTargetRequest: checkSSHFileTargetRequest,
 		Stage:              "ssh",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// As for localfile: a param_ parameter can still fill a label
@@ -135,8 +108,9 @@ func (sshFileRequester) Fetch(ctx context.Context, target string, c *model.Colle
 }
 
 // CheckTarget checks an sshfile collector's target.
-func (sshFileRequester) CheckTarget(c *model.Collector, target string, static bool) error {
-	return checkSSHTarget(c, target, static)
+func (sshFileRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseSSHTarget(RequestTypeSSHFile, target)
+	return err
 }
 
 // Label is the url label of an sshfile request.
@@ -149,23 +123,8 @@ func (sshFileRequester) Method(*model.Collector, RequestOverrides) string { retu
 
 // Display renders an sshfile target for logs and labels.
 func (sshFileRequester) Display(target string) string {
-	return sshDisplay(target)
+	return sshDisplay(RequestTypeSSHFile, target)
 }
-
-// The defaults of the connection settings.
-const (
-	defaultSSHKeepaliveInterval = 30 * time.Second
-	defaultSSHKeepaliveCountMax = 3
-	defaultSSHIdleTimeout       = 5 * time.Minute
-)
-
-// sshDefaultPort is the port of a target that names none.
-const sshDefaultPort = "22"
-
-// sshMinKeepaliveInterval is the shortest keepalive_interval but 0: each
-// keepalive is given the interval to be answered in, and one shorter than a
-// round trip would close every connection as soon as it is made.
-const sshMinKeepaliveInterval = time.Second
 
 func validateSSHFileRequest(x *model.Collector) error {
 	if err := validateFileRequest(x, RequestTypeSSHFile, false); err != nil {
@@ -175,40 +134,13 @@ func validateSSHFileRequest(x *model.Collector) error {
 		return err
 	}
 	r := &x.Request
-	own := sshFileRequest(x)
 	if err := checkSSHPath("request.root", r.Root); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if err := checkSSHPath("request.path", r.Path); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if strings.TrimSpace(r.Username) == "" {
-		return fmt.Errorf("collector %q request.username is required for request.type sshfile: the account the file is read as on the host", x.Name)
-	}
-	if strings.TrimSpace(own.KnownHostsFile) == "" {
-		return fmt.Errorf("collector %q request.known_hosts_file is required for request.type sshfile: the host's key is always verified, against the lines of this file (ssh-keyscan writes them)", x.Name)
-	}
-	if err := checkSSHCredentialKeys(r.Username, r.PrivateKeyFile, own.PassphraseFile, r.PasswordFile); err != nil {
-		return fmt.Errorf("collector %q %w", x.Name, err)
-	}
-	if err := checkSSHFileKey("request.known_hosts_file", own.KnownHostsFile); err != nil {
-		return fmt.Errorf("collector %q %w", x.Name, err)
-	}
-	for key, value := range map[string]*model.Duration{"keepalive_interval": own.KeepaliveInterval, "idle_timeout": own.IdleTimeout} {
-		if value != nil && *value < 0 {
-			return fmt.Errorf("collector %q request.%s must not be negative", x.Name, key)
-		}
-	}
-	if own.KeepaliveInterval != nil && *own.KeepaliveInterval > 0 && time.Duration(*own.KeepaliveInterval) < sshMinKeepaliveInterval {
-		return fmt.Errorf("collector %q request.keepalive_interval %s is under the least, %s; set 0 to send no keepalives", x.Name, time.Duration(*own.KeepaliveInterval), sshMinKeepaliveInterval)
-	}
-	if own.KeepaliveCountMax != nil && *own.KeepaliveCountMax < 1 {
-		return fmt.Errorf("collector %q request.keepalive_count_max must be at least 1: how many keepalives in a row may go unanswered before the connection is closed", x.Name)
-	}
-	if own.MaxOpenConnections < 0 {
-		return fmt.Errorf("collector %q request.max_open_connections must not be negative; 0, the default, sets no limit", x.Name)
-	}
-	return nil
+	return validateSSHConnection(x, "the file is read as")
 }
 
 // checkSSHPath refuses a backslash in request.root, or in a path under it:
@@ -222,66 +154,10 @@ func checkSSHPath(what, name string) error {
 	return nil
 }
 
-// checkSSHCredentialKeys holds the account and credential keys to their
-// rules: a private key, a password or both; a passphrase only for a private
-// key; none written with blanks alone, which is neither a name nor the key
-// left out, which "" is; and no placeholder in any of them, since none is a
-// template. An empty username is the collector's to require; a static
-// target's empty one keeps the collector's.
-func checkSSHCredentialKeys(username, privateKeyFile, passphraseFile, passwordFile string) error {
-	if strings.Contains(username, "{{") {
-		return fmt.Errorf("request.username %q has a placeholder; the account is named as it is, so it takes none", username)
-	}
-	if err := checkSSHBlank("request.username", username); err != nil {
-		return err
-	}
-	for _, key := range []struct{ name, value string }{{"request.private_key_file", privateKeyFile}, {"request.passphrase_file", passphraseFile}, {"request.password_file", passwordFile}} {
-		if err := checkSSHBlank(key.name, key.value); err != nil {
-			return err
-		}
-	}
-	if strings.TrimSpace(passphraseFile) != "" && strings.TrimSpace(privateKeyFile) == "" {
-		return errors.New("sets request.passphrase_file without request.private_key_file; the passphrase is the private key's")
-	}
-	if strings.TrimSpace(privateKeyFile) == "" && strings.TrimSpace(passwordFile) == "" {
-		return errors.New("sets neither request.private_key_file nor request.password_file; an sshfile request authenticates with a private key, a password, or both (the key is tried first)")
-	}
-	for key, value := range map[string]string{"request.private_key_file": privateKeyFile, "request.passphrase_file": passphraseFile, "request.password_file": passwordFile} {
-		if err := checkSSHFileKey(key, value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// checkSSHBlank refuses a key written with blanks alone: "" is the key left
-// out, and blanks are no name of an account or a file.
-func checkSSHBlank(key, value string) error {
-	if value == "" || strings.TrimSpace(value) != "" {
-		return nil
-	}
-	if key == "request.username" {
-		return fmt.Errorf("%s is written with blanks alone; name the account, or leave the key out", key)
-	}
-	return fmt.Errorf("%s is written with blanks alone; name the file, or leave the key out", key)
-}
-
-// checkSSHFileKey refuses a placeholder in a key that names a file: like
-// every credential file's, the path is read as it is written.
-func checkSSHFileKey(key, value string) error {
-	if strings.Contains(value, "{{") {
-		return fmt.Errorf("%s %q has a placeholder; a credential file is named as it is, so it takes none", key, value)
-	}
-	return nil
-}
-
-// checkSSHTargetRequest checks what a static target's request block sets for
-// an sshfile collector: its path, as a probe's path parameter is checked;
-// and its account and credential keys. The credential files go together:
-// a target that sets any of private_key_file, passphrase_file and
-// password_file replaces all three of the collector's with its own, so it
-// must name a key or a password of its own.
-func checkSSHTargetRequest(_ *model.Collector, t *model.StaticTarget) error {
+// checkSSHFileTargetRequest checks what a static target's request block
+// sets for an sshfile collector: its path, as a probe's path parameter is
+// checked; and its account and credential keys (checkSSHTargetAccount).
+func checkSSHFileTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	r := &t.Request
 	if r.PathSet {
 		if err := checkLocalFileName("request.path", r.Path); err != nil {
@@ -291,83 +167,14 @@ func checkSSHTargetRequest(_ *model.Collector, t *model.StaticTarget) error {
 			return err
 		}
 	}
-	if r.PrivateKeyFile == "" && r.PassphraseFile == "" && r.PasswordFile == "" {
-		if strings.Contains(r.Username, "{{") {
-			return fmt.Errorf("request.username %q has a placeholder; the account is named as it is, so it takes none", r.Username)
-		}
-		return checkSSHBlank("request.username", r.Username)
-	}
-	if err := checkSSHCredentialKeys(r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile); err != nil {
-		return fmt.Errorf("%w; a target that sets a credential file replaces the collector's credential files with its own", err)
-	}
-	return nil
-}
-
-// sshAddress is a target as an sshfile request reaches it: host is the
-// name or address as the policy and known_hosts_file match it, and
-// hostPort what is dialed.
-type sshAddress struct {
-	host     string
-	hostPort string
-}
-
-// parseSSHTarget reads a target: host, host:port, [v6]:port, or the same
-// after ssh://. Nothing else may come with it: the account is
-// request.username and the file request.root and request.path.
-func parseSSHTarget(raw string) (sshAddress, error) {
-	raw = strings.TrimSpace(raw)
-	rest := raw
-	if scheme, after, found := strings.Cut(rest, "://"); found {
-		if scheme != "ssh" {
-			return sshAddress{}, fmt.Errorf("target %q has the scheme %s://; an sshfile target is host, host:port or ssh://host:port", raw, scheme)
-		}
-		rest = after
-	}
-	rest = strings.TrimSuffix(rest, "/")
-	if strings.ContainsAny(rest, "/?#@") {
-		return sshAddress{}, fmt.Errorf("target %q has a path, query or user in it; an sshfile target is only the host and its port: the account is request.username, and the file request.root and request.path", raw)
-	}
-	host, port := rest, sshDefaultPort
-	if h, p, err := net.SplitHostPort(rest); err == nil {
-		host, port = h, p
-	} else if strings.HasPrefix(rest, "[") && strings.HasSuffix(rest, "]") {
-		host = rest[1 : len(rest)-1]
-	} else if strings.Count(rest, ":") == 1 {
-		return sshAddress{}, fmt.Errorf("target %q is not host or host:port; write an IPv6 address in brackets, as [2001:db8::1]:22", raw)
-	}
-	if host == "" {
-		return sshAddress{}, fmt.Errorf("target %q names no host; an sshfile target is host, host:port or ssh://host:port", raw)
-	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-		return sshAddress{}, fmt.Errorf("target %q has the port %q; want a number from 1 to 65535", raw, port)
-	}
-	canonical, err := canonicalHost(host)
-	if err != nil {
-		return sshAddress{}, err
-	}
-	return sshAddress{host: canonical, hostPort: net.JoinHostPort(canonical, port)}, nil
-}
-
-// checkSSHTarget is a probe's and a static target's check of the target.
-func checkSSHTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseSSHTarget(target)
-	return err
-}
-
-// sshDisplay renders a target for logs and labels: as written, since an
-// sshfile target holds no credentials, when it is one at all.
-func sshDisplay(target string) string {
-	if _, err := parseSSHTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
+	return checkSSHTargetAccount(c, t)
 }
 
 // sshFileLabel is the url label of a read: sftp://host:port/ and the file's
 // path on the host, with path parameters as their placeholders, or the
 // directory's, ending in /, for a collector reading one.
 func sshFileLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
-	address, err := parseSSHTarget(target)
+	address, err := parseSSHTarget(RequestTypeSSHFile, target)
 	if err != nil {
 		return "", err
 	}
@@ -384,48 +191,10 @@ func sshFileLabel(target string, c *model.Collector, overrides RequestOverrides)
 // sshNoFile is the error of a read that names no file.
 const sshNoFile = "no file to read: set request.path, or give the probe a path parameter naming a file under request.root"
 
-// sshSettingsOf is how a scrape of c with overrides connects: the
-// collector's account, credentials and connection settings, with a static
-// target's account and credential files over them, and its policy.
-func sshSettingsOf(c *model.Collector, overrides RequestOverrides) sshSettings {
-	r := &c.Request
-	own := sshFileRequest(c)
-	s := sshSettings{
-		username:          strings.TrimSpace(r.Username),
-		privateKeyFile:    r.PrivateKeyFile,
-		passphraseFile:    own.PassphraseFile,
-		passwordFile:      r.PasswordFile,
-		knownHostsFile:    own.KnownHostsFile,
-		keepaliveInterval: defaultSSHKeepaliveInterval,
-		keepaliveCountMax: defaultSSHKeepaliveCountMax,
-		idleTimeout:       defaultSSHIdleTimeout,
-		policy:            policyOf(c),
-	}
-	if own.MaxOpenConnections > 0 {
-		s.owner = c.Name
-	}
-	if own.KeepaliveInterval != nil {
-		s.keepaliveInterval = time.Duration(*own.KeepaliveInterval)
-	}
-	if own.KeepaliveCountMax != nil {
-		s.keepaliveCountMax = *own.KeepaliveCountMax
-	}
-	if own.IdleTimeout != nil {
-		s.idleTimeout = time.Duration(*own.IdleTimeout)
-	}
-	if name := strings.TrimSpace(overrides.Username); name != "" {
-		s.username = name
-	}
-	if overrides.PrivateKeyFile != "" || overrides.PassphraseFile != "" || overrides.PasswordFile != "" {
-		s.privateKeyFile, s.passphraseFile, s.passwordFile = overrides.PrivateKeyFile, overrides.PassphraseFile, overrides.PasswordFile
-	}
-	return s
-}
-
 // fetchSSHFile reads a scrape's file, or directory, from the target host.
 func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
-	address, err := parseSSHTarget(target)
+	address, err := parseSSHTarget(RequestTypeSSHFile, target)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +233,7 @@ func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overri
 		body []byte
 		info fs.FileInfo
 	}
-	err = sshConns.session(ctx, key, c.Name, sshFileRequest(c).MaxOpenConnections, c.Request.Root, "sftp://"+address.hostPort+full, func(src *sftpSource) error {
+	err = sshConns.session(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, "sftp://"+address.hostPort+full, func(src *sftpSource) error {
 		var err error
 		read.body, read.info, err = readSourceFile(src, c.Request.Root, file, responseLimit(c))
 		return err
@@ -485,7 +254,7 @@ func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overri
 // came is answered, and the files not read fail alone.
 func readSSHDirectory(ctx context.Context, key sshConnKey, c *model.Collector, target string) (*DirectoryRead, error) {
 	var read *DirectoryRead
-	err := sshConns.directory(ctx, key, c.Name, sshFileRequest(c).MaxOpenConnections, c.Request.Root, "sftp://"+key.address+sshDirectory(c.Request.Root), func(src *sftpSource, progress *directoryProgress) error {
+	err := sshConns.directory(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, "sftp://"+key.address+sshDirectory(c.Request.Root), func(src *sftpSource, progress *directoryProgress) error {
 		return readSourceDirectory(src, c, "", progress)
 	}, func(r *DirectoryRead) { read = r })
 	if err != nil {
@@ -505,60 +274,6 @@ func sshDirectory(root string) string {
 	return strings.TrimSuffix(root, "/") + "/"
 }
 
-// onSSHHost names the host in a failed read's error, unless the error
-// names it already, as every error of making the connection does.
-func onSSHHost(err error, hostPort string) error {
-	if strings.Contains(err.Error(), hostPort) {
-		return err
-	}
-	return fmt.Errorf("%w (on %s)", err, hostPort)
-}
-
-// checkSSHFiles reads the credential files and known_hosts_file of a
-// collector, or the credential files of a static target that sets its own,
-// as making a connection reads them, for --dry-run: a file missing or
-// unreadable, a key that is none or is encrypted without its passphrase,
-// a passphrase that does not decrypt it, an empty password, a known_hosts
-// file without a line or with one that is none. Loading the configuration
-// reads none of them, since a file may be mounted after the exporter starts.
-func checkSSHFiles(c *model.Collector, t *model.StaticTarget) []string {
-	who := fmt.Sprintf("collector %q", c.Name)
-	overrides := RequestOverrides{}
-	if t != nil {
-		r := &t.Request
-		if r.PrivateKeyFile == "" && r.PassphraseFile == "" && r.PasswordFile == "" {
-			return nil
-		}
-		who, overrides = fmt.Sprintf("target %q", t.Name), TargetOverrides(t)
-	}
-	s := sshSettingsOf(c, overrides)
-	var problems []error
-	if s.privateKeyFile != "" {
-		if _, err := sshSigner(s.privateKeyFile, s.passphraseFile); err != nil {
-			problems = append(problems, err)
-		} else if s.passphraseFile != "" {
-			if _, err := ReadCredentialFile(s.passphraseFile); err != nil {
-				problems = append(problems, fmt.Errorf("reading request.passphrase_file: %w", err))
-			}
-		}
-	}
-	if s.passwordFile != "" {
-		if _, err := readSSHPassword(s.passwordFile); err != nil {
-			problems = append(problems, err)
-		}
-	}
-	if t == nil {
-		if _, err := readKnownHosts(s.knownHostsFile); err != nil {
-			problems = append(problems, err)
-		}
-	}
-	warnings := make([]string, 0, len(problems))
-	for _, err := range problems {
-		warnings = append(warnings, fmt.Sprintf("%s: %v; a scrape would fail on it now (the file is read when a connection is made, so one put in place later is used then)", who, err))
-	}
-	return warnings
-}
-
 // sshFileSchemaRule is what an sshfile collector's request requires, as the
 // exporter does (validateSSHFileRequest): root, username and
 // known_hosts_file, each written with something other than ""; a private key
@@ -575,18 +290,5 @@ func sshFileSchemaRule() map[string]any {
 		"anyOf":      []any{SchemaWrittenKey("private_key_file"), SchemaWrittenKey("password_file")},
 		"if":         SchemaWrittenKey("passphrase_file"),
 		"then":       SchemaWrittenKey("private_key_file"),
-	}
-}
-
-// sshFileKeyRules is what the configuration schema says of a sshfile
-// collector's own keys.
-func sshFileKeyRules() map[string]map[string]any {
-	return map[string]map[string]any{
-		"passphrase_file":      {"not": SchemaOnlyBlanks(), "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with."},
-		"known_hosts_file":     {"not": SchemaOnlyBlanks(), "description": "sshfile, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys."},
-		"keepalive_interval":   {"description": "sshfile: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 sends none."},
-		"keepalive_count_max":  {"minimum": 1, "description": "sshfile: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3."},
-		"idle_timeout":         {"description": "sshfile: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
-		"max_open_connections": {"minimum": 0, "description": "sshfile: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections."},
 	}
 }

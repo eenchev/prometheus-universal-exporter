@@ -478,3 +478,34 @@ func TestChartReadmeSSHExamplesRender(t *testing.T) {
 		}
 	}
 }
+
+// The chart README's SSH exec collectors section renders as it is shown:
+// its one example, sshAuth and an sshexec collector together, mounts the
+// files at the paths the collector names.
+func TestChartReadmeSSHExecExampleRenders(t *testing.T) {
+	helm := requireHelm(t)
+	_, section, found := strings.Cut(readChartFile(t, "README.md"), "## SSH exec collectors\n")
+	if !found {
+		t.Fatal("the chart README has no SSH exec collectors section")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	blocks := yamlBlocksOf(section)
+	if len(blocks) != 1 || !strings.HasPrefix(blocks[0], "sshAuth:\n") || !strings.Contains(blocks[0], "type: sshexec") {
+		t.Fatalf("the section shows %d examples, want one of sshAuth and an sshexec collector", len(blocks))
+	}
+	if !strings.Contains(section, "(#ssh-file-collectors)") {
+		t.Error("the section does not point to SSH file collectors")
+	}
+	for _, path := range []string{"/var/run/prometheus-universal-exporter/ssh/private_key", "/var/run/prometheus-universal-exporter/ssh/known_hosts"} {
+		if !strings.Contains(blocks[0], path) {
+			t.Errorf("the collector does not name %s", path)
+		}
+	}
+	pod := podSpecOf(t, renderedObjects(t, helm, "-f", valuesFile(t, blocks[0])))
+	raw, _ := json.Marshal(namedEntry(pod["volumes"], "ssh-auth"))
+	for _, want := range []string{`"path":"private_key"`, `"path":"known_hosts"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the volume has no %s: %s", want, raw)
+		}
+	}
+}

@@ -1,0 +1,105 @@
+# Commands run on a host over SSH, read with the opt-in sshexec request type
+# (docs/SSHEXEC.md): the space of the root file system from df, the load
+# from uptime, a systemd unit's state, and a count a script of the host's
+# own writes as exposition. The published image does not carry the type, so
+# build the exporter with it; make run builds bin/prometheus-universal-exporter
+# with sshexec, as `make build OPT_IN_REQUEST_TYPES=sshexec` does, and runs
+# it with this file and the static target file beside it:
+#
+#   make run EXAMPLE=sshexec
+#
+# Each probe's target is the host, port 22 when it names none:
+#
+#   curl 'http://localhost:8080/probe?collector=disk&target=localhost'
+#   curl 'http://localhost:8080/probe?collector=unit&target=localhost&param_unit=cron.service'
+#
+# Every collector reaches the host as the account metrics, with a key made
+# for the exporter alone, and verifies the host's key against a known_hosts
+# file:
+#
+#   ssh-keygen -t ed25519 -N '' -C prometheus-exporter -f /etc/exporter/ssh/id_ed25519
+#   ssh-keyscan -t ed25519 localhost > /etc/exporter/ssh/known_hosts
+#
+# and, on the host, the key's line in ~metrics/.ssh/authorized_keys,
+# restricted, best with a forced command that allows these commands alone
+# (see Security in docs/SSHEXEC.md):
+#
+#   restrict,command="/usr/local/bin/exporter-commands" ssh-ed25519 AAAA... prometheus-exporter
+#
+# The command is a list, each word sent in single quotes, so nothing in it
+# is read by the host's shell; the output goes to the decoder as it came.
+collectors:
+  # df -P writes a header and a line of columns for the file system; each
+  # rule reads a column of the line mounted on /.
+  #
+  #   Filesystem     1024-blocks     Used Available Capacity Mounted on
+  #   /dev/vda         264212084 29570808  15622016      66% /
+  - name: disk
+    request:
+      type: sshexec
+      command: [df, -P, -k, /]
+      username: metrics
+      private_key_file: /etc/exporter/ssh/id_ed25519
+      known_hosts_file: /etc/exporter/ssh/known_hosts
+    transform:
+      type: regex
+    metrics:
+      - name: node_filesystem_used_kilobytes
+        description: Space used on the root file system
+        expression: '(?m)^\S+\s+\d+\s+(\d+)\s+\d+\s+\d+%\s+/$'
+      - name: node_filesystem_available_kilobytes
+        description: Space left on the root file system
+        expression: '(?m)^\S+\s+\d+\s+\d+\s+(\d+)\s+\d+%\s+/$'
+  # uptime ends its line with the three load averages, after "load
+  # average:" on Linux and "load averages:" on macOS.
+  - name: load
+    request:
+      type: sshexec
+      command: [uptime]
+      username: metrics
+      private_key_file: /etc/exporter/ssh/id_ed25519
+      known_hosts_file: /etc/exporter/ssh/known_hosts
+    transform:
+      type: regex
+    metrics:
+      - name: node_load1
+        expression: 'load averages?: ([\d.]+),? [\d.]+,? [\d.]+'
+      - name: node_load5
+        expression: 'load averages?: [\d.]+,? ([\d.]+),? [\d.]+'
+      - name: node_load15
+        expression: 'load averages?: [\d.]+,? [\d.]+,? ([\d.]+)'
+  # systemctl is-active prints active and exits with 0 for a running unit,
+  # and prints the unit's state and exits with 3 otherwise: both are an
+  # answer. The unit is the probe's param_unit, nginx.service without one;
+  # its value may hold only a name's characters. The static targets label
+  # their series with the unit they ask about.
+  - name: unit
+    request:
+      type: sshexec
+      command: [systemctl, is-active, "{{param_unit:nginx.service}}"]
+      success_exit_codes: [0, 3]
+      username: metrics
+      private_key_file: /etc/exporter/ssh/id_ed25519
+      known_hosts_file: /etc/exporter/ssh/known_hosts
+    transform:
+      type: regex
+    metrics:
+      - name: systemd_unit_active
+        type: gauge
+        description: 1 when the unit is active
+        expression: '^(\w+)'
+        value_map: {active: 1, "*": 0}
+  # A script of the host's own counts the failed logins of the last hour
+  # with grep -c, and writes the count as exposition:
+  #
+  #   n=$(journalctl -u ssh --since -1h --no-pager -q | grep -c 'Failed password' || true)
+  #   printf '# TYPE ssh_failed_logins gauge\nssh_failed_logins %s\n' "$n"
+  - name: failed_logins
+    request:
+      type: sshexec
+      command: [/usr/local/bin/count-failed-logins]
+      username: metrics
+      private_key_file: /etc/exporter/ssh/id_ed25519
+      known_hosts_file: /etc/exporter/ssh/known_hosts
+    transform:
+      type: prometheus

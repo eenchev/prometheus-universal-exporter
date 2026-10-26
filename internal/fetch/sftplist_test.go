@@ -233,7 +233,7 @@ func TestSFTPListerListsWhatPkgSFTPListed(t *testing.T) {
 		dir := filepath.Join(f.root, fmt.Sprintf("gen%d", i))
 		generateDirectory(t, rng, dir, size)
 		testutil.WriteIn(t, dir, "target", "the target")
-		want, err := entry.sftp.ReadDir(dir)
+		want, err := entry.sftpClient().ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,8 +272,8 @@ func TestSFTPListerListsWhatPkgSFTPListed(t *testing.T) {
 			}
 			return progress.snapshot(nil)
 		}
-		batches := &sftpSource{client: entry.sftp, conn: entry.client, root: dir}
-		oracle := oracleSFTPSource{&sftpSource{client: entry.sftp, root: dir}}
+		batches := &sftpSource{client: entry.sftpClient(), conn: entry.client, root: dir}
+		oracle := oracleSFTPSource{&sftpSource{client: entry.sftpClient(), root: dir}}
 		gotRead, wantRead := readWith(batches, batches), readWith(oracle, oracle.sftpSource)
 		if i == len(sizes)-1 && !wantRead.Truncated {
 			t.Errorf("%s: the listing of %d entries was not cut at its bound", dir, size)
@@ -732,7 +732,7 @@ func TestSSHFileWaitsOnceForAHostThatKeepsListingSessionsOpen(t *testing.T) {
 		if _, err := f.fetch(c, RequestOverrides{}); err != nil {
 			t.Fatalf("scrape %d: %v", i+1, err)
 		}
-		if entry := keptConn(f.server.Addr); entry == nil || !entry.listingSessionsKept.Load() {
+		if entry := keptConn(f.server.Addr); entry == nil || !entry.sftp().listingSessionsKept.Load() {
 			t.Fatalf("after scrape %d, the connection does not remember that its host keeps listing sessions open", i+1)
 		}
 		if n := waits.Load(); n != 1 {
@@ -913,7 +913,7 @@ func TestSSHFileAbandonEndsTheWaitForAListingsSession(t *testing.T) {
 		<-hold
 	})
 	entry := f.connect(t)
-	src := &sftpSource{client: entry.sftp, conn: entry.client, root: "/"}
+	src := &sftpSource{client: entry.sftpClient(), conn: entry.client, root: "/"}
 	l := newSFTPLister(entry.client, "/listed")
 	src.listing = map[*sftpLister]bool{l: true}
 	d := &sftpDir{lister: l, src: src}

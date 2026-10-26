@@ -93,8 +93,8 @@ type TargetRequestConfig struct {
 	// request.accept_status and accept_codes for this target.
 	AcceptStatus []string `yaml:"accept_status"`
 	AcceptCodes  []string `yaml:"accept_codes"`
-	// Username and the credential files replace an sshfile, sql or redis
-	// collector's for this target, and BindDN and PasswordFile an ldap
+	// Username and the credential files replace an sshfile, sshexec, sql
+	// or redis collector's for this target, and BindDN and PasswordFile an ldap
 	// collector's: the account it reads as.
 	Username       string `yaml:"username"`
 	BindDN         string `yaml:"bind_dn"`

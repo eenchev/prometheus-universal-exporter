@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_sshfile
+//go:build !select_request_types || request_type_sshfile || request_type_sshexec
 
 package fetch
 
@@ -21,16 +21,20 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
-	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-// sshfile reads reuse their connections, as grpc calls do (grpcconn.go): one
-// SSH connection, with one SFTP session on it, per host and port, account,
+// sshfile reads and sshexec commands reuse their connections, as grpc calls
+// do (grpcconn.go): one SSH connection per host and port, account,
 // credential files, known_hosts file, keepalive settings and target policy,
 // kept across scrapes and shared by the scrapes reaching it at the same
-// time. It is made at the first scrape that needs it, and made again:
+// time, an sshfile connection with one SFTP session on it. Each type keeps
+// its connections apart, in a cache of its own (sshConns, sshExecConns),
+// so that a reload's following of one type's collectors leaves the
+// other's alone; this file, built with either type, is the code both use,
+// and it imports no SFTP. A connection is made at the first scrape that
+// needs it, and made again:
 //
 //   - when one of its files changes on disk: a rotated key or password, or
 //     a known_hosts line replaced, gets a new connection at the next scrape;
@@ -72,7 +76,8 @@ import (
 // deadline comes during its read returns at once, closes the files the read
 // has open, and gives the read sshAbandonGrace to return; when it does not,
 // the connection is dropped, which ends the read, and the scrapes on it then
-// connect again.
+// connect again. A command's session is closed at the deadline in the same
+// way (requesttype_sshexec.go).
 
 // sshSettings are what a connection depends on besides the host: who it
 // authenticates as and with what, how its host key is verified, how it is
@@ -106,14 +111,13 @@ type sshConn struct {
 	// (sshFilesStamp).
 	stamp string
 	// ready is closed once the connection is made or has failed; err is the
-	// failure. client and sftp are set before ready is closed.
+	// failure. client and attached are set before ready is closed.
 	ready  chan struct{}
 	err    error
 	client *ssh.Client
-	sftp   *sftp.Client
-	// listingSessionsKept says the host did not close a listing's session
-	// on the connection in time (sftpLister.hostKeepsSessions).
-	listingSessionsKept atomic.Bool
+	// attached is what the cache's attach started on the connection, an
+	// sshfile connection's SFTP session; nil for an sshexec one.
+	attached io.Closer
 	// ended is closed when the connection has ended, however it ended.
 	ended chan struct{}
 	// users are the collectors whose scrapes used the connection.
@@ -147,11 +151,22 @@ const (
 	sshStageSession
 )
 
-// sshConnCache is the kept connections, and how many each collector made.
+// sshConnCache is the kept connections of one request type, and how many
+// each collector made.
 type sshConnCache struct {
-	mu       sync.Mutex
-	entries  map[sshConnKey]*sshConn
-	connects map[string]uint64
+	// requestType is the type whose collectors' connections the cache
+	// keeps, which follow reads the configuration for.
+	requestType string
+	// attach starts what a connection of the type holds beside the SSH
+	// connection once the handshake is done, within the deadline of the
+	// making, an sshfile connection's SFTP session; nil for nothing.
+	// attachStage names that stage in the error of a scrape that stops
+	// waiting for it, such as "starting the SFTP session".
+	attach      func(ctx context.Context, key sshConnKey, client *ssh.Client) (io.Closer, error)
+	attachStage string
+	mu          sync.Mutex
+	entries     map[sshConnKey]*sshConn
+	connects    map[string]uint64
 	// owned are, of each collector with max_open_connections, its
 	// connections open or being made, those the cache has forgotten but a
 	// read still holds among them.
@@ -169,15 +184,16 @@ type sshConnCache struct {
 	limitWaits, limitFailures map[string]uint64
 }
 
-var sshConns = newSSHConnCache()
-
-func newSSHConnCache() *sshConnCache {
-	return &sshConnCache{entries: map[sshConnKey]*sshConn{}, connects: map[string]uint64{}, owned: map[string]map[*sshConn]bool{}, making: map[*sshConn]bool{}, freed: make(chan struct{}), limitWaits: map[string]uint64{}, limitFailures: map[string]uint64{}}
+// newSSHConnCache is the cache of requestType's connections, with what
+// attach starts on each (sshConnCache.attach).
+func newSSHConnCache(requestType string, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error), attachStage string) *sshConnCache {
+	return &sshConnCache{requestType: requestType, attach: attach, attachStage: attachStage, entries: map[sshConnKey]*sshConn{}, connects: map[string]uint64{}, owned: map[string]map[*sshConn]bool{}, making: map[*sshConn]bool{}, freed: make(chan struct{}), limitWaits: map[string]uint64{}, limitFailures: map[string]uint64{}}
 }
 
 // sshConnectTimeout is the least time making a connection is given: the TCP
-// connection, the SSH handshake with authentication, and the start of the
-// SFTP session. The first scrape's deadline is given when it is later.
+// connection, the SSH handshake with authentication, and the start of what
+// the type attaches, such as the SFTP session. The first scrape's deadline
+// is given when it is later.
 const sshConnectTimeout = 30 * time.Second
 
 // sshAbandonGrace is how long a read whose scrape's deadline came is given to
@@ -191,8 +207,8 @@ var sshAbandonGrace = 2 * time.Second
 // waits for room, each with the address of the connection.
 var sshConnEvent atomic.Pointer[func(event, address string)]
 
-// beforeSSHRead, set by tests, runs when a read of one file is about to
-// start on its connection.
+// beforeSSHRead, set by tests, runs when a read of one file, or a command,
+// is about to start on its connection.
 var beforeSSHRead atomic.Pointer[func()]
 
 func sshEvent(event, address string) {
@@ -256,7 +272,7 @@ func (c *sshConnCache) get(ctx context.Context, key sshConnKey, collector string
 		case <-entry.ready:
 		case <-ctx.Done():
 			c.release(entry)
-			return nil, false, entry.unfinished(ctx.Err())
+			return nil, false, c.unfinished(entry, ctx.Err())
 		}
 	}
 	if entry.err != nil {
@@ -303,7 +319,7 @@ func (c *sshConnCache) startLocked(ctx context.Context, key sshConnKey, stamp, c
 // cache forgot while a scrape waited for it is counted, since that scrape
 // reads on it.
 func (c *sshConnCache) dial(ctx context.Context, entry *sshConn, collector string) {
-	client, session, err := dialSSH(ctx, entry.key, &entry.stage)
+	client, attached, err := dialSSH(ctx, entry.key, &entry.stage, c.attach)
 	c.mu.Lock()
 	delete(c.making, entry)
 	if err != nil {
@@ -318,7 +334,7 @@ func (c *sshConnCache) dial(ctx context.Context, entry *sshConn, collector strin
 		c.mu.Unlock()
 		return
 	}
-	entry.client, entry.sftp = client, session
+	entry.client, entry.attached = client, attached
 	if !entry.givenUp && !entry.makerGone {
 		c.connects[collector]++
 	}
@@ -338,12 +354,12 @@ func (c *sshConnCache) dial(ctx context.Context, entry *sshConn, collector strin
 
 // unfinished is the error of a scrape whose deadline came while it waited
 // for the connection to be made, saying how far the making had got.
-func (entry *sshConn) unfinished(err error) error {
+func (c *sshConnCache) unfinished(entry *sshConn, err error) error {
 	switch entry.stage.Load() {
 	case sshStageHandshake:
 		return fmt.Errorf("the SSH handshake with %s did not finish: %w", entry.key.address, err)
 	case sshStageSession:
-		return fmt.Errorf("starting the SFTP session on %s: %w", entry.key.address, err)
+		return fmt.Errorf("%s on %s: %w", c.attachStage, entry.key.address, err)
 	}
 	return fmt.Errorf("connecting to %s: %w", entry.key.address, err)
 }
@@ -535,9 +551,9 @@ func (c *sshConnCache) retireLocked(entry *sshConn, why string) {
 }
 
 // closeLocked closes a connection once. Closing the SSH connection closes
-// its socket, which ends whatever waits on it at once. The SFTP session is
-// closed after it, apart: its close waits for a request being sent, which
-// the socket's close ends.
+// its socket, which ends whatever waits on it at once. What is attached to
+// it, an SFTP session, is closed after it, apart: its close waits for a
+// request being sent, which the socket's close ends.
 func (c *sshConnCache) closeLocked(entry *sshConn, why string) {
 	if entry.closed || entry.client == nil {
 		return
@@ -548,7 +564,9 @@ func (c *sshConnCache) closeLocked(entry *sshConn, why string) {
 	}
 	c.disownLocked(entry)
 	_ = entry.client.Close()
-	go func() { _ = entry.sftp.Close() }()
+	if entry.attached != nil {
+		go func() { _ = entry.attached.Close() }()
+	}
 	sshEvent("closed: "+why, entry.key.address)
 }
 
@@ -624,7 +642,7 @@ func (c *sshConnCache) follow(collectors []model.Collector, targets []model.Stat
 	byName := map[string]*model.Collector{}
 	for i := range collectors {
 		col := &collectors[i]
-		if col.Request.Type != RequestTypeSSHFile {
+		if col.Request.Type != c.requestType {
 			continue
 		}
 		byName[col.Name] = col
@@ -713,125 +731,21 @@ func (c *sshConnCache) limitCounts(collector string) (waited, failed uint64) {
 	return c.limitWaits[collector], c.limitFailures[collector]
 }
 
-// size reports how many connections are kept, for tests.
-func (c *sshConnCache) size() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries)
-}
-
-// session runs read on a connection for key, with a fileSource of root on it,
-// within ctx. A read that loses its connection is run once more, on a new
-// one, while ctx lasts. shown is what a debug probe's request section shows
-// of the read.
-func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource) error) error {
-	for attempt := 0; ; attempt++ {
-		entry, reused, err := c.get(ctx, key, collector, limit)
-		traceSSH(ctx, key, shown, reused, err)
-		if err != nil {
-			return err
-		}
-		src := &sftpSource{client: entry.sftp, conn: entry.client, hostKeepsSessions: &entry.listingSessionsKept, root: root}
-		done := make(chan error, 1)
-		go func() {
-			if hook := beforeSSHRead.Load(); hook != nil {
-				(*hook)()
-			}
-			done <- src.run(func() error { return read(src) })
-		}()
-		select {
-		case err = <-done:
-			c.release(entry)
-		case <-ctx.Done():
-			c.abandon(entry, src, done)
-			err = fmt.Errorf("reading %s: %w", shown, ctx.Err())
-			traceOutcome(ctx, "error: "+err.Error())
-			return err
-		}
-		if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
-			c.drop(entry, "lost")
-			traceOutcome(ctx, "the connection was lost: "+err.Error())
-			continue
-		}
-		if err != nil {
-			traceOutcome(ctx, "error: "+err.Error())
-		} else {
-			traceOutcome(ctx, "read")
-		}
-		return err
-	}
-}
-
-// directory reads a directory on a connection for key as session reads a
-// file, and hands answer what was read: all of it, or, when ctx ended
-// first, the files read by then (awaitDirectory).
-func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource, *directoryProgress) error, answer func(*DirectoryRead)) error {
-	for attempt := 0; ; attempt++ {
-		entry, reused, err := c.get(ctx, key, collector, limit)
-		traceSSH(ctx, key, shown, reused, err)
-		if err != nil {
-			return err
-		}
-		src := &sftpSource{client: entry.sftp, conn: entry.client, hostKeepsSessions: &entry.listingSessionsKept, root: root}
-		progress := &directoryProgress{}
-		done := make(chan error, 1)
-		go func() { done <- src.run(func() error { return read(src, progress) }) }()
-		abandoned := false
-		result, err := awaitDirectory(ctx, root, progress, done, func() {
-			abandoned = true
-			c.abandon(entry, src, done)
-		})
-		if !abandoned {
-			c.release(entry)
-			if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
-				c.drop(entry, "lost")
-				traceOutcome(ctx, "the connection was lost: "+err.Error())
-				continue
-			}
-		}
-		if err != nil {
-			traceOutcome(ctx, "error: "+err.Error())
-			return err
-		}
-		traceOutcome(ctx, fmt.Sprintf("read %d files", len(result.Files)))
-		answer(result)
-		return nil
-	}
-}
-
-// abandon is a scrape giving up on its read: the files the read has open
-// are closed, and the read is given sshAbandonGrace to return, after which
-// the connection is dropped. The connection is released when the read
-// returns.
-func (c *sshConnCache) abandon(entry *sshConn, src *sftpSource, done <-chan error) {
-	src.abandon()
-	go func() {
-		grace := time.NewTimer(sshAbandonGrace)
-		defer grace.Stop()
-		select {
-		case <-done:
-		case <-grace.C:
-			c.drop(entry, "stalled")
-			<-done
-		}
-		c.release(entry)
-	}()
-}
-
-// lost says a read's error is its connection ending under it.
-func (entry *sshConn) lost(err error) bool {
-	return errors.Is(err, sftp.ErrSSHFxConnectionLost) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || isClosedChannel(entry.ended)
-}
-
-// traceSSH records a read in a debug probe's request section: the host, the
-// account, the file or directory, and whether the connection was kept from
-// an earlier scrape or made for this one.
-func traceSSH(ctx context.Context, key sshConnKey, shown string, reused bool, err error) {
+// traceSSH records a read, or a command, in a debug probe's request
+// section: method, as the http_method label names it, the host, the
+// account, the file, directory or command, whether the connection was kept
+// from an earlier scrape or made for this one, and what more the type
+// shows, extra, such as the command line.
+func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, extra http.Header, reused bool, err error) {
 	connection := "new"
 	if reused {
 		connection = "reused"
 	}
-	traceRequest(ctx, localFileMethod, shown, http.Header{"Ssh-User": {key.username}, "Ssh-Connection": {connection}}, "", false)
+	header := http.Header{"Ssh-User": {key.username}, "Ssh-Connection": {connection}}
+	for name, values := range extra {
+		header[name] = values
+	}
+	traceRequest(ctx, method, shown, header, "", false)
 	if err != nil {
 		traceOutcome(ctx, "error: "+err.Error())
 	}
@@ -870,10 +784,11 @@ func sshFilesStamp(s sshSettings) string {
 
 // dialSSH makes a connection: TCP to the address, checked against the
 // policy as it is made, the SSH handshake, with the host key verified
-// against known_hosts_file and the account authenticated, and the SFTP
-// session, all within ctx, or sshConnectTimeout when ctx has no deadline.
-// stage is set to each stage as it starts.
-func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32) (*ssh.Client, *sftp.Client, error) {
+// against known_hosts_file and the account authenticated, and what attach
+// starts on it, an SFTP session, when it is not nil, all within ctx, or
+// sshConnectTimeout when ctx has no deadline. stage is set to each stage as
+// it starts.
+func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error)) (*ssh.Client, io.Closer, error) {
 	config, hostKeyFailure, err := sshClientConfig(key)
 	if err != nil {
 		return nil, nil, err
@@ -911,24 +826,25 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32) (*ssh.Cli
 		return nil, nil, sshHandshakeError(ctx, key, err, *hostKeyFailure)
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
-	stage.Store(sshStageSession)
-	session, err := sftp.NewClient(client)
-	if err != nil {
-		_ = client.Close()
-		if ctx.Err() != nil {
-			return nil, nil, fmt.Errorf("starting the SFTP session on %s: %w", key.address, ctx.Err())
+	var attached io.Closer
+	if attach != nil {
+		stage.Store(sshStageSession)
+		if attached, err = attach(ctx, key, client); err != nil {
+			_ = client.Close()
+			return nil, nil, err
 		}
-		return nil, nil, fmt.Errorf("the host %s took the connection of user %q but did not start an SFTP session: %w; the account needs the sftp subsystem, which OpenSSH's Subsystem sftp line enables", key.address, key.username, err)
 	}
 	if !stop() {
-		// ctx ended just as the session started: the socket's deadline is
-		// past, and the connection of no use.
-		_ = session.Close()
+		// ctx ended just as the connection was made: the socket's
+		// deadline is past, and the connection of no use.
+		if attached != nil {
+			_ = attached.Close()
+		}
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("connecting to %s over SSH: %w", key.address, ctx.Err())
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return client, session, nil
+	return client, attached, nil
 }
 
 // sshHandshakeError says in plain words why a handshake failed: the host

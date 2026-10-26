@@ -425,14 +425,12 @@ One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
 `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `kubernetes` and the opt-in
-`s3file`, `redis`, `tcp` and `ldap` — and under every transform: `transform.labels` are applied
+`s3file`, `redis`, `tcp`, `ldap` and `sshexec` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
 value](CONFIGURATION.md#long-label-values). A `python` script is not given
 the parameters; what it labels its series with is its own.
-
-`sshexec`, TODO(sshexec): say here what the list says of each other type.
 <!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or
@@ -795,7 +793,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `redis`, `tcp` and `ldap` collector, and a
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `redis`, `tcp`, `ldap` and `sshexec` collector, and a
 `dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
 refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
@@ -954,7 +952,7 @@ A proxy URL may carry credentials, `http://user:password@proxy:3128`, sent as
 environment applies to the whole exporter, and is read once, when the exporter
 first connects. In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
-affected, and neither are `sshfile`, `sql`, `redis`, `tcp` and `ldap` collectors, which
+affected, and neither are `sshfile`, `sql`, `redis`, `tcp`, `ldap` and `sshexec` collectors, which
 connect to their hosts directly; `s3file` collectors go through the proxy, by the AWS
 SDK's own client, which reads the same variables.
 

@@ -28,7 +28,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeRedis:      `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.commands or its label values names them`,
 	RequestTypeTCP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.send or its label values names them`,
 	RequestTypeLDAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in the base or filter of its request.searches or its label values names them`,
-	RequestTypeSshexec:    `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeSSHExec:    `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.command or its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the
@@ -50,6 +50,8 @@ var placeWords = []struct{ field, word string }{
 	{"request.commands[", "request.commands"},
 	{"request.send", "request.send"},
 	{"request.searches[", "request.searches"},
+	// With the blank after it, which redis's request.commands has not.
+	{"request.command[", "request.command "},
 	{"transform.labels.", "label values"},
 }
 
@@ -59,7 +61,8 @@ var placeWords = []struct{ field, word string }{
 // and no body; a grpc collector's message and metadata values; a localfile,
 // sshfile or s3file collector's path and nothing else of the request; a sql
 // collector's database and args; a redis collector's command arguments; a
-// tcp collector's send; an ldap collector's searches' base and filter. The
+// tcp collector's send; an ldap collector's searches' base and filter; an
+// sshexec collector's command's arguments. The
 // collector has a placeholder in each request key its type takes of those
 // that are filled, so a type that starts filling another place fails here
 // until the refusal names it.

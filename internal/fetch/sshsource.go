@@ -3,14 +3,18 @@
 package fetch
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -237,4 +241,150 @@ func (d *sftpDir) Close() error {
 	delete(d.src.listing, d.lister)
 	d.src.mu.Unlock()
 	return err
+}
+
+// sshConns are the connections of sshfile collectors, each with its SFTP
+// session (sshconn.go).
+var sshConns = newSSHConnCache(RequestTypeSSHFile, startSFTP, "starting the SFTP session")
+
+// startSFTP starts the SFTP session of an sshfile connection, once its
+// handshake is done.
+func startSFTP(ctx context.Context, key sshConnKey, client *ssh.Client) (io.Closer, error) {
+	session, err := sftp.NewClient(client)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("starting the SFTP session on %s: %w", key.address, ctx.Err())
+		}
+		return nil, fmt.Errorf("the host %s took the connection of user %q but did not start an SFTP session: %w; the account needs the sftp subsystem, which OpenSSH's Subsystem sftp line enables", key.address, key.username, err)
+	}
+	return &sftpConn{Client: session}, nil
+}
+
+// sftpConn is what an sshfile connection holds beside its SSH connection:
+// its SFTP session, which it is closed with, and whether the host did not
+// close a listing's session on it in time, which the connection's listings
+// share (sftpLister.hostKeepsSessions).
+type sftpConn struct {
+	*sftp.Client
+	listingSessionsKept atomic.Bool
+}
+
+// sftp is what an sshfile connection holds beside its SSH connection.
+func (entry *sshConn) sftp() *sftpConn {
+	return entry.attached.(*sftpConn)
+}
+
+// sftpClient is the SFTP session of an sshfile connection.
+func (entry *sshConn) sftpClient() *sftp.Client {
+	return entry.sftp().Client
+}
+
+// size reports how many connections a cache keeps, for tests.
+func (c *sshConnCache) size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries)
+}
+
+// session runs read on a connection for key, with a fileSource of root on it,
+// within ctx. A read that loses its connection is run once more, on a new
+// one, while ctx lasts. shown is what a debug probe's request section shows
+// of the read.
+func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource) error) error {
+	for attempt := 0; ; attempt++ {
+		entry, reused, err := c.get(ctx, key, collector, limit)
+		traceSSH(ctx, localFileMethod, key, shown, nil, reused, err)
+		if err != nil {
+			return err
+		}
+		src := &sftpSource{client: entry.sftpClient(), conn: entry.client, hostKeepsSessions: &entry.sftp().listingSessionsKept, root: root}
+		done := make(chan error, 1)
+		go func() {
+			if hook := beforeSSHRead.Load(); hook != nil {
+				(*hook)()
+			}
+			done <- src.run(func() error { return read(src) })
+		}()
+		select {
+		case err = <-done:
+			c.release(entry)
+		case <-ctx.Done():
+			c.abandon(entry, src, done)
+			err = fmt.Errorf("reading %s: %w", shown, ctx.Err())
+			traceOutcome(ctx, "error: "+err.Error())
+			return err
+		}
+		if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
+			c.drop(entry, "lost")
+			traceOutcome(ctx, "the connection was lost: "+err.Error())
+			continue
+		}
+		if err != nil {
+			traceOutcome(ctx, "error: "+err.Error())
+		} else {
+			traceOutcome(ctx, "read")
+		}
+		return err
+	}
+}
+
+// directory reads a directory on a connection for key as session reads a
+// file, and hands answer what was read: all of it, or, when ctx ended
+// first, the files read by then (awaitDirectory).
+func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource, *directoryProgress) error, answer func(*DirectoryRead)) error {
+	for attempt := 0; ; attempt++ {
+		entry, reused, err := c.get(ctx, key, collector, limit)
+		traceSSH(ctx, localFileMethod, key, shown, nil, reused, err)
+		if err != nil {
+			return err
+		}
+		src := &sftpSource{client: entry.sftpClient(), conn: entry.client, hostKeepsSessions: &entry.sftp().listingSessionsKept, root: root}
+		progress := &directoryProgress{}
+		done := make(chan error, 1)
+		go func() { done <- src.run(func() error { return read(src, progress) }) }()
+		abandoned := false
+		result, err := awaitDirectory(ctx, root, progress, done, func() {
+			abandoned = true
+			c.abandon(entry, src, done)
+		})
+		if !abandoned {
+			c.release(entry)
+			if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
+				c.drop(entry, "lost")
+				traceOutcome(ctx, "the connection was lost: "+err.Error())
+				continue
+			}
+		}
+		if err != nil {
+			traceOutcome(ctx, "error: "+err.Error())
+			return err
+		}
+		traceOutcome(ctx, fmt.Sprintf("read %d files", len(result.Files)))
+		answer(result)
+		return nil
+	}
+}
+
+// abandon is a scrape giving up on its read: the files the read has open
+// are closed, and the read is given sshAbandonGrace to return, after which
+// the connection is dropped. The connection is released when the read
+// returns.
+func (c *sshConnCache) abandon(entry *sshConn, src *sftpSource, done <-chan error) {
+	src.abandon()
+	go func() {
+		grace := time.NewTimer(sshAbandonGrace)
+		defer grace.Stop()
+		select {
+		case <-done:
+		case <-grace.C:
+			c.drop(entry, "stalled")
+			<-done
+		}
+		c.release(entry)
+	}()
+}
+
+// lost says a read's error is its connection ending under it.
+func (entry *sshConn) lost(err error) bool {
+	return errors.Is(err, sftp.ErrSSHFxConnectionLost) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || isClosedChannel(entry.ended)
 }

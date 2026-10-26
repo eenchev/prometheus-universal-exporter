@@ -81,7 +81,7 @@ collector is looked at):
 | [`redis`](REDIS.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 | [`tcp`](TCP.md#static-targets), opt-in | the service, `host:port`, required | `timeout`, and its own `tls` |
 | [`ldap`](LDAP.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `bind_dn` and `password_file`, and `tls` |
-| [`sshexec`](SSHEXEC.md#static-targets), opt-in | TODO(sshexec) | TODO(sshexec) |
+| [`sshexec`](SSHEXEC.md#static-targets), opt-in | the host, required | `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file`; nothing of the command |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

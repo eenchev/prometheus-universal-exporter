@@ -227,7 +227,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"redis":      {"a Redis or Valkey server", ""},
 	"tcp":        {"a service that answers a line sent over TCP", ""},
 	"ldap":       {"an LDAP directory", ""},
-	"sshexec":    {"TODO(sshexec)", ""},
+	"sshexec":    {"a command run on another host over SSH", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

@@ -485,8 +485,11 @@ func TestTheRecentProbesWithholdAURLsUserinfo(t *testing.T) {
 		errors.New("fetching https://reader:hunter2@db.example/x: refused"),
 		&url.Error{Op: "Get", URL: "https://reader:hunter2@db.example/x?token=abc", Err: errors.New("refused")},
 	} {
-		if shown := shownStatusError(err); strings.Contains(shown, "hunter2") || strings.Contains(shown, "abc") || !strings.Contains(shown, "db.example") {
-			t.Errorf("the error %q is shown as %q", err, shown)
+		for _, level := range []DebugLevel{DebugOff, DebugFull} {
+			server.SetDebug(level)
+			if shown := server.shownStatusError(err); strings.Contains(shown, "hunter2") || strings.Contains(shown, "abc") || !strings.Contains(shown, "db.example") {
+				t.Errorf("with --web.debug=%s the error %q is shown as %q", level, err, shown)
+			}
 		}
 	}
 }

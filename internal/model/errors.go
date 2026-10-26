@@ -99,9 +99,11 @@ func JoinProblems(errs ...error) error {
 }
 
 // operatorError is an error whose text holds what is for the exporter's
-// operator alone, such as what a remote command wrote to stderr: the log,
-// the debug report and the status page show the whole text, and the caller
-// of a probe, who may be anyone the probe endpoint answers, only caller.
+// operator alone, such as what a remote command wrote to stderr: the log
+// shows the whole text, and so do the debug report and the status page with
+// --web.debug=full; the caller of a probe, who may be anyone the probe
+// endpoint answers, is shown only caller, and so is the status page below
+// --web.debug=full, read by the same callers.
 type operatorError struct {
 	err    error
 	caller string

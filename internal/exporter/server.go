@@ -743,22 +743,23 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Error:     result.err.Error(),
 		})
 		failure := out.result(false)
-		failure.failure = shownStatusError(result.err)
+		failure.failure = s.shownStatusError(result.err)
 		return failure
 	case result.refused:
 		// The caller asked for a target the collector may not reach.
 		http.Error(out, fmt.Sprintf("collector %s refused the target: %v", name, result.err), http.StatusForbidden)
 		refused := out.result(false)
 		refused.refused = true
-		refused.outcome, refused.failure = probeRefused, shownStatusError(result.err)
+		refused.outcome, refused.failure = probeRefused, s.shownStatusError(result.err)
 		return refused
 	case result.failed():
 		// What is for the operator alone, such as a remote command's
-		// stderr, stays in the log, the debug report and the status page.
+		// stderr, stays in the log, and with --web.debug=full the debug
+		// report and the status page.
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %s", name, result.stage, model.CallerText(result.err)), http.StatusBadGateway)
 		failure := out.result(false)
 		failure.unauthorized = result.unauthorized
-		failure.failure = shownStatusError(result.err)
+		failure.failure = s.shownStatusError(result.err)
 		if job.backingOff != nil {
 			failure.outcome = probeBackoff
 		}

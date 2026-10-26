@@ -223,14 +223,15 @@ exporter did not write:
 the command on db1.example.com:22 exited with 2; its stderr began: grep: /var/log/app/current.log: No such file or directory
 ```
 
-That text is the operator's: the exporter's log, a [debug
-probe](#errors-and-self-metrics)'s report and the [status
-page](STATIC-TARGETS.md) show it. The caller of `/probe` is answered the
-status alone, and where stderr is, since stderr may quote what a file on
-the host holds:
+That text is the operator's: the exporter's log shows it, and with
+`--web.debug=full` so do a [debug probe](#errors-and-self-metrics)'s report
+and the [status page](ENDPOINTS.md#status-page). The caller of `/probe` is
+answered the status alone, and that stderr is in the log, since stderr may
+quote what a file on the host holds; below `--web.debug=full` the status
+page, which whoever may call `/probe` can read, shows the same:
 
 ```text
-collector disk ssh failed: the command on db1.example.com:22 exited with 2; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page
+collector disk ssh failed: the command on db1.example.com:22 exited with 2; what it wrote to stderr is in the exporter's log
 ```
 
 A command ended by a signal says which: `the command on db1.example.com:22
@@ -386,8 +387,8 @@ need:
   options, `[wc, -l, --, "{{param_file}}"]`, so that its program reads no
   option there whatever the rules let through.
 - **stderr stays with the operator.** A failed command's stderr is in the
-  exporter's log, a debug probe's report and the status page, not in what
-  `/probe` answers ([Exit status](#exit-status)): a command that complains
+  exporter's log, and with `--web.debug=full` in a debug probe's report and
+  on the status page, not in what `/probe` answers ([Exit status](#exit-status)): a command that complains
   of a file quotes it, and the caller of a probe may be anyone the probe
   endpoint answers.
 - **Opt-in.** The type is in no build that does not ask for it, so an

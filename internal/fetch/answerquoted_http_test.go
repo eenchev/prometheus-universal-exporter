@@ -16,7 +16,11 @@ import (
 )
 
 // bannerServer answers every connection with banner and closes it: a
-// server of another protocol, which says who it is before it is asked.
+// server of another protocol. It writes the banner once the request has
+// come, as a server of HTTP would its answer: written before, it may reach
+// Go's client while the connection sits idle in its pool, which the client
+// logs as an unsolicited response and drops, and the request sent on the
+// connection after that fails without the banner in its error.
 func bannerServer(t *testing.T, banner string) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -30,8 +34,14 @@ func bannerServer(t *testing.T, banner string) string {
 			if err != nil {
 				return
 			}
-			_, _ = conn.Write([]byte(banner))
-			_ = conn.Close()
+			go func() {
+				defer func() { _ = conn.Close() }()
+				request := make([]byte, 4096)
+				if _, err := conn.Read(request); err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte(banner))
+			}()
 		}
 	}()
 	return "http://" + listener.Addr().String()

@@ -29035,7 +29035,21 @@ A login that fails MUST fail the trip in the `login` stage, saying where it
 went, with its query's values masked, and why: for an answer that is not
 `2xx`, its status and the start of its body, at most 256 bytes, with what
 reads as a credential masked (§ 42.17), and for `oauth2` the error code and
-description RFC 6749 has the server send. What the login sent MUST NOT be
+description RFC 6749 has the server send. The start of the body, the error
+code and the description MUST be in the log, and with `--web.debug=full` in
+a debug probe's report and on the status page, alone: the `502` a probe is
+answered MUST say the status, for `oauth2` the error code only when it is
+one RFC 6749 § 5.2 registers (`invalid_request`, `invalid_client`,
+`invalid_grant`, `unauthorized_client`, `unsupported_grant_type`,
+`invalid_scope`) and otherwise that the code is not one it registers, and
+that what the server said is in the exporter's log, and MUST NOT hold any of
+the body or the description. What the OAuth library says of an answer it
+could not read as a token MUST be answered as that it could not be, the
+library's words in the log alone; a connection that failed and an answer
+without `access_token` MUST be answered as logged. A failure the login
+cache hands to every request waiting for one login, or that the
+collector's target policy refused, MUST be answered to each request's
+caller as it would be alone. What the login sent MUST NOT be
 shown anywhere: not its body, a file's content or the token. An error of a
 `token` or `expires_in` expression MUST say the kind of value it gave and
 never the value. A debug report MUST list a login request, marked as one,

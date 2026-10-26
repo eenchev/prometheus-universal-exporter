@@ -890,3 +890,95 @@ func TestARelativeLoginIsSentWithTheHostOverride(t *testing.T) {
 		}
 	})
 }
+
+// A refused login whose failure the login cache hands to every request
+// waiting for it answers each request's caller the status alone: the mark
+// that the provider's answer is the operator's is on the error they share.
+func TestARefusedLoginSharedByRequestsKeepsItsAnswerFromEachCaller(t *testing.T) {
+	freshLogins(t)
+	release := make(chan struct{})
+	server := newLoginServer(t, func(w http.ResponseWriter, _ int64) {
+		<-release
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"message": "user svc-metrics-7f3a is unknown to ldap://10.20.30.40:389"}`)
+	}, func(*http.Request) bool { return true })
+	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
+	for range 5 {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, err := FetchCollector(ctx, server.URL+"/data", c, RequestOverrides{}, nil)
+			errs <- err
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "svc-metrics-7f3a") {
+			t.Fatalf("got %v, want the login's failure with the provider's answer", err)
+		}
+		shown := model.CallerText(err)
+		if !strings.HasSuffix(shown, "the login was answered with HTTP status 401; what it said is in the exporter's log") || strings.Contains(shown, "svc-metrics") {
+			t.Errorf("the caller is answered %q", shown)
+		}
+	}
+	if n := server.logins.Load(); n != 1 {
+		t.Errorf("made %d logins for 5 requests at once, want 1", n)
+	}
+}
+
+// What the OAuth library says of a token endpoint's answer it could not
+// read quotes the answer, and is the operator's; that a connection failed,
+// or that the answer had no token, is the library's own words, and the
+// caller is answered them.
+func TestAnOAuth2AnswerTheLibraryCannotReadIsTheOperators(t *testing.T) {
+	for _, tc := range []struct {
+		name, contentType, body, said, shown string
+	}{
+		{"unreadable", "application/x-www-form-urlencoded", "access_token=%zz", `invalid URL escape "%zz"`, "the token endpoint's answer could not be read as a token; what it said is in the exporter's log"},
+		{"no token", "application/json", `{"token_type": "Bearer"}`, "missing access_token", "missing access_token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			freshLogins(t)
+			idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer idp.Close()
+			files := secretFiles(t, map[string]string{"secret": "very-secret"})
+			c := loginCollector(t, model.LoginConfig{Type: "oauth2", URL: idp.URL, ClientID: "exporter", ClientSecretFile: files["secret"]})
+			_, err := FetchCollector(context.Background(), "http://127.0.0.1:1", c, RequestOverrides{}, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.said) {
+				t.Fatalf("got %v, want the library's words %q", err, tc.said)
+			}
+			if shown := model.CallerText(err); !strings.HasSuffix(shown, tc.shown) {
+				t.Errorf("the caller is answered %q, want it to end with %q", shown, tc.shown)
+			}
+		})
+	}
+	// A connection that failed is answered as it is.
+	freshLogins(t)
+	files := secretFiles(t, map[string]string{"secret": "very-secret"})
+	c := loginCollector(t, model.LoginConfig{Type: "oauth2", URL: "http://127.0.0.1:1/token", ClientID: "exporter", ClientSecretFile: files["secret"]})
+	_, err := FetchCollector(context.Background(), "http://127.0.0.1:1", c, RequestOverrides{}, nil)
+	if err == nil || model.CallerText(err) != err.Error() {
+		t.Errorf("a failed connection: %v, answered %q; want it answered as it is", err, model.CallerText(err))
+	}
+}
+
+// A login refused by the collector's target policy no longer reads as the
+// target's refusal, and keeps what its caller is answered of it.
+func TestALoginsPolicyRefusalKeepsWhatItsCallerIsAnswered(t *testing.T) {
+	err := fmt.Errorf("%w: %w", ErrTargetRefused, model.WithOperatorDetail(errors.New("the provider said svc-metrics-7f3a"), "the provider's words are logged"))
+	got := notTargetRefused(err)
+	if errors.Is(got, ErrTargetRefused) || got.Error() != err.Error() {
+		t.Errorf("got %v (refused %v), want the same text, not a target's refusal", got, errors.Is(got, ErrTargetRefused))
+	}
+	if shown := model.CallerText(got); strings.Contains(shown, "svc-metrics") || !strings.Contains(shown, "the provider's words are logged") {
+		t.Errorf("the caller is answered %q", shown)
+	}
+}

@@ -146,3 +146,89 @@ func TestAStaticTargetsLoginIsPartOfItsCacheKey(t *testing.T) {
 		t.Errorf("a target without a login has %q", own)
 	}
 }
+
+// A login the identity provider refuses fails the probe with the status the
+// provider answered and, for an OAuth 2.0 token endpoint, the error code
+// when RFC 6749 registers it; what the provider said, which may name the
+// user, the client or the directory it asked, is the operator's: it is in
+// the log and the debug report, with what reads as a credential masked as
+// in every text the exporter did not write, and not in the probe's answer.
+func TestARefusedLoginAnswersTheCallerTheStatusAndLogsTheAnswer(t *testing.T) {
+	const said = "user svc-metrics-7f3a is unknown to ldap://10.20.30.40:389"
+	for _, tc := range []struct {
+		name, contentType, body string
+		login                   func() *model.LoginConfig
+		answer, notAnswer       string
+		logged                  string
+	}{
+		{
+			name: "json", body: `{"message": "` + said + `", "password": "hunter2-echoed"}`,
+			login: func() *model.LoginConfig {
+				return &model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: map[string]string{"password": testutil.WriteFile(t, "password", "the-login-password")}}
+			},
+			answer: "the login was answered with HTTP status 401; what it said is in the exporter's log",
+			logged: said,
+		},
+		{
+			name: "oauth2 registered code", contentType: "application/json", body: `{"error": "invalid_client", "error_description": "` + said + `"}`,
+			login: func() *model.LoginConfig {
+				return &model.LoginConfig{Type: "oauth2", URL: "/login", ClientID: "client-id-4b1d", ClientSecretFile: testutil.WriteFile(t, "secret", "the-client-secret")}
+			},
+			answer: "the token endpoint answered HTTP status 401, invalid_client; what it said is in the exporter's log",
+			logged: "401, invalid_client: " + said,
+		},
+		{
+			name: "oauth2 code of its own", contentType: "application/json", body: `{"error": "client-id-4b1d_locked_in_ldap", "error_description": "` + said + `"}`,
+			login: func() *model.LoginConfig {
+				return &model.LoginConfig{Type: "oauth2", URL: "/login", ClientID: "client-id-4b1d", ClientSecretFile: testutil.WriteFile(t, "secret", "the-client-secret")}
+			},
+			answer:    "the token endpoint answered HTTP status 401 with an error code RFC 6749 does not register; what it said is in the exporter's log",
+			notAnswer: "locked_in_ldap",
+			logged:    "401, client-id-4b1d_locked_in_ldap: " + said,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fetch.CloseConnections()
+			t.Cleanup(fetch.CloseConnections)
+			logs := testutil.CaptureLogs(t)
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/login" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(target.Close)
+			c := testutil.Collector("login_api", "text")
+			c.Request.Login = tc.login()
+			server := modeServer(t, c)
+			server.SetDebug(DebugFull)
+			r := probeOnce(t, server, "/probe?collector=login_api&target="+url.QueryEscape(target.URL+"/data"), nil)
+			answer := r.Body.String()
+			if r.Code == http.StatusOK || !strings.Contains(answer, tc.answer) {
+				t.Errorf("answered %d: %s; want %q", r.Code, answer, tc.answer)
+			}
+			for _, kept := range []string{"svc-metrics", "10.20.30.40", "ldap", "client-id-4b1d", tc.notAnswer} {
+				if kept != "" && strings.Contains(answer, kept) {
+					t.Errorf("the probe's answer shows %q of the provider's answer: %s", kept, answer)
+				}
+			}
+			if !strings.Contains(logs.String(), tc.logged) {
+				t.Errorf("the log does not hold %q:\n%s", tc.logged, logs)
+			}
+			report := debugProbeGet(t, server, "collector=login_api&debug=true&target="+url.QueryEscape(target.URL+"/data")).Body.String()
+			if !strings.Contains(report, tc.logged) {
+				t.Errorf("the debug report does not hold %q:\n%s", tc.logged, report)
+			}
+			for _, secret := range []string{"hunter2-echoed", "the-login-password", "the-client-secret"} {
+				if strings.Contains(logs.String()+answer+report, secret) {
+					t.Errorf("%q is in the log, the answer or the report", secret)
+				}
+			}
+		})
+	}
+}

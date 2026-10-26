@@ -117,6 +117,21 @@ type TargetRequestConfig struct {
 	// RateLimit replaces an http or graphite collector's
 	// request.rate_limit for this target's requests.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+	// Order is the keys the block sets, and those of each mapping it holds
+	// directly as retry.codes, in the order the file has them
+	// (keyorder.go), so that of several keys the check against the
+	// target's collector refuses it names the first in the file. Two
+	// targets that differ in it alone scrape alike (SameStaticTarget).
+	Order []string `yaml:"-"`
+}
+
+// SameStaticTarget says whether two static targets scrape alike: they are
+// equal but for the order their request blocks have their keys in, which
+// only the check of a block reads (TargetRequestConfig.Order), so that a
+// reload does not take a target whose keys were moved for a changed one.
+func SameStaticTarget(a, b StaticTarget) bool {
+	a.Request.Order, b.Request.Order = nil, nil
+	return reflect.DeepEqual(a, b)
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets
@@ -171,7 +186,8 @@ type TargetOTLPConfig struct {
 // UnmarshalYAML records whether path and body were present, because an empty
 // string is a meaningful override for both. A key a merge key (<<) supplies
 // is present like one written out, and a key that is an alias is the key its
-// anchor holds (KeyName): *p : x with &p body sets the body.
+// anchor holds (KeyName): *p : x with &p body sets the body. It records the
+// order of the keys too (Order).
 func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain TargetRequestConfig
 	// Node.Decode does not refuse unknown keys the way the file's decoder
@@ -192,5 +208,7 @@ func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 			t.BodySet = true
 		}
 	}
+	// A path or a body written "" is set too (PathSet, BodySet).
+	t.Order = keyOrder(n, reflect.ValueOf(t).Elem(), "path", "body")
 	return nil
 }

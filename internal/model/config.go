@@ -242,6 +242,11 @@ type RequestConfig struct {
 	// block sets, which the validation refuses: a collector it accepts has
 	// none.
 	Foreign []string `yaml:"-"`
+	// Order is the keys the request block sets, and those of each mapping
+	// it holds directly as retry.codes, in the order the file has them
+	// (keyorder.go), so that of several keys the validation refuses it
+	// names the first in the file; nil for a block built in code.
+	Order []string `yaml:"-"`
 }
 
 // RateLimitConfig is request.rate_limit: the requests a second a collector

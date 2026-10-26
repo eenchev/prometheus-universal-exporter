@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // A localfile collector reading a directory with request.files
@@ -58,5 +59,22 @@ func TestLocalDirectoryValidation(t *testing.T) {
 				t.Fatalf("err=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// Of max_files and max_total_bytes on a collector that reads one file, the
+// first in the file is named; it once was either, as a map gave them.
+func TestOfTheDirectoryLimitsTheFirstInTheFileIsNamed(t *testing.T) {
+	for _, order := range [][2]string{{"max_files", "max_total_bytes"}, {"max_total_bytes", "max_files"}} {
+		// A map's order changes from one range to the next.
+		for range 20 {
+			var c model.Collector
+			if err := yaml.Unmarshal([]byte("name: f\nrequest:\n  type: localfile\n  root: "+t.TempDir()+"\n  path: a.prom\n  "+order[0]+": 3\n  "+order[1]+": 3\n"), &c); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), "request."+order[0]+", which applies only") {
+				t.Fatalf("%v: error %v", order, err)
+			}
+		}
 	}
 }

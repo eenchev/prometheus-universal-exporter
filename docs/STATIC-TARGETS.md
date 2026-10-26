@@ -61,7 +61,10 @@ every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `retry` settings — overriding the collector's own request for that target only.
 Which of these keys a target may set follows its collector's
 [request type](CONFIGURATION.md#request-types), as the table says; a key the
-type does not take is refused when the file loads, naming the target:
+type does not take is refused when the file loads, naming the target, and of
+several such keys, a key of `retry` for other types among them, the first in
+the file (an unknown key is refused as soon as the file is read, before its
+collector is looked at):
 
 | Type | `target` | What a target's `request` may set |
 | --- | --- | --- |

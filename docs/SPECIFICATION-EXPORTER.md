@@ -638,7 +638,14 @@ Each type MUST own, and the implementation MUST keep in one registry:
   accept MUST be rejected, naming the key and the type, so a configuration can
   never carry a setting that is silently ignored. Keys MUST be checked before
   the type fills in defaults, so a default is never mistaken for something the
-  author wrote;
+  author wrote. Of several keys a request block sets that its type does not
+  take — keys of the common part, keys of other types, a key of `retry` that
+  applies to other types, and unknown keys — the error MUST name the first in
+  the file, whatever refuses each: an unknown key after a key the type does
+  not take is refused once that key is gone, and one before it as an unknown
+  key (§ 24.2a). The first in the file is the one on the earlier line, or
+  further left on the same line; a key a merge key brings in is where its
+  anchor has it. So MUST a collector file's;
 - the `/probe` parameters it accepts (§ 42.10). A parameter that some type
   accepts but the collector's type does not MUST be rejected with
   `400 Bad Request` naming the parameter and the type, before the target is
@@ -646,7 +653,9 @@ Each type MUST own, and the implementation MUST keep in one registry:
   as it always has been, since a monitor may carry parameters of its own;
 - the keys a static target's `request` block may set (§ 42.14). A key its
   collector's type does not accept MUST be rejected at startup naming the
-  target, the key, the collector and the type;
+  target, the key, the collector and the type, and of several such keys, a
+  key of `retry` among them, the first in the file. An unknown key is refused
+  when the file is read, before its collector is known (§ 24.2a);
 - its own validation — required keys, defaults and cross-key rules;
 - its own fetch. Decoding, transforms, error policies, limits, caching and
   exposition MUST be shared by every type, so a new type adds only how bytes
@@ -1122,7 +1131,7 @@ textfile collector — and follows that collector's practice.
 | `max_total_bytes` | 64 MiB | With `files` only; not negative. A size (§ 5.0a). |
 
 `max_files` or `max_total_bytes` without `files` MUST be rejected, naming the
-key.
+key, the first in the file when both are set.
 
 The file read MUST be `root` / target / `path`:
 
@@ -8285,7 +8294,10 @@ expected (`a duration such as 30s`, `a whole number`, `a list of values`,
 mapping belongs, and the message reaches the log and the reload status; the
 line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
-rather than only the first. A YAML syntax error is reported as the YAML
+rather than only the first, in the order of the file within a block; the
+exception is an unknown key of a collector's `request` block that a key its
+type does not take comes before, which MUST be left to be refused once that
+key is gone, so that the error names the first in the file (§ 5.1). A YAML syntax error is reported as the YAML
 parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
@@ -31292,7 +31304,8 @@ why: a collector that runs Python (`transform.type: python` or
 `transform.pre_script`), which MUST NOT be run; one whose `request.type` is
 not `http`; and one that sets `request.basic_auth_file`,
 `request.bearer_token_file`, a `request.tls` file or `request.login`
-(§ 42.6a). Nothing a file holds
+(§ 42.6a), naming every such key in the order the collector has them.
+Nothing a file holds
 MUST reach the answer. Its own request block MUST NOT make a request.
 
 A configured collector MUST be run as it is configured, its Python

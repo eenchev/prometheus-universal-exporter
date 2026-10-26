@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -158,7 +157,7 @@ func targetChanges(before, after *model.StaticTargetFile) changeLists {
 			switch {
 			case !ok:
 				added = append(added, target.Name)
-			case !reflect.DeepEqual(*previous, *target):
+			case !model.SameStaticTarget(*previous, *target):
 				changed = append(changed, target.Name)
 			}
 			kept[target.Name] = true

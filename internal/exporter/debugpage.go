@@ -331,7 +331,10 @@ func refusedOnDebugPage(x *model.Collector) error {
 		}
 	}
 	if len(files) > 0 {
+		// In the order the file has them; tls's keys, which the map above
+		// gives in no order, in theirs where it says none.
 		sort.Strings(files)
+		files = model.InFileOrder(files, x.Request.Order)
 		return fmt.Errorf("collector %q sets request.%s, which names a file on the server; a collector written on the debug page reads no file of the server's. Leave it out: a pasted response needs no credential, and a target is fetched through a configured collector (request_from), with its credentials", x.Name, strings.Join(files, ", request."))
 	}
 	return nil

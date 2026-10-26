@@ -143,7 +143,8 @@ func TestAKeyThatIsAnAliasIsTheKeyItsAnchorHolds(t *testing.T) {
 		}
 		_, path := keys.Request["path"]
 		_, body := keys.Request["body"]
-		request.PathSet, request.BodySet = false, false
+		// The order of the keys is not yaml.v3's to say (keyorder_test.go).
+		request.PathSet, request.BodySet, request.Order = false, false, nil
 		if path != test.pathSet || body != test.bodySet || !reflect.DeepEqual(plainRequest(request), *want.Request) {
 			t.Errorf("%s: request %+v, and yaml.v3 alone %+v with path %v and body %v", test.name, request, *want.Request, path, body)
 		}
@@ -377,6 +378,8 @@ func sameAsItWas(t *testing.T, where string, n *yaml.Node, seen map[*yaml.Node]b
 	}
 	var request TargetRequestConfig
 	requestErr := request.UnmarshalYAML(n)
+	// The order of the keys was not recorded before (keyorder_test.go).
+	request.Order = nil
 	if was, wasErr := requestAsItWas(n); errorText(requestErr) != errorText(wasErr) || (requestErr == nil && !reflect.DeepEqual(request, was)) {
 		t.Fatalf("%s: line %d: request is %v %+v, and was %v %+v", where, n.Line, requestErr, request, wasErr, was)
 	}

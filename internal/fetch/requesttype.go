@@ -568,10 +568,18 @@ func ValidateRequest(c *model.Collector) error {
 		return fmt.Errorf("collector %q has unsupported request.type %q; the supported types are: %s", c.Name, c.Request.Type, supportedRequestTypes())
 	}
 	// The keys of other types' own are refused as the common part's keys
-	// the type does not take are, after them.
-	for _, key := range append(setKeys(reflect.ValueOf(c.Request), "type"), c.Request.Foreign...) {
+	// the type does not take are, the first in the file first; a key of
+	// retry that does not apply to the type is refused where retry is.
+	retryKeys := retryKeysSet(reflect.ValueOf(c.Request.Retry))
+	for _, key := range model.InFileOrder(append(setKeys(reflect.ValueOf(c.Request), "type"), c.Request.Foreign...), c.Request.Order) {
 		if !rt.Takes(key) {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
+		}
+		if key == "retry" && slices.Contains(c.Request.Order, key) {
+			if err := checkRetryKeys(rt, retryKeys, c.Request.Order); err != nil {
+				return fmt.Errorf("collector %q %w", c.Name, err)
+			}
+			retryKeys = nil
 		}
 	}
 	// Own keys of another type, as a collector built in code may hold, are
@@ -586,7 +594,7 @@ func ValidateRequest(c *model.Collector) error {
 	if rt.Config != nil && c.Request.Own == nil {
 		c.Request.Own = rt.Config
 	}
-	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.Statuses != nil, c.Request.Retry.NonIdempotent, c.Request.Retry.RetryAfter); err != nil {
+	if err := checkRetryKeys(rt, retryKeys, c.Request.Order); err != nil {
 		return fmt.Errorf("collector %q %w", c.Name, err)
 	}
 	if c.Request.MaxResponseBytes < 0 {
@@ -607,21 +615,54 @@ func ValidateRequest(c *model.Collector) error {
 	return rt.Validate(c)
 }
 
-// checkRetryKeys refuses the retry key that does not apply to the type:
-// codes, the gRPC status codes a grpc request retries, for the others, and
-// statuses, non_idempotent and retry_after, about HTTP answers and methods,
-// for grpc.
-func checkRetryKeys(rt *RequestType, codes, statuses, nonIdempotent, retryAfter bool) error {
-	if codes && !rt.StatusCodes {
+// checkRetryKeys refuses the retry key that does not apply to the type,
+// of those set, by their paths (retryKeysSet), the first in the file by
+// order, the request block's Order: codes, the gRPC status codes a grpc
+// request retries, for the others, and statuses, non_idempotent and
+// retry_after, about HTTP answers and methods, for grpc.
+func checkRetryKeys(rt *RequestType, set, order []string) error {
+	for _, key := range model.InFileOrder(set, order) {
+		if err := retryKeyRefusal(rt, strings.TrimPrefix(key, "retry.")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// retryKeys are the keys of retry that apply to some types alone, in the
+// order checkRetryKeys looks at them in where the file does not say.
+var retryKeys = []string{"codes", "statuses", "non_idempotent", "retry_after"}
+
+// retryKeysSet are the paths of the keys of retryKeys that a collector's or
+// a static target's retry sets, in retryKeys' order.
+func retryKeysSet(retry reflect.Value) []string {
+	if retry.Kind() == reflect.Pointer {
+		if retry.IsNil() {
+			return nil
+		}
+		retry = retry.Elem()
+	}
+	set := setKeys(retry)
+	var out []string
+	for _, key := range retryKeys {
+		if slices.Contains(set, key) {
+			out = append(out, "retry."+key)
+		}
+	}
+	return out
+}
+
+// retryKeyRefusal is why a key of retry does not apply to the type, nil
+// when it does.
+func retryKeyRefusal(rt *RequestType, key string) error {
+	switch {
+	case key == "codes" && !rt.StatusCodes:
 		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on the HTTP statuses retry.statuses lists, 408, 425, 429 and 5xx when it is left out", rt.Name)
-	}
-	if statuses && rt.StatusCodes {
+	case key == "statuses" && rt.StatusCodes:
 		return fmt.Errorf("sets request.retry.statuses, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
-	}
-	if nonIdempotent && rt.StatusCodes {
+	case key == "non_idempotent" && rt.StatusCodes:
 		return fmt.Errorf("sets request.retry.non_idempotent, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
-	}
-	if retryAfter && rt.StatusCodes {
+	case key == "retry_after" && rt.StatusCodes:
 		return fmt.Errorf("sets request.retry.retry_after, which does not apply to request.type %q; a gRPC status carries no Retry-After header, and retry.backoff is the wait between its retries", rt.Name)
 	}
 	return nil
@@ -699,7 +740,11 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	if t.Request.BodySet && !slices.Contains(keys, "body") {
 		keys = append(keys, "body")
 	}
-	for _, key := range keys {
+	// The first key in the file is refused first, and a key of retry
+	// where retry is.
+	order := t.Request.Order
+	retryKeys := retryKeysSet(reflect.ValueOf(t.Request.Retry))
+	for _, key := range model.InFileOrder(keys, order) {
 		if !slices.Contains(rt.TargetFields, key) {
 			return fmt.Errorf("target %q sets request.%s, which does not apply to collector %q, whose request.type is %q", t.Name, key, c.Name, rt.Name)
 		}
@@ -708,11 +753,15 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 				return fmt.Errorf("target %q sets request.%s: %w", t.Name, key, err)
 			}
 		}
-	}
-	if retry := t.Request.Retry; retry != nil {
-		if err := checkRetryKeys(rt, retry.Codes != nil, retry.Statuses != nil, retry.NonIdempotent != nil, retry.RetryAfter != nil); err != nil {
-			return fmt.Errorf("target %q %w", t.Name, err)
+		if key == "retry" && slices.Contains(order, key) {
+			if err := checkRetryKeys(rt, retryKeys, order); err != nil {
+				return fmt.Errorf("target %q %w", t.Name, err)
+			}
+			retryKeys = nil
 		}
+	}
+	if err := checkRetryKeys(rt, retryKeys, order); err != nil {
+		return fmt.Errorf("target %q %w", t.Name, err)
 	}
 	if err := checkAcceptStatus(t.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)

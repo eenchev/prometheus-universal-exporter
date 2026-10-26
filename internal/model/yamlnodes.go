@@ -257,7 +257,32 @@ func DecodedEntries(n *yaml.Node) []MappingEntry {
 // alias the key it names (KeyName), and a merge key supplies the keys of the
 // mappings it merges in (MappingEntries).
 func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
-	var problems []string
+	return keyProblemsError(unknownKeys(n, t, name))
+}
+
+// keyProblem is the decoder's message of a key it refuses, with the key's
+// place in the file.
+type keyProblem struct {
+	line, column int
+	message      string
+}
+
+// keyProblemsError is the decoder's error of the problems, nil for none.
+func keyProblemsError(problems []keyProblem) error {
+	if len(problems) == 0 {
+		return nil
+	}
+	messages := make([]string, len(problems))
+	for i, problem := range problems {
+		messages[i] = problem.message
+	}
+	return &yaml.TypeError{Errors: messages}
+}
+
+// unknownKeys are the keys checkKnownKeys refuses, in the order it finds
+// them.
+func unknownKeys(n *yaml.Node, t reflect.Type, name string) []keyProblem {
+	var problems []keyProblem
 	visiting := map[*yaml.Node]bool{}
 	var walk func(n *yaml.Node, t reflect.Type, top bool)
 	walk = func(n *yaml.Node, t reflect.Type, top bool) {
@@ -296,7 +321,7 @@ func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 					if top {
 						typeName = name
 					}
-					problems = append(problems, fmt.Sprintf("line %d: field %s not found in type %s", key.Line, KeyName(key), typeName))
+					problems = append(problems, keyProblem{key.Line, key.Column, fmt.Sprintf("line %d: field %s not found in type %s", key.Line, KeyName(key), typeName)})
 					continue
 				}
 				walk(entry.Value, field, false)
@@ -316,8 +341,5 @@ func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 		}
 	}
 	walk(n, t, true)
-	if len(problems) > 0 {
-		return &yaml.TypeError{Errors: problems}
-	}
-	return nil
+	return problems
 }

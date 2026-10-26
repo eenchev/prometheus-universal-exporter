@@ -5,7 +5,6 @@ import (
 	"errors"
 	"hash/fnv"
 	"log/slog"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -230,7 +229,7 @@ func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticT
 		}
 		seen[target.Name] = true
 		state := s.states[target.Name]
-		if state == nil || changed && (followed.stay(target.Name, target.Collector) > state.since || !reflect.DeepEqual(state.target, target) || reloaded && state.collector != fingerprint(target.Collector)) {
+		if state == nil || changed && (followed.stay(target.Name, target.Collector) > state.since || !model.SameStaticTarget(state.target, target) || reloaded && state.collector != fingerprint(target.Collector)) {
 			running, awaited := &atomic.Bool{}, &atomic.Bool{}
 			if state != nil {
 				running, awaited = state.running, state.awaited

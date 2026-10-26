@@ -27750,6 +27750,42 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   values alone, without naming it
   (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
 
+## 34.218 The scaffold's test in a job of its own, and template rules owned by their types
+
+- `ci.yml`'s job `test` skips the scaffold test in its step `Run the
+  repository's checks`, the job `scaffold` ends in a step running it alone
+  (`go test -run '^TestANewRequestTypeIsWiredByTheScaffold$'
+  ./test/repository/`) under the go output, and `make ci` reaches
+  `test-scaffold`, which runs it the same way; every test a go command of
+  `ci.yml` or of a target `make ci` reaches skips with `-skip` is run by
+  another command of the same file with `-run`, by the same pattern over the
+  same packages (or over `./...` in the Makefile) under the same condition,
+  and names a test of the tree; with the old `ci.yml` and Makefile, which ran
+  the scaffold test in the job `test`, it fails (§ 34.33)
+  (TestTheScaffoldTestRunsInAJobOfItsOwn).
+- `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
+  `ci.yml`'s job `test` has a step of that name that runs
+  `go test -skip '^TestANewRequestTypeIsWiredByTheScaffold$' ./test/repository/`
+  under the go output (TestTheCIGateFindsTheSuiteStepOfCI).
+- Every go command of `ci.yml` is run by a target `make ci` reaches, over
+  `./...` where CI names a side's packages or `test/repository`, or as CI
+  writes it, `make test`'s `-skip` of the scaffold test read past
+  (TestMakeCIRunsTheGoCommandsOfTheCIWorkflow).
+- No file of `internal/fetch` that every build compiles, those without a
+  request type's build constraint, compares a templated field's place
+  (`where`) with a literal, by `==`, `!=`, a switch or a `strings` function;
+  it fails on the shared template code that refused a message's filters by
+  the place `request.message` and knew the places the probe's body, message
+  and targets replace (§ 5.1) (TestTheSharedTemplateCodeKnowsNoFieldOfOneType,
+  and TestThePlaceComparisonCheckFindsARuleOfOneField for the check itself).
+- A grpc collector's message with `{{param_q|form}}` or `{{param_q|xml}}` is
+  refused as writing no JSON, and with no filter, `|json`, `|number` or
+  `|raw` is not, in the request's templated field, the message a call sends
+  and the message the configuration checks, by the rule grpc registers for
+  its message's kind; a probe's message replaces the collector's, whose
+  placeholders are then not checked; without the registration it fails
+  (TestAMessageTakesOnlyTheFiltersThatWriteJSON).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

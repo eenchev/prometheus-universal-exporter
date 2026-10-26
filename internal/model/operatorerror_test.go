@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -27,5 +28,68 @@ func TestCallerTextReplacesTheOperatorsDetail(t *testing.T) {
 	}
 	if WithOperatorDetail(nil, "x") != nil {
 		t.Error("a nil error is marked")
+	}
+}
+
+// A value of the answer that a failure quotes is withheld from the caller,
+// wherever the error that quotes it is in the chain, and the rest of the
+// text is shown as it reads; a value given a caller's text is shown that.
+func TestCallerTextWithholdsTheValuesOfTheAnswer(t *testing.T) {
+	inner := Errorf("expected float as value, got %s", Quoted("AWS_SECRET=abc"))
+	wrapped := fmt.Errorf("decoding the response: %w", Errorf("line %d: %w", Position(3), inner))
+	if want := "decoding the response: line 3: expected float as value, got " + WithheldMark; CallerText(wrapped) != want {
+		t.Errorf("the caller is shown %q, want %q", CallerText(wrapped), want)
+	}
+	if !strings.Contains(wrapped.Error(), "AWS_SECRET=abc") {
+		t.Errorf("the error reads %q; want the value in it", wrapped)
+	}
+	typed := Errorf("python transform failed: %s", ShownAs("Traceback...\nValueError: abc", "same").ForCaller("ValueError"))
+	if got := CallerText(typed); got != "python transform failed: ValueError" {
+		t.Errorf("a value given a caller's text is shown %q", got)
+	}
+	both := errors.Join(Errorf("a %s", Quoted("x")), WithOperatorDetail(errors.New("secret"), "kept"))
+	if got := CallerText(both); got != "a "+WithheldMark+"\nkept" {
+		t.Errorf("a joined error is shown %q", got)
+	}
+}
+
+// A wrapper that rewrote the text of an error with something to withhold
+// leaves nothing to tell it apart by: the caller is answered that the
+// failure is in the log, not the rewritten text.
+func TestCallerTextOfARewrittenErrorShowsNothingOfIt(t *testing.T) {
+	inner := Errorf("got %s", Quoted("secret"))
+	rewritten := &rewording{err: inner}
+	if got := CallerText(rewritten); got != WithheldFailure {
+		t.Errorf("the caller is shown %q, want %q", got, WithheldFailure)
+	}
+}
+
+type rewording struct{ err error }
+
+func (e *rewording) Error() string { return strings.ToUpper(e.err.Error()) }
+
+func (e *rewording) Unwrap() error { return e.err }
+
+// An error over the bound is a new error of the start of its text, which no
+// longer wraps what it was: what the caller is shown of it is kept with it,
+// so that neither a value of the answer nor the operator's detail reaches
+// the caller through the cut.
+func TestABoundedFailureKeepsWhatTheCallerIsShown(t *testing.T) {
+	long := strings.Repeat("x", MaxFailureBytes)
+	for name, err := range map[string]error{
+		"operator's detail": WithOperatorDetail(errors.New("stderr: secret "+long), "the command failed"),
+		"value":             Errorf("got %s; then %s", Quoted("secret"), long),
+	} {
+		bounded := BoundedFailure(fmt.Errorf("wrapped: %w", err))
+		if len(bounded.Error()) > MaxFailureBytes+64 || !strings.Contains(bounded.Error(), "secret") {
+			t.Errorf("%s: the bounded error reads %d bytes", name, len(bounded.Error()))
+		}
+		if got := CallerText(bounded); strings.Contains(got, "secret") || !strings.HasPrefix(got, "wrapped: ") {
+			t.Errorf("%s: the caller is shown %.200q", name, got)
+		}
+	}
+	plain := BoundedFailure(errors.New(long + long))
+	if got := CallerText(plain); got != plain.Error() {
+		t.Errorf("a bounded error with nothing to withhold is shown %.100q", got)
 	}
 }

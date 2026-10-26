@@ -1179,7 +1179,7 @@ func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any,
 			break
 		}
 		if executionErr, ok := value.(error); ok {
-			return nil, executionErr
+			return nil, expr.JQRunError(executionErr)
 		}
 		values = append(values, value)
 	}
@@ -1232,8 +1232,8 @@ func (v *jqValues) next() (value any, ok bool, err error) {
 		return nil, false, nil
 	}
 	if executionErr, isErr := value.(error); isErr {
-		v.err, v.program = executionErr, nil
-		return nil, false, executionErr
+		v.err, v.program = expr.JQRunError(executionErr), nil
+		return nil, false, v.err
 	}
 	return value, true, nil
 }
@@ -1300,7 +1300,7 @@ func evaluateJQOne(ctx context.Context, input, root any, expression string) (any
 			break
 		}
 		if executionErr, ok := value.(error); ok {
-			return nil, executionErr
+			return nil, expr.JQRunError(executionErr)
 		}
 		if count == 0 {
 			first = value

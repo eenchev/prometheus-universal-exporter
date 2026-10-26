@@ -21,7 +21,7 @@ func TestAnXMLErrorOfNoKnownFormIsLeftAsItIs(t *testing.T) {
 		// The words of an entity without a semicolon are no part of its name.
 		"invalid character entity &" + long[:60] + " (no semicolon)", "invalid character entity &" + long[:62] + ";",
 	} {
-		if short, same, cut := xmlNamesCut(xmlSyntaxErrors, text); cut {
+		if short, same, _, cut := xmlNamesCut(xmlSyntaxErrors, text); cut {
 			t.Errorf("the syntax error %q is cut to %q, recognised by %q", text, short, same)
 		}
 	}
@@ -31,13 +31,13 @@ func TestAnXMLErrorOfNoKnownFormIsLeftAsItIs(t *testing.T) {
 		`xml: opening charset "` + long + `": no such charset`, `xml: encoding "` + long + `" declared but Decoder.CharsetReader is nil`,
 		"xmlquery: invalid XML document, namespace abc is missing", "xmlquery: invalid XML document, namespace " + long + " is not there", "xmlquery: invalid XML document",
 	} {
-		if short, same, cut := xmlNamesCut(xmlOtherErrors, text); cut {
+		if short, same, _, cut := xmlNamesCut(xmlOtherErrors, text); cut {
 			t.Errorf("the error %q is cut to %q, recognised by %q", text, short, same)
 		}
 	}
 	// A quoted name is read by its quotes, with what it escapes.
 	name := strings.Repeat(`a"; only version 1.0 is supported`, 4)
-	short, same, cut := xmlNamesCut(xmlOtherErrors, "xml: unsupported version "+model.QuoteValue(name)[:0]+`"`+strings.ReplaceAll(name, `"`, `\"`)+`"; only version 1.0 is supported`)
+	short, same, _, cut := xmlNamesCut(xmlOtherErrors, "xml: unsupported version "+model.QuoteValue(name)[:0]+`"`+strings.ReplaceAll(name, `"`, `\"`)+`"; only version 1.0 is supported`)
 	if want := "xml: unsupported version " + model.QuoteValue(name) + "; only version 1.0 is supported"; !cut || short != want || same != lengthsMarked(want) {
 		t.Errorf("a version that holds the words after it is cut to %q, recognised by %q, want %q", short, same, want)
 	}

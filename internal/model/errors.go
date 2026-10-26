@@ -98,12 +98,29 @@ func JoinProblems(errs ...error) error {
 	return all
 }
 
+// What a probe's caller is answered of a failure is less than the operator
+// is shown. The caller may be anyone the probe endpoint answers, and may
+// point a collector at a target, a file or a command its parameters let
+// through; what the target answered is the operator's, as what it means is
+// the series. So the caller is answered a failure's text (CallerText) with
+// every value of the answer it quotes (QuotedValue) withheld, and with what
+// an error marked as the operator's (WithOperatorDetail) holds replaced by
+// what the caller may be told of it; the log shows the whole text, and so
+// do the debug report and, with --web.debug=full, the status page.
+
+// WithheldMark is what a caller is shown in place of a value of the answer
+// that a failure quotes.
+const WithheldMark = "[withheld; in the exporter's log]"
+
+// WithheldFailure is what a caller is answered of a failure whose text could
+// not be told apart from what it withholds: a wrapper rewrote the text of an
+// error that holds the operator's detail, so nothing of it is shown.
+const WithheldFailure = "what failed is in the exporter's log"
+
 // operatorError is an error whose text holds what is for the exporter's
-// operator alone, such as what a remote command wrote to stderr: the log
-// shows the whole text, and so do the debug report and the status page with
-// --web.debug=full; the caller of a probe, who may be anyone the probe
-// endpoint answers, is shown only caller, and so is the status page below
-// --web.debug=full, read by the same callers.
+// operator alone, such as what a remote command wrote to stderr or what a
+// database said: the log shows the whole text, and the caller of a probe
+// only caller.
 type operatorError struct {
 	err    error
 	caller string
@@ -122,15 +139,78 @@ func WithOperatorDetail(err error, caller string) error {
 	return &operatorError{err: err, caller: caller}
 }
 
-// CallerText is the text of err as a probe's caller is answered it: the
-// text of an error WithOperatorDetail marked, wherever it is in the chain,
-// replaced by what the caller is shown of it, and the text around it, what
-// wraps it, as it is.
+// CallerText is the text of err as a probe's caller is answered it: each
+// error WithOperatorDetail marked, wherever it is in the chain, replaced by
+// what the caller is shown of it, each value of the answer an error made by
+// Errorf quotes replaced by WithheldMark (or by the text the value gives
+// the caller, QuotedValue.ForCaller), and the text around them, what wraps
+// them, as it is. When a wrapper rewrote the text of an error that has
+// something to withhold, so that its text is not found in the whole, the
+// caller is answered WithheldFailure.
 func CallerText(err error) string {
-	text := err.Error()
-	var marked *operatorError
-	if errors.As(err, &marked) {
-		text = strings.Replace(text, marked.Error(), marked.caller, 1)
+	if err == nil {
+		return ""
+	}
+	text, ok := callerText(err)
+	if !ok {
+		return WithheldFailure
 	}
 	return text
+}
+
+// callerText is CallerText, and false when what is withheld could not be
+// found in the text.
+func callerText(err error) (text string, ok bool) {
+	// An error that is a nil pointer of its type panics when asked for its
+	// text: there is nothing in it to withhold.
+	defer func() {
+		if recover() != nil {
+			text, ok = fmt.Sprint(err), true
+		}
+	}()
+	switch e := err.(type) { //nolint:errorlint // the error itself; those it wraps are walked below
+	case *operatorError:
+		return e.caller, true
+	case *movingError:
+		return e.callerText()
+	case *sameAsError:
+		return callerText(e.err)
+	}
+	return withCallerParts(err, err.Error())
+}
+
+// withCallerParts replaces in text, the text of an error that wraps err, the
+// text of each error down err's chain that shows a caller less by what it
+// shows: false when one of those is not found in text.
+func withCallerParts(err error, text string) (string, bool) {
+	switch e := err.(type) { //nolint:errorlint // this is the walk down the chain
+	case *operatorError, *movingError, *sameAsError:
+		shown, ok := callerText(e)
+		if !ok {
+			return "", false
+		}
+		whole := e.Error()
+		if shown == whole {
+			return text, true
+		}
+		if !strings.Contains(text, whole) {
+			return "", false
+		}
+		return strings.Replace(text, whole, shown, 1), true
+	case interface{ Unwrap() error }:
+		if inner := e.Unwrap(); inner != nil {
+			return withCallerParts(inner, text)
+		}
+	case interface{ Unwrap() []error }:
+		for _, inner := range e.Unwrap() {
+			if inner == nil {
+				continue
+			}
+			var ok bool
+			if text, ok = withCallerParts(inner, text); !ok {
+				return "", false
+			}
+		}
+	}
+	return text, true
 }

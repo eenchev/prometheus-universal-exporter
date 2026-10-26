@@ -74,7 +74,7 @@ func linesMark(whole int, recognised bool) string {
 // the lengths, a few bytes a line.
 func shownScriptError(text string) model.QuotedValue {
 	if len(text) <= scriptErrorBytes {
-		return model.ShownAs(text, text)
+		return model.ShownAs(text, text).ForCaller(scriptCallerText(text))
 	}
 	lines := strings.Split(text, "\n")
 	// own is the exception's own line: the first that is not indented
@@ -138,7 +138,7 @@ func shownScriptError(text string) model.QuotedValue {
 	if left := len(lines) - own; len(message) < left {
 		write(linesMark(left, false), linesMark(left, true))
 	}
-	return model.ShownAs(said.String(), same.String())
+	return model.ShownAs(said.String(), same.String()).ForCaller(scriptCallerText(text))
 }
 
 // shownByWorker is the error of a script that failed as the worker made it
@@ -174,7 +174,79 @@ func shownByWorker(parts []any) model.QuotedValue {
 	if said.Len() > shownByWorkerBytes {
 		return shownScriptError(strings.TrimSpace(said.String()))
 	}
-	return model.ShownAs(said.String(), same.String())
+	return model.ShownAs(said.String(), same.String()).ForCaller(scriptCallerText(said.String()))
+}
+
+// scriptFrame is the name a script's own frames have in a traceback, as the
+// worker compiles it.
+const scriptFrame = `"<collector-python>"`
+
+// scriptCallerText is what a probe's caller is told of a script's error,
+// text: the type of the exception and the line of the script it came from,
+// as in "ValueError at line 3 of the script". The message is not: it is
+// what the script, or a library it called, made of the data — a KeyError
+// quotes a key of the response, a JSONDecodeError the response itself — and
+// so are the lines of the frames, the script's source among them. An error
+// the exporter's worker raised after the script, which has no frame, is
+// told by its type alone; a text whose exception's line names no type, such
+// as fail()'s message, is withheld whole.
+func scriptCallerText(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	own, scriptLine := -1, ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(lines[i], scriptFrameLine) {
+			continue
+		}
+		if own < 0 {
+			own = i + 1
+			for own < len(lines)-1 && strings.HasPrefix(lines[own], " ") {
+				own++
+			}
+		}
+		// The innermost of the script's own frames of the last
+		// exception: the frames after it are a library's.
+		if rest, ok := strings.CutPrefix(lines[i], scriptFrameLine+scriptFrame+", line "); ok {
+			if n, _, _ := strings.Cut(rest, ","); n != "" && strings.Trim(n, "0123456789") == "" {
+				scriptLine = n
+			}
+			break
+		}
+	}
+	if own < 0 {
+		own = 0
+	}
+	if own >= len(lines) {
+		return model.WithheldMark
+	}
+	kind, _, typed := strings.Cut(lines[own], ":")
+	if !typed || !pythonName(kind) {
+		return model.WithheldMark
+	}
+	shown := kind
+	if scriptLine != "" {
+		shown += " at line " + scriptLine + " of the script"
+	}
+	return shown + "; the rest is in the exporter's log"
+}
+
+// pythonName reports whether s reads as the name of an exception's type,
+// dotted as Python writes one of a module: json.decoder.JSONDecodeError.
+func pythonName(s string) bool {
+	if s == "" || len(s) > 200 {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if part == "" || part[0] >= '0' && part[0] <= '9' {
+			return false
+		}
+		for _, r := range part {
+			letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+			if r != '_' && !letter && (r < '0' || r > '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // shownByWorkerBytes is how long what is shown of a script's error can be,

@@ -94,7 +94,24 @@ type errorLengthCase struct {
 	// most is the largest size the failure can be made of, when that is
 	// under the test's.
 	most int
+	// answered is what a probe's caller is told of the error as the log has
+	// it, text, when the error quotes a value of the answer, which is
+	// withheld from the caller (model.CallerText); unset, the caller is told
+	// the text.
+	answered func(text string) string
 }
+
+// cutAfter is the answered of an error whose text from words on, words
+// excepted, is a value of the answer.
+func cutAfter(words string) func(text string) string {
+	return func(text string) string {
+		start, _, _ := strings.Cut(text, words)
+		return start + words + model.WithheldMark
+	}
+}
+
+// toldAs is the answered of an error the caller is told as told.
+func toldAs(told string) func(string) string { return func(string) string { return told } }
 
 // The largest failure each stage of a probe can be made to end with is
 // answered, logged and remembered in no more than the 2,000 bytes of any
@@ -147,7 +164,7 @@ func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBoun
 			collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: .n}]}`,
 			raw:       func(size int) string { return strings.Repeat("\x01", size) + "\r\n\r\n" },
 			stage:     "http", code: http.StatusBadGateway, msg: failed, most: 200 << 10,
-			starts: `HTTP request failed: Get "http://127.0.0.1:`,
+			starts: `HTTP request failed: Get "http://127.0.0.1:`, answered: cutAfter("malformed HTTP response "),
 		},
 		"target_policy, a redirect's long Location": {
 			collector: `{name: c, request: {type: http, follow_redirects: true, denied_targets: ["10.0.0.0/8"]}, decoder: {type: json}, transform: {type: jq}, metrics: [{name: m, expression: .n}]}`,
@@ -168,24 +185,28 @@ func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBoun
 			answer:    body("text/plain", func(size int) string { return `m{a="` + strings.Repeat("a", size) + "\n" }),
 			stage:     "decode", code: http.StatusBadGateway, msg: failed,
 			starts: `decoding Prometheus exposition: text format parsing error in line 1: label value "aaa`, ends: ` bytes) contains unescaped new-line`,
+			answered: toldAs("decoding Prometheus exposition: text format parsing error in line 1: label value " + model.WithheldMark + " contains unescaped new-line"),
 		},
 		"validation, a metric's long name": {
 			collector: `{name: c, request: {type: http}, decoder: {type: prometheus}, transform: {type: prometheus}}`,
 			answer:    body("text/plain", func(size int) string { return "h" + strings.Repeat("a", size) + " 1\n" }),
 			stage:     "validation", code: http.StatusBadGateway, msg: failed,
 			starts: `invalid metric name "haaa`, ends: ` bytes): longer than limits.max_metric_name_length 200`,
+			answered: toldAs("invalid metric name " + model.WithheldMark + ": longer than limits.max_metric_name_length 200"),
 		},
 		"transform, a script's exception": {
 			collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "raise Exception(data['message'])"}, limits: {max_output_bytes: 64MiB}}`,
 			answer:    body("application/json", message),
 			stage:     "transform", code: http.StatusBadGateway, msg: failed,
 			starts: "python transform failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    raise Exception(data['message'])\nException: aaa", ends: " bytes)",
+			answered: toldAs("python transform failed: Exception at line 1 of the script; the rest is in the exporter's log"),
 		},
 		"transform, a pre-script's exception": {
 			collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: jq, pre_script: "raise Exception(data['message'])"}, metrics: [{name: m, expression: .n}], limits: {max_output_bytes: 64MiB}}`,
 			answer:    body("application/json", message),
 			stage:     "transform", code: http.StatusBadGateway, msg: failed, most: 1 << 20,
 			starts: "python pre-script failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    raise Exception(data['message'])\nException: aaa", ends: " bytes)",
+			answered: toldAs("python pre-script failed: Exception at line 1 of the script; the rest is in the exporter's log"),
 		},
 		"transform, labels that escape alike": {
 			collector: `{name: c, name_escaping: underscores, request: {type: http}, decoder: {type: prometheus}, transform: {type: prometheus}}`,
@@ -200,7 +221,8 @@ func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBoun
 			collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: 'error(.message)', error_mode: fail}]}`,
 			answer:    body("application/json", message),
 			stage:     "metric", code: http.StatusBadGateway, msg: failed,
-			starts: `metric "m" expression: error: aaa`,
+			starts:   `metric "m" expression: error: aaa`,
+			answered: toldAs(`metric "m" expression: the jq program failed on the answer: ` + model.WithheldMark),
 		},
 		"a rule that raises under log": {
 			collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: 'error(.message)', error_mode: log}, {name: n, expression: .n}]}`,
@@ -253,22 +275,27 @@ func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBoun
 			if len(text) > model.MaxFailureBytes || !strings.HasPrefix(text, tc.starts) {
 				t.Fatalf("%s: a failure made of %d bytes is logged in %d, %.200q ... %q, want at most %d that start %q", name, of, len(text), text, text[max(0, len(text)-80):], model.MaxFailureBytes, tc.starts)
 			}
-			// The answer is the error and what the probe always wrote
-			// around it: the collector and the stage, or, for a rule
-			// under fail, the JSON object that names them.
+			// The answer is the error as the caller is told it and what
+			// the probe always wrote around it: the collector and the
+			// stage, or, for a rule under fail, the JSON object that names
+			// them.
+			told := text
+			if tc.answered != nil {
+				told = tc.answered(text)
+			}
 			switch {
 			case tc.code == http.StatusOK:
 			case tc.stage == "metric":
 				var said probeError
-				if err := json.Unmarshal(answer.Body.Bytes(), &said); err != nil || said.Error != text || said.Stage != "metric" || said.Metric != "m" {
+				if err := json.Unmarshal(answer.Body.Bytes(), &said); err != nil || said.Error != told || said.Stage != "metric" || said.Metric != "m" {
 					t.Fatalf("%s: answered %.300q, want the error in a JSON object: %v", name, answer.Body, err)
 				}
 			case tc.stage == "target_policy":
-				if got := answer.Body.String(); got != "collector c refused the target: "+text+"\n" {
+				if got := answer.Body.String(); got != "collector c refused the target: "+told+"\n" {
 					t.Fatalf("%s: answered %d bytes, %.300q", name, len(got), got)
 				}
 			default:
-				if got := answer.Body.String(); got != "collector c "+tc.stage+" failed: "+text+"\n" {
+				if got := answer.Body.String(); got != "collector c "+tc.stage+" failed: "+told+"\n" {
 					t.Fatalf("%s: answered %d bytes, %.300q", name, len(got), got)
 				}
 			}
@@ -337,7 +364,7 @@ func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBoun
 func shortFailure(ctx context.Context, t *testing.T, c *model.Collector, target string) (stage, answer, logged, remembered string) {
 	t.Helper()
 	fail := func(stage string, err error) (string, string, string, string) {
-		return stage, fmt.Sprintf("collector %s %s failed: %v\n", c.Name, stage, err), err.Error(), model.SameFailureText(err)
+		return stage, fmt.Sprintf("collector %s %s failed: %s\n", c.Name, stage, model.CallerText(err)), err.Error(), model.SameFailureText(err)
 	}
 	response, err := fetch.FetchCollector(ctx, target, c, fetch.RequestOverrides{}, nil)
 	if err != nil {
@@ -354,7 +381,7 @@ func shortFailure(ctx context.Context, t *testing.T, c *model.Collector, target 
 	var rule *transform.MetricFailure
 	switch {
 	case errors.As(err, &rule):
-		said, encodeErr := json.Marshal(probeError{Status: "error", Stage: "metric", Collector: c.Name, Metric: rule.Metric, Target: target, Error: err.Error()})
+		said, encodeErr := json.Marshal(probeError{Status: "error", Stage: "metric", Collector: c.Name, Metric: rule.Metric, Target: target, Error: model.CallerText(err)})
 		if encodeErr != nil {
 			t.Fatal(encodeErr)
 		}
@@ -376,7 +403,8 @@ func shortFailure(ctx context.Context, t *testing.T, c *model.Collector, target 
 // of a value of up to 150 bytes — a path, a label, a message, a name — the
 // answer to the scraper, the log line's error and the text the failure log
 // remembers are what the stage's own error gave before any was bounded
-// (shortFailure).
+// (shortFailure): the answer what a probe's caller is told of it
+// (model.CallerText), the values of the answer withheld.
 func TestAShortFailureOfAnyStageIsAnsweredLoggedAndRememberedAsItWas(t *testing.T) {
 	requirePython(t)
 	testutil.CaptureLogs(t)

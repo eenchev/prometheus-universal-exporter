@@ -70,36 +70,39 @@ var xmlOtherErrors = []xmlForm{
 // length; the same with the mark for each length, which is what the failure
 // is recognised by; and whether that is so. Both are made anew, and hold
 // nothing of text. The text is of the first form it reads as, and of no
-// other.
-func xmlNamesCut(forms []xmlForm, text string) (short, same string, cut bool) {
+// other. caller is text, when it is of a form, as a probe's caller is told
+// it: each name withheld (model.WithheldMark), as a name of the document is
+// a value of the answer; empty when text is of no form.
+func xmlNamesCut(forms []xmlForm, text string) (short, same, caller string, cut bool) {
 	for _, form := range forms {
-		if short, same, cut, is := form.namesCut(text); is {
-			return short, same, cut
+		if short, same, caller, cut, is := form.namesCut(text); is {
+			return short, same, caller, cut
 		}
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // namesCut is xmlNamesCut for one form, and whether text is of the form: one
 // that is not of it to its last byte is not.
-func (f xmlForm) namesCut(text string) (short, same string, cut, is bool) {
+func (f xmlForm) namesCut(text string) (short, same, caller string, cut, is bool) {
 	rest, ok := strings.CutPrefix(text, f.words[0])
 	if !ok {
-		return "", "", false, false
+		return "", "", "", false, false
 	}
-	var shown, recognised strings.Builder
+	var shown, recognised, told strings.Builder
 	shown.WriteString(f.words[0])
 	recognised.WriteString(f.words[0])
+	told.WriteString(f.words[0])
 	for _, word := range f.words[1:] {
 		var name model.QuotedValue
 		if f.quoted {
 			quoted, err := strconv.QuotedPrefix(rest)
 			if err != nil {
-				return "", "", false, false
+				return "", "", "", false, false
 			}
 			written, err := strconv.Unquote(quoted)
 			if err != nil {
-				return "", "", false, false
+				return "", "", "", false, false
 			}
 			name, rest = model.Quoted(written), rest[len(quoted):]
 		} else {
@@ -109,24 +112,26 @@ func (f xmlForm) namesCut(text string) (short, same string, cut, is bool) {
 				end = strings.Index(rest, word)
 			}
 			if end < 0 {
-				return "", "", false, false
+				return "", "", "", false, false
 			}
 			name, rest = model.Bare(rest[:end]), rest[end:]
 		}
 		if rest, ok = strings.CutPrefix(rest, word); !ok {
-			return "", "", false, false
+			return "", "", "", false, false
 		}
 		cut = cut || name.String() != name.Same()
 		shown.WriteString(name.String())
 		shown.WriteString(word)
 		recognised.WriteString(name.Same())
 		recognised.WriteString(word)
+		told.WriteString(model.WithheldMark)
+		told.WriteString(word)
 	}
 	if rest != "" {
-		return "", "", false, false
+		return "", "", "", false, false
 	}
 	if !cut {
-		return "", "", false, true
+		return "", "", told.String(), false, true
 	}
-	return shown.String(), recognised.String(), true, true
+	return shown.String(), recognised.String(), told.String(), true, true
 }

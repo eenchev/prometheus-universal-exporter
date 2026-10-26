@@ -918,8 +918,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		traceRateLimitWait(requestContext, waited, false)
 		resp, err := client.Do(req)
 		if err != nil {
-			// Go's error quotes the whole URL, request.query included.
-			err = RedactURLErrors(err)
+			// Go's error quotes the whole URL, request.query included, and
+			// of an answer that is no HTTP, its first line, which a
+			// probe's caller is not told (answerquoted.go).
+			err = withAnswerWithheld(RedactURLErrors(err))
 			traceOutcome(requestContext, "error: "+err.Error())
 			// Headers over the bound are over it on every attempt, and
 			// Go's own words for it name neither the limit's reason nor

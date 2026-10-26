@@ -3,6 +3,7 @@ package decode
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,11 +81,20 @@ func tomlParseError(parse toml.ParseError) error {
 	message := strings.TrimPrefix(parse.Error(), fmt.Sprintf("toml: line %d: ", parse.Position.Line))
 	line := model.Position(parse.Position.Line)
 	head := headOf(message, maxTOMLMessage)
+	var err error
 	if head == len(message) {
-		return model.Errorf("line %d: %s", line, message)
+		err = model.Errorf("line %d: %s", line, message)
+	} else {
+		start := message[:head]
+		err = model.SameFailureAs(model.Errorf("line %d: %s%s", line, start, cutMark(len(message), false)), "line "+model.MovingMark+": "+start+cutMark(len(message), true))
 	}
-	start := message[:head]
-	return model.SameFailureAs(model.Errorf("line %d: %s%s", line, start, cutMark(len(message), false)), "line "+model.MovingMark+": "+start+cutMark(len(message), true))
+	// The library quotes what it found, as Go quotes a text: a message
+	// with a quote in it holds a token of the body, which a probe's caller
+	// is not told.
+	if strings.Contains(message, `"`) {
+		err = model.WithOperatorDetail(err, "line "+strconv.Itoa(parse.Position.Line)+": "+model.WithheldMark)
+	}
+	return err
 }
 
 // tomlValue is v, a value the library made, as the json decoder makes one,

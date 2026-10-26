@@ -685,7 +685,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
-		return loginToken{}, RedactURLErrors(err)
+		return loginToken{}, withAnswerWithheld(RedactURLErrors(err))
 	}
 	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, loginAnswerLimit+1))
 	_ = resp.Body.Close()
@@ -953,6 +953,12 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 		said := errors.New(RedactText(RedactURLErrors(err).Error()))
 		var failed *url.Error
 		if errors.As(err, &failed) || err.Error() == oauth2EmptyAnswer {
+			// A failed connection's words quote the first line of an
+			// answer that is no HTTP, as the target's do (answerquoted.go):
+			// read before RedactText, which may mask Go's words.
+			if told, quoted := toldOfGoQuoting(RedactURLErrors(err).Error()); quoted {
+				return loginToken{}, model.WithOperatorDetail(said, told)
+			}
 			return loginToken{}, said
 		}
 		// Any other is an answer the library could not read, and its

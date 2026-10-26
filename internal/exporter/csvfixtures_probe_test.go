@@ -15,6 +15,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -1196,12 +1197,14 @@ func TestCSVFixtureProbeAnEncodingIsNamedByTheResponseOrTheCollector(t *testing.
 
 	service.answerAs("text/csv; charset=cp-bulgarian")
 	response := probeCSV(t, server, service, "oblasti", false)
-	const unknown = `collector oblasti decode failed: unsupported charset "cp-bulgarian"; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk` + "\n"
+	// The charset's name is a value of the answer: the caller is not told
+	// it, and the log is.
+	unknown := `collector oblasti decode failed: unsupported charset ` + model.WithheldMark + `; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk` + "\n"
 	if response.Code != http.StatusBadGateway || response.Body.String() != unknown {
 		t.Errorf("a charset the exporter does not know: status=%d body=%s", response.Code, response.Body.String())
 	}
 	failures, others := ruleFailureLogs(t, logs)
-	if len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"msg":"probe failed"`) || !strings.Contains(others[0], `"stage":"decode"`) || !strings.Contains(others[0], target) {
+	if len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"msg":"probe failed"`) || !strings.Contains(others[0], `"stage":"decode"`) || !strings.Contains(others[0], target) || !strings.Contains(others[0], "cp-bulgarian") {
 		t.Errorf("logged %v and %v, want the one failed probe, in the decode stage", failures, others)
 	}
 }
@@ -1398,7 +1401,7 @@ func TestCSVFixtureProbeRowsARuleCannotReadAreLoggedOrFailTheProbe(t *testing.T)
 
 	for collector, want := range map[string]string{
 		"readings_by_sensor": `collector readings_by_sensor validation failed: duplicate metric series "reading_temperature_celsius"`,
-		"usage": `collector usage decode failed: CSV header names column "used" twice, as columns 2 and 4; ` +
+		"usage": `collector usage decode failed: CSV header names column ` + model.WithheldMark + ` twice, as columns 2 and 4; ` +
 			`rename one, or set response.csv.header: false and read the columns by number`,
 	} {
 		response := probeCSV(t, server, service, collector, false)
@@ -1407,7 +1410,7 @@ func TestCSVFixtureProbeRowsARuleCannotReadAreLoggedOrFailTheProbe(t *testing.T)
 		}
 	}
 	failures, others := ruleFailureLogs(t, logs)
-	if len(failures) != 0 || len(others) != 3 || strings.Count(logs.String(), `"msg":"probe failed"`) != 3 {
+	if len(failures) != 0 || len(others) != 3 || strings.Count(logs.String(), `"msg":"probe failed"`) != 3 || !strings.Contains(logs.String(), `CSV header names column \"used\" twice`) {
 		t.Errorf("logged %v and %v, want the three failed probes", failures, others)
 	}
 	for _, stage := range []string{`"stage":"metric"`, `"stage":"validation"`, `"stage":"decode"`} {

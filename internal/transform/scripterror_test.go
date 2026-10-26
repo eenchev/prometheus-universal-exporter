@@ -283,7 +283,7 @@ func TestTheEndOfWhatAWorkerWroteToStderrIsWhatItsErrorShows(t *testing.T) {
 	fatal := "Fatal Python error: Segmentation fault\n\nCurrent thread 0x00007f (most recent call first):\n  File \"<collector-python>\", line 4 in <module>"
 	noise := strings.Repeat("W", 100000) + "\n"
 	died := worker(noise+fatal+"\n", 1<<30)
-	text := died.describe(nil) + died.memoryHint()
+	text := died.describe(nil, died.memoryHint()).Error()
 	kept := (noise + fatal)[len(noise+fatal)-stderrShownBytes:]
 	if want := "the interpreter exited: ... " + kept + died.memoryHint(); text != want || len("python transform failed: "+text) > model.MaxFailureBytes || !strings.Contains(text, fatal) || !strings.HasSuffix(text, "so raise the limit if the script needs more)") {
 		t.Errorf("a worker that died after writing %d bytes is described in %d bytes:\n%s\nwant\n%s", len(noise+fatal), len(text), text, want)
@@ -294,7 +294,7 @@ func TestTheEndOfWhatAWorkerWroteToStderrIsWhatItsErrorShows(t *testing.T) {
 		if tail := strings.TrimSpace(wrote); tail != "" {
 			was += ": " + tail
 		}
-		if got := w.describe(nil); got != was {
+		if got := w.describe(nil, "").Error(); got != was {
 			t.Errorf("a worker that wrote %d bytes is described as %.200q, and was as %.200q", len(wrote), got, was)
 		}
 		stopped := errors.New("the interpreter did not start within 10s")
@@ -362,5 +362,57 @@ func TestTheFirstFailureARuleReportsIsNoLongerThanAnyFailure(t *testing.T) {
 	}
 	if logs.Len() > 3*model.MaxFailureBytes || !strings.Contains(logs.String(), fmt.Sprintf(`aaa... (%d bytes)","failures":1}`, whole)) || !strings.Contains(logs.String(), `"metric":"short","error_mode":"log","error":"error: the queue is paused"`) {
 		t.Errorf("the transform logged %d bytes of its rules' failures: %.300s ... %s", logs.Len(), logs, logs.String()[max(0, logs.Len()-300):])
+	}
+}
+
+// A probe's caller is told of a script's error the type of its exception
+// and the line of the script it came from, not the message, which is what
+// the script or a library made of the data, nor the frames' source lines;
+// the whole text is the operator's. Where no exception can be read, as of
+// fail()'s message, nothing of it is shown.
+func TestAScriptsCallerIsToldTheExceptionsTypeAndLine(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"Traceback (most recent call last):\n  File \"<collector-python>\", line 3, in <module>\n    v = data['secret']\nKeyError: 'secret'",
+			"KeyError at line 3 of the script; the rest is in the exporter's log"},
+		{"Traceback (most recent call last):\n  File \"<collector-python>\", line 2, in <module>\n    json.loads(body)\n  File \"/usr/lib/python3.12/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0) secret",
+			"json.decoder.JSONDecodeError at line 2 of the script; the rest is in the exporter's log"},
+		{"Traceback (most recent call last):\n  File \"/x.py\", line 1, in f\nValueError: secret",
+			"ValueError; the rest is in the exporter's log"},
+		{"the response holds secret", model.WithheldMark},
+		{"RecursionError: data is nested more than 10000 deep: secret", "RecursionError; the rest is in the exporter's log"},
+		{"Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\nnot a type: secret", model.WithheldMark},
+	} {
+		err := model.Errorf("python transform failed: %s", shownScriptError(c.text))
+		if got := model.CallerText(err); got != "python transform failed: "+c.want || strings.Contains(got, "secret") {
+			t.Errorf("%.60q: the caller is told %q, want %q", c.text, got, c.want)
+		}
+		if !strings.Contains(err.Error(), "secret") {
+			t.Errorf("%.60q: the error reads %q, want the whole text", c.text, err)
+		}
+	}
+	long := "Traceback (most recent call last):\n  File \"<collector-python>\", line 7, in <module>\nKeyError: " + strings.Repeat("secret ", 1000)
+	if got := model.CallerText(model.Errorf("python transform failed: %s", shownScriptError(long))); got != "python transform failed: KeyError at line 7 of the script; the rest is in the exporter's log" {
+		t.Errorf("a long traceback's caller is told %q", got)
+	}
+	parts := []any{"Traceback (most recent call last):\n  File \"<collector-python>\", line ", json.Number("5"), ", in <module>\nTypeError: secret"}
+	if got := model.CallerText(model.Errorf("python transform failed: %s", shownByWorker(parts))); got != "python transform failed: TypeError at line 5 of the script; the rest is in the exporter's log" {
+		t.Errorf("a traceback the worker shows is told the caller as %q", got)
+	}
+}
+
+// What a worker wrote to stderr is the operator's: the error says it, and a
+// probe's caller is told only that it is in the exporter's log.
+func TestWhatAWorkerWroteToStderrIsTheOperators(t *testing.T) {
+	w := &pythonWorker{collector: "died", cmd: &exec.Cmd{}, stderr: &tailBuffer{max: pythonStderrTail}, maxMemory: 1 << 30}
+	_, _ = w.stderr.Write([]byte("printed: AWS_SECRET=abc\n"))
+	err := fmt.Errorf("python transform failed: %w", w.describe(nil, w.memoryHint()))
+	if !strings.Contains(err.Error(), "AWS_SECRET=abc") {
+		t.Errorf("the error reads %q, want what the worker wrote", err)
+	}
+	if got, want := model.CallerText(err), "python transform failed: the interpreter exited"+w.memoryHint()+"; what it wrote to stderr is in the exporter's log"; got != want {
+		t.Errorf("the caller is told %q, want %q", got, want)
+	}
+	if got := model.CallerText(w.startFailure(errors.New("the interpreter did not start within 10s"))); got != "the interpreter did not start within 10s; what it had written to stderr is in the exporter's log" {
+		t.Errorf("a stopped start's caller is told %q", got)
 	}
 }

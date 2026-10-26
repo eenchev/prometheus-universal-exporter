@@ -46,8 +46,14 @@ func TestDataThatHoldsAListTooOftenFailsTheScrapeAtOnce(t *testing.T) {
 		// Twice: the worker that answered the first is there for the second.
 		for range 2 {
 			answer := probeOnce(t, server, probePath(collector, target.URL, ""), nil)
-			if answer.Code == http.StatusOK || answer.Body.String() != "collector "+collector+" transform failed: "+want+"\n" {
-				t.Fatalf("%s: answered %d %.600q, want the failure %q", collector, answer.Code, answer.Body, want)
+			// The worker's own errors, raised after the script, are told
+			// the caller by their type, and the log has their message.
+			answered := want
+			if kind, _, raised := strings.Cut(strings.TrimPrefix(want, "python pre-script failed: "), ":"); raised && !strings.Contains(kind, " ") {
+				answered = "python pre-script failed: " + kind + "; the rest is in the exporter's log"
+			}
+			if answer.Code == http.StatusOK || answer.Body.String() != "collector "+collector+" transform failed: "+answered+"\n" {
+				t.Fatalf("%s: answered %d %.600q, want the failure %q", collector, answer.Code, answer.Body, answered)
 			}
 		}
 	}

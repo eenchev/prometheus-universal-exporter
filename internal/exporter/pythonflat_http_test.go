@@ -37,9 +37,11 @@ func TestAListNestedDeepInAMetricFailsTheScrapeAsAShortOneDoes(t *testing.T) {
 		t.Fatalf("a label that is a list of three: answered %d %q, want it to say %q", short.Code, short.Body, label)
 	}
 	for collector, want := range map[string]string{
-		"flat_deep":     label,
-		"flat_itself":   label,
-		"flat_argument": "ValueError: metric 'm' help a list of 3 items is not a string",
+		"flat_deep":   label,
+		"flat_itself": label,
+		// The caller is told the exception's type and the script's line,
+		// and the log the message.
+		"flat_argument": "ValueError at line 4 of the script; the rest is in the exporter's log",
 	} {
 		// Twice: the worker that answered the first is there for the second.
 		for range 2 {

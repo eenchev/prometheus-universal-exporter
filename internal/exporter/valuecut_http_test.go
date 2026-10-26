@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -61,13 +62,19 @@ func TestALongValueFailsTheProbeInAShortErrorThatIsWhole(t *testing.T) {
 	for collector, tc := range map[string]struct {
 		// body is the response with the token in it, after so many good
 		// lines, and said the error it fails with there.
-		body func(token string, after int) string
-		said func(token string, after int) string
+		// answered is said as a probe's caller is told it, the value
+		// withheld.
+		body     func(token string, after int) string
+		said     func(token string, after int) string
+		answered func(after int) string
 	}{
 		"exposition": {
 			func(token string, after int) string { return strings.Repeat("ok 1\n", after) + `m{a="` + token + "\n" },
 			func(token string, after int) string {
 				return fmt.Sprintf(`decoding Prometheus exposition: text format parsing error in line %d: label value "%s"... (%d bytes) contains unescaped new-line`, after+1, token[:64], len(token))
+			},
+			func(after int) string {
+				return fmt.Sprintf(`decoding Prometheus exposition: text format parsing error in line %d: label value %s contains unescaped new-line`, after+1, model.WithheldMark)
 			},
 		},
 		"carbon": {
@@ -76,6 +83,9 @@ func TestALongValueFailsTheProbeInAShortErrorThatIsWhole(t *testing.T) {
 			},
 			func(token string, after int) string {
 				return fmt.Sprintf(`carbon line %d: "a.b 1 2 3 %s"... (%d bytes) has 5 fields; want <path> <value> <timestamp>`, after+1, token[:54], len(token)+10)
+			},
+			func(after int) string {
+				return fmt.Sprintf(`carbon line %d: %s has 5 fields; want <path> <value> <timestamp>`, after+1, model.WithheldMark)
 			},
 		},
 	} {
@@ -87,7 +97,7 @@ func TestALongValueFailsTheProbeInAShortErrorThatIsWhole(t *testing.T) {
 			answer := probeOnce(t, server, probePath(collector, target.URL, ""), nil)
 			logged := logs.Len()
 			lines := linesOf(t, logs, "probe failed")
-			if want := "collector " + collector + " decode failed: " + said + "\n"; answer.Code != http.StatusBadGateway || answer.Body.String() != want || answer.Body.Len() > 400 {
+			if want := "collector " + collector + " decode failed: " + tc.answered(after) + "\n"; answer.Code != http.StatusBadGateway || answer.Body.String() != want || answer.Body.Len() > 400 {
 				t.Fatalf("%s, a token of %d bytes: answered %d with %d bytes, %.500q, want a 502 saying %q", collector, len(token), answer.Code, answer.Body.Len(), answer.Body, want)
 			}
 			if len(lines) != 1 || lines[0]["stage"] != "decode" || lines[0]["error"] != said || logged > 1000 {

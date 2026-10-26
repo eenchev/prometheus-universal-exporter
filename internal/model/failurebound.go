@@ -99,7 +99,8 @@ func Shown(text string, limit int) QuotedValue {
 // text, is let go of, which is why the new error does not wrap it. What err
 // was to errors.As is lost with it; what kind of failure it is, which the
 // self-metrics count apart (ErrLimitExceeded, ErrMissingValue,
-// ErrScriptFailed), is kept.
+// ErrScriptFailed), is kept, and so is what a probe's caller is shown of it
+// (CallerText), cut to the same bound.
 //
 // Whether the recognised text is cut is decided by its own length, not by
 // the error's, whose positions and sizes have more digits on one scrape than
@@ -131,6 +132,12 @@ func BoundedFailure(err error) (bounded error) {
 		if errors.Is(err, kind) {
 			bounded = MarkError(bounded, kind)
 		}
+	}
+	// What a probe's caller is shown of err is taken before err is let go
+	// of, and kept with the new error: of its text alone, CallerText could
+	// tell no value of the answer, and no operator's detail, from the rest.
+	if caller := CallerText(err); caller != text {
+		bounded = WithOperatorDetail(bounded, CutTo(caller, MaxFailureBytes, false))
 	}
 	return bounded
 }

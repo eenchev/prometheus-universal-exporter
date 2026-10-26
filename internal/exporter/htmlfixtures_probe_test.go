@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -106,12 +107,15 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 		// asXML and asYAML are how the page fails when it is called XML and
 		// YAML; a page that is well-formed XML does not fail as XML. asCSV
 		// is how its decode fails when it is called CSV, if it does.
-		asXML, asYAML, asCSV string
+		// xmlAnswered is what a probe's caller is told of asXML, the names of
+		// the document withheld, when that is not asXML itself.
+		asXML, asYAML, asCSV, xmlAnswered string
 	}{
 		{
 			fixture: "server-status.html", title: "Statistics Report for lb01.example.net",
-			asXML:  "XML decode: XML syntax error on line 16: element <meta> closed by </head>",
-			asYAML: "YAML decode: yaml: line 8: mapping values are not allowed in this context",
+			asXML:       "XML decode: XML syntax error on line 16: element <meta> closed by </head>",
+			xmlAnswered: "XML decode: XML syntax error on line 16: element <" + model.WithheldMark + "> closed by </" + model.WithheldMark + ">",
+			asYAML:      "YAML decode: yaml: line 8: mapping values are not allowed in this context",
 			asCSV: "CSV line 8 has a value in column 2, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; " +
 				"if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space",
 		},
@@ -130,7 +134,8 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 	for _, page := range pages {
 		// What each Content-Type makes of the page for a collector that
 		// leaves the decoder to the answer: read, or failed in a stage.
-		type outcome struct{ stage, failure string }
+		// answered is what the caller is told, when that is not failure.
+		type outcome struct{ stage, failure, answered string }
 		contentTypes := map[string]outcome{
 			"text/html; charset=utf-8":     {},
 			"text/html":                    {},
@@ -139,20 +144,20 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 			"text/plain; charset=utf-8":    {},
 			"application/octet-stream":     {},
 			"":                             {},
-			"application/xml":              {"decode", page.asXML},
-			"text/xml; charset=utf-8":      {"decode", page.asXML},
-			"application/json":             {"decode", asJSON},
-			"application/problem+json":     {"decode", asJSON},
-			"text/plain; version=0.0.4":    {"decode", asPrometheus},
-			"application/yaml":             {"transform", `xpath transform requires an XML or HTML response, got "yaml"`},
-			"text/csv":                     {"transform", `xpath transform requires an XML or HTML response, got "csv"`},
+			"application/xml":              {"decode", page.asXML, page.xmlAnswered},
+			"text/xml; charset=utf-8":      {"decode", page.asXML, page.xmlAnswered},
+			"application/json":             {"decode", asJSON, ""},
+			"application/problem+json":     {"decode", asJSON, ""},
+			"text/plain; version=0.0.4":    {"decode", asPrometheus, ""},
+			"application/yaml":             {"transform", `xpath transform requires an XML or HTML response, got "yaml"`, ""},
+			"text/csv":                     {"transform", `xpath transform requires an XML or HTML response, got "csv"`, ""},
 			"TEXT/HTML; Charset=\"utf-8\"": {},
 		}
 		if page.asYAML != "" {
-			contentTypes["application/yaml"] = outcome{"decode", page.asYAML}
+			contentTypes["application/yaml"] = outcome{"decode", page.asYAML, ""}
 		}
 		if page.asCSV != "" {
-			contentTypes["text/csv"] = outcome{"decode", page.asCSV}
+			contentTypes["text/csv"] = outcome{"decode", page.asCSV, ""}
 		}
 		for _, contentType := range slices.Sorted(maps.Keys(contentTypes)) {
 			left := contentTypes[contentType]
@@ -166,7 +171,11 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 					status, series, failure := probeHTML(t, server, site, collector, "/page")
 					toTheAnswer := collector == "xpath_unset" || collector == "xpath_auto"
 					if toTheAnswer && left.failure != "" {
-						if want := "collector " + collector + " " + left.stage + " failed: " + left.failure; status != http.StatusBadGateway || failure != want {
+						answered := left.failure
+						if left.answered != "" {
+							answered = left.answered
+						}
+						if want := "collector " + collector + " " + left.stage + " failed: " + answered; status != http.StatusBadGateway || failure != want {
 							t.Errorf("%s: status=%d body=%s\nwant 502 %s", collector, status, failure, want)
 						}
 						sameLogLines(t, logs, []string{"ERROR probe failed stage=" + left.stage + " error=" + left.failure})

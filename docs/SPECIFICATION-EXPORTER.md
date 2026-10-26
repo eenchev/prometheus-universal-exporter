@@ -6550,6 +6550,47 @@ required is never a failure when its value is absent, so its `error_mode` does
 not apply; `required` decides whether an absent value is a failure at all, and
 `error_mode` decides what a failure does.
 
+### 19.4 What a failed probe's caller is answered
+
+Whoever may call `/probe` may name the target and the collector's request
+parameters, so what the target answered MUST NOT reach a failed probe's
+answer. The answer — the text after `collector <name> <stage> failed: `, and
+`error` in the JSON object of a rule under `fail` — MUST be the failure's
+text as a probe's caller is told it (`model.CallerText`):
+
+- every value of the answer a failure quotes (`model.Quoted`, `Bare`,
+  `Shown` and `ShownAs` in an error made by `model.Errorf`) MUST be
+  replaced by `[withheld; in the exporter's log]`, the rest of the text as
+  it reads; a value may name what the caller is told of it instead
+  (`QuotedValue.ForCaller`);
+- an error marked as the operator's (`model.WithOperatorDetail`) MUST be
+  replaced by the text it gives the caller, wherever it is in the chain;
+- when a wrapper rewrote the text of an error that has something to
+  withhold, so that its text is not found in the whole, the answer MUST be
+  `what failed is in the exporter's log`, not the rewritten text.
+
+These MUST be withheld so: an XML syntax error's names and entities (each
+form `xmlcut.go` reads, its words kept), a TOML parser message that quotes a
+token, a jq program's error on the answer (`the jq program failed on the
+answer: [withheld; in the exporter's log]`), the start of a Graphite
+server's answer that is not render JSON (not that it is empty), and what Go's
+HTTP client quotes of an answer that is no HTTP (`malformed HTTP response`,
+`malformed HTTP status code`, `malformed HTTP version` and the `malformed
+MIME header` forms, the text after Go's words withheld), for a target's
+request and a login's. A Python script's error MUST be answered as the
+exception's type, ` at line <n> of the script` for the innermost frame of
+the script when there is one, and `; the rest is in the exporter's log`, and
+as `[withheld; in the exporter's log]` when its exception's line names no
+type; what a worker wrote to stderr MUST be withheld, its error answered
+with `; what it wrote to stderr is in the exporter's log` (or `what it had
+written`, of a start that was stopped). An error over `model.MaxFailureBytes`
+MUST keep what the caller is told of it when it is cut (§ 25), cut to the
+same bound. The names of valid series are not values of the answer the
+failure withholds: a successful probe answers them.
+
+The exporter's log, a debug probe's report and, with `--web.debug=full`,
+the status page MUST show each failure whole.
+
 ---
 
 # 20. Resource and cardinality limits
@@ -19090,10 +19131,12 @@ Tests MUST show:
   when it is written, and nothing where nothing is held twice.
 - Through `/probe`, a pre-script that leaves a list in itself twice answers
   502 `collector ... transform failed: python pre-script failed:
-  RecursionError: data is nested more than 10000 deep, or a list or a dict
-  in it holds itself; ...`, one that leaves lists doubled 40 times
-  `... OverflowError: what the script left in data is longer than
-  limits.max_output_bytes (1048576 bytes) written out, ...`, and a
+  RecursionError; the rest is in the exporter's log` (the log has
+  `RecursionError: data is nested more than 10000 deep, or a list or a dict
+  in it holds itself; ...`), one that leaves lists doubled 40 times
+  `... OverflowError; the rest is in the exporter's log` (the log has
+  `OverflowError: what the script left in data is longer than
+  limits.max_output_bytes (1048576 bytes) written out, ...`), and a
   transform with those lists as a label `python transform: metric "m" label
   "l" is an array of 2 values, not a single value; select one, or join them
   with join(",")`, twice each from one worker, each counted in
@@ -19966,7 +20009,9 @@ Tests MUST show:
   twice, or `m{l="",k="v"}` beside `m{k="v",j=""}` is answered 502
   `collector pass validation failed: duplicate metric series "m"`, and one
   writing a histogram's `_sum` and `_count` with `l=""` and again without
-  502 `... decode failed: ... second h_sum sample for the histogram h`.
+  502 `... decode failed: ... second [withheld; in the exporter's log]_sum
+  sample for the [withheld; in the exporter's log]`, the names being values
+  of the answer (§ 19.4).
 - An OTLP resource attribute written `""` is on no resource: the
   exporter-wide resource leaves it out, a static target's sets nothing so
   that the exporter-wide attribute of the name stays, a value that is not
@@ -21175,7 +21220,8 @@ Tests MUST show:
   duplicate series and labels that escape alike, each made of a value of up to
   150 bytes, the answer, the log line's error and the remembered text are what
   the stages' own error gave, the stages run in the test as the trip runs them
-  and the answer worded as the probe words it; at least 40 (8 under the race
+  and the answer worded as the probe words it, what the caller is told of the
+  error (§ 19.4); at least 40 (8 under the race
   detector) are of each of the `http`, `http_status`, `decode`, `metric`,
   `transform` and `validation` stages.
 - A static target's scrape that fails is logged and remembered within the
@@ -28101,6 +28147,117 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   page at `--web.debug` off as at full, the caller's text being taken
   without losing the URLs the error quotes.
 
+## 34.223 What a failed probe's caller is told
+
+- `TestCallerTextWithholdsTheValuesOfTheAnswer`: a value an error made by
+  `model.Errorf` quotes is answered as `[withheld; in the exporter's log]`
+  through two wrappers, the error's own text keeping it; a value given a
+  caller's text (`ForCaller`) is answered that, and an `errors.Join` of a
+  quoting error and a marked one answers each as its caller is told.
+- `TestCallerTextOfARewrittenErrorShowsNothingOfIt`: a wrapper that rewrites
+  the text of an error with a value to withhold makes the answer `what failed
+  is in the exporter's log`.
+- `TestABoundedFailureKeepsWhatTheCallerIsShown`: a marked error and one
+  quoting a value, wrapped and over `model.MaxFailureBytes`, are cut and
+  still answer the caller without the operator's detail or the value; an
+  error over the bound with nothing to withhold answers its cut text.
+- `TestAProbesCallerIsNotToldTheValuesOfTheAnswer`: through `/probe`, an
+  exposition's value, a TOML token, an XML entity, a jq program's error and
+  a rule's own `error(...)` under `fail`, a script's `ValueError` raised with
+  the data at line 2, and an SSH banner from a target that is no HTTP are
+  answered 502 with the value withheld (`expected float as value, got
+  [withheld; ...]`, `line 1: [withheld; ...]`, `invalid character entity
+  [withheld; ...]`, `the jq program failed on the answer: [withheld; ...]`,
+  `ValueError at line 2 of the script; the rest is in the exporter's log`,
+  `malformed HTTP response [withheld; ...]`); the log and a debug probe's
+  report have it.
+- `TestWhatGoQuotesOfAnAnswerThatIsNoHTTPIsTheOperators`: a target, a json
+  login and an oauth2 login whose server answers an SSH banner fail with the
+  banner in the error, and their caller is told the error up to `malformed
+  HTTP ...` and the mark after it.
+- `TestAGraphiteAnswerMustBeRenderJSON`: the start of a Graphite answer that
+  is no render JSON is withheld from the caller, and that it is empty is told.
+- `TestAScriptsCallerIsToldTheExceptionsTypeAndLine`: a traceback is told as
+  `KeyError at line 3 of the script; the rest is in the exporter's log`, a
+  library's frame after the script's naming the script's line, a dotted type
+  (`json.decoder.JSONDecodeError`) whole, a traceback without a script frame
+  by its type alone, the worker's own error without a frame by its type, and
+  a text whose last line names no type, or that has none, as the mark; a long
+  traceback and one the worker shows in parts alike.
+- `TestWhatAWorkerWroteToStderrIsTheOperators`: a worker that died after
+  printing a secret to stderr fails with it in the error, and its caller is
+  told `the interpreter exited (<memory hint>); what it wrote to stderr is in
+  the exporter's log`; a stopped start `...; what it had written to stderr is
+  in the exporter's log`.
+- `TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound`:
+  an answer of 200 kB that is no HTTP, an exposition's unclosed label value,
+  a long metric name, a script's and a pre-script's exception and a rule's
+  `error(...)` are answered as the caller is told them, the value withheld,
+  within the bound; the log has each as before.
+- A json login, an oauth2 login refused with `invalid_client` and one
+  refused with a code of the server's own, each answered `401` with a body
+  naming a user, a client id and an LDAP address, fail a probe whose answer
+  says the status, the registered code alone, or that the code is not one
+  RFC 6749 registers, and that what the server said is in the exporter's
+  log, and holds none of the body; the log and a debug probe's report hold
+  the start of the body or the description, a credential in it masked
+  (TestARefusedLoginAnswersTheCallerTheStatusAndLogsTheAnswer).
+- Five requests waiting for one login that the provider refuses each get
+  the failure with the provider's answer, and each request's caller is
+  answered the status alone (TestARefusedLoginSharedByRequestsKeepsItsAnswerFromEachCaller).
+- An oauth2 answer the library cannot read (`access_token=%zz` as a form)
+  is answered as one that could not be read as a token, the library's words
+  in the error alone; an answer without `access_token` and a connection
+  that failed are answered as they are (TestAnOAuth2AnswerTheLibraryCannotReadIsTheOperators).
+- A login failure the collector's target policy refused, rewritten so it no
+  longer reads as the target's refusal, keeps the same text and answers
+  its caller what the error held for the caller, not the operator's detail
+  (TestALoginsPolicyRefusalKeepsWhatItsCallerIsAnswered).
+- `TestTheBuiltInSQLDriversTellTheServersErrorByItsCode`: `postgres`
+  recognises a `PgError` as `SQLSTATE 28P01`, `mysql` a `MySQLError` as
+  `error 1045 (SQLSTATE 28000)` and one without a SQLSTATE as `error 1146`,
+  `sqlserver` an `mssql.Error`, a value or a pointer, as `error 18456`,
+  each bare or wrapped by the driver; marked, the error's text is unchanged,
+  a probe's caller is answered `the database answered <code>; its message is
+  in the exporter's log`, and the error is still the server's to
+  `errors.As`. A refused connection, a TLS failure, nil and mysql's
+  `ErrInvalidConn` are not the server's and are returned as they are.
+- `TestTheClickHouseDriverTellsTheServersErrorByItsCode`,
+  `TestTheOracleDriverTellsTheServersErrorByItsCode`,
+  `TestTheSnowflakeDriverTellsTheServersErrorByItsCode` and
+  `TestTheVerticaDriverTellsTheServersErrorByItsCode` (each with its
+  `sql_driver_<name>` tag): a `proto.Exception` is `code 62`, an
+  `OracleError` `ORA-01017`, a `SnowflakeError` `error 002003 (SQLSTATE
+  42S02)` and, without a SQLSTATE, `error 390100`, a `VError` `SQLSTATE
+  28000`, with the same marking; snowflake's own failure numbered 260008,
+  and a refused connection, are not the server's.
+- `TestASQLProbesCallerIsToldTheServersCodeAndNotItsMessage`: through a
+  postgres collector's pool, the server's error when connecting, when
+  beginning the read-only transaction, running the statement and reading
+  the rows is answered to the caller as the step and `the database answered
+  SQLSTATE 22P02; its message is in the exporter's log`, with `(on
+  host:port)` after it but for the connection, which names the server
+  already; the error's text keeps the message quoting the row's value, and
+  the error is still a `PgError` to `errors.As`. A message that names the
+  server still has the server named after the caller's text. A refused
+  connection is answered as its text.
+- `TestAMarkedStatementTimeoutIsStillTheScrapesDeadline`: postgres's
+  SQLSTATE 57014 statement timeout, marked as the server's answer, is still
+  `context.DeadlineExceeded` and answered `running the statement: the
+  scrape's deadline came first (context deadline exceeded): the database
+  answered SQLSTATE 57014; ...`.
+- `TestASQLProbeIsAnsweredTheDatabasesErrorCodeAndNotItsMessage`
+  (internal/exporter): a `/probe` of a postgres collector whose statement
+  the server fails with a conversion error quoting a row's value is
+  answered 502 `collector jobs sql failed: running the statement: the
+  database answered SQLSTATE 22P02; its message is in the exporter's log
+  (on db.example:5432)`, and of a mysql collector whose login the server
+  refuses, naming the account and the exporter's address, `collector
+  jobs_jq sql failed: connecting: connecting to mysql at db.example:3306:
+  the database answered error 1045 (SQLSTATE 28000); its message is in the
+  exporter's log`; the exporter's log, and with `--web.debug=full` a debug
+  probe's report, have the whole message.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30319,10 +30476,10 @@ then one of the OTLP export. Of the static targets:
   `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
   MUST leave the error of the last failed scrape, and when it began, as they
   were. The error MUST be the text the
-  log has, except that below `--web.debug=full` what an error holds for the
-  operator alone (as an `sshexec` command's stderr) MUST be shown as a
-  probe's caller is answered it, the page being read by whoever may call
-  `/probe`, with every URL's credentials withheld, masked again for what
+  log has, except that below `--web.debug=full` it MUST be shown as a
+  probe's caller is answered it (§ 19.4), without the values of the answer
+  it quotes and what it holds for the operator alone (as an `sshexec`
+  command's stderr), the page being read by whoever may call `/probe`, with every URL's credentials withheld, masked again for what
   reads as a credential, a URL's userinfo (`scheme://user:password@`)
   anywhere in it among that, and cut to the bound of a failure's text
   (§ 25); nothing else of a target's answer MAY be shown. A scrape that

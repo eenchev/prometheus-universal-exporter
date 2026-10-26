@@ -27929,6 +27929,77 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   where its anchor has it; `model.InFileOrder` puts keys the order lacks
   after the others, in their own order.
 
+## 34.220 The opt-in sshexec request type
+
+- An sshexec collector runs its command over SSH with a private key and
+  answers its stdout as the body, raw: no status, no Content-Type, nothing
+  wrapped around it; the stand-in server (internal/sshtest) receives the
+  command line with every word in single quotes.
+- Exit status 0 is a success and 1 fails the scrape, `exited with 1, and
+  wrote nothing to stderr`; with success_exit_codes [0, 1] a 1 succeeds, a 2
+  fails saying the list does not hold it, [1] makes 0 fail, and 255 fails.
+- A failed command's error holds the start of its stderr with a password
+  in it masked, a stderr of 10 KiB is kept to 2 KiB and shown to 1 KiB with
+  its length, and a command ended by a signal says `was killed by signal
+  TERM`.
+- A command line run through /bin/sh hands the program every word
+  unchanged: blanks, a quote and double quotes, $HOME, a backquote, a glob,
+  `; rm -rf /`, a line break, an empty word and a filled placeholder.
+- A probe's placeholder value holding `;`, a blank, a quote, `$(...)` or a
+  line break is refused before any connection is made, naming the argument
+  and the parameter; a name's characters are taken. Through the exporter
+  the probe is answered 400.
+- A command whose stdout grows past max_response_bytes fails the scrape as a
+  limit exceeded, and the command is ended on the host.
+- At the scrape's deadline the scrape returns at once, saying it was
+  running the command on the host, and the command is sent KILL and ended.
+- A host presenting a key known_hosts_file does not hold for it is refused,
+  and nothing is run.
+- denied_targets naming the host, and allowed_targets not naming it, refuse
+  the scrape before any connection; through the exporter a refused target
+  is answered 403 and counted in http_exporter_targets_refused_total.
+- A static target with a password_file of its own runs the command where
+  the collector's own missing key could not; a static target's path, a
+  lone passphrase_file, a placeholder in a file key and a key written with
+  blanks alone are refused.
+- A debug probe's request section shows EXEC, ssh://host:port, the user,
+  the command line as sent in Ssh-Command, new and then reused, and the
+  outcome `exited with 0, read N bytes; stderr: ...` with a token in stderr
+  masked; through the exporter its report shows no private key.
+- The url label is ssh://host:port, the http_method EXEC, and a target with
+  a path is refused naming request.command.
+- The configuration's rules: a command required; the program blank, a
+  relative path, a placeholder or a control character refused; a NUL in an
+  argument, a default with `;` or a blank, a command over 64 KiB, an exit
+  status outside 0 to 255 refused; username, known_hosts_file and a
+  credential required, keepalive_count_max at least 1, root refused as
+  another type's key; an absolute or bare program, quotes in an argument,
+  exit codes and connection keys taken.
+- A probe of an sshexec collector through a regex transform reads the
+  output; a status of success_exit_codes succeeds with its output; the
+  collector's http_exporter_sshexec_connections and connects_total read 1
+  after two probes on one kept connection, its limit counters 0, and its
+  verbose scrapes carry ssh://host:port and EXEC.
+- An sshexec collector's output is read by a python transform, its label
+  values filled from the probe's parameters.
+- The refusal of an unused probe parameter by an sshexec collector names the
+  arguments of its request.command and its label values.
+- The keys of an sshexec collector get one verdict from the schema and the
+  exporter: username, known_hosts_file, password_file, passphrase_file and
+  the target lists' entries.
+- A build of sshexec alone links golang.org/x/crypto/ssh and not
+  github.com/pkg/sftp, a build of sshfile alone both, and no other single
+  type either.
+- The chart README's SSH exec collectors example renders, mounting the
+  private key and known_hosts at the paths its collector names.
+- The pages whose Static targets section names every key a target may set
+  include docs/SSHEXEC.md.
+- The scaffold refuses a Go name that is not the type's name with capitals
+  in it, or does not start with a capital; given GO_NAME=ZZDemo it spells the
+  type's constant RequestTypeZZDemo and its tests' names with ZZDemo, and it
+  adds the new type's page to the pages whose Static targets section is
+  read, which names timeout.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

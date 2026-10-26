@@ -638,7 +638,14 @@ Each type MUST own, and the implementation MUST keep in one registry:
   accept MUST be rejected, naming the key and the type, so a configuration can
   never carry a setting that is silently ignored. Keys MUST be checked before
   the type fills in defaults, so a default is never mistaken for something the
-  author wrote;
+  author wrote. Of several keys a request block sets that its type does not
+  take — keys of the common part, keys of other types, a key of `retry` that
+  applies to other types, and unknown keys — the error MUST name the first in
+  the file, whatever refuses each: an unknown key after a key the type does
+  not take is refused once that key is gone, and one before it as an unknown
+  key (§ 24.2a). The first in the file is the one on the earlier line, or
+  further left on the same line; a key a merge key brings in is where its
+  anchor has it. So MUST a collector file's;
 - the `/probe` parameters it accepts (§ 42.10). A parameter that some type
   accepts but the collector's type does not MUST be rejected with
   `400 Bad Request` naming the parameter and the type, before the target is
@@ -646,7 +653,9 @@ Each type MUST own, and the implementation MUST keep in one registry:
   as it always has been, since a monitor may carry parameters of its own;
 - the keys a static target's `request` block may set (§ 42.14). A key its
   collector's type does not accept MUST be rejected at startup naming the
-  target, the key, the collector and the type;
+  target, the key, the collector and the type, and of several such keys, a
+  key of `retry` among them, the first in the file. An unknown key is refused
+  when the file is read, before its collector is known (§ 24.2a);
 - its own validation — required keys, defaults and cross-key rules;
 - its own fetch. Decoding, transforms, error policies, limits, caching and
   exposition MUST be shared by every type, so a new type adds only how bytes
@@ -1122,7 +1131,7 @@ textfile collector — and follows that collector's practice.
 | `max_total_bytes` | 64 MiB | With `files` only; not negative. A size (§ 5.0a). |
 
 `max_files` or `max_total_bytes` without `files` MUST be rejected, naming the
-key.
+key, the first in the file when both are set.
 
 The file read MUST be `root` / target / `path`:
 
@@ -8285,7 +8294,10 @@ expected (`a duration such as 30s`, `a whole number`, `a list of values`,
 mapping belongs, and the message reaches the log and the reload status; the
 line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
-rather than only the first. A YAML syntax error is reported as the YAML
+rather than only the first, in the order of the file within a block; the
+exception is an unknown key of a collector's `request` block that a key its
+type does not take comes before, which MUST be left to be refused once that
+key is gone, so that the error names the first in the file (§ 5.1). A YAML syntax error is reported as the YAML
 parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
@@ -27786,6 +27798,46 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   placeholders are then not checked; without the registration it fails
   (TestAMessageTakesOnlyTheFiltersThatWriteJSON).
 
+## 34.219 The first refused request key in the file
+
+- An http collector's request block with several keys it may not set is
+  refused for the first in the file, in the configuration and in a
+  collector file: a key of another type before a key of the common part,
+  and the other way round; an unknown key before a key of another type
+  (refused as unknown) and after it (the key of another type, unknown keys
+  after it left out); keys of two types in the reverse of the types' order
+  and in it; a key of `retry` that applies to grpc alone before a key of
+  another type and after it, and before an unknown key; and keys of one
+  flow mapping, by column. It fails where the common part's keys were
+  refused first, then the other types' in the types' order, then retry's,
+  and an unknown key whatever came before it.
+- The validation of a decoded http collector refuses the first key in the
+  file in the same cases, and a collector built in code, which has no
+  order, keeps the order of the code.
+- The decoder leaves an unknown key after a key the type does not take to
+  the validation, and refuses one before it, and one after a key the type
+  takes, naming its line.
+- A static target's request is refused for its first key in the file,
+  loaded against its collector and checked alone: `username`, `message`
+  and `targets` in the reverse of the code's order and in it, and a key of
+  `retry` before another key and after it. It fails where the keys were
+  refused in the order of the code and retry's after every other.
+- A static target whose request keys were moved is no change to a reload,
+  and one whose timeout changed is one; it fails when the targets are
+  compared with their order.
+- A localfile collector reading one file with `max_files` and
+  `max_total_bytes` is refused naming the first in the file, in both
+  orders, twenty times each; it failed while a map gave the keys in no
+  order.
+- The debug page refuses a written collector that sets `tls.key_file`,
+  `tls.ca_file` and `bearer_token_file`, in that order, naming them in that
+  order, where it named them sorted.
+- A request block, a collector's and a static target's, keeps the order of
+  its keys, nested keys of a mapping it holds directly (`retry.codes`)
+  included, in a block and in a flow mapping, a key a merge key brings in
+  where its anchor has it; `model.InFileOrder` puts keys the order lacks
+  after the others, in their own order.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31292,7 +31344,8 @@ why: a collector that runs Python (`transform.type: python` or
 `transform.pre_script`), which MUST NOT be run; one whose `request.type` is
 not `http`; and one that sets `request.basic_auth_file`,
 `request.bearer_token_file`, a `request.tls` file or `request.login`
-(§ 42.6a). Nothing a file holds
+(§ 42.6a), naming every such key in the order the collector has them.
+Nothing a file holds
 MUST reach the answer. Its own request block MUST NOT make a request.
 
 A configured collector MUST be run as it is configured, its Python

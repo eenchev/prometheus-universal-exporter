@@ -101,12 +101,13 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				out = append(out, leaf{prefix + field.Name, append(append([]int(nil), index...), i)})
 				continue
 			}
-			if key == "-" && typ == reflect.TypeOf(model.RequestConfig{}) && (field.Name == "Own" || field.Name == "Foreign") {
+			if key == "-" && typ == reflect.TypeOf(model.RequestConfig{}) && (field.Name == "Own" || field.Name == "Foreign" || field.Name == "Order") {
 				// Own is written by RequestConfig's MarshalYAML, its keys
 				// flat beside the common part's; its leaves are those of
 				// each request type's own struct, below. Foreign is what
 				// the validation refuses, and no collector it accepts has
-				// it.
+				// it. Order is where the file has the keys, which changes
+				// nothing a request does.
 				continue
 			}
 			if key == "-" {

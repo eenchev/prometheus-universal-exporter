@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -90,8 +91,24 @@ var requestKeys = sync.OnceValue(func() *model.RequestKeys {
 		}
 		keys.Unbuilt = append(keys.Unbuilt, model.UnbuiltRequestKey{Type: entry.Type, Key: entry.Key, GoType: goTypeOf(shape, keys.TypeNames)})
 	}
+	keys.Refuses = refusesRequestKey
 	return keys
 })
+
+// refusesRequestKey says whether the validation refuses a key a request
+// block of the type sets, by its path, as one the type does not take
+// (model.RequestKeys.Refuses): a key of the block it does not take, or a
+// key of retry that does not apply to it (checkRetryKeys).
+func refusesRequestKey(requestType, key string) bool {
+	rt := RequestTypes[requestType]
+	if rt == nil {
+		return false
+	}
+	if inner, ok := strings.CutPrefix(key, "retry."); ok {
+		return retryKeyRefusal(rt, inner) != nil
+	}
+	return !strings.Contains(key, ".") && !rt.Takes(key)
+}
 
 func init() {
 	model.SetRequestKeys(requestKeys)

@@ -161,7 +161,12 @@ of that type's own into a value of its struct, which the collector holds in
 `Request.Own`, written back flat when the collector is written as YAML (its
 cache key, a reload's comparison); a key of another type's own goes into
 `Request.Foreign`, which the validation refuses as it refuses a key of the
-common part the type does not take. The type reads its keys with a typed
+common part the type does not take. The block keeps the order the file has
+its keys in, `Request.Order` (`internal/model/keyorder.go`), so that of
+several keys refused the error names the first in the file, whatever
+refuses each; the decoder asks the registry which keys a type refuses
+(`model.RequestKeys.Refuses`), to leave an unknown key after one of them to
+be refused once it is gone. The type reads its keys with a typed
 accessor (`tcpRequest(c).Send`), and writes a changed value back into `Own`,
 which is a value, so that a copy of a collector is a copy of its keys. A
 key's schema is made from its field's Go type, as every other key's is,

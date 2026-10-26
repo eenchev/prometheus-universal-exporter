@@ -2619,6 +2619,11 @@ For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
 its table is in [LDAP directories](LDAP.md#a-collector).
 <!-- /request-types -->
 
+Of several keys a request block may not set (a key of another type, a key
+its type does not take, a key of `retry` for other types, an unknown key),
+the error names the first in the file, the one on the earlier line or
+further left on the same line, and once that is fixed the next.
+
 <!-- request-types: all -->
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
@@ -5152,7 +5157,7 @@ it is given runs on the server:
   hosts and databases with the server's own credentials, and **no file of
   the server's**: `request.basic_auth_file`, `request.bearer_token_file`,
   the `request.tls` files and a `request.login`, which reads its secrets
-  from files, are refused. A pasted response needs no
+  from files, are refused, named in the order the collector has them. A pasted response needs no
   credential, and a fetched target gets the configured collector's.
 
 A run takes as long as a probe may — the timeout on the page, sent as

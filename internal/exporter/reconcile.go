@@ -1,7 +1,6 @@
 package exporter
 
 import (
-	"reflect"
 	"sync/atomic"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -801,7 +800,7 @@ func targetsDefinedFrom(previous *followedConfig, file *model.StaticTargetFile, 
 	defined := make(map[string]uint64, len(targets))
 	for i := range targets {
 		defined[targets[i].Name] = generation
-		if was := former[targets[i].Name]; was != nil && reflect.DeepEqual(*was, targets[i]) {
+		if was := former[targets[i].Name]; was != nil && model.SameStaticTarget(*was, targets[i]) {
 			defined[targets[i].Name] = previous.targetsDefined[targets[i].Name]
 		}
 	}

@@ -43,6 +43,11 @@ type RequestKeys struct {
 	// for the errors of a decoding to name them as a build with the type
 	// does.
 	TypeNames map[string]string
+	// Refuses says whether a request block of a type the build has, by
+	// its name, refuses a key it sets, by its path (retry.codes for codes
+	// in retry), as the validation does; false for a type the build does
+	// not have, which the validation refuses the block for.
+	Refuses func(requestType, key string) bool
 }
 
 // RequestStruct is a request type of the build and the struct of its own
@@ -86,6 +91,8 @@ type requestLayout struct {
 	structs map[string]reflect.Type
 	// typeNames are RequestKeys.TypeNames.
 	typeNames map[string]string
+	// refuses is RequestKeys.Refuses, nil without RequestKeys.
+	refuses func(requestType, key string) bool
 }
 
 // ownedKey is a field of a decoded request block that holds a key of one
@@ -142,6 +149,7 @@ func newRequestLayout(keys *RequestKeys) *requestLayout {
 	}
 	if keys != nil {
 		layout.typeNames = keys.TypeNames
+		layout.refuses = keys.Refuses
 		for _, own := range keys.Structs {
 			layout.structs[own.Type] = own.Struct
 			for i := 0; i < own.Struct.NumField(); i++ {
@@ -162,9 +170,11 @@ func newRequestLayout(keys *RequestKeys) *requestLayout {
 // UnmarshalYAML reads a request block: its common part into RequestConfig's
 // fields, the keys of its type's own into the type's struct (Own), and the
 // names of the keys of other types that it sets into Foreign, for the
-// validation to refuse in its words. A key of no type is refused as the
-// decoder refuses an unknown key, and a value of the wrong kind as it
-// refuses one, whichever type takes the key.
+// validation to refuse in its words, and the order of its keys into
+// Order. A key of no type is refused as the decoder refuses an unknown key,
+// unless a key the validation refuses comes first in the file, and a value
+// of the wrong kind as the decoder refuses one, whichever type takes the
+// key.
 func (r *RequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	n = resolveAlias(n)
 	if n.Kind != yaml.MappingNode {
@@ -182,14 +192,24 @@ func (r *RequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	}
 	// Node.Decode does not refuse unknown keys the way the file's decoder
 	// does, so they are checked here, or a misspelt key would be ignored.
-	if err := collect(checkKnownKeys(n, layout.decoded, "model.RequestConfig")); err != nil {
-		return err
-	}
+	unknown := unknownKeys(n, layout.decoded, "model.RequestConfig")
 	decoded := reflect.New(layout.decoded)
 	if err := collect(n.Decode(decoded.Interface())); err != nil {
 		return err
 	}
 	layout.store(decoded.Elem(), r)
+	r.Order = keyOrder(n, decoded.Elem())
+	// A key the validation refuses that comes before the unknown ones in
+	// the file is the one the error names, so they are left to be refused
+	// once it is gone.
+	if first, ok := layout.firstRefused(n, decoded.Elem(), r.Type); ok {
+		unknown = slices.DeleteFunc(unknown, func(p keyProblem) bool { return !before(p.line, p.column, first) })
+	}
+	messages := make([]string, 0, len(unknown)+len(problems))
+	for _, problem := range unknown {
+		messages = append(messages, problem.message)
+	}
+	problems = append(messages, problems...)
 	if len(problems) == 0 {
 		return nil
 	}
@@ -199,6 +219,23 @@ func (r *RequestConfig) UnmarshalYAML(n *yaml.Node) error {
 		}
 	}
 	return &yaml.TypeError{Errors: problems}
+}
+
+// firstRefused is the first key in the file, of those a request block of
+// the type sets and of those of each mapping it holds directly, that the
+// validation refuses as one the type does not take (RequestKeys.Refuses);
+// false when there is none, or the build does not have the type.
+func (l *requestLayout) firstRefused(n *yaml.Node, decoded reflect.Value, requestType string) (keyAt, bool) {
+	if l.refuses == nil {
+		return keyAt{}, false
+	}
+	requestType = strings.ToLower(strings.TrimSpace(requestType))
+	for _, key := range blockKeys(n, decoded) {
+		if key.path != "type" && l.refuses(requestType, key.path) {
+			return key, true
+		}
+	}
+	return keyAt{}, false
 }
 
 // store puts what a request block was decoded into where it belongs.
@@ -292,8 +329,9 @@ func RequestView(r *RequestConfig) reflect.Value {
 // does not hold.
 func StoreRequestView(view reflect.Value, r *RequestConfig) {
 	layout := currentRequestLayout()
-	foreign := r.Foreign
+	foreign, order := r.Foreign, r.Order
 	layout.store(view, r)
+	r.Order = order
 	if len(foreign) == 0 {
 		return
 	}

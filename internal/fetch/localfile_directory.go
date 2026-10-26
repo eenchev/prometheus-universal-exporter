@@ -69,10 +69,16 @@ func readsDirectory(c *model.Collector) bool {
 
 func validateLocalDirectory(x *model.Collector) error {
 	if !readsDirectory(x) {
-		for key, set := range map[string]bool{"max_files": x.Request.MaxFiles != 0, "max_total_bytes": x.Request.MaxTotalBytes != 0} {
-			if set {
-				return fmt.Errorf("collector %q sets request.%s, which applies only to a collector reading a directory with request.files", x.Name, key)
-			}
+		var set []string
+		if x.Request.MaxFiles != 0 {
+			set = append(set, "max_files")
+		}
+		if x.Request.MaxTotalBytes != 0 {
+			set = append(set, "max_total_bytes")
+		}
+		// Of the two, the first in the file is named.
+		if set = model.InFileOrder(set, x.Request.Order); len(set) > 0 {
+			return fmt.Errorf("collector %q sets request.%s, which applies only to a collector reading a directory with request.files", x.Name, set[0])
 		}
 		return nil
 	}

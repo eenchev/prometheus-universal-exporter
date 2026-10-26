@@ -186,41 +186,53 @@ func TestAnSSHExecCollectorsOutputInPython(t *testing.T) {
 	}
 }
 
-// What a failed command wrote to stderr is the operator's: the log, a debug
-// probe's report and the status page show it, masked, and the probe's
-// caller is answered the exit status and where stderr is, since stderr may
-// quote a file of the host's.
+// What a failed command wrote to stderr is the operator's: the log shows
+// it, masked, and so do a debug probe's report and the status page with
+// --web.debug=full. The probe's caller is answered the exit status and that
+// stderr is in the log, since stderr may quote a file of the host's; below
+// --web.debug=full the status page, read by whoever may call /probe, shows
+// the same as the caller is answered.
 func TestAnSSHExecProbeIsNotAnsweredStderr(t *testing.T) {
-	dir := t.TempDir()
-	keyFile, key := sshtest.WriteClientKey(t, dir, "id_ed25519", "")
-	host := sshtest.Start(t, sshtest.Options{AuthorizedKeys: []ssh.PublicKey{key}, Exec: func(_ context.Context, _ string, _, stderr io.Writer) int {
-		_, _ = io.WriteString(stderr, "wc: invalid zero-length file name in 'root:x:0:0:root:/root:/bin/bash'\n")
-		return 1
-	}})
-	known := host.WriteKnownHosts(t, dir)
-	path := testutil.WriteIn(t, dir, "config.yaml", strings.NewReplacer("KEY", keyFile, "KNOWN", known).Replace(execCollectors))
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	logs := testutil.CaptureLogs(t)
-	exp := NewServer(config.NewManager(cfg, path, slog.Default()), "python3", slog.Default())
-	t.Cleanup(fetch.CloseConnections)
-	probe := "/probe?collector=unit&target=" + url.QueryEscape(host.Addr)
-	recorder := probeOnce(t, exp, probe, nil)
-	want := "collector unit ssh failed: the command on " + host.Addr + " exited with 1, which request.success_exit_codes [0 3] does not list; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page"
-	if recorder.Code != http.StatusBadGateway || strings.TrimSpace(recorder.Body.String()) != want {
-		t.Errorf("the probe was answered %d %q, want %q", recorder.Code, recorder.Body, want)
-	}
-	exp.SetDebug(DebugFull)
-	shown := map[string]string{
-		"the log":          logs.String(),
-		"the debug report": probeOnce(t, exp, probe+"&debug=true", nil).Body.String(),
-		"the status page":  probeOnce(t, exp, "/static-targets/status?format=json", nil).Body.String(),
-	}
-	for where, text := range shown {
-		if !strings.Contains(text, "root:x:0:0:root") {
-			t.Errorf("%s does not show stderr:\n%s", where, text)
-		}
+	for _, level := range []DebugLevel{DebugOff, DebugEdit, DebugFull} {
+		t.Run(level.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			keyFile, key := sshtest.WriteClientKey(t, dir, "id_ed25519", "")
+			host := sshtest.Start(t, sshtest.Options{AuthorizedKeys: []ssh.PublicKey{key}, Exec: func(_ context.Context, _ string, _, stderr io.Writer) int {
+				_, _ = io.WriteString(stderr, "wc: invalid zero-length file name in 'root:x:0:0:root:/root:/bin/bash'\n")
+				return 1
+			}})
+			known := host.WriteKnownHosts(t, dir)
+			path := testutil.WriteIn(t, dir, "config.yaml", strings.NewReplacer("KEY", keyFile, "KNOWN", known).Replace(execCollectors))
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logs := testutil.CaptureLogs(t)
+			exp := NewServer(config.NewManager(cfg, path, slog.Default()), "python3", slog.Default())
+			exp.SetDebug(level)
+			t.Cleanup(fetch.CloseConnections)
+			probe := "/probe?collector=unit&target=" + url.QueryEscape(host.Addr)
+			recorder := probeOnce(t, exp, probe, nil)
+			callerText := "the command on " + host.Addr + " exited with 1, which request.success_exit_codes [0 3] does not list; what it wrote to stderr is in the exporter's log"
+			if want := "collector unit ssh failed: " + callerText; recorder.Code != http.StatusBadGateway || strings.TrimSpace(recorder.Body.String()) != want {
+				t.Errorf("the probe was answered %d %q, want %q", recorder.Code, recorder.Body, want)
+			}
+			if !strings.Contains(logs.String(), "root:x:0:0:root") {
+				t.Errorf("the log does not show stderr:\n%s", logs)
+			}
+			status := probeOnce(t, exp, "/static-targets/status?format=json", nil).Body.String()
+			if level != DebugFull {
+				if strings.Contains(status, "root:x:0:0:root") || !strings.Contains(status, callerText) {
+					t.Errorf("the status page shows, at --web.debug=%s:\n%s\nwant the caller's text, not stderr", level, status)
+				}
+				return
+			}
+			if !strings.Contains(status, "root:x:0:0:root") {
+				t.Errorf("the status page does not show stderr at --web.debug=full:\n%s", status)
+			}
+			if report := probeOnce(t, exp, probe+"&debug=true", nil).Body.String(); !strings.Contains(report, "root:x:0:0:root") {
+				t.Errorf("the debug report does not show stderr:\n%s", report)
+			}
+		})
 	}
 }

@@ -462,7 +462,7 @@ func sshExecFailure(c *model.Collector, hostPort string, r *sshExecRun) error {
 	// probe's caller is not told what the host's files hold.
 	return model.WithOperatorDetail(
 		model.Errorf("the command on %s %s; its stderr began: %s", hostPort, how, model.Shown(RedactText(r.stderr), sshExecStderrShown)),
-		fmt.Sprintf("the command on %s %s; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page", hostPort, how))
+		fmt.Sprintf("the command on %s %s; what it wrote to stderr is in the exporter's log", hostPort, how))
 }
 
 // run runs line on a connection for key, in a session of its own, within

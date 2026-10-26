@@ -5093,7 +5093,7 @@ logged and the series a probe would have answered. One flag, `--web.debug`
 |---------------|----------------|
 | `off`, the default | Nothing: `/debug` is not there (`404`), and `debug=true` on `/probe` and `debug=<name>` on `/static-targets` are answered `403`. |
 | `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
-| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). |
+| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). The [status page](ENDPOINTS.md#status-page) shows what an error holds for the operator alone, such as an [`sshexec`](SSHEXEC.md) command's stderr, which below `full` it leaves out as a probe's caller is answered. |
 
 Any other value stops the exporter at startup, as any wrong flag does
 (exit status 2). Every run, whichever asked for it, is made by the same

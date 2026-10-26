@@ -2623,10 +2623,11 @@ Its keys:
   not list it) or the signal (`was killed by signal NAME`), and the start of
   stderr, at most 1 KiB of it, with what reads as a credential masked as in
   any text the target wrote, or that it wrote nothing there. The start of
-  stderr MUST be in the log, a debug probe's report and the status page
-  alone: the `502` a probe is answered MUST say the host and the status or
-  the signal, and that stderr is in the exporter's log, a debug probe's
-  report and the status page, and MUST NOT hold any of stderr.
+  stderr MUST be in the log, and with `--web.debug=full` in a debug probe's
+  report and on the status page, alone: the `502` a probe is answered MUST
+  say the host and the status or the signal, and that stderr is in the
+  exporter's log, and MUST NOT hold any of stderr; below `--web.debug=full`
+  the status page MUST show the error as the probe was answered it.
 - At the scrape's deadline, 30 seconds without one, or when it is
   cancelled, the scrape MUST fail at once, send the command `KILL` and
   close its session. When the session has not ended two seconds later, as
@@ -28040,13 +28041,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   `--help` or `../x` is answered 400 naming the parameter.
 - A failed command's error holds its stderr, and model.CallerText of it,
   wrapped, says the host and the exit status and that stderr is in the
-  exporter's log, a debug probe's report and the status page, without
-  stderr; an unmarked error is shown whole, and the marked error reads and
+  exporter's log, without stderr; an unmarked error is shown whole, and the marked error reads and
   is recognised as the one it marks.
 - Through the exporter, a probe of a command that exits with 1 and writes
   a line of /etc/passwd to stderr is answered 502 with the status and where
-  stderr is, and no stderr; the log, a debug probe's report and the status
-  page show the line.
+  stderr is, and no stderr, at `--web.debug` off, edit and full; the log
+  shows the line at each, the status page shows the caller's text and not
+  the line at off and edit, and the status page and a debug probe's report
+  show the line at full.
 - A command the stand-in server will not end at the deadline — its signals
   refused, its session's close not sent, as OpenSSH leaves a forced
   command — fails its scrape at the deadline and is sent KILL; a scrape
@@ -28063,6 +28065,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   type whose registration takes the key.
 - A tcp collector whose send begins with a placeholder sends `-1`,
   `../..` and `a/../b` unchanged: sshexec's argument rules are not send's.
+
+## 34.222 Operator-only detail on the status page
+
+- `TestAnSSHExecProbeIsNotAnsweredStderr`, at `--web.debug` off and edit:
+  the status page's recent probes show the failure of a command that wrote
+  a line of /etc/passwd to stderr as the probe's caller was answered it,
+  saying stderr is in the exporter's log, and not the line; at full the
+  page and a debug probe's report show the line. The log shows it at every
+  level.
+- `TestTheRecentProbesWithholdAURLsUserinfo`: a URL's userinfo and a
+  credential in its query are withheld from an error shown on the status
+  page at `--web.debug` off as at full, the caller's text being taken
+  without losing the URLs the error quotes.
 
 # 35. Documentation requirements
 
@@ -30268,7 +30283,10 @@ then one of the OTLP export. Of the static targets:
   `skipped by backoff`; it MUST NOT count as a consecutive failed scrape, and
   MUST leave the error of the last failed scrape, and when it began, as they
   were. The error MUST be the text the
-  log has, with every URL's credentials withheld, masked again for what
+  log has, except that below `--web.debug=full` what an error holds for the
+  operator alone (as an `sshexec` command's stderr) MUST be shown as a
+  probe's caller is answered it, the page being read by whoever may call
+  `/probe`, with every URL's credentials withheld, masked again for what
   reads as a credential, a URL's userinfo (`scheme://user:password@`)
   anywhere in it among that, and cut to the bound of a failure's text
   (§ 25); nothing else of a target's answer MAY be shown. A scrape that

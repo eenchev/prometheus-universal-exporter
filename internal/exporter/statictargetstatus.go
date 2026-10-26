@@ -31,7 +31,9 @@ import (
 // once more for anything reading as a credential, a URL's userinfo among it
 // (fetch.RedactText), and cut to model.MaxFailureBytes. A probe's error is
 // shown by the same rule (shownStatusError), and so is a panic's: by a fixed
-// text, the panic itself being only in the log. What is kept of each
+// text, the panic itself being only in the log. What an error holds for the
+// operator alone is shown only with --web.debug=full; below it, as the
+// probe's caller is answered it. What is kept of each
 // static target is one record, replaced by its next scrape, so the page
 // holds no more than the targets are many; what is kept of the probes is
 // bounded apart (recentprobes.go). The path is the static targets path's,
@@ -113,20 +115,40 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 		// scrapes that failed, which the backoff counts apart.
 	default:
 		st.failures++
-		st.errorText = shownStatusError(status.err)
+		st.errorText = s.shownStatusError(status.err)
 		st.failedAt = status.started
 	}
 	status.err = nil
 	st.last = status
 }
 
-// shownStatusError is err as the status page shows it.
-func shownStatusError(err error) string {
+// shownStatusError is err as the status page shows it. The page is read by
+// whoever may call /probe, behind the same Basic Auth, so what an error
+// holds for the operator alone (model.WithOperatorDetail) is shown as the
+// probe's caller is answered it (model.CallerText) unless --web.debug is
+// full, the level that already shows those callers what a target answers.
+// The caller's text is taken before the error is bounded, which keeps only
+// its text and with it would lose the mark.
+func (s *Server) shownStatusError(err error) string {
 	if err == nil {
 		return "the scrape failed"
 	}
+	if s.debug != DebugFull {
+		err = &callerShownError{text: model.CallerText(err), err: err}
+	}
 	return shownFailureText(boundedTripFailure(fetch.RedactURLErrors(err)).Error())
 }
+
+// callerShownError is err with the text a probe's caller is answered: what
+// it wraps stays readable, so that its URLs are still redacted.
+type callerShownError struct {
+	text string
+	err  error
+}
+
+func (e *callerShownError) Error() string { return e.text }
+
+func (e *callerShownError) Unwrap() error { return e.err }
 
 // The results a row shows.
 const (

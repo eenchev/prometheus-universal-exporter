@@ -79,6 +79,10 @@ collector, target and parameters:
   shown as the static targets' errors are: the log's text, with every URL's
   credentials withheld, its userinfo too where the text only quotes the URL,
   anything else that reads as a credential masked, and cut to 2000 bytes. A
+  failure whose text holds what is for the operator alone, such as what an
+  [`sshexec`](SSHEXEC.md) command wrote to stderr, is shown as the probe's
+  caller was answered it, without that part, unless `--web.debug` is `full`:
+  the page is read by whoever may call `/probe`. A
   probe that panicked shows `the scrape panicked; the exporter's log has the
   panic`, the text it was answered: the panic's own text is only in the log.
 

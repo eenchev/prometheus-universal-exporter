@@ -271,7 +271,7 @@ func TestAnSSHExecFailuresStderrIsNotForTheCaller(t *testing.T) {
 		t.Fatalf("err=%v, want stderr in the error", err)
 	}
 	caller := model.CallerText(fmt.Errorf("wrapped: %w", err))
-	want := "wrapped: the command on " + f.server.Addr + " exited with 1; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page"
+	want := "wrapped: the command on " + f.server.Addr + " exited with 1; what it wrote to stderr is in the exporter's log"
 	if caller != want {
 		t.Errorf("the caller is answered %q, want %q", caller, want)
 	}

@@ -358,3 +358,24 @@ func TestSpecTestSectionsAreNumberedInOrder(t *testing.T) {
 		t.Fatalf("found %d sections of § 34; the spec has moved", count)
 	}
 }
+
+// The schema's descriptions of the account and credential keys name every
+// request type that takes them: sshexec arrived after them and was left out
+// of three, so an editor read that only sshfile and sql had an account.
+func TestCredentialKeyDescriptionsNameTheTypesThatTakeThem(t *testing.T) {
+	keys := registeredRequestTypeKeys(t)
+	source := read(t, "internal/config/configschema.go")
+	fields := func(k requestTypeKeys) []string { return k.fields }
+	for _, key := range []string{"username", "private_key_file", "password_file", "passphrase_file", "known_hosts_file"} {
+		m := regexp.MustCompile(`"collectors\[\]\.request\.` + key + `":\s*\{[^\n]*?"description": "((?:[^"\\]|\\.)*)"`).FindStringSubmatch(source)
+		if m == nil {
+			t.Errorf("the description of request.%s is not found in internal/config/configschema.go; it has moved", key)
+			continue
+		}
+		for _, typ := range typesTaking(keys, key, fields) {
+			if !regexp.MustCompile(`\b` + typ + `\b`).MatchString(m[1]) {
+				t.Errorf("the schema's description of request.%s does not name %s, which takes it: %q", key, typ, m[1])
+			}
+		}
+	}
+}

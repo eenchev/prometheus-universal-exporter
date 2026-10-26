@@ -80,9 +80,21 @@ type Options struct {
 	// and stderr and returns its exit status, which the server sends
 	// before it closes the session; a negative status -n says the command
 	// was ended by signal n, 9 or 15, which is sent as KILL or TERM. ctx
-	// ends when the client sends a signal or closes the session, as a
-	// remote command is ended then. Unset, an exec request is refused.
+	// ends when the client sends a signal, unless RefuseSignals, or closes
+	// the session, as a remote command is ended then. Unset, and
+	// ExecInput too, an exec request is refused.
 	Exec func(ctx context.Context, command string, stdout, stderr io.Writer) int
+	// ExecInput, when set, runs each command in Exec's place, reading
+	// what the client sends to the command's stdin from stdin.
+	ExecInput func(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) int
+	// RefuseSignals makes it answer a signal as OpenSSH answers one to a
+	// forced command: refused, and not passed on, so the command runs on.
+	// The signal is still recorded.
+	RefuseSignals bool
+	// DropAtExec makes it take an exec request, record and count it, and
+	// close the connection without answering it, as a host lost just after
+	// it took the command does.
+	DropAtExec bool
 }
 
 // ExecRecord is an exec request the server took: the command line, and the
@@ -107,16 +119,18 @@ type Server struct {
 	// entries, and listed the entries of those answers.
 	readDirs, listed atomic.Int64
 	sftp             func(n int, channel io.ReadWriter) bool
-	exec             func(ctx context.Context, command string, stdout, stderr io.Writer) int
+	exec             func(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) int
 	// execs are the exec requests taken, and ended counts the commands
 	// whose ctx ended before they returned.
-	execs       []*ExecRecord
-	ended       atomic.Int64
-	maxSessions int
-	closeDelay  time.Duration
-	gate        *gate
-	mu          sync.Mutex
-	conns       []net.Conn
+	execs         []*ExecRecord
+	ended         atomic.Int64
+	refuseSignals bool
+	dropAtExec    bool
+	maxSessions   int
+	closeDelay    time.Duration
+	gate          *gate
+	mu            sync.Mutex
+	conns         []net.Conn
 }
 
 // Start starts a server that serves until the test ends.
@@ -167,7 +181,13 @@ func Start(t testing.TB, options Options) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Addr: listener.Addr().String(), HostKeys: options.HostKeys, listener: listener, gate: newGate(), sftp: options.SFTP, exec: options.Exec, maxSessions: options.MaxSessions, closeDelay: options.SessionCloseDelay}
+	s := &Server{Addr: listener.Addr().String(), HostKeys: options.HostKeys, listener: listener, gate: newGate(), sftp: options.SFTP, exec: options.ExecInput, maxSessions: options.MaxSessions, closeDelay: options.SessionCloseDelay, refuseSignals: options.RefuseSignals, dropAtExec: options.DropAtExec}
+	if s.exec == nil && options.Exec != nil {
+		run := options.Exec
+		s.exec = func(ctx context.Context, command string, _ io.Reader, stdout, stderr io.Writer) int {
+			return run(ctx, command, stdout, stderr)
+		}
+	}
 	go s.serve(config)
 	t.Cleanup(s.Close)
 	return s
@@ -309,11 +329,15 @@ func (s *Server) handle(conn net.Conn, config *ssh.ServerConfig) {
 						_ = r.Reply(false, nil)
 						continue
 					}
-					_ = r.Reply(true, nil)
 					record = &ExecRecord{Command: payload.Command}
 					s.mu.Lock()
 					s.execs = append(s.execs, record)
 					s.mu.Unlock()
+					if s.dropAtExec {
+						_ = conn.Close()
+						continue
+					}
+					_ = r.Reply(true, nil)
 					go s.runExec(ctx, payload.Command, channel)
 				case r.Type == "signal" && record != nil:
 					var payload struct{ Signal string }
@@ -321,6 +345,10 @@ func (s *Server) handle(conn net.Conn, config *ssh.ServerConfig) {
 					s.mu.Lock()
 					record.Signals = append(record.Signals, payload.Signal)
 					s.mu.Unlock()
+					if s.refuseSignals {
+						_ = r.Reply(false, nil)
+						continue
+					}
 					cancel()
 					if r.WantReply {
 						_ = r.Reply(true, nil)
@@ -341,7 +369,7 @@ func (s *Server) handle(conn net.Conn, config *ssh.ServerConfig) {
 // runExec runs a command with Options.Exec and ends its session as sshd
 // does: the end of its output, its exit status, and the close.
 func (s *Server) runExec(ctx context.Context, command string, channel ssh.Channel) {
-	status := s.exec(ctx, command, channel, channel.Stderr())
+	status := s.exec(ctx, command, channel, channel, channel.Stderr())
 	if ctx.Err() != nil {
 		s.ended.Add(1)
 	}

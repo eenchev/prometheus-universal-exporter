@@ -241,6 +241,11 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 		if err != nil {
 			return "", err
 		}
+		if rule := templateLeadRules[f.kind]; rule != nil && b.Len() == 0 && p.start == previous {
+			if err := rule(f.where, p.Name, written); err != nil {
+				return "", err
+			}
+		}
 		b.WriteString(f.text[previous:p.start])
 		b.WriteString(written)
 		previous = p.end
@@ -254,6 +259,12 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 // carries none of its code: each writes the value of the placeholder name
 // into its place, the field where, or says why it cannot be.
 var templateEscapers = map[string]func(where, name, value string) (string, error){}
+
+// templateLeadRules are the rules a request type registers, by kind, for a
+// value that begins the field it is written into, with nothing of the
+// field before it: an sshexec argument that begins with a - is an option to
+// its program, whatever the placeholder was meant to name.
+var templateLeadRules = map[string]func(where, name, written string) error{}
 
 // write encodes a value for its place.
 func (f templateField) write(p pathPlaceholder, value string) (string, error) {

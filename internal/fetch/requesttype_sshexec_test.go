@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,11 +38,19 @@ const execPassword = "exec-pass"
 
 func newExecFixture(t *testing.T, exec func(ctx context.Context, command string, stdout, stderr io.Writer) int, hostKeys ...ssh.Signer) *execFixture {
 	t.Helper()
+	return newExecFixtureWith(t, sshtest.Options{HostKeys: hostKeys, Exec: exec})
+}
+
+// newExecFixtureWith is newExecFixture with a server of options, its
+// password and authorized key set here.
+func newExecFixtureWith(t *testing.T, options sshtest.Options) *execFixture {
+	t.Helper()
 	f := &execFixture{dir: t.TempDir()}
 	var key ssh.PublicKey
 	f.keyFile, key = sshtest.WriteClientKey(t, f.dir, "id_ed25519", "")
 	f.passwordFile = sshtest.WriteFile(t, f.dir, "password", execPassword+"\n")
-	f.server = sshtest.Start(t, sshtest.Options{Password: execPassword, AuthorizedKeys: []ssh.PublicKey{key}, HostKeys: hostKeys, Exec: exec})
+	options.Password, options.AuthorizedKeys = execPassword, []ssh.PublicKey{key}
+	f.server = sshtest.Start(t, options)
 	f.knownHosts = f.server.WriteKnownHosts(t, f.dir)
 	t.Cleanup(sshExecConns.closeAll)
 	return f
@@ -196,6 +205,78 @@ func TestAnSSHExecPlaceholderValueIsHeldToOneWord(t *testing.T) {
 	}
 }
 
+// A placeholder's value may not begin its argument with a -, which the
+// program would read as an option, as wc reads --files0-from=/etc/passwd,
+// nor have .. as a path component; a - after what the configuration wrote
+// is part of the value, and a .. within a name is no component. Each
+// refusal names the parameter and why, and nothing is sent.
+func TestAnSSHExecPlaceholderValueIsNoOptionAndNoClimb(t *testing.T) {
+	f := newExecFixture(t, scripted("1\n", "", 0))
+	c := f.collector(t, "c", []string{"wc", "-l", "{{param_file}}", "--unit={{param_unit:x}}", "/var/log/{{param_name:app}}", "{{param_a:}}{{param_b:x}}"})
+	refused := map[string]struct{ param, value, want string }{
+		"option":            {"param_file", "--files0-from=/etc/passwd", "request.command[2]: the value of param_file begins with -, and begins the argument"},
+		"dash":              {"param_file", "-", "the value of param_file begins with -"},
+		"after empty":       {"param_b", "-x", "request.command[5]: the value of param_b begins with -"},
+		"dot dot":           {"param_name", "..", "request.command[4]: the value of param_name has .. as a path component"},
+		"leading dot dot":   {"param_name", "../../etc/shadow", "has .. as a path component"},
+		"trailing dot dot":  {"param_name", "app/..", "has .. as a path component"},
+		"inner dot dot":     {"param_name", "app/../../etc", "has .. as a path component"},
+		"dot dot in a file": {"param_file", "../x", "the value of param_file has .. as a path component"},
+	}
+	for name, tc := range refused {
+		_, err := f.fetch(c, RequestOverrides{Params: map[string]string{"param_file": "/etc/hostname", tc.param: tc.value}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
+		}
+		if _, err := CheckRequestParams(c, RequestOverrides{Params: map[string]string{"param_file": "/etc/hostname", tc.param: tc.value}}); err == nil {
+			t.Errorf("%s: the probe's parameters pass the check a probe is answered 400 by", name)
+		}
+	}
+	if f.server.Accepted() != 0 {
+		t.Errorf("the server took %d connections for refused values", f.server.Accepted())
+	}
+	for name, params := range map[string]map[string]string{
+		"option after a prefix": {"param_file": "/etc/hostname", "param_unit": "-x"},
+		"dots in names":         {"param_file": "a..b", "param_name": "..app/x.../...", "param_b": "x-"},
+		"a dash later":          {"param_file": "a-b", "param_a": "x", "param_b": "-y"},
+	} {
+		if _, err := f.fetch(c, RequestOverrides{Params: params}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		word, want string
+	}{
+		"option default":  {"{{param_p:-x}}", "request.command[1]: the default of param_p begins with -"},
+		"dot dot default": {"/srv/{{param_p:../etc}}", "request.command[1]: the default of param_p has .. as a path component"},
+	} {
+		x := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHExec, Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh", Own: SSHExecConfig{Command: []string{"df", tc.word}}}}
+		if err := ValidateRequest(&x); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
+		}
+	}
+	x := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHExec, Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh", Own: SSHExecConfig{Command: []string{"df", "--since={{param_p:-1d}}"}}}}
+	if err := ValidateRequest(&x); err != nil {
+		t.Errorf("a default after a prefix: %v", err)
+	}
+}
+
+// A failed command's stderr is the operator's: the error says it, and what
+// a probe's caller is answered (model.CallerText) says the status and
+// where stderr is, not what it holds.
+func TestAnSSHExecFailuresStderrIsNotForTheCaller(t *testing.T) {
+	f := newExecFixture(t, scripted("", "wc: cannot open 'root:x:0:0:root:/root:/bin/bash'\n", 1))
+	_, err := f.fetch(f.collector(t, "c", []string{"wc", "-l", "/etc/hostname"}), RequestOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "root:x:0:0") {
+		t.Fatalf("err=%v, want stderr in the error", err)
+	}
+	caller := model.CallerText(fmt.Errorf("wrapped: %w", err))
+	want := "wrapped: the command on " + f.server.Addr + " exited with 1; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page"
+	if caller != want {
+		t.Errorf("the caller is answered %q, want %q", caller, want)
+	}
+}
+
 // stdout is held to the response limit as it comes: the scrape fails as
 // over the limit, and the command is ended rather than read to its end.
 func TestAnSSHExecOutputIsHeldToTheResponseLimit(t *testing.T) {
@@ -242,6 +323,100 @@ func TestAnSSHExecCommandIsKilledAtTheDeadline(t *testing.T) {
 	testutil.WaitFor(t, "the command ended", func() bool { return f.server.Ended() == 1 })
 	if execs := f.server.Execs(); len(execs) != 1 || len(execs[0].Signals) != 1 || execs[0].Signals[0] != "KILL" {
 		t.Errorf("the server saw %+v, want one command sent KILL", execs)
+	}
+}
+
+// A command the host will not end at the deadline, as OpenSSH will not
+// end a forced command — the signal refused, the close unanswered while
+// the command lives — fails its scrape at the deadline and retires its
+// connection rather than closing it: a scrape whose command runs on it
+// meanwhile completes, a later scrape makes a new connection, and the
+// retired one is closed once that command has ended.
+func TestAnSSHExecStalledSessionRetiresItsConnection(t *testing.T) {
+	stuck, slow := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	f := newExecFixtureWith(t, sshtest.Options{RefuseSignals: true, Exec: func(_ context.Context, command string, stdout, _ io.Writer) int {
+		switch command {
+		case "'sleep' 'forever'":
+			<-stuck
+		case "'slow'":
+			<-slow
+		}
+		_, _ = io.WriteString(stdout, "done\n")
+		return 0
+	}})
+	sshExecCloseUnanswered.Store(true)
+	t.Cleanup(func() { sshExecCloseUnanswered.Store(false) })
+	saved := sshAbandonGrace
+	sshAbandonGrace = 50 * time.Millisecond
+	t.Cleanup(func() { sshAbandonGrace = saved })
+
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := f.fetch(f.collector(t, "slow", []string{"slow"}), RequestOverrides{})
+		slowDone <- err
+	}()
+	testutil.WaitFor(t, "the slow command started", func() bool { return len(f.server.Execs()) == 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := FetchCollector(ctx, f.server.Addr, f.collector(t, "stuck", []string{"sleep", "forever"}), RequestOverrides{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v, want the scrape to fail at its deadline", err)
+	}
+	if f.server.Accepted() != 1 {
+		t.Fatalf("the server took %d connections, want the two scrapes on one", f.server.Accepted())
+	}
+	testutil.WaitFor(t, "the stuck command sent KILL", func() bool {
+		execs := f.server.Execs()
+		return len(execs) == 2 && slices.Equal(execs[1].Signals, []string{"KILL"})
+	})
+	time.Sleep(4 * sshAbandonGrace)
+	if resp, err := f.fetch(f.collector(t, "later", []string{"uptime"}), RequestOverrides{}); err != nil || string(resp.Body) != "done\n" {
+		t.Fatalf("a later scrape: %v", err)
+	}
+	if f.server.Accepted() != 2 || f.server.Open() != 2 {
+		t.Errorf("the server took %d connections, %d open, want a new one beside the retired one", f.server.Accepted(), f.server.Open())
+	}
+	close(slow)
+	if err := <-slowDone; err != nil {
+		t.Errorf("the scrape whose command ran on the retired connection: %v", err)
+	}
+	testutil.WaitFor(t, "the retired connection closed", func() bool { return f.server.Open() == 1 })
+}
+
+// A connection lost once the exec request was written is not retried: the
+// host may have taken the command, which must not run twice. The scrape
+// fails, and the host saw the command once.
+func TestAnSSHExecCommandIsNotSentTwice(t *testing.T) {
+	f := newExecFixtureWith(t, sshtest.Options{DropAtExec: true, Exec: scripted("x\n", "", 0)})
+	_, err := f.fetch(f.collector(t, "c", []string{"/usr/local/bin/rotate"}), RequestOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "the connection was lost once the command was sent, so it is not sent again") {
+		t.Errorf("err=%v, want the scrape to fail", err)
+	}
+	if execs := f.server.Execs(); len(execs) != 1 {
+		t.Errorf("the host took the command %d times, want once", len(execs))
+	}
+}
+
+// A command reads nothing: the client sends the end of stdin at once, so a
+// command that reads it, as cat does, sees its end and does not wait.
+func TestAnSSHExecCommandReadsAnEmptyStdin(t *testing.T) {
+	f := newExecFixtureWith(t, sshtest.Options{ExecInput: func(_ context.Context, _ string, stdin io.Reader, stdout, _ io.Writer) int {
+		if _, err := io.Copy(stdout, stdin); err != nil {
+			return 1
+		}
+		return 0
+	}})
+	start := time.Now()
+	resp, err := f.fetch(f.collector(t, "c", []string{"cat"}), RequestOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Body) != 0 {
+		t.Fatalf("body %q, want an empty output", resp.Body)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("cat took %v, want it to end at once", elapsed)
 	}
 }
 

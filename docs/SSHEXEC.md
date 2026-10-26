@@ -172,6 +172,31 @@ there for what comes after it: the program, which may read a value as an
 option or a list, and a [forced command](#security)'s wrapper, which may
 split the command line again on blanks.
 
+Two values of those characters are refused besides, a probe's with `400`
+naming the argument, the parameter and why, a default when the
+configuration loads:
+
+- **A value that begins its argument with `-`**, which the program would
+  read as an option, whatever the placeholder was meant to name: with
+  `command: [wc, -l, "{{param_file}}"]`, `param_file=--files0-from=/etc/passwd`
+  would have `wc` read the names of the files to count from `/etc/passwd`,
+  and complain of each line of it. A `-` after what the configuration
+  wrote is part of the value: `--unit={{param_unit}}` takes `-x`.
+- **A value with `..` as a path component** — `..` itself, or one that
+  begins with `../`, ends with `/..` or holds `/../` — which would name a
+  file outside the directory the argument is written under, as
+  `/var/log/app/{{param_file}}` is. A `..` inside a name, `a..b`, is no
+  component.
+
+```text
+request.command[2]: the value of param_file begins with -, and begins the argument, which the program would read as an option; a value that begins an argument of request.command may not begin with -
+```
+
+Where the program takes options, write `--` before the arguments a
+placeholder fills, as the end of its options: `[wc, -l, --,
+"{{param_file}}"]`. The refusal stays, and a program that reads `--` so is
+safe from an option however its arguments are written.
+
 No environment variable is sent. OpenSSH accepts only the variables its
 `AcceptEnv` names, none by default, so a request to set one would fail on
 some hosts and be ignored on others; a script that needs a variable sets it
@@ -196,6 +221,16 @@ exporter did not write:
 
 ```text
 the command on db1.example.com:22 exited with 2; its stderr began: grep: /var/log/app/current.log: No such file or directory
+```
+
+That text is the operator's: the exporter's log, a [debug
+probe](#errors-and-self-metrics)'s report and the [status
+page](STATIC-TARGETS.md) show it. The caller of `/probe` is answered the
+status alone, and where stderr is, since stderr may quote what a file on
+the host holds:
+
+```text
+collector disk ssh failed: the command on db1.example.com:22 exited with 2; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page
 ```
 
 A command ended by a signal says which: `the command on db1.example.com:22
@@ -287,7 +322,12 @@ need:
 
 - **A dedicated account**, used by the exporter alone, that owns nothing
   and may read only what the commands read: not `root`, not a person's
-  account, not one in `sudo` or `wheel`.
+  account, not one in `sudo` or `wheel`. Give it a real login shell,
+  `/bin/sh`: sshd runs every command with the account's shell, `$SHELL -c`,
+  a forced command too, so an account whose shell is `/usr/sbin/nologin` or
+  `/bin/false` runs nothing, and every scrape fails with `This account is
+  currently not available`. What keeps the account from a shell of its own
+  is the key's `restrict` and forced command below, not its shell.
 - **A key of its own**, made for the exporter, with no passphrase or with
   one in `passphrase_file`, and restricted in the account's
   `~/.ssh/authorized_keys` with `restrict`, which turns off forwarding, a
@@ -339,6 +379,17 @@ need:
   Nothing a probe or a static target sends can add a command, a pipe or a
   redirection. Who may change the configuration may run any command the
   account may; guard it as you guard the account.
+- **No option and no `..` from a probe.** A value that would begin its
+  argument with `-`, an option to the program, or that has `..` as a path
+  component is refused with `400` ([The command](#the-command)). Write
+  `--` before the arguments a placeholder fills in a command that takes
+  options, `[wc, -l, --, "{{param_file}}"]`, so that its program reads no
+  option there whatever the rules let through.
+- **stderr stays with the operator.** A failed command's stderr is in the
+  exporter's log, a debug probe's report and the status page, not in what
+  `/probe` answers ([Exit status](#exit-status)): a command that complains
+  of a file quotes it, and the caller of a probe may be anyone the probe
+  endpoint answers.
 - **Opt-in.** The type is in no build that does not ask for it, so an
   exporter built without it cannot be configured to run commands anywhere.
 
@@ -384,11 +435,29 @@ that writes much there is not held up.
 
 Making the connection, opening the session and running the command end at
 the probe's deadline, its `timeout` or the scrape's, 30 seconds without
-one. At the deadline the scrape returns at once, and the command is sent
-`KILL` and its session closed: OpenSSH's sshd ends the command when its
-session closes, a signal or not. A host that does not answer the close
-within two seconds has its connection dropped, which ends every session on
-it, and the next scrapes connect again.
+one. At the deadline the scrape fails at once, and the command is sent
+`KILL` and its session closed. For a command the client asked for,
+OpenSSH 8.1 and later passes the signal on, and the command ends.
+
+**A forced command is not ended**, nor any command on an sshd older than
+8.1. OpenSSH refuses a signal to a session whose command is forced
+(`command="..."` in `authorized_keys`, or `ForceCommand`), and keeps a
+session open, its close unanswered, for as long as its command lives. The exporter gives such a session two seconds,
+and then retires its connection: no scrape opens a session on it any
+more, the next scrapes connect again, and the scrapes whose commands run
+on it meanwhile finish, each by its own deadline and two seconds; the
+connection is closed when the last of them has ended. The exporter logs a
+warning once for each connection it retires. The command itself runs on,
+on the host, until it ends, so bound it there: run it under `timeout`, in
+the forced command's wrapper, `exec timeout 20 df -P -k /`, or in the
+collector's command, `[timeout, 20, df, -P, -k, /]`, with a bound below
+the probe's deadline.
+
+A connection lost after the command was sent is not tried again: the host
+may have run the command, which then would run twice. The scrape fails
+saying so, and the next scrape connects again. Only opening the session,
+before the command is sent, is tried again on a new connection when the
+kept one is found lost.
 
 Each scrape opens one session on the kept connection, so scrapes that
 overlap, of one collector or of several sharing a connection, each hold a
@@ -437,8 +506,10 @@ a scrape is labelled `url="ssh://host:port"` and `http_method="EXEC"`.
   pipe, a redirection, a variable or `&&` is a script's to do on the host.
 - **No environment.** `env` is not a key: servers refuse to set most
   variables (OpenSSH's `AcceptEnv`), and a script sets what it needs.
-- **No terminal, no input.** The command runs without a terminal and reads
-  nothing; a command that waits for input waits until the deadline.
+- **No terminal, no input.** The command runs without a terminal, and its
+  stdin is at its end at once: a command that reads it, as `cat` with no
+  file does, reads nothing and goes on, and one that asks a question reads
+  no answer.
 - **A POSIX shell.** The quoting is a POSIX shell's; an account whose shell
   reads quotes otherwise, `fish` or `csh`, runs the command differently.
 - **Keyboard-interactive is answered with the password alone**, as for
@@ -453,8 +524,13 @@ a scrape is labelled `url="ssh://host:port"` and `http_method="EXEC"`.
 | `the command on ... exited with 126` | The program is not executable by the account, or a forced command's wrapper refused the line: compare the debug probe's `Ssh-Command` with the wrapper's list. |
 | `the command on ... exited with 1, and wrote nothing to stderr` | A command whose 1 is an answer, as `grep`'s is: list it in `success_exit_codes`. |
 | `request.command[N]: the value of param_<name> holds ...` | The probe's parameter: a value may hold only a name's characters. |
+| `request.command[N]: the value of param_<name> begins with -, ...` | A value may not begin its argument with `-`, which the program would read as an option. |
+| `request.command[N]: the value of param_<name> has .. as a path component ...` | A value may not climb out of the directory its argument names. |
+| `the command on ... exited with 1; what it wrote to stderr is in the exporter's log, ...` | The probe's answer leaves stderr out: read the exporter's log, a debug probe's report or the status page. |
+| `the command on ... exited with 1; its stderr began: This account is currently not available.` | The account's shell is `nologin` or `false`; sshd runs every command with it. Give the account `/bin/sh` (see [Security](#security)). |
+| `the connection was lost once the command was sent, so it is not sent again; it may have run` | The connection broke between the command and its answer; the next scrape connects again. A command that must not run twice cannot be told apart from one that did not run. |
 | `request.command[0] "..." is a relative path` | Write the program as an absolute path or a bare name. |
 | `... the command's output is larger than the response limit ...` | Raise `max_response_bytes`, or have the command write less. |
-| `running the command on ...: context deadline exceeded` | The command took longer than the probe's deadline: raise its `timeout`, or make the command faster. |
+| `running the command on ...: context deadline exceeded` | The command took longer than the probe's deadline: raise its `timeout`, or make the command faster. Under a forced command, bound it on the host with `timeout` (see [Limits](#limits)). |
 | `opening a session: ...` | The host refused a session on the connection: its `MaxSessions`, or an account that may not run commands. |
 | `... is not in request.known_hosts_file`, `refused user ...` | The host key or the authentication, as for [`sshfile`](SSHFILE.md#troubleshooting). |

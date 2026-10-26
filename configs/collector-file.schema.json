@@ -1610,7 +1610,7 @@
                 ]
               },
               "command": {
-                "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md.",
+                "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md.",
                 "items": {
                   "type": [
                     "string",
@@ -2725,7 +2725,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -2749,7 +2749,7 @@
                 "type": "boolean"
               },
               "private_key_file": {
-                "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
+                "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -3148,7 +3148,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"

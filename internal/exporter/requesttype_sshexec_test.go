@@ -5,6 +5,7 @@ package exporter
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -108,6 +109,8 @@ func TestAnSSHExecProbesRefusals(t *testing.T) {
 		"param_unit=" + url.QueryEscape("x;reboot") + "&target=" + url.QueryEscape(host.Addr): http.StatusBadRequest,
 		"param_unit=" + url.QueryEscape("x y") + "&target=" + url.QueryEscape(host.Addr):      http.StatusBadRequest,
 		"param_unit=" + url.QueryEscape(`x"y'`) + "&target=" + url.QueryEscape(host.Addr):     http.StatusBadRequest,
+		"param_unit=" + url.QueryEscape("--help") + "&target=" + url.QueryEscape(host.Addr):   http.StatusBadRequest,
+		"param_unit=" + url.QueryEscape("../x") + "&target=" + url.QueryEscape(host.Addr):     http.StatusBadRequest,
 		"target=169.254.169.254":                          http.StatusForbidden,
 		"target=" + url.QueryEscape("ssh://u@"+host.Addr): http.StatusBadRequest,
 	} {
@@ -115,7 +118,7 @@ func TestAnSSHExecProbesRefusals(t *testing.T) {
 		if recorder.Code != want {
 			t.Errorf("%s: %d %s, want %d", query, recorder.Code, recorder.Body, want)
 		}
-		if want == http.StatusBadRequest && strings.HasPrefix(query, "param_unit") && !strings.Contains(recorder.Body.String(), "request.command[2]: the value of param_unit holds") {
+		if want == http.StatusBadRequest && strings.HasPrefix(query, "param_unit") && !strings.Contains(recorder.Body.String(), "request.command[2]: the value of param_unit ") {
 			t.Errorf("%s: %s, want the value refused", query, recorder.Body)
 		}
 	}
@@ -180,5 +183,44 @@ func TestAnSSHExecCollectorsOutputInPython(t *testing.T) {
 	want := []string{`fs_used_ratio{mount="/",site="rack1"} 0.42`}
 	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("%d %v, want %v\n%s", recorder.Code, got, want, recorder.Body)
+	}
+}
+
+// What a failed command wrote to stderr is the operator's: the log, a debug
+// probe's report and the status page show it, masked, and the probe's
+// caller is answered the exit status and where stderr is, since stderr may
+// quote a file of the host's.
+func TestAnSSHExecProbeIsNotAnsweredStderr(t *testing.T) {
+	dir := t.TempDir()
+	keyFile, key := sshtest.WriteClientKey(t, dir, "id_ed25519", "")
+	host := sshtest.Start(t, sshtest.Options{AuthorizedKeys: []ssh.PublicKey{key}, Exec: func(_ context.Context, _ string, _, stderr io.Writer) int {
+		_, _ = io.WriteString(stderr, "wc: invalid zero-length file name in 'root:x:0:0:root:/root:/bin/bash'\n")
+		return 1
+	}})
+	known := host.WriteKnownHosts(t, dir)
+	path := testutil.WriteIn(t, dir, "config.yaml", strings.NewReplacer("KEY", keyFile, "KNOWN", known).Replace(execCollectors))
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := testutil.CaptureLogs(t)
+	exp := NewServer(config.NewManager(cfg, path, slog.Default()), "python3", slog.Default())
+	t.Cleanup(fetch.CloseConnections)
+	probe := "/probe?collector=unit&target=" + url.QueryEscape(host.Addr)
+	recorder := probeOnce(t, exp, probe, nil)
+	want := "collector unit ssh failed: the command on " + host.Addr + " exited with 1, which request.success_exit_codes [0 3] does not list; what it wrote to stderr is in the exporter's log, a debug probe's report and the status page"
+	if recorder.Code != http.StatusBadGateway || strings.TrimSpace(recorder.Body.String()) != want {
+		t.Errorf("the probe was answered %d %q, want %q", recorder.Code, recorder.Body, want)
+	}
+	exp.SetDebug(DebugFull)
+	shown := map[string]string{
+		"the log":          logs.String(),
+		"the debug report": probeOnce(t, exp, probe+"&debug=true", nil).Body.String(),
+		"the status page":  probeOnce(t, exp, "/static-targets/status?format=json", nil).Body.String(),
+	}
+	for where, text := range shown {
+		if !strings.Contains(text, "root:x:0:0:root") {
+			t.Errorf("%s does not show stderr:\n%s", where, text)
+		}
 	}
 }

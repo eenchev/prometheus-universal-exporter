@@ -2596,8 +2596,14 @@ Its keys:
   : / @ + = , %`, as `tcp`'s `send`; a value holding any other character
   MUST be refused with `400` before anything is sent, naming the argument,
   the parameter and the character, and a default holding one MUST be
-  refused at load. A probe parameter that no placeholder of an argument or
-  of a label value names MUST be refused, the refusal naming
+  refused at load. A value that would begin its argument with `-`, nothing
+  of the argument written before it, and a value with `..` as a path
+  component — `..` itself, or one beginning with `../`, ending with `/..`
+  or holding `/../` — MUST be refused alike, naming the argument, the
+  parameter and why; a `-` after what the configuration wrote in the
+  argument, and a `..` within a name, MUST be taken. `tcp`'s `send` MUST NOT
+  take these two rules. A probe parameter that no placeholder of an
+  argument or of a label value names MUST be refused, the refusal naming
   `request.command`.
 - A scrape MUST open one SSH session on the connection kept to the host,
   run the command in it with no environment, terminal or input, and read its
@@ -2605,19 +2611,31 @@ Its keys:
   scrape MUST fail as a limit exceeded, the command sent `KILL` and its
   session closed. Of stderr the first 2 KiB MUST be kept, the rest read and
   dropped. A session that cannot be opened because the connection was lost
-  MUST be opened once more on a new connection; a command that was sent
-  MUST NOT be sent again.
+  MUST be opened once more on a new connection; once the exec request has
+  been written the command MUST NOT be sent again, even when the
+  connection is lost before the host answers it, and the scrape MUST fail
+  saying the command may have run. The client MUST send the end of stdin at
+  once, so a command reading it reads nothing and does not wait.
 - The exit status MUST decide: 0, or with `success_exit_codes` one it lists,
   is a success, whose stdout is the body; any other status, a signal, or a
   session ended without a status MUST fail the scrape, saying the host and
   the status (`exited with N`, and, with `success_exit_codes`, that it does
   not list it) or the signal (`was killed by signal NAME`), and the start of
   stderr, at most 1 KiB of it, with what reads as a credential masked as in
-  any text the target wrote, or that it wrote nothing there.
+  any text the target wrote, or that it wrote nothing there. The start of
+  stderr MUST be in the log, a debug probe's report and the status page
+  alone: the `502` a probe is answered MUST say the host and the status or
+  the signal, and that stderr is in the exporter's log, a debug probe's
+  report and the status page, and MUST NOT hold any of stderr.
 - At the scrape's deadline, 30 seconds without one, or when it is
-  cancelled, the scrape MUST return at once, send the command `KILL` and
-  close its session, and drop the connection when the session has not
-  ended two seconds later.
+  cancelled, the scrape MUST fail at once, send the command `KILL` and
+  close its session. When the session has not ended two seconds later, as
+  OpenSSH leaves a forced command's, which it refuses signals and keeps
+  open while the command lives, the connection MUST be retired, not
+  closed: no scrape MUST open a session on it any more, the scrapes whose
+  sessions run on it MUST be let finish, and it MUST be closed when the
+  last of those has ended; a warning MUST be logged once for each
+  connection retired.
 - The answer MUST be the body, with no status and no `Content-Type`; the
   decoder MUST be `decoder.type`, or the one the transform implies, or what
   the body reads as. A failed scrape MUST be reported in the `ssh` stage.
@@ -2640,7 +2658,15 @@ Its keys:
   server then ignores the configured command and hands it to the forced
   command in `SSH_ORIGINAL_COMMAND`, with a wrapper that allows a short list
   of command lines, and that no shell metacharacter reaches the host
-  unquoted; and it MUST say why `env` is not supported.
+  unquoted; that the account needs a real login shell, since sshd runs
+  every command, a forced one too, with `$SHELL -c`, and an account whose
+  shell is `nologin` or `false` fails every scrape; that a placeholder's
+  value may not begin its argument with `-` or have `..` as a path
+  component, recommending `--` before the arguments placeholders fill in a
+  command that takes options; that stderr is not answered to a probe's
+  caller; that a forced command is not ended at the deadline, recommending
+  `timeout` in the wrapper or the command; and it MUST say why `env` is not
+  supported.
 
 #### `ldap`
 

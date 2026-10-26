@@ -321,6 +321,17 @@ func TestATCPCollectorHoldsSendsValuesToOneArgument(t *testing.T) {
 	if err := ValidateRequest(bad); err == nil || !strings.Contains(err.Error(), `collector "stats" request.send: the default of param_proxy holds ';' (U+003B)`) {
 		t.Errorf("a default with ';': %v", err)
 	}
+	// sshexec's rules for an argument, no leading - and no .., are not
+	// send's: a line of text is no program's argv.
+	lead := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "{{param_proxy:-1}}\n"} })
+	for _, value := range []string{"-1", "../..", "a/../b"} {
+		if _, err := tcpScrape(t, lead, server.Addr, map[string]string{"param_proxy": value}); err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+		if got := <-sent; got != value+"\n" {
+			t.Errorf("sent %q", got)
+		}
+	}
 }
 
 // A collector's keys are checked when it loads: send and terminator are

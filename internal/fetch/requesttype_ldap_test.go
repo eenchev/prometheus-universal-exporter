@@ -19,13 +19,27 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
+// An ldap collector's placeholders are in its searches' base and filter.
+func init() {
+	ownPlaceholders[RequestTypeLDAP] = func(c *model.Collector) {
+		c.Request.Own = LDAPConfig{Searches: []LDAPSearch{{Name: "n", Base: "ou={{param_ou:x}},dc=org", Filter: "(uid={{param_uid:x}})"}}}
+	}
+}
+
+// editLDAP edits an ldap collector's own keys.
+func editLDAP(c *model.Collector, edit func(*LDAPConfig)) {
+	r := ldapRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
+
 // ldapCollector is a validated ldap collector of one search of people, as
 // edit makes it.
 func ldapCollector(t *testing.T, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
-	c := &model.Collector{Name: "directory", Request: model.RequestConfig{Type: RequestTypeLDAP, Searches: []model.LDAPSearch{
+	c := &model.Collector{Name: "directory", Request: model.RequestConfig{Type: RequestTypeLDAP, Own: LDAPConfig{Searches: []LDAPSearch{
 		{Name: "people", Base: "ou=people,dc=example,dc=org", Filter: "(objectClass=person)", Attributes: []string{"cn", "mail"}},
-	}}}
+	}}}}
 	for _, e := range edit {
 		e(c)
 	}
@@ -70,7 +84,9 @@ func TestAnLDAPCollectorAnswersItsSearchesAsADocument(t *testing.T) {
 	ldapPeople(server)
 	server.SetReferences("ldap://other.example.org/ou=people,dc=example,dc=org")
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches = append(c.Request.Searches, model.LDAPSearch{Name: "groups", Base: "dc=example,dc=org", Scope: "sub", Filter: "(objectClass=groupOfNames)"})
+		editLDAP(c, func(r *LDAPConfig) {
+			r.Searches = append(r.Searches, LDAPSearch{Name: "groups", Base: "dc=example,dc=org", Scope: "sub", Filter: "(objectClass=groupOfNames)"})
+		})
 	})
 	body, err := ldapScrape(t, c, server.Addr, nil)
 	if err != nil {
@@ -141,7 +157,8 @@ func TestAnLDAPCollectorBindsWithItsDNAndPasswordFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := ldapCollector(t, func(c *model.Collector) {
-		c.Request.BindDN, c.Request.PasswordFile = "cn=exporter,dc=example,dc=org", passwordFile
+		c.Request.PasswordFile = passwordFile
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
 	})
 	if _, err := ldapScrape(t, bound, server.Addr, nil); err != nil {
 		t.Fatal(err)
@@ -182,7 +199,10 @@ func TestAnLDAPCollectorBindsWithItsDNAndPasswordFile(t *testing.T) {
 func TestAnLDAPCollectorSpeaksTLS(t *testing.T) {
 	server := ldaptest.New(t)
 	ldapPeople(server)
-	startTLS := ldapCollector(t, func(c *model.Collector) { c.Request.StartTLS, c.Request.TLS.CAFile = true, server.CAFile })
+	startTLS := ldapCollector(t, func(c *model.Collector) {
+		c.Request.TLS.CAFile = server.CAFile
+		editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true })
+	})
 	for _, target := range []string{server.Addr, "ldap://" + server.Addr} {
 		if _, err := ldapScrape(t, startTLS, target, nil); err != nil {
 			t.Errorf("%s: %v", target, err)
@@ -195,7 +215,7 @@ func TestAnLDAPCollectorSpeaksTLS(t *testing.T) {
 	if label, _ := RequestLabelFor(server.Addr, startTLS, RequestOverrides{}); label != "ldap://"+server.Addr {
 		t.Errorf("label %q", label)
 	}
-	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { c.Request.StartTLS = true }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "STARTTLS: TLS handshake with "+server.Addr) {
+	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true }) }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "STARTTLS: TLS handshake with "+server.Addr) {
 		t.Errorf("an unknown authority: %v", err)
 	}
 	server.RefuseStartTLS()
@@ -238,8 +258,8 @@ func TestAnLDAPSearchIsReadPageByPage(t *testing.T) {
 	server := ldaptest.New(t)
 	ldapMany(server, 1200)
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches[0].MaxEntries = 2000
-		c.Request.Searches[0].Attributes = []string{"cn"}
+		ldapRequest(c).Searches[0].MaxEntries = 2000
+		ldapRequest(c).Searches[0].Attributes = []string{"cn"}
 	})
 	var doc struct {
 		Searches map[string]struct {
@@ -282,8 +302,8 @@ func TestAnLDAPSearchCountsOrBoundsItsEntries(t *testing.T) {
 	server := ldaptest.New(t)
 	ldapMany(server, 1500)
 	counted := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches[0].Attributes = nil
-		c.Request.Searches[0].CountOnly = true
+		ldapRequest(c).Searches[0].Attributes = nil
+		ldapRequest(c).Searches[0].CountOnly = true
 	})
 	body, err := ldapScrape(t, counted, server.Addr, nil)
 	if err != nil {
@@ -300,7 +320,7 @@ func TestAnLDAPSearchCountsOrBoundsItsEntries(t *testing.T) {
 	if _, err := ldapScrape(t, ldapCollector(t), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "matches more than its max_entries, 1000; narrow its base or filter, raise max_entries, or set count_only") {
 		t.Errorf("past the default max_entries: %v", err)
 	}
-	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { c.Request.Searches[0].MaxEntries = 10 }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "max_entries, 10;") {
+	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { ldapRequest(c).Searches[0].MaxEntries = 10 }), server.Addr, nil); err == nil || !strings.Contains(err.Error(), "max_entries, 10;") {
 		t.Errorf("past max_entries: %v", err)
 	}
 }
@@ -335,10 +355,10 @@ func TestLDAPFiltersAreParsed(t *testing.T) {
 		"(uid:=alan)":                                    1,
 	} {
 		c := ldapCollector(t, func(c *model.Collector) {
-			c.Request.Searches[0].Base = "dc=example,dc=org"
-			c.Request.Searches[0].Filter = filter
-			c.Request.Searches[0].Attributes = nil
-			c.Request.Searches[0].CountOnly = true
+			ldapRequest(c).Searches[0].Base = "dc=example,dc=org"
+			ldapRequest(c).Searches[0].Filter = filter
+			ldapRequest(c).Searches[0].Attributes = nil
+			ldapRequest(c).Searches[0].CountOnly = true
 		})
 		body, err := ldapScrape(t, c, server.Addr, nil)
 		if err != nil {
@@ -375,7 +395,7 @@ func TestLDAPFiltersAreParsed(t *testing.T) {
 		if _, err := parseLDAPFilter(filter); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", filter, err, want)
 		}
-		c := &model.Collector{Name: "d", Request: model.RequestConfig{Type: RequestTypeLDAP, Searches: []model.LDAPSearch{{Name: "s", Filter: filter}}}}
+		c := &model.Collector{Name: "d", Request: model.RequestConfig{Type: RequestTypeLDAP, Own: LDAPConfig{Searches: []LDAPSearch{{Name: "s", Filter: filter}}}}}
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "request.searches[0].filter: ") {
 			t.Errorf("%s loaded: %v", filter, err)
 		}
@@ -392,10 +412,10 @@ func TestAnLDAPSubstringFilterFilledEmptyIsPresence(t *testing.T) {
 	server := ldaptest.New(t)
 	ldapPeople(server)
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches[0].Base = "dc=example,dc=org"
-		c.Request.Searches[0].Filter = "(&(objectClass=person)(cn=*{{param_x:}}*))"
-		c.Request.Searches[0].Attributes = nil
-		c.Request.Searches[0].CountOnly = true
+		ldapRequest(c).Searches[0].Base = "dc=example,dc=org"
+		ldapRequest(c).Searches[0].Filter = "(&(objectClass=person)(cn=*{{param_x:}}*))"
+		ldapRequest(c).Searches[0].Attributes = nil
+		ldapRequest(c).Searches[0].CountOnly = true
 	})
 	body, err := ldapScrape(t, c, server.Addr, nil)
 	if err != nil || !strings.Contains(body, `"count":2,`) {
@@ -423,8 +443,8 @@ func TestLDAPPlaceholdersCannotChangeASearchsStructure(t *testing.T) {
 	server := ldaptest.New(t)
 	ldapPeople(server)
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches[0].Base = "ou={{param_ou}},dc=example,dc=org"
-		c.Request.Searches[0].Filter = "(&(objectClass=person)(uid={{param_user}}))"
+		ldapRequest(c).Searches[0].Base = "ou={{param_ou}},dc=example,dc=org"
+		ldapRequest(c).Searches[0].Filter = "(&(objectClass=person)(uid={{param_user}}))"
 	})
 	body, err := ldapScrape(t, c, server.Addr, map[string]string{"param_ou": "people", "param_user": "ada"})
 	if err != nil || !strings.Contains(body, `"count":1,`) {
@@ -461,18 +481,19 @@ func TestLDAPPlaceholdersCannotChangeASearchsStructure(t *testing.T) {
 		edit func(*model.Collector)
 		want string
 	}{
-		"an attribute's name":    {func(c *model.Collector) { c.Request.Searches[0].Filter = "({{param_a}}=x)" }, "a placeholder may stand only in a value"},
-		"the filter's structure": {func(c *model.Collector) { c.Request.Searches[0].Filter = "{{param_f}}" }, "does not begin with ("},
-		"a whole DN":             {func(c *model.Collector) { c.Request.Searches[0].Base = "{{param_base}}" }, "a placeholder may stand only in a value"},
-		"a DN's type":            {func(c *model.Collector) { c.Request.Searches[0].Base = "{{param_t}}=x,dc=org" }, "a placeholder may stand only in a value"},
-		"the scope":              {func(c *model.Collector) { c.Request.Searches[0].Scope = "{{param_scope}}" }, "scope \"{{param_scope}}\" has a placeholder"},
-		"an attribute":           {func(c *model.Collector) { c.Request.Searches[0].Attributes = []string{"{{param_a}}"} }, "has a placeholder; a placeholder may stand in base and filter alone"},
+		"an attribute's name":    {func(c *model.Collector) { ldapRequest(c).Searches[0].Filter = "({{param_a}}=x)" }, "a placeholder may stand only in a value"},
+		"the filter's structure": {func(c *model.Collector) { ldapRequest(c).Searches[0].Filter = "{{param_f}}" }, "does not begin with ("},
+		"a whole DN":             {func(c *model.Collector) { ldapRequest(c).Searches[0].Base = "{{param_base}}" }, "a placeholder may stand only in a value"},
+		"a DN's type":            {func(c *model.Collector) { ldapRequest(c).Searches[0].Base = "{{param_t}}=x,dc=org" }, "a placeholder may stand only in a value"},
+		"the scope":              {func(c *model.Collector) { ldapRequest(c).Searches[0].Scope = "{{param_scope}}" }, "scope \"{{param_scope}}\" has a placeholder"},
+		"an attribute":           {func(c *model.Collector) { ldapRequest(c).Searches[0].Attributes = []string{"{{param_a}}"} }, "has a placeholder; a placeholder may stand in base and filter alone"},
 		"bind_dn": {func(c *model.Collector) {
-			c.Request.BindDN, c.Request.PasswordFile = "cn={{param_u}},dc=org", "/p"
+			c.Request.PasswordFile = "/p"
+			editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn={{param_u}},dc=org" })
 		}, "request.bind_dn \"cn={{param_u}},dc=org\" has a placeholder"},
-		"a broken placeholder": {func(c *model.Collector) { c.Request.Searches[0].Filter = "(cn={{param_)" }, "request.searches[0].filter"},
+		"a broken placeholder": {func(c *model.Collector) { ldapRequest(c).Searches[0].Filter = "(cn={{param_)" }, "request.searches[0].filter"},
 	} {
-		c := &model.Collector{Name: "d", Request: model.RequestConfig{Type: RequestTypeLDAP, Searches: []model.LDAPSearch{{Name: "s", Base: "dc=org"}}}}
+		c := &model.Collector{Name: "d", Request: model.RequestConfig{Type: RequestTypeLDAP, Own: LDAPConfig{Searches: []LDAPSearch{{Name: "s", Base: "dc=org"}}}}}
 		tc.edit(c)
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
@@ -520,7 +541,7 @@ func TestAnLDAPServersMessagesAreHeldToTheResponseLimit(t *testing.T) {
 	// A count_only search's entries count against it too.
 	counted := ldapCollector(t, func(c *model.Collector) {
 		c.Request.MaxResponseBytes = 1000
-		c.Request.Searches[0].Attributes, c.Request.Searches[0].CountOnly = nil, true
+		ldapRequest(c).Searches[0].Attributes, ldapRequest(c).Searches[0].CountOnly = nil, true
 	})
 	if _, err := ldapScrape(t, counted, server.Addr, nil); !errors.Is(err, model.ErrLimitExceeded) {
 		t.Errorf("counted entries past the limit: %v", err)
@@ -582,12 +603,12 @@ func TestAnLDAPValueThatIsNotTextFailsTheScrape(t *testing.T) {
 	server := ldaptest.New(t)
 	server.AddEntry(ldaptest.Entry{DN: "ou=people,dc=example,dc=org"},
 		ldaptest.Entry{DN: "uid=ada,ou=people,dc=example,dc=org", Attributes: map[string][]string{"objectClass": {"person"}, "cn": {"Ada"}, "objectGUID": {"\x8f\xff\x01\x02"}}})
-	c := ldapCollector(t, func(c *model.Collector) { c.Request.Searches[0].Attributes = []string{"cn", "objectGUID"} })
+	c := ldapCollector(t, func(c *model.Collector) { ldapRequest(c).Searches[0].Attributes = []string{"cn", "objectGUID"} })
 	_, err := ldapScrape(t, c, server.Addr, nil)
 	if !errors.Is(err, errLDAPNotText) || !strings.Contains(err.Error(), "the attribute objectGUID of uid=ada,ou=people,dc=example,dc=org holds bytes that are not UTF-8") || !strings.Contains(err.Error(), "SEARCH people") {
 		t.Errorf("a binary value: %v", err)
 	}
-	if body, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { c.Request.Searches[0].Attributes = []string{"cn"} }), server.Addr, nil); err != nil || !strings.Contains(body, `"cn":["Ada"]`) {
+	if body, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { ldapRequest(c).Searches[0].Attributes = []string{"cn"} }), server.Addr, nil); err != nil || !strings.Contains(body, `"cn":["Ada"]`) {
 		t.Errorf("without it: %s %v", body, err)
 	}
 	escaped := ldaptest.New(t)
@@ -620,7 +641,7 @@ func TestAnLDAPResultCodeFailsTheScrape(t *testing.T) {
 	}
 	other := ldaptest.New(t)
 	ldapPeople(other)
-	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { c.Request.Searches[0].Base = "ou=nobody,dc=example,dc=org" }), other.Addr, nil); err == nil || !strings.Contains(err.Error(), "noSuchObject (32)") {
+	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { ldapRequest(c).Searches[0].Base = "ou=nobody,dc=example,dc=org" }), other.Addr, nil); err == nil || !strings.Contains(err.Error(), "noSuchObject (32)") {
 		t.Errorf("noSuchObject: %v", err)
 	}
 	ldapAnswer(other, func(int) []byte { return ldaptest.Message(0, ldaptest.ResultOp(0x78, 52, "server shutting down")) })
@@ -661,44 +682,51 @@ func TestAnLDAPCollectorKeepsToItsTargetLists(t *testing.T) {
 // ldap:// with a tls block but no start_tls, and ldaps:// with start_tls,
 // contradict each other.
 func TestAnLDAPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
-	search := func(edit func(*model.LDAPSearch)) func(*model.Collector) {
-		return func(c *model.Collector) { edit(&c.Request.Searches[0]) }
+	search := func(edit func(*LDAPSearch)) func(*model.Collector) {
+		return func(c *model.Collector) { edit(&ldapRequest(c).Searches[0]) }
 	}
 	for name, tc := range map[string]struct {
 		edit func(*model.Collector)
 		want string
 	}{
-		"no searches":                {func(c *model.Collector) { c.Request.Searches = nil }, "has no request.searches"},
-		"a name jq cannot reach":     {search(func(s *model.LDAPSearch) { s.Name = "all-people" }), `request.searches[0].name "all-people"`},
-		"a name twice":               {func(c *model.Collector) { c.Request.Searches = append(c.Request.Searches, c.Request.Searches[0]) }, "names people twice"},
-		"a base that is no DN":       {search(func(s *model.LDAPSearch) { s.Base = "people" }), `base "people" is not a DN`},
-		"a base with an odd escape":  {search(func(s *model.LDAPSearch) { s.Base = `cn=a\q,dc=org` }), `has the escape \q`},
-		"a scope in capitals":        {search(func(s *model.LDAPSearch) { s.Scope = "SUB" }), `scope "SUB" is not base, one or sub`},
-		"a scope of subtree":         {search(func(s *model.LDAPSearch) { s.Scope = "subtree" }), "is not base, one or sub"},
-		"an attribute with a blank":  {search(func(s *model.LDAPSearch) { s.Attributes = []string{"given name"} }), `attributes[0] "given name" is not an attribute's name`},
-		"an attribute twice":         {search(func(s *model.LDAPSearch) { s.Attributes = []string{"cn", "CN"} }), "names CN twice"},
-		"count_only with attributes": {search(func(s *model.LDAPSearch) { s.CountOnly = true }), "sets count_only and attributes"},
-		"count_only with max_entries": {search(func(s *model.LDAPSearch) {
+		"no searches":            {func(c *model.Collector) { editLDAP(c, func(r *LDAPConfig) { r.Searches = nil }) }, "has no request.searches"},
+		"a name jq cannot reach": {search(func(s *LDAPSearch) { s.Name = "all-people" }), `request.searches[0].name "all-people"`},
+		"a name twice": {func(c *model.Collector) {
+			editLDAP(c, func(r *LDAPConfig) { r.Searches = append(r.Searches, r.Searches[0]) })
+		}, "names people twice"},
+		"a base that is no DN":       {search(func(s *LDAPSearch) { s.Base = "people" }), `base "people" is not a DN`},
+		"a base with an odd escape":  {search(func(s *LDAPSearch) { s.Base = `cn=a\q,dc=org` }), `has the escape \q`},
+		"a scope in capitals":        {search(func(s *LDAPSearch) { s.Scope = "SUB" }), `scope "SUB" is not base, one or sub`},
+		"a scope of subtree":         {search(func(s *LDAPSearch) { s.Scope = "subtree" }), "is not base, one or sub"},
+		"an attribute with a blank":  {search(func(s *LDAPSearch) { s.Attributes = []string{"given name"} }), `attributes[0] "given name" is not an attribute's name`},
+		"an attribute twice":         {search(func(s *LDAPSearch) { s.Attributes = []string{"cn", "CN"} }), "names CN twice"},
+		"count_only with attributes": {search(func(s *LDAPSearch) { s.CountOnly = true }), "sets count_only and attributes"},
+		"count_only with max_entries": {search(func(s *LDAPSearch) {
 			s.CountOnly, s.Attributes, s.MaxEntries = true, nil, 5
 		}), "sets count_only and max_entries"},
-		"a negative max_entries":    {search(func(s *model.LDAPSearch) { s.MaxEntries = -1 }), "max_entries must not be negative"},
-		"bind_dn alone":             {func(c *model.Collector) { c.Request.BindDN = "cn=exporter,dc=org" }, "without request.password_file; a simple bind with a DN and no password is an unauthenticated bind"},
-		"password_file alone":       {func(c *model.Collector) { c.Request.PasswordFile = "/p" }, "without request.bind_dn"},
-		"a bind_dn that is no DN":   {func(c *model.Collector) { c.Request.BindDN, c.Request.PasswordFile = "exporter", "/p" }, `request.bind_dn "exporter" is not a DN`},
-		"a key of another type":     {func(c *model.Collector) { c.Request.Statement = "SELECT 1" }, "sets request.statement, which does not apply"},
+		"a negative max_entries": {search(func(s *LDAPSearch) { s.MaxEntries = -1 }), "max_entries must not be negative"},
+		"bind_dn alone":          {func(c *model.Collector) { editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=org" }) }, "without request.password_file; a simple bind with a DN and no password is an unauthenticated bind"},
+		"password_file alone":    {func(c *model.Collector) { c.Request.PasswordFile = "/p" }, "without request.bind_dn"},
+		"a bind_dn that is no DN": {func(c *model.Collector) {
+			c.Request.PasswordFile = "/p"
+			editLDAP(c, func(r *LDAPConfig) { r.BindDN = "exporter" })
+		}, `request.bind_dn "exporter" is not a DN`},
+		"a key of another type":     {func(c *model.Collector) { c.Request.Foreign = []string{"statement"} }, "sets request.statement, which does not apply"},
 		"half a client certificate": {func(c *model.Collector) { c.Request.TLS.CertFile = "/c.pem" }, "only one of cert_file and key_file"},
 	} {
-		c := &model.Collector{Name: "directory", Request: model.RequestConfig{Type: RequestTypeLDAP, Searches: []model.LDAPSearch{{Name: "people", Base: "ou=people,dc=example,dc=org", Attributes: []string{"cn"}}}}}
+		c := &model.Collector{Name: "directory", Request: model.RequestConfig{Type: RequestTypeLDAP, Own: LDAPConfig{Searches: []LDAPSearch{{Name: "people", Base: "ou=people,dc=example,dc=org", Attributes: []string{"cn"}}}}}}
 		tc.edit(c)
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
 	rootDSE := ldapCollector(t, func(c *model.Collector) {
-		c.Request.Searches = []model.LDAPSearch{{Name: "root", Scope: "base", Attributes: []string{"+", "*", "namingContexts", "2.5.4.3;lang-de"}}}
+		editLDAP(c, func(r *LDAPConfig) {
+			r.Searches = []LDAPSearch{{Name: "root", Scope: "base", Attributes: []string{"+", "*", "namingContexts", "2.5.4.3;lang-de"}}}
+		})
 	})
-	if rootDSE.Request.Searches[0].Base != "" {
-		t.Errorf("base %q", rootDSE.Request.Searches[0].Base)
+	if ldapRequest(rootDSE).Searches[0].Base != "" {
+		t.Errorf("base %q", ldapRequest(rootDSE).Searches[0].Base)
 	}
 	plain := ldapCollector(t)
 	for target, want := range map[string]string{
@@ -725,7 +753,10 @@ func TestAnLDAPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 	if err := CheckTarget(withTLS, "ldap://dir.internal", false); err == nil || !strings.Contains(err.Error(), "asks for plaintext with ldap://, but the collector sets request.tls") {
 		t.Errorf("ldap:// with a tls block: %v", err)
 	}
-	startTLS := ldapCollector(t, func(c *model.Collector) { c.Request.StartTLS, c.Request.TLS.CAFile = true, "/ca.pem" })
+	startTLS := ldapCollector(t, func(c *model.Collector) {
+		c.Request.TLS.CAFile = "/ca.pem"
+		editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true })
+	})
 	if err := CheckTarget(startTLS, "ldaps://dir.internal", false); err == nil || !strings.Contains(err.Error(), "asks for TLS from the start with ldaps://, but the collector sets request.start_tls") {
 		t.Errorf("ldaps:// with start_tls: %v", err)
 	}
@@ -757,9 +788,11 @@ func TestAnLDAPScrapeIsTracedWithoutItsPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := ldapCollector(t, func(c *model.Collector) {
-		c.Request.BindDN, c.Request.PasswordFile = "cn=exporter,dc=example,dc=org", passwordFile
-		c.Request.StartTLS, c.Request.TLS.CAFile = true, server.CAFile
-		c.Request.Searches[0].Attributes, c.Request.Searches[0].CountOnly = nil, true
+		c.Request.PasswordFile = passwordFile
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
+		c.Request.TLS.CAFile = server.CAFile
+		editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true })
+		ldapRequest(c).Searches[0].Attributes, ldapRequest(c).Searches[0].CountOnly = nil, true
 	})
 	ctx, trace := WithRequestTrace(context.Background())
 	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err != nil {
@@ -789,7 +822,8 @@ func TestAnLDAPScrapeIsTracedWithoutItsPassword(t *testing.T) {
 		t.Errorf("warnings %v", warnings)
 	}
 	missing := ldapCollector(t, func(c *model.Collector) {
-		c.Request.BindDN, c.Request.PasswordFile = "cn=exporter,dc=example,dc=org", filepath.Join(t.TempDir(), "missing")
+		c.Request.PasswordFile = filepath.Join(t.TempDir(), "missing")
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
 	})
 	if warnings := FileWarnings(missing, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "request.password_file") {
 		t.Errorf("warnings %v", warnings)

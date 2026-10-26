@@ -69,9 +69,10 @@ func dnsSystemServers(conf string) []string {
 // of the name — the name does not exist, or exists and is no alias — is not
 // found, as a name without records of the type is for every other type.
 func lookupCNAME(ctx context.Context, c *model.Collector, name string) ([]dnsAnswer, error) {
+	r := dnsRequest(c)
 	servers := []string{}
-	if c.Request.Server != "" {
-		server, _ := ParseDNSServer(c.Request.Server)
+	if r.Server != "" {
+		server, _ := ParseDNSServer(r.Server)
 		servers = append(servers, server)
 	} else {
 		conf, err := os.ReadFile(dnsResolvConf)
@@ -87,7 +88,7 @@ func lookupCNAME(ctx context.Context, c *model.Collector, name string) ([]dnsAns
 		if i < len(servers)-1 {
 			askCtx, cancel = context.WithTimeout(ctx, dnsServerTimeout)
 		}
-		answers, err := askCNAME(askCtx, server, c.Request.Transport == dnsTCP, name)
+		answers, err := askCNAME(askCtx, server, r.Transport == dnsTCP, name)
 		cancel()
 		var dnsErr *net.DNSError
 		if err == nil || errors.As(err, &dnsErr) && dnsErr.IsNotFound || ctx.Err() != nil {

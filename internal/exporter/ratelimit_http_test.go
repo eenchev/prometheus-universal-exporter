@@ -24,7 +24,7 @@ func TestAProbeRefusedByTheRateLimitIsCounted(t *testing.T) {
 	fetch.CloseConnections()
 	t.Cleanup(fetch.CloseConnections)
 	for _, family := range []string{"http_exporter_rate_limit_waits_total", "http_exporter_rate_limit_refused_total"} {
-		if only := requestTypeFamilies[family]; !slices.Equal(only, []string{"http", "graphite"}) {
+		if only := familyTypes(family); !slices.Equal(only, builtOf("graphite", "http")) {
 			t.Errorf("%s is of %v, want http and graphite", family, only)
 		}
 	}

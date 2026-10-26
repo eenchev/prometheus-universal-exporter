@@ -112,7 +112,7 @@ func TestAVerticaStatementHoldingMoreThanOneIsRefused(t *testing.T) {
 		if (err != nil) != tc.refused {
 			t.Errorf("%q: %v, want refused %t", tc.statement, err, tc.refused)
 		}
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverVertica, Statement: tc.statement, Username: "metrics"}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverVertica, Statement: tc.statement}}}
 		if err := ValidateRequest(c); (err != nil && strings.Contains(err.Error(), "more than one statement")) != tc.refused {
 			t.Errorf("%q: loading gives %v, want refused %t", tc.statement, err, tc.refused)
 		}
@@ -157,7 +157,7 @@ func TestAVerticaStatementTheServerReadsAsSeveralIsRefused(t *testing.T) {
 // scrape.
 func TestAVerticaStatementTheDriversLexerFailsOnIsRefused(t *testing.T) {
 	for _, statement := range []string{"'?", "SELECT 1 AS one -- c\n'?'"} {
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverVertica, Statement: statement, Username: "metrics"}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverVertica, Statement: statement}}}
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "lexer fails") {
 			t.Errorf("%q: loading gives %v, want the lexer's failure", statement, err)
 		}

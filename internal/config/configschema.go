@@ -3,11 +3,8 @@ package config
 import (
 	"encoding/json"
 	"reflect"
-	"regexp"
-	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -216,28 +213,19 @@ func durationSchema() map[string]any {
 // optionalEnum is the values and "", and optionalPattern the pattern or
 // nothing at all. A key the exporter requires, such as transform.type, has
 // neither: written "", it is as missing as left out, to both.
-func optionalEnum(values []string) []string {
-	return append(slices.Clone(values), "")
-}
+// optionalEnum is fetch.SchemaOptionalEnum.
+func optionalEnum(values []string) []string { return fetch.SchemaOptionalEnum(values) }
 
-func optionalPattern(pattern string) string {
-	return "^$|" + pattern
-}
+// optionalPattern is fetch.SchemaOptionalPattern.
+func optionalPattern(pattern string) string { return fetch.SchemaOptionalPattern(pattern) }
 
-// writtenKey is the rule that an object has the key and that it is not "":
-// what required alone cannot say, which goes by the key being there,
-// whatever its value. Every rule about a key that may be written "" — one
-// that requires it, or that forbids it beside another — is made of it, so
-// that key: "" is the key left out to the rule as it is to the exporter.
-func writtenKey(key string) map[string]any {
-	return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
-}
+// writtenKey is the rule that an object has the key and that it is not ""
+// (fetch.SchemaWrittenKey).
+func writtenKey(key string) map[string]any { return fetch.SchemaWrittenKey(key) }
 
-// surroundingBlank is a regular expression class of the characters
-// strings.TrimSpace takes off a text, written so that Go and JavaScript read
-// it alike: the two below U+0100 that are no ASCII as escapes, the rest as
-// themselves.
-const surroundingBlank = `\t\n\v\f\r \x85\xA0` + "\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000"
+// surroundingBlank is the class of the characters strings.TrimSpace takes
+// off a text (fetch.SchemaSurroundingBlank).
+const surroundingBlank = fetch.SchemaSurroundingBlank
 
 // valueMapKeys is what the exporter refuses of a value_map's keys, a metric
 // rule's and a label's alike (transform.checkValueRules): the empty key, and
@@ -252,10 +240,8 @@ func valueMapKeys() map[string]any {
 // onlyBlanks is text of one blank or more and nothing else: what a label's
 // expression may not be (validateMetricRule). It goes under not, so that the
 // key keeps the types it takes, an unquoted 1 for a capture group among
-// them, and "" stays the key left out.
-func onlyBlanks() map[string]any {
-	return map[string]any{"type": "string", "pattern": "^[" + surroundingBlank + "]+$"}
-}
+// them, and "" stays the key left out (fetch.SchemaOnlyBlanks).
+func onlyBlanks() map[string]any { return fetch.SchemaOnlyBlanks() }
 
 // blanksOrPlaceholder is onlyBlanks, or text with {{ in it: what a static
 // target's account and credential files may not be, a placeholder being
@@ -276,23 +262,9 @@ func blanksOrPlaceholder() map[string]any {
 // which the exporter asks, takes these and no others.
 const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
 
-// caseless is a regular expression of text matched without regard to case,
-// written so that Go and JavaScript read it alike: each letter as a class of
-// its two cases, anything else escaped as regexp.QuoteMeta escapes it.
-func caseless(text string) string {
-	var b strings.Builder
-	for _, r := range text {
-		if lower, upper := unicode.ToLower(r), unicode.ToUpper(r); lower != upper {
-			b.WriteByte('[')
-			b.WriteRune(upper)
-			b.WriteRune(lower)
-			b.WriteByte(']')
-			continue
-		}
-		b.WriteString(regexp.QuoteMeta(string(r)))
-	}
-	return b.String()
-}
+// caseless is a regular expression of text matched without regard to case
+// (fetch.SchemaCaseless).
+func caseless(text string) string { return fetch.SchemaCaseless(text) }
 
 // headerNames is what the exporter takes as a name of request.headers, a
 // collector's or a static target's, and of otlp.headers
@@ -376,6 +348,9 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 					continue
 				}
 				properties[key] = schemaFor(field.Type, joinSchemaPath(path, key), rules)
+			}
+			if t == requestConfigType {
+				ownRequestKeys(properties, path, rules)
 			}
 			schema = map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
 		case reflect.Slice:
@@ -482,120 +457,39 @@ func configSchemaRules() map[string]map[string]any {
 		"rate_limits[].rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
 		"rate_limits[].rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
 		// What a collector must have, and each of its rules a name.
-		"collectors[]":                                         collectorSchemaRule(),
-		"collectors[].name":                                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
-		"collectors[].metrics_prefix":                          {"pattern": optionalPattern(transform.MetricsPrefixRE.String()), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
-		"collectors[].cache":                                   {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
-		"collectors[].cache.ttl":                               {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
-		"collectors[].cache.stale_if_error":                    {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
-		"collectors[].cache.revalidate":                        {"description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses."},
-		"collectors[].max_concurrent_probes":                   {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
-		"collectors[].coalesce":                                {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
-		"collectors[].lint":                                    {"description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint."},
-		"collectors[].lint.ignore":                             {"description": "The ids of the lint rules whose advice is not given for this collector."},
-		"collectors[].lint.ignore[]":                           {"enum": model.LintRules},
-		"collectors[].failure_backoff":                         {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
-		"collectors[].failure_backoff.after":                   {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
-		"collectors[].failure_backoff.initial":                 {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
-		"collectors[].failure_backoff.max":                     {"description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer."},
-		"collectors[].failure_backoff.min_budget":              {"description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
-		"collectors[].request":                                 requestSchemaRule(),
-		"collectors[].request.type":                            {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method":                          {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
-		"collectors[].request.body":                            {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
-		"collectors[].request.path":                            {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. s3file: the object, relative to request.root, its key the two joined. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
-		"collectors[].request.root":                            {"description": "localfile, sshfile and s3file, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host, or, for s3file, the key prefix written as one, /exports/app for the keys under exports/app/. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree, and for s3file, for every key of the bucket. See docs/LOCALFILE.md, docs/SSHFILE.md and docs/S3FILE.md."},
-		"collectors[].request.files":                           {"description": "localfile, sshfile and s3file: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
-		"collectors[].request.max_files":                       {"description": "localfile, sshfile and s3file with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
-		"collectors[].request.max_total_bytes":                 {"description": "localfile, sshfile and s3file with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
-		"collectors[].request.max_age":                         {"description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
-		"collectors[].request.username":                        {"not": onlyBlanks(), "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone."},
-		"collectors[].request.private_key_file":                {"not": onlyBlanks(), "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication."},
-		"collectors[].request.passphrase_file":                 {"not": onlyBlanks(), "description": "sshfile, with private_key_file: the file of the passphrase an encrypted private key is decrypted with."},
-		"collectors[].request.password_file":                   {"not": onlyBlanks(), "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape."},
-		"collectors[].request.known_hosts_file":                {"not": onlyBlanks(), "description": "sshfile, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys."},
-		"collectors[].request.keepalive_interval":              {"description": "sshfile: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 sends none."},
-		"collectors[].request.keepalive_count_max":             {"minimum": 1, "description": "sshfile: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3."},
-		"collectors[].request.idle_timeout":                    {"description": "sshfile: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
-		"collectors[].request.max_open_connections":            {"minimum": 0, "description": "sshfile: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections."},
-		"collectors[].request.region":                          {"pattern": optionalPattern(`^[A-Za-z0-9_-]+$`), "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md."},
-		"collectors[].request.endpoint":                        {"pattern": optionalPattern(`^https?://[^/?#@]+/?$`), "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores."},
-		"collectors[].request.path_style":                      {"description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false."},
-		"collectors[].request.access_key_id_file":              {"not": onlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},
-		"collectors[].request.secret_access_key_file":          {"not": onlyBlanks(), "description": "s3file, with access_key_id_file: the file of the static access key's secret."},
-		"collectors[].request.session_token_file":              {"not": onlyBlanks(), "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token."},
-		"collectors[].request.driver":                          {"type": "string", "pattern": sqlDriverName(fetch.BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
-		"collectors[].request.db":                              {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
-		"collectors[].request.info_sections":                   {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
-		"collectors[].request.info_sections[]":                 {"pattern": model.RedisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
-		"collectors[].request.commands":                        {"description": "redis: read-only commands whose replies the document holds under .commands.<name>, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands."},
-		"collectors[].request.commands[]":                      {"required": []string{"name", "command"}},
-		"collectors[].request.commands[].name":                 {"pattern": model.RedisCommandNamePattern, "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands."},
-		"collectors[].request.commands[].command":              {"minItems": 1, "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold."},
-		"collectors[].request.send":                            {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
-		"collectors[].request.terminator":                      {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
-		"collectors[].request.bind_dn":                         {"not": onlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding."},
-		"collectors[].request.start_tls":                       {"description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls."},
-		"collectors[].request.searches":                        {"minItems": 1, "description": "ldap, required: the searches whose results the document holds under .searches.<name>, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches."},
-		"collectors[].request.searches[]":                      {"required": []string{"name"}},
-		"collectors[].request.searches[].name":                 {"pattern": model.LDAPSearchNamePattern, "description": "The name the result is put under in the document's searches: letters, digits and _, not starting with a digit, unique among the collector's searches."},
-		"collectors[].request.searches[].base":                 {"description": "The DN the search starts at, such as ou=people,dc=example,dc=org; left out or \"\", the root DSE. May contain {{param_name}} placeholders in its attribute values, filled escaped as RFC 4514 escapes a value."},
-		"collectors[].request.searches[].scope":                {"enum": optionalEnum(model.LDAPScopes), "description": "base, the base entry alone; one, the entries right under it; sub, the base and everything under it. Defaults to sub."},
-		"collectors[].request.searches[].filter":               {"description": "An RFC 4515 filter in parentheses, such as (&(objectClass=user)(cn=a*)); defaults to (objectClass=*). May contain {{param_name}} placeholders in its values, filled escaped as RFC 4515 escapes a value, so a probe cannot change the filter's structure."},
-		"collectors[].request.searches[].attributes":           {"description": "The attributes each entry is read with, such as [cn, mail], * for every user attribute or + for every operational one; left out, the entries' DNs alone. Leave binary attributes, such as objectGUID or jpegPhoto, out: a value that is not UTF-8 fails the scrape."},
-		"collectors[].request.searches[].attributes[]":         {"pattern": model.LDAPAttributePattern, "description": "An attribute's name or OID, with options after ;, or * or +."},
-		"collectors[].request.searches[].count_only":           {"description": "Count the entries the search matches, holding none of them: the result has count and references and no entries. Not with attributes or max_entries."},
-		"collectors[].request.searches[].max_entries":          {"minimum": 0, "description": "The most entries a search that is not count_only may match; one more fails the scrape. Defaults to 1000."},
-		"collectors[].request.database":                        {"not": onlyBlanks(), "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only."},
-		"collectors[].request.statement":                       {"not": onlyBlanks(), "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
-		"collectors[].request.args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
-		"collectors[].request.options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
-		"collectors[].request.service_name":                    {"not": onlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
-		"collectors[].request.record_type":                     {"type": "string", "pattern": optionalPattern(sqlDriverName(model.DNSRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
-		"collectors[].request.server":                          {"not": onlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
-		"collectors[].request.transport":                       {"enum": optionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
-		"collectors[].request.resource":                        {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
-		"collectors[].request.group":                           {"type": "string", "pattern": optionalPattern(model.KubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
-		"collectors[].request.version":                         {"type": "string", "pattern": optionalPattern(model.KubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},
-		"collectors[].request.namespaces":                      {"items": map[string]any{"type": "string", "pattern": model.KubernetesNamePattern, "maxLength": 63}, "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account."},
-		"collectors[].request.all_namespaces":                  {"description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false."},
-		"collectors[].request.label_selector":                  {"not": onlyBlanks(), "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out."},
-		"collectors[].request.field_selector":                  {"not": onlyBlanks(), "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out."},
-		"collectors[].request.max_objects":                     {"minimum": 0, "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000."},
-		"collectors[].request.api_server":                      {"type": "string", "pattern": optionalPattern(`^https://[^/?#@]+(/[^?#]*)?$`), "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster."},
-		"collectors[].request.max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},
-		"collectors[].request.connections":                     {"description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections."},
-		"collectors[].request.connections.max_per_target":      {"minimum": 0, "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools."},
-		"collectors[].request.connections.max_idle_per_target": {"minimum": 0, "description": "How many connections to a target are kept idle between scrapes, across its databases and accounts. Defaults to 1; 0 keeps none."},
-		"collectors[].request.connections.max_targets":         {"minimum": 0, "description": "The most targets, servers or Snowflake accounts, the collector keeps connections to, whatever databases and accounts it reaches there; at the limit the pools of the target used longest ago are closed. Defaults to 50; 0 sets no limit."},
-		"collectors[].request.connections.idle_timeout":        {"description": "How long an idle connection is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
-		"collectors[].request.connections.max_lifetime":        {"description": "How long a connection is used before it is closed and made again. Defaults to 1h; 0 uses it as long as it works."},
-		"collectors[].request.connections.keepalive":           {"description": "How a kept connection is found broken."},
-		"collectors[].request.connections.keepalive.interval":  {"description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 checks none."},
-		"collectors[].request.connections.keepalive.check":     {"enum": optionalEnum([]string{"tcp", "ping"}), "description": "tcp, the default: TCP keepalives on every connection. ping: every idle connection is pinged every interval."},
-		"collectors[].request.targets":                         {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
-		"collectors[].request.from":                            {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
-		"collectors[].request.until":                           {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
-		"collectors[].request.pagination":                      paginationRule(),
-		"collectors[].request.pagination.type":                 {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
-		"collectors[].request.pagination.items":                {"not": onlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
-		"collectors[].request.pagination.next":                 {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
-		"collectors[].request.pagination.param":                {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
-		"collectors[].request.pagination.start":                {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it."},
-		"collectors[].request.pagination.size":                 {"minimum": 1, "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held."},
-		"collectors[].request.pagination.max_pages":            {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
-		"collectors[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
-		"collectors[].request.retry.non_idempotent":            {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
-		"collectors[].request.retry.retry_after":               {"description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read."},
-		"collectors[].request.retry.codes":                     {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
-		"collectors[].request.retry.statuses":                  {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused."},
-		"collectors[].request.rpc":                             {"pattern": optionalPattern(`^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`), "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
-		"collectors[].request.message":                         {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
-		"collectors[].request.metadata":                        {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.descriptors":                     {"enum": optionalEnum([]string{"reflection", "protoset", "proto"}), "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
-		"collectors[].request.protoset_file":                   {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
-		"collectors[].request.proto_files":                     {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
-		"collectors[].request.proto_import_paths":              {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
+		"collectors[]":                              collectorSchemaRule(),
+		"collectors[].name":                         {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
+		"collectors[].metrics_prefix":               {"pattern": optionalPattern(transform.MetricsPrefixRE.String()), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
+		"collectors[].cache":                        {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
+		"collectors[].cache.ttl":                    {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
+		"collectors[].cache.stale_if_error":         {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
+		"collectors[].cache.revalidate":             {"description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses."},
+		"collectors[].max_concurrent_probes":        {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
+		"collectors[].coalesce":                     {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].lint":                         {"description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint."},
+		"collectors[].lint.ignore":                  {"description": "The ids of the lint rules whose advice is not given for this collector."},
+		"collectors[].lint.ignore[]":                {"enum": model.LintRules},
+		"collectors[].failure_backoff":              {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
+		"collectors[].failure_backoff.after":        {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
+		"collectors[].failure_backoff.initial":      {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
+		"collectors[].failure_backoff.max":          {"description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer."},
+		"collectors[].failure_backoff.min_budget":   {"description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
+		"collectors[].request":                      requestSchemaRule(),
+		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
+		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. s3file: the object, relative to request.root, its key the two joined. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].request.root":                 {"description": "localfile, sshfile and s3file, required: the absolute directory the collector may read files under, on the exporter's filesystem or on the host, or, for s3file, the key prefix written as one, /exports/app for the keys under exports/app/. No read reaches outside it, through .. or a symbolic link. Not / for localfile; / is taken for sshfile, for an account confined to its own tree, and for s3file, for every key of the bucket. See docs/LOCALFILE.md, docs/SSHFILE.md and docs/S3FILE.md."},
+		"collectors[].request.files":                {"description": "localfile, sshfile and s3file: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
+		"collectors[].request.max_files":            {"description": "localfile, sshfile and s3file with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
+		"collectors[].request.max_total_bytes":      {"description": "localfile, sshfile and s3file with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
+		"collectors[].request.max_age":              {"description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
+		"collectors[].request.username":             {"not": onlyBlanks(), "description": "sshfile and sql, required: the account the file is read as on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone."},
+		"collectors[].request.private_key_file":     {"not": onlyBlanks(), "description": "sshfile: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication."},
+		"collectors[].request.password_file":        {"not": onlyBlanks(), "description": "sshfile: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape."},
+		"collectors[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
+		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
+		"collectors[].request.retry.retry_after":    {"description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read."},
+		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
+		"collectors[].request.retry.statuses":       {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused."},
 		"collectors[].response.graphite.value": {
 			"enum":        optionalEnum(model.GraphiteValues),
 			"description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
@@ -646,7 +540,6 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].expression":          {"not": onlyBlanks(), "description": "Reads the label from the response, in the transform's language, like the metric's expression. Not blanks alone: a constant is a value."},
 		"collectors[].metrics[].labels[].truncate":            {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].metrics[].labels[].required":            {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
-		"collectors[].request.accept_codes":                   {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 		"collectors[].request.rate_limit":                     {"required": []string{"requests_per_second"}, "description": "http and graphite: the most requests a second the collector sends to one origin (scheme, host and port) of its targets, every attempt, page, followed redirect and login request counted where it is sent. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once. Each collector has its own limit for an origin. No probe parameter sets or changes it. See docs/REQUESTS.md#rate-limiting."},
 		"collectors[].request.rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
 		"collectors[].request.rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
@@ -945,186 +838,18 @@ func labelSchemaRule() map[string]any {
 	}
 }
 
-// requestSchemaRule requires type, and for each built request type with
-// required keys of its own, those keys when the type is chosen. A required
-// key of text written "" is as missing as left out, to the exporter and so
-// here (writtenKey). A grpc collector also says where its message types come
-// from, descriptors, unless it calls the health service, whose types are
-// built in (fetch.validateDescriptorKeys), a tlscert collector's tls
-// block takes no insecure_skip_verify true (tlscertRule), and a kubernetes
-// collector names its resource and keeps to its rules (kubernetesRule), and
-// a redis collector's username comes with its password_file (redisRule), and
-// an ldap collector has searches and its bind_dn and password_file come
-// together (ldapRule).
+// requestSchemaRule requires type, and for each built request type with a
+// rule of its own beyond its keys (fetch.RequestType.SchemaRule), that rule
+// when the type is chosen.
 func requestSchemaRule() map[string]any {
 	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file, docs/KUBERNETES.md for kubernetes, docs/REDIS.md for redis, docs/TCP.md for tcp and docs/LDAP.md for ldap."}
-	grpc := writtenKey("rpc")
-	grpc["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
-	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc, fetch.RequestTypeSSHFile: sshfileRequired(), fetch.RequestTypeSQL: sqlRequired(), fetch.RequestTypeS3File: s3fileRequired(), fetch.RequestTypeTLSCert: tlscertRule(), fetch.RequestTypeKubernetes: kubernetesRule(), fetch.RequestTypeRedis: redisRule(), fetch.RequestTypeLDAP: ldapRule()}[name]
-		if required != nil {
+		if rt := fetch.RequestTypes[name]; rt.SchemaRule != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
-				"then": required,
+				"then": rt.SchemaRule(),
 			})
-		}
-	}
-	if len(conditions) > 0 {
-		rule["allOf"] = conditions
-	}
-	return rule
-}
-
-// paginationRule is the rule of request.pagination: type and items
-// required, each written with something other than "", next with type
-// next_url and cursor, and param with cursor, page and offset, as the
-// exporter has them (fetch.validatePagination).
-func paginationRule() map[string]any {
-	when := func(types ...string) map[string]any {
-		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
-	}
-	return map[string]any{
-		"description": "http: fetch the further pages of a paginated answer and merge them into one JSON document, the first page with its items array holding every page's items, which the decoder and the rules read as the answer. Every page is sent the request's headers, credentials and body, and must stay on the target's scheme, host and port. The decoder is json. See docs/REQUESTS.md#pagination.",
-		"allOf": []any{
-			writtenKey("type"),
-			writtenKey("items"),
-			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": writtenKey("next")},
-			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": writtenKey("param")},
-		},
-	}
-}
-
-// tlscertRule is what a tlscert collector's request is held to beyond its
-// keys, as the exporter holds it (fetch.validateTLSCertRequest): its tls
-// block takes no insecure_skip_verify true, since a chain that does not
-// verify is reported and never refused.
-func tlscertRule() map[string]any {
-	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
-}
-
-// redisRule is what a redis collector's request is held to beyond its
-// keys, as the exporter holds it (fetch.validateRedisRequest): username only
-// beside password_file, since an ACL user logs in with both. "" is a key
-// left out to the exporter, so each is "written" when it is something else
-// (writtenKey).
-func redisRule() map[string]any {
-	return map[string]any{"if": writtenKey("username"), "then": writtenKey("password_file")}
-}
-
-// ldapRule is what an ldap collector's request is held to beyond its keys,
-// as the exporter holds it (fetch.validateLDAPRequest): searches, and
-// bind_dn and password_file each only beside the other, since a simple
-// bind with a DN and no password is an unauthenticated one and a password
-// is sent with its account's DN.
-func ldapRule() map[string]any {
-	return map[string]any{
-		"required": []string{"searches"},
-		"allOf": []any{
-			map[string]any{"if": writtenKey("bind_dn"), "then": writtenKey("password_file")},
-			map[string]any{"if": writtenKey("password_file"), "then": writtenKey("bind_dn")},
-		},
-	}
-}
-
-// kubernetesRule is what a kubernetes collector's request is held to, as
-// the exporter holds it (fetch.validateKubernetesRequest): resource,
-// written with something other than "", and not the core group's secrets;
-// namespaces or all_namespaces, not both; bearer_token_file only beside
-// api_server, and beside api_server a credential, bearer_token_file or
-// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
-// to the exporter, so each is "written" when it is something else
-// (writtenKey).
-func kubernetesRule() map[string]any {
-	rule := writtenKey("resource")
-	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
-	rule["allOf"] = []any{
-		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
-		map[string]any{
-			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
-			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
-		},
-		map[string]any{"if": map[string]any{"not": writtenKey("api_server")}, "then": map[string]any{"not": writtenKey("bearer_token_file")}},
-		map[string]any{"if": writtenKey("api_server"), "then": map[string]any{
-			"anyOf":      []any{writtenKey("bearer_token_file"), map[string]any{"properties": map[string]any{"tls": writtenKey("cert_file")}, "required": []string{"tls"}}},
-			"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}},
-		}},
-	}
-	return rule
-}
-
-// sshfileRequired is what an sshfile collector's request requires, as the
-// exporter does (fetch.validateSSHFileRequest): root, username and
-// known_hosts_file, each written with something other than ""; a private key
-// or a password, or both; and a passphrase only beside a private key.
-func sshfileRequired() map[string]any {
-	keys := []string{"root", "username", "known_hosts_file"}
-	properties := map[string]any{}
-	for _, key := range keys {
-		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
-	}
-	return map[string]any{
-		"required":   keys,
-		"properties": properties,
-		"anyOf":      []any{writtenKey("private_key_file"), writtenKey("password_file")},
-		"if":         writtenKey("passphrase_file"),
-		"then":       writtenKey("private_key_file"),
-	}
-}
-
-// s3fileRequired is what an s3file collector's request requires, as the
-// exporter does (fetch.validateS3FileRequest): root, written with something
-// other than ""; access_key_id_file and secret_access_key_file together, if
-// at all; and session_token_file only beside them. "" is a key left out to
-// the exporter, so each is "written" when it is something else (writtenKey).
-func s3fileRequired() map[string]any {
-	rule := writtenKey("root")
-	rule["allOf"] = []any{
-		map[string]any{"if": writtenKey("access_key_id_file"), "then": writtenKey("secret_access_key_file")},
-		map[string]any{"if": writtenKey("secret_access_key_file"), "then": writtenKey("access_key_id_file")},
-		map[string]any{"if": writtenKey("session_token_file"), "then": writtenKey("access_key_id_file")},
-	}
-	return rule
-}
-
-// sqlDriverName is the pattern of request.driver naming one of names, as
-// the exporter matches a driver (fetch.validateSQLRequest): in any case, with
-// blanks around it or not. The spec has the driver matched so, as it has
-// request.type, so the schema takes what the exporter takes rather than the
-// exporter refusing what an enum would.
-func sqlDriverName(names ...string) string {
-	alternatives := make([]string, len(names))
-	for i, name := range names {
-		alternatives[i] = caseless(name)
-	}
-	blanks := "[" + surroundingBlank + "]*"
-	return "^" + blanks + "(" + strings.Join(alternatives, "|") + ")" + blanks + "$"
-}
-
-// sqlRequired is what a sql collector's request requires, as the exporter
-// does (fetch.validateSQLRequest): driver, statement and username, each
-// written with something other than ""; for the oracle driver, when it is
-// built, service_name; and for the snowflake driver, when it is built,
-// password_file or private_key_file; each driver named as the exporter
-// matches it (sqlDriverName).
-func sqlRequired() map[string]any {
-	keys := []string{"driver", "statement", "username"}
-	properties := map[string]any{}
-	for _, key := range keys {
-		properties[key] = writtenKey(key)["properties"].(map[string]any)[key]
-	}
-	rule := map[string]any{"required": keys, "properties": properties}
-	driverIs := func(name string) map[string]any {
-		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": sqlDriverName(name)}}, "required": []string{"driver"}}
-	}
-	var conditions []any
-	for _, name := range fetch.BuiltSQLDrivers() {
-		switch name {
-		case fetch.SQLDriverOracle:
-			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": writtenKey("service_name")})
-		case fetch.SQLDriverSnowflake:
-			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{writtenKey("password_file"), writtenKey("private_key_file")}}})
 		}
 	}
 	if len(conditions) > 0 {

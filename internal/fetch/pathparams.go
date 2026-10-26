@@ -181,28 +181,18 @@ func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 	if overrides.PathSet {
 		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and nothing else in the request and no label value of the collector names them", strings.Join(unused, ", "))
 	}
-	switch c.Request.Type {
-	case RequestTypeGRPC:
-		if overrides.Message != nil {
-			return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request and no label value of the collector names them", strings.Join(unused, ", "))
-		}
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.message, its metadata values or its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeGraphite:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.targets, its request.path (%q), its header or query values or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
-	case RequestTypeSQL:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.database, its args or its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeRedis:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in the arguments of its request.commands or its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeTCP:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.send or its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeLDAP:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in the base or filter of its request.searches or its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeDNS, RequestTypeTLSCert, RequestTypeKubernetes:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its label values names them", strings.Join(unused, ", "), c.Name)
-	case RequestTypeLocalFile, RequestTypeSSHFile, RequestTypeS3File:
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q) or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
+	joined := strings.Join(unused, ", ")
+	if rt := requestTypeOf(c); rt != nil && rt.UnusedParams != nil {
+		return rt.UnusedParams(c, overrides, joined)
 	}
-	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q), body, header or query values or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
+	return unusedParamsIn(c, joined, fmt.Sprintf("its request.path (%q), body, header or query values or its label values", c.Request.Path))
+}
+
+// unusedParamsIn is the refusal of the probe parameters unused, which no
+// placeholder in places, the places a placeholder of the collector can
+// stand in, names (RequestType.UnusedParams).
+func unusedParamsIn(c *model.Collector, unused, places string) error {
+	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them", unused, c.Name, places)
 }
 
 // requestLabel is the URL a verbose self-metric carries for a request. Path

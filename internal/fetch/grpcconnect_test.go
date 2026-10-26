@@ -94,7 +94,7 @@ func TestAGRPCTargetThatNeverAnswersThePrefaceIsGivenUpAtTheConnectLimit(t *test
 		}
 	}()
 
-	c := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, RPC: "grpc.health.v1.Health/Check"}, Transform: model.TransformConfig{Type: "jq"}}
+	c := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "grpc.health.v1.Health/Check"}}, Transform: model.TransformConfig{Type: "jq"}}
 	checked := validGRPC(t, c)
 	addr := listener.Addr().String()
 	// The connection goes on trying for as long as it is kept, so it is

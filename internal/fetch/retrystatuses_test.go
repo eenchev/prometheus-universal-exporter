@@ -221,7 +221,7 @@ func TestRetriesOfSaysWhichStatusesAreRetried(t *testing.T) {
 	if got := RetriesOf(c, RequestOverrides{RetryAttempts: &none}); got != "" {
 		t.Errorf("no attempts: %q", got)
 	}
-	c.Request.Method = http.MethodPost
+	editHTTP(c, func(r *HTTPConfig) { r.Method = http.MethodPost })
 	if got := RetriesOf(c, RequestOverrides{}); got != "" {
 		t.Errorf("a POST without non_idempotent: %q", got)
 	}

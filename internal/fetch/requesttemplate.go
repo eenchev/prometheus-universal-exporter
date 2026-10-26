@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -62,16 +60,6 @@ import (
 var bodyFilters = []string{"json", "number", "form", "xml", "raw"}
 
 var jsonNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
-
-// graphiteValue is what a placeholder may be filled with in a Graphite
-// expression: the characters of a path node or a tag value, and none that
-// Graphite's grammar gives a meaning.
-var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
-
-// sqlDatabaseName is what a placeholder may be filled with in a sql
-// collector's request.database: the characters of a database name that
-// need no quoting in any of the databases.
-var sqlDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.$-]+$`)
 
 // parsePlaceholders finds the placeholders of text, reported as where. strict
 // makes every `{{` a placeholder; otherwise only `{{param_`. filters allows a
@@ -164,20 +152,22 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header", "query", "graphite", "database", "arg"
-	// (a sql collector's args and a redis collector's command arguments),
-	// "line" (a tcp collector's send), or a kind of templateEscapers, such
-	// as an ldap collector's "ldap_dn" and "ldap_filter", which decides the
-	// encoding.
+	// kind is "body", "header", "query", "arg" (a value sent as a value,
+	// such as a sql collector's args and a redis collector's command
+	// arguments), or a kind of templateEscapers or templateFilterRules,
+	// which a request type registers, such as graphite's "graphite", sql's
+	// "database", tcp's "line", ldap's "ldap_dn" and "ldap_filter" and
+	// grpc's "message", which decides the encoding.
 	kind string
 }
 
 // requestTemplates lists a collector's templated body, header and query
-// values. The body is left out when the probe replaced it.
+// values, and the templated parts its request type lists as its own
+// (RequestType.Templates). The body is left out when the probe replaced it.
 func requestTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
 	var out []templateField
-	if overrides.Body == nil && HasPathParams(c.Request.Body) {
-		out = append(out, templateField{"request.body", c.Request.Body, "body"})
+	if _, body := methodBody(c); overrides.Body == nil && HasPathParams(body) {
+		out = append(out, templateField{"request.body", body, "body"})
 	}
 	for _, name := range model.SortedKeys(c.Request.Headers) {
 		if value := c.Request.Headers[name]; HasPathParams(value) {
@@ -189,72 +179,36 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 			out = append(out, templateField{"request.query." + name, value, "query"})
 		}
 	}
-	// A grpc collector's message takes the body's filters, and its
-	// metadata values the header rule.
-	if overrides.Message == nil && HasPathParams(c.Request.Message) {
-		out = append(out, templateField{"request.message", c.Request.Message, "body"})
-	}
-	for _, name := range model.SortedKeys(c.Request.Metadata) {
-		if value := c.Request.Metadata[name]; HasPathParams(value) {
-			out = append(out, templateField{"request.metadata." + name, value, "header"})
-		}
-	}
-	// A sql collector's database and the values bound to its statement.
-	if HasPathParams(c.Request.Database) {
-		out = append(out, templateField{"request.database", c.Request.Database, "database"})
-	}
-	for i, arg := range c.Request.Args {
-		if HasPathParams(arg) {
-			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
-		}
-	}
-	// The arguments of a redis collector's commands, sent as values, as a
-	// sql collector's args are.
-	for i, cmd := range c.Request.Commands {
-		for j, arg := range cmd.Command {
-			if j > 0 && HasPathParams(arg) {
-				out = append(out, templateField{fmt.Sprintf("request.commands[%d].command[%d]", i, j), arg, "arg"})
-			}
-		}
-	}
-	// A tcp collector's send, the line written to its server.
-	if HasPathParams(c.Request.Send) {
-		out = append(out, templateField{"request.send", c.Request.Send, "line"})
-	}
-	// The base and the filter of an ldap collector's searches, each value
-	// escaped as its place escapes one (ldapfilter.go).
-	for i, search := range c.Request.Searches {
-		if HasPathParams(search.Base) {
-			out = append(out, templateField{fmt.Sprintf("request.searches[%d].base", i), search.Base, "ldap_dn"})
-		}
-		if HasPathParams(search.Filter) {
-			out = append(out, templateField{fmt.Sprintf("request.searches[%d].filter", i), search.Filter, "ldap_filter"})
-		}
-	}
-	// A static target's own targets replace the collector's, placeholders
-	// and all.
-	if overrides.Targets == nil {
-		for i, target := range c.Request.Targets {
-			if HasPathParams(target) {
-				out = append(out, templateField{fmt.Sprintf("request.targets[%d]", i), target, "graphite"})
-			}
-		}
+	// The parts of the request that are its type's own.
+	if rt := requestTypeOf(c); rt != nil && rt.Templates != nil {
+		out = append(out, rt.Templates(c, overrides)...)
 	}
 	return out
 }
 
+// templateFilterRules are the kinds of templated field a request type
+// registers that take the body's filters and are written as the body is,
+// each with the rule of which filters it takes: it says why a placeholder of
+// the field where may not have its filter, or returns nil. Registered by the
+// type, as templateEscapers are, so the shared code knows no field of one
+// type.
+var templateFilterRules = map[string]func(where string, p pathPlaceholder) error{}
+
+// templateReplacers are the kinds of templated field a request type
+// registers that a probe's overrides can replace, each saying whether these
+// do (replacedBy).
+var templateReplacers = map[string]func(overrides RequestOverrides) bool{}
+
 // parseField finds the placeholders of a field.
 func (f templateField) parse() ([]pathPlaceholder, error) {
-	placeholders, err := parsePlaceholders(f.where, f.text, false, f.kind == "body")
-	if err != nil || f.where != "request.message" {
+	rule := templateFilterRules[f.kind]
+	placeholders, err := parsePlaceholders(f.where, f.text, false, f.kind == "body" || rule != nil)
+	if err != nil || rule == nil {
 		return placeholders, err
 	}
-	// A message is JSON, so only the filters that write JSON apply.
 	for _, p := range placeholders {
-		switch p.Filter {
-		case "", "json", "number", "raw":
-		default:
-			return nil, fmt.Errorf("%s placeholder {{%s}} has the filter |%s, which does not write JSON; a message takes |json for a string, |number for a number, or |raw", f.where, p.Name, p.Filter)
+		if err := rule(f.where, p); err != nil {
+			return nil, err
 		}
 	}
 	return placeholders, nil
@@ -295,61 +249,16 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 	return b.String(), nil
 }
 
-// lineValueRule is why a placeholder's value in a tcp collector's send is
-// held to lineValue (lineValueRefused).
-const lineValueRule = "a value written into request.send may hold only letters, digits and . _ - : / @ + = , %, since the server reads send as commands, and a blank, a ';', a quote or a line break could make the value an argument or a command of its own"
-
-// lineValue is the characters a placeholder's value in a tcp collector's
-// send may hold. The value lands in a line of a text protocol, and those
-// protocols split it on more than the line break: HAProxy's runtime API
-// runs each ';'-separated command of a line, and memcached, ZooKeeper and
-// NUT split a command's arguments on blanks. So a value is held to what
-// names a thing, a proxy, a server, a UPS or a key, and nothing that
-// separates or quotes: a probe's value stays one argument and adds none.
-var lineValue = regexp.MustCompile(`^[A-Za-z0-9._\-:/@+=,%]*$`)
-
-// lineValueRefused names the first character of value lineValue does not
-// take, and says whether there is one. A blank, a line break and a control
-// character are named, as a quoted glyph would not show them; any other
-// is shown with its code point.
-func lineValueRefused(value string) (string, bool) {
-	if lineValue.MatchString(value) {
-		return "", false
-	}
-	for rest := value; rest != ""; {
-		r, size := utf8.DecodeRuneInString(rest)
-		rest = rest[size:]
-		switch {
-		case r == utf8.RuneError && size == 1:
-			return "a byte that is not UTF-8", true
-		case lineValue.MatchString(string(r)):
-			continue
-		case r == ' ':
-			return "a blank (U+0020)", true
-		case r == '\r' || r == '\n':
-			return fmt.Sprintf("a line break (%U)", r), true
-		case unicode.IsControl(r):
-			return fmt.Sprintf("a control character (%U)", r), true
-		}
-		return fmt.Sprintf("%q (%U)", r, r), true
-	}
-	return "", false
-}
-
 // templateEscapers are the encodings of the kinds of templated field a
 // request type registers itself, by kind, so that a build without the type
-// carries none of its code: each writes a value into its place, or says
-// why it cannot be.
-var templateEscapers = map[string]func(value string) (string, error){}
+// carries none of its code: each writes the value of the placeholder name
+// into its place, the field where, or says why it cannot be.
+var templateEscapers = map[string]func(where, name, value string) (string, error){}
 
 // write encodes a value for its place.
 func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 	if escape, ok := templateEscapers[f.kind]; ok {
-		written, err := escape(value)
-		if err != nil {
-			return "", fmt.Errorf("%s: the value of %s: %w", f.where, p.Name, err)
-		}
-		return written, nil
+		return escape(f.where, p.Name, value)
 	}
 	switch f.kind {
 	case "header":
@@ -367,21 +276,6 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		// the driver quoted as a literal, never as SQL, or sent to a redis
 		// server as one bulk string of a command, never parsed as more of
 		// it, so any text is safe.
-		return value, nil
-	case "line":
-		if character, refused := lineValueRefused(value); refused {
-			return "", fmt.Errorf("%s: the value of %s holds %s; %s", f.where, p.Name, character, lineValueRule)
-		}
-		return value, nil
-	case "database":
-		if !sqlDatabaseName.MatchString(value) {
-			return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . $, since it names the database the statement runs on", f.where, p.Name, value)
-		}
-		return value, nil
-	case "graphite":
-		if !graphiteValue.MatchString(value) {
-			return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . : @ %% + ~, since it lands inside a Graphite expression, where anything else could change the expression", f.where, p.Name, value)
-		}
 		return value, nil
 	}
 	switch p.Filter {
@@ -456,16 +350,15 @@ func parseRequestPlaceholders(c *model.Collector, overrides RequestOverrides) re
 }
 
 // replacedBy tells whether the overrides replace the field, which
-// requestTemplates then leaves out: the body, the message, and a graphite
-// collector's targets.
+// requestTemplates then leaves out: the body, and the fields of the kinds a
+// request type registers as replaceable (templateReplacers), such as a grpc
+// collector's message and a graphite collector's targets.
 func (f templateField) replacedBy(overrides RequestOverrides) bool {
-	switch {
-	case f.where == "request.body":
+	if f.kind == "body" {
 		return overrides.Body != nil
-	case f.where == "request.message":
-		return overrides.Message != nil
-	case strings.HasPrefix(f.where, "request.targets["):
-		return overrides.Targets != nil
+	}
+	if replaced, ok := templateReplacers[f.kind]; ok {
+		return replaced(overrides)
 	}
 	return false
 }

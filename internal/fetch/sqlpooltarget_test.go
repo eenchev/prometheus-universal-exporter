@@ -39,8 +39,7 @@ func TestAHangingSQLKeepalivePingHoldsOnePlaceAtMaxPerTargetUntilItsInterval(t *
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one, interval := 1, model.Duration(500*time.Millisecond)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{MaxPerTarget: &one, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{MaxPerTarget: &one, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +75,7 @@ func TestASQLKeepaliveSkipsItsPingWhileTheScrapesHoldEveryPlace(t *testing.T) {
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one, interval := 1, model.Duration(5*time.Millisecond)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{MaxPerTarget: &one, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{MaxPerTarget: &one, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +119,9 @@ func TestTheSQLPoolsOfOneServersDatabasesAreOneTarget(t *testing.T) {
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	two, three := 2, 3
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
 		// A target keeps no more pools than its max_per_target.
-		r.Connections = &model.SQLConnections{MaxTargets: &two, MaxPerTarget: &three}
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxTargets: &two, MaxPerTarget: &three} })
 	})
 	scrape := func(target, database string) {
 		t.Helper()
@@ -165,8 +163,8 @@ func TestMaxPerTargetBoundsTheConnectionsToAServerAcrossItsDatabases(t *testing.
 	// Two places, so that the target may keep two pools.
 	two := 2
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Database = "{{param_db}}"
-		r.Connections = &model.SQLConnections{MaxPerTarget: &two, MaxIdlePerTarget: &two}
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db}}" })
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &two, MaxIdlePerTarget: &two} })
 	})
 	of := func(database string) RequestOverrides {
 		return RequestOverrides{Params: map[string]string{"param_db": database}}
@@ -213,7 +211,9 @@ func TestAStaticTargetWithItsOwnConnectionSettingsIsATargetOfItsOwn(t *testing.T
 	// Two places, so that the probes' target may keep the pools of two
 	// accounts.
 	two, three := 2, 3
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &two} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &two} })
+	})
 	own := &model.StaticTarget{Name: "own", Collector: "db", Target: "db.example", Request: model.TargetRequestConfig{Username: "owner", Connections: &model.SQLConnections{MaxPerTarget: &three}}}
 	account := &model.StaticTarget{Name: "account", Collector: "db", Target: "db.example", Request: model.TargetRequestConfig{Username: "reader"}}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {

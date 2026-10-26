@@ -114,7 +114,7 @@ func TestRetryAttemptsAreBounded(t *testing.T) {
 // A request that fails does not put request.query or the target's query in
 // its error.
 func TestAFailedRequestsErrorWithholdsTheQuery(t *testing.T) {
-	c := model.Collector{Name: "q", Request: model.RequestConfig{Type: RequestTypeHTTP, Method: "GET", Query: map[string]string{"api_key": "s3cretQUERY"}}, Limits: model.Limits{MaxResponseBytes: 1024}}
+	c := model.Collector{Name: "q", Request: model.RequestConfig{Type: RequestTypeHTTP, Query: map[string]string{"api_key": "s3cretQUERY"}, Own: HTTPConfig{Method: "GET"}}, Limits: model.Limits{MaxResponseBytes: 1024}}
 	_, err := FetchCollector(t.Context(), "http://127.0.0.1:1/x?token=s3cretTARGET", &c, RequestOverrides{}, nil)
 	if err == nil || strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "api_key=<redacted>") {
 		t.Fatalf("%v", err)

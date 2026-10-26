@@ -155,8 +155,8 @@ func TestAPostgresRowOverTheResponseLimitIsRefusedBeforeItIsRead(t *testing.T) {
 	})
 	c := &model.Collector{
 		Name: "pg",
-		Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "SELECT v", Username: "metrics",
-			PasswordFile: testutil.WriteIn(t, t.TempDir(), "password", "s3cret\n"), MaxResponseBytes: 1 << 20},
+		Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics",
+			PasswordFile: testutil.WriteIn(t, t.TempDir(), "password", "s3cret\n"), MaxResponseBytes: 1 << 20, Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "SELECT v"}},
 		Transform: model.TransformConfig{Type: "jq"},
 	}
 	if err := ValidateRequest(c); err != nil {

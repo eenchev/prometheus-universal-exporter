@@ -78,7 +78,9 @@ func TestGRPCAnAnswerWhoseJSONIsOverTheLimitIsRefusedBeforeItIsDecoded(t *testin
 	addr := startRawGRPC(t, answer)
 	dir := t.TempDir()
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtoFiles, c.Request.ProtoImportPaths = "proto", []string{grpctest.WriteSources(t, dir)}, []string{dir}
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Descriptors, r.ProtoFiles, r.ProtoImportPaths = "proto", []string{grpctest.WriteSources(t, dir)}, []string{dir}
+	})
 	c.Request.MaxResponseBytes = 10 << 20
 	checked := validGRPC(t, c)
 
@@ -117,14 +119,14 @@ func TestGRPCAnAnswerTheCountLetsThroughIsMeasuredAsJSON(t *testing.T) {
 		return `{"details": [` + durations + `]}`, nil
 	}})
 	c := grpcCollector()
-	c.Request.RPC = grpctest.Service + "/Explain"
+	editGRPC(&c, func(r *GRPCConfig) { r.RPC = grpctest.Service + "/Explain" })
 	checked := validGRPC(t, c)
 	resp, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Each Duration counts as "0s", and is "1.500s" with "value": written.
-	method, err := staticMethod(&model.Collector{Request: model.RequestConfig{Type: RequestTypeGRPC, RPC: c.Request.RPC, Descriptors: "protoset", ProtosetFile: grpctest.WriteProtoset(t, filepath.Join(t.TempDir(), "queue.pb"), true)}})
+	method, err := staticMethod(&model.Collector{Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: grpcRequest(&c).RPC, Descriptors: "protoset", ProtosetFile: grpctest.WriteProtoset(t, filepath.Join(t.TempDir(), "queue.pb"), true)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

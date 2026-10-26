@@ -622,8 +622,7 @@ func TestVerificationKeysBesideAnOptionThatDoesNotVerifyAreRefused(t *testing.T)
 		if err := checkSQLOptions(d, map[string]string{tc.option: tc.insecure}, model.TLSConfig{CertFile: "c.pem", KeyFile: "k.pem"}); err != nil {
 			t.Errorf("%s: a client certificate beside %s: %v", tc.driver, tc.insecure, err)
 		}
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: tc.driver, Statement: "SELECT 1", Username: "u",
-			Options: map[string]string{tc.option: tc.insecure}, TLS: model.TLSConfig{CAFile: "/etc/ssl/db-ca.pem"}}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", TLS: model.TLSConfig{CAFile: "/etc/ssl/db-ca.pem"}, Own: SQLConfig{Driver: tc.driver, Statement: "SELECT 1", Options: map[string]string{tc.option: tc.insecure}}}}
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "which does not verify it") {
 			t.Errorf("%s: loading gives %v", tc.driver, err)
 		}

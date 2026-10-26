@@ -19,6 +19,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// KindRows is the Kind of the rows of a statement, which a driver read
+// value by value and no decoder decoded; it is shown as the format of the
+// answer, as a decoder's name is.
+const KindRows = "sql"
+
 // Decoded is a response decoded for a transform. Kind names the decoder, and
 // Data holds what it produced: normalized JSON or YAML values, the same
 // values of NDJSON, logfmt, TOML and INI (ndjson.go, logfmt.go, toml.go,
@@ -26,6 +31,7 @@ import (
 // *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
 // Graphite series document (graphite.go), or the body as a string. Raw is the body the decoder read.
 type Decoded struct {
+	// Kind is the decoder's name, or KindRows for the rows a driver read.
 	Kind string
 	Data any
 	Raw  []byte
@@ -180,9 +186,10 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 // decodeBody is Decode, with the error as the decoder made it.
 func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// A sql collector's rows were read by its driver, value by value, and
-	// are handed on as they are: they have no body to decode.
-	if c.Request.Type == fetch.RequestTypeSQL {
-		return &Decoded{Kind: "sql", Data: r.Rows, Raw: r.Body, Columns: r.Columns}, nil
+	// are handed on as they are: they have no body to decode
+	// (fetch.RequestType.Rows).
+	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
+		return &Decoded{Kind: KindRows, Data: r.Rows, Raw: r.Body, Columns: r.Columns}, nil
 	}
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)

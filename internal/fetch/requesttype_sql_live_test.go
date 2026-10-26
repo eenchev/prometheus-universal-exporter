@@ -74,7 +74,7 @@ func TestLiveSQL(t *testing.T) {
 			t.Cleanup(sqlPools.closeAll)
 			passwordFile := testutil.WriteIn(t, t.TempDir(), "password", os.Getenv(db.prefix+"_PASSWORD")+"\n")
 			collector := func(statement string) *model.Collector {
-				c := &model.Collector{Name: "live", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: db.driver, Statement: statement, Username: os.Getenv(db.prefix + "_USER"), PasswordFile: passwordFile}}
+				c := &model.Collector{Name: "live", Request: model.RequestConfig{Type: RequestTypeSQL, Username: os.Getenv(db.prefix + "_USER"), PasswordFile: passwordFile, Own: SQLConfig{Driver: db.driver, Statement: statement}}}
 				if err := ValidateRequest(c); err != nil {
 					t.Fatal(err)
 				}

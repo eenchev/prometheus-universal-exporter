@@ -247,7 +247,7 @@ func TestA401IsAnsweredWithOneNewLogin(t *testing.T) {
 	freshLogins(t)
 	server := newLoginServer(t, tokenAnswer(0), bearer("tok2"))
 	c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
-	c.Request.Method = http.MethodPost
+	editHTTP(c, func(r *HTTPConfig) { r.Method = http.MethodPost })
 	response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil)
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("fetch: %v, %+v", err, response)

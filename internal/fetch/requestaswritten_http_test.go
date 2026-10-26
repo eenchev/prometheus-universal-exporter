@@ -497,18 +497,22 @@ func TestAnUnusableDefaultIsRefusedAtLoad(t *testing.T) {
 	}{
 		"a word as a number": {
 			func(c *model.Collector) {
-				c.Request.Method, c.Request.Body = "POST", `{"n": {{param_limit:ten|number}}}`
+				editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = "POST", `{"n": {{param_limit:ten|number}}}` })
 			},
 			[]string{`collector "web"`, "request.body", "param_limit", `"ten"`, "default"},
 		},
 		"beside a placeholder without a default": {
 			func(c *model.Collector) {
-				c.Request.Method, c.Request.Body = "POST", `{"s": {{param_service|json}}, "n": {{param_limit:1.|number}}}`
+				editHTTP(c, func(r *HTTPConfig) {
+					r.Method, r.Body = "POST", `{"s": {{param_service|json}}, "n": {{param_limit:1.|number}}}`
+				})
 			},
 			[]string{`collector "web"`, "request.body", "param_limit", "default"},
 		},
 		"an empty default as a number": {
-			func(c *model.Collector) { c.Request.Method, c.Request.Body = "POST", `{"n": {{param_limit:|number}}}` },
+			func(c *model.Collector) {
+				editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = "POST", `{"n": {{param_limit:|number}}}` })
+			},
 			[]string{`collector "web"`, "request.body", "param_limit", "default"},
 		},
 		"a line break in a header": {
@@ -535,11 +539,13 @@ func TestAnUnusableDefaultIsRefusedAtLoad(t *testing.T) {
 	}
 	// Defaults that can be written, and placeholders without one, load.
 	good := httpCollector(t, func(c *model.Collector) {
-		c.Request.Method = "POST"
+		editHTTP(c, func(r *HTTPConfig) { r.Method = "POST" })
 		c.Request.Path = "/api/{{param_tenant:acme}}/{{param_suffix:}}"
 		c.Request.Headers = map[string]string{"X-Tenant": "{{param_tenant:a\tb}}"}
 		c.Request.Query = map[string]string{"region": "{{param_region:eu&west}}"}
-		c.Request.Body = `{"s": {{param_service|json}}, "n": {{param_limit:10|number}}, "q": {{param_q:a "b"|json}}, "r": {{param_r:}}}`
+		editHTTP(c, func(r *HTTPConfig) {
+			r.Body = `{"s": {{param_service|json}}, "n": {{param_limit:10|number}}, "q": {{param_q:a "b"|json}}, "r": {{param_r:}}}`
+		})
 	})
 	if _, err := CheckRequestParams(good, RequestOverrides{Params: map[string]string{"param_service": "checkout"}}); err != nil {
 		t.Fatalf("the defaults that loaded do not render: %v", err)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -21,7 +22,8 @@ func TestDNSDocumentationExamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, conf)
 	}
-	if len(cfg.Collectors) != 3 || cfg.Collectors[0].Request.RecordType != "MX" || cfg.Collectors[2].Request.RecordType != "TXT" {
+	recordType := func(c int) string { return cfg.Collectors[c].Request.Own.(fetch.DNSConfig).RecordType }
+	if len(cfg.Collectors) != 3 || recordType(0) != "MX" || recordType(2) != "TXT" {
 		t.Errorf("collectors %+v", cfg.Collectors)
 	}
 	file, err := config.LoadStaticTargets(testutil.WriteIn(t, dir, "targets.yaml", pageBlock(t, blocks, "interval: 5m\ntargets:\n")))

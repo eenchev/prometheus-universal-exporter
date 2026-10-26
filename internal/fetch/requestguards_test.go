@@ -91,7 +91,7 @@ func TestTheResponseLimitReportsTheRealSize(t *testing.T) {
 	// A HEAD answer has no body, whatever size it says the body would be.
 	head := httpCollector(t, func(c *model.Collector) {
 		c.Request.MaxResponseBytes = 100
-		c.Request.Method = http.MethodHead
+		editHTTP(c, func(r *HTTPConfig) { r.Method = http.MethodHead })
 		c.Request.AcceptStatus = []string{"2xx"}
 	})
 	if _, err := FetchCollector(ctx, declared.URL, head, RequestOverrides{}, nil); err != nil {

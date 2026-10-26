@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +25,27 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
+
+// A sql collector's placeholders are in its database and its args.
+func init() {
+	ownPlaceholders[RequestTypeSQL] = func(c *model.Collector) {
+		c.Request.Own = SQLConfig{Database: "{{param_database:x}}", Args: []string{"{{param_arg:x}}"}}
+	}
+}
+
+// sqlOwn edits a sql request's own keys.
+func sqlOwn(r *model.RequestConfig, edit func(*SQLConfig)) {
+	own, _ := r.Own.(SQLConfig)
+	edit(&own)
+	r.Own = own
+}
+
+// editSQL edits a sql collector's own keys.
+func editSQL(c *model.Collector, edit func(*SQLConfig)) {
+	r := sqlRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
 
 // sqlFixture is a stand-in database that every connection of the sql
 // request type reaches in place of its driver, through the type's pools and
@@ -67,7 +89,7 @@ func (f *sqlFixture) collector(t *testing.T, name, driverName, statement string,
 	t.Helper()
 	c := &model.Collector{
 		Name:          name,
-		Request:       model.RequestConfig{Type: RequestTypeSQL, Driver: driverName, Statement: statement, Username: "metrics", PasswordFile: f.passwordFile},
+		Request:       model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", PasswordFile: f.passwordFile, Own: SQLConfig{Driver: driverName, Statement: statement}},
 		Transform:     model.TransformConfig{Type: "jq"},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 	}
@@ -212,7 +234,10 @@ func TestTheRowsOfASQLStatementAreBounded(t *testing.T) {
 		{0, 19, ""},
 		{0, 18, "the statement's rows hold more than the response limit of 18 bytes of values and column names"},
 	} {
-		c := f.collector(t, "db", SQLDriverMySQL, "three", func(r *model.RequestConfig) { r.MaxRows, r.MaxResponseBytes = tc.maxRows, tc.maxBytes })
+		c := f.collector(t, "db", SQLDriverMySQL, "three", func(r *model.RequestConfig) {
+			r.MaxResponseBytes = tc.maxBytes
+			sqlOwn(r, func(o *SQLConfig) { o.MaxRows = tc.maxRows })
+		})
 		resp, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil)
 		switch {
 		case tc.want == "" && (err != nil || len(resp.Rows) != 3):
@@ -285,8 +310,8 @@ func TestSQLArgsAndDatabaseTakeTheProbesParameters(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
-		r.Args = []string{"{{param_queue}}", "fixed", "{{param_state:open}}"}
-		r.Database = "app_{{param_tenant}}"
+		sqlOwn(r, func(o *SQLConfig) { o.Args = []string{"{{param_queue}}", "fixed", "{{param_state:open}}"} })
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "app_{{param_tenant}}" })
 	})
 	params := map[string]string{"param_queue": "it's; DROP TABLE x", "param_tenant": "acme"}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Params: params}, nil); err != nil {
@@ -317,7 +342,7 @@ func TestSQLArgsAndDatabaseTakeTheProbesParameters(t *testing.T) {
 func TestASQLConnectionIsMadeWithTheCollectorsSettings(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
-	c := f.collector(t, "db", SQLDriverMySQL, "q", func(r *model.RequestConfig) { r.Database = "app" })
+	c := f.collector(t, "db", SQLDriverMySQL, "q", func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "app" }) })
 	if _, err := FetchCollector(context.Background(), "DB.Example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +379,9 @@ func TestASQLPoolHasTheCollectorsConnectionSettings(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	three := 3
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &three} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &three} })
+	})
 	for range 3 {
 		if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 			t.Fatal(err)
@@ -396,7 +423,9 @@ func TestASQLScrapeWaitsAtMaxPerTarget(t *testing.T) {
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 4)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one := 1
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	})
 	first := make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil)
@@ -432,7 +461,9 @@ func TestASQLCollectorKeepsAtMostMaxTargetsPools(t *testing.T) {
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	two := 2
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxTargets: &two} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxTargets: &two} })
+	})
 	for _, target := range []string{"a.example", "b.example", "a.example", "c.example"} {
 		if _, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil); err != nil {
 			t.Fatal(err)
@@ -495,7 +526,7 @@ func TestFollowingAConfigurationClosesTheSQLPoolsItNoLongerUses(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := *changed
-	now.Request.Database = "elsewhere"
+	editSQL(&now, func(r *SQLConfig) { r.Database = "elsewhere" })
 	FollowConfiguration([]model.Collector{*kept, now}, []model.StaticTarget{target})
 	events.await(t, "closed: reload", 2)
 	if size := sqlPools.size(); size != 2 {
@@ -519,8 +550,7 @@ func TestASQLPoolPingsAnIdleConnectionWithCheckPing(t *testing.T) {
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	interval := model.Duration(5 * time.Millisecond)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +569,10 @@ func TestASQLPoolPingsAnIdleConnectionWithCheckPing(t *testing.T) {
 func TestADebugProbeShowsTheSQLStatementWithoutSecrets(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"state", "n"}, Rows: [][]driver.Value{{"open", int64(3)}}}
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Database = "app"; r.Args = []string{"secret-arg"} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Database = "app" })
+		sqlOwn(r, func(o *SQLConfig) { o.Args = []string{"secret-arg"} })
+	})
 	var requests []TracedRequest
 	for range 2 {
 		ctx, trace := WithRequestTrace(context.Background())
@@ -573,7 +606,7 @@ func TestADebugProbeShowsTheSQLStatementWithoutSecrets(t *testing.T) {
 // and withheld when it holds anything else.
 func TestTheVerboseLabelsOfASQLStatement(t *testing.T) {
 	f := newSQLFixture(t)
-	c := f.collector(t, "db", SQLDriverSQLServer, "SELECT 1 AS one", func(r *model.RequestConfig) { r.Database = "app_{{param_tenant}}" })
+	c := f.collector(t, "db", SQLDriverSQLServer, "SELECT 1 AS one", func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "app_{{param_tenant}}" }) })
 	label, err := RequestLabelFor("db.example", c, RequestOverrides{})
 	if err != nil || label != "sqlserver://db.example:1433/app_{{param_tenant}}" || RequestMethodFor(c, RequestOverrides{}) != "QUERY" {
 		t.Errorf("label %q %v, method %q", label, err, RequestMethodFor(c, RequestOverrides{}))
@@ -685,34 +718,46 @@ func TestASQLCollectorsRequestIsCheckedWhenItLoads(t *testing.T) {
 		change func(*model.RequestConfig)
 		want   string
 	}{
-		"no driver":             {func(r *model.RequestConfig) { r.Driver = "" }, `collector "db" has no request.driver; a sql collector names its database's driver, one of: `},
-		"an unknown driver":     {func(r *model.RequestConfig) { r.Driver = "db2" }, `collector "db" has unknown request.driver "db2"; the sql drivers are clickhouse, mysql, oracle, postgres, snowflake, sqlserver, vertica`},
-		"no statement":          {func(r *model.RequestConfig) { r.Statement = " " }, `collector "db" has no request.statement`},
+		"no driver":             {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Driver = "" }) }, `collector "db" has no request.driver; a sql collector names its database's driver, one of: `},
+		"an unknown driver":     {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Driver = "db2" }) }, `collector "db" has unknown request.driver "db2"; the sql drivers are clickhouse, mysql, oracle, postgres, snowflake, sqlserver, vertica`},
+		"no statement":          {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Statement = " " }) }, `collector "db" has no request.statement`},
 		"no username":           {func(r *model.RequestConfig) { r.Username = "" }, `collector "db" request.username is required for request.type sql`},
 		"a blank password file": {func(r *model.RequestConfig) { r.PasswordFile = " " }, "request.password_file is written with blanks alone"},
 		"a private key":         {func(r *model.RequestConfig) { r.PrivateKeyFile = "/k" }, "sets request.private_key_file, which only the snowflake driver takes"},
-		"a passphrase":          {func(r *model.RequestConfig) { r.PassphraseFile = "/p" }, `collector "db" sets request.passphrase_file, which does not apply to request.type "sql"`},
-		"a service name":        {func(r *model.RequestConfig) { r.ServiceName = "ORCL" }, "sets request.service_name, which only the oracle driver takes"},
-		"a blank database":      {func(r *model.RequestConfig) { r.Database = "  " }, "request.database is written with blanks alone"},
-		"an unknown option":     {func(r *model.RequestConfig) { r.Options = map[string]string{"sslrootcert": "/ca"} }, `request.options sets "sslrootcert", which the postgres driver does not take; it takes: application_name, sslmode`},
-		"an option's value":     {func(r *model.RequestConfig) { r.Options = map[string]string{"sslmode": "prefer"} }, `request.options.sslmode is "prefer"; the postgres driver takes one of disable, require, verify-full`},
+		"a passphrase":          {func(r *model.RequestConfig) { r.Foreign = []string{"passphrase_file"} }, `collector "db" sets request.passphrase_file, which does not apply to request.type "sql"`},
+		"a service name":        {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.ServiceName = "ORCL" }) }, "sets request.service_name, which only the oracle driver takes"},
+		"a blank database":      {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "  " }) }, "request.database is written with blanks alone"},
+		"an unknown option": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslrootcert": "/ca"} })
+		}, `request.options sets "sslrootcert", which the postgres driver does not take; it takes: application_name, sslmode`},
+		"an option's value": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslmode": "prefer"} })
+		}, `request.options.sslmode is "prefer"; the postgres driver takes one of disable, require, verify-full`},
 		"tls without tls": {func(r *model.RequestConfig) {
-			r.Options = map[string]string{"sslmode": "disable"}
+			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslmode": "disable"} })
 			r.TLS.CAFile = "/ca"
 		}, `sets request.tls, but request.options.sslmode is "disable", which uses no TLS`},
-		"half a certificate":  {func(r *model.RequestConfig) { r.TLS.CertFile = "/c" }, "request.tls sets only one of cert_file and key_file"},
-		"negative max_rows":   {func(r *model.RequestConfig) { r.MaxRows = -1 }, "request.max_rows must not be negative"},
-		"a negative limit":    {func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &negative} }, "request.connections.max_per_target must not be negative"},
-		"a negative lifetime": {func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxLifetime: &half} }, "request.connections.max_lifetime must not be negative"},
+		"half a certificate": {func(r *model.RequestConfig) { r.TLS.CertFile = "/c" }, "request.tls sets only one of cert_file and key_file"},
+		"negative max_rows":  {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.MaxRows = -1 }) }, "request.max_rows must not be negative"},
+		"a negative limit": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &negative} })
+		}, "request.connections.max_per_target must not be negative"},
+		"a negative lifetime": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxLifetime: &half} })
+		}, "request.connections.max_lifetime must not be negative"},
 		"a short keepalive": {func(r *model.RequestConfig) {
-			r.Connections = &model.SQLConnections{Keepalive: &model.SQLKeepalive{Interval: &short}}
+			sqlOwn(r, func(o *SQLConfig) {
+				o.Connections = &model.SQLConnections{Keepalive: &model.SQLKeepalive{Interval: &short}}
+			})
 		}, "request.connections.keepalive.interval 500ms is under the least, 1s"},
 		"an unknown check": {func(r *model.RequestConfig) {
-			r.Connections = &model.SQLConnections{Keepalive: &model.SQLKeepalive{Check: "icmp"}}
+			sqlOwn(r, func(o *SQLConfig) {
+				o.Connections = &model.SQLConnections{Keepalive: &model.SQLKeepalive{Check: "icmp"}}
+			})
 		}, `request.connections.keepalive.check is "icmp"; want tcp`},
 		"a retry": {func(r *model.RequestConfig) { r.Retry.Attempts = 2 }, `sets request.retry, which does not apply to request.type "sql"`},
 	} {
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "metrics", PasswordFile: f.passwordFile}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", PasswordFile: f.passwordFile, Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q"}}}
 		tc.change(&c.Request)
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v\nwant %q", name, err, tc.want)
@@ -720,10 +765,12 @@ func TestASQLCollectorsRequestIsCheckedWhenItLoads(t *testing.T) {
 	}
 	// Taken: no limits at all, and a keepalive switched off.
 	c := f.collector(t, "db", " PostgreS ", "q", func(r *model.RequestConfig) {
-		r.Connections = &model.SQLConnections{MaxPerTarget: &zero, MaxTargets: &zero, Keepalive: &model.SQLKeepalive{Interval: new(model.Duration)}}
+		sqlOwn(r, func(o *SQLConfig) {
+			o.Connections = &model.SQLConnections{MaxPerTarget: &zero, MaxTargets: &zero, Keepalive: &model.SQLKeepalive{Interval: new(model.Duration)}}
+		})
 	})
-	if c.Request.Driver != SQLDriverPostgres {
-		t.Errorf("driver %q", c.Request.Driver)
+	if sqlRequest(c).Driver != SQLDriverPostgres {
+		t.Errorf("driver %q", sqlRequest(c).Driver)
 	}
 	// A static target may not set max_targets, nor a key another type owns.
 	for _, tc := range []struct {
@@ -754,7 +801,7 @@ func TestASQLDriverTheBuildLeftOutIsRefusedSayingHowToBuildIt(t *testing.T) {
 	if missing == "" {
 		t.Skip("the build has every sql driver")
 	}
-	c := &model.Collector{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: missing, Statement: "q", Username: "u"}}
+	c := &model.Collector{Name: "x", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: missing, Statement: "q"}}}
 	want := `collector "x" uses sql driver "` + missing + `", which this build does not include; it was built with: ` + strings.Join(BuiltSQLDrivers(), ", ") + `. Build with SQL_DRIVERS=` + missing + ` (make build SQL_DRIVERS=` + missing + `, or the image's SQL_DRIVERS build argument)`
 	if err := ValidateRequest(c); err == nil || err.Error() != want {
 		t.Errorf("%v\nwant %s", err, want)
@@ -890,5 +937,36 @@ func TestADryRunWarnsOfTheSQLFilesAScrapeWouldFailOn(t *testing.T) {
 	good := f.collector(t, "good", SQLDriverPostgres, "q")
 	if warnings := FileWarnings(good, nil); len(warnings) != 0 {
 		t.Errorf("%q", warnings)
+	}
+}
+
+// A collector that sets none of the sql type's keys is written as YAML
+// without them, as the fingerprint of its cache writes it: a collector of
+// another type is written, and costs, as it did before they were added. One
+// that sets them is written with them, beside the common part's keys.
+func TestACollectorIsWrittenWithoutTheSQLKeysItLeavesOut(t *testing.T) {
+	keys := []string{"driver", "database", "statement", "args", "options", "service_name", "max_rows", "connections"}
+	has := func(written []byte, key string) bool {
+		return regexp.MustCompile(`(?m)^\s+` + key + `:`).Match(written)
+	}
+	written, err := yaml.Marshal(&model.Collector{Name: "web", Request: model.RequestConfig{Type: "http", Path: "/status"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if has(written, key) {
+			t.Errorf("%s is written:\n%s", key, written)
+		}
+	}
+	one := 1
+	written, err = yaml.Marshal(&model.Collector{Name: "db", Request: model.RequestConfig{Type: "sql", Own: SQLConfig{Driver: "postgres", Database: "app", Statement: "SELECT 1", Args: []string{"a"},
+		Options: map[string]string{"sslmode": "disable"}, ServiceName: "s", MaxRows: 5, Connections: &model.SQLConnections{MaxPerTarget: &one}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if !has(written, key) {
+			t.Errorf("%s is not written:\n%s", key, written)
+		}
 	}
 }

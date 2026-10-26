@@ -58,24 +58,131 @@ import (
 // outside the standard library: the client is the BER of ldapber.go, and
 // the filters are parsed by ldapfilter.go.
 
+// LDAPConfig is an ldap collector's own request keys: the DN a simple
+// bind is made as, none for an anonymous bind, whether TLS is begun with
+// the StartTLS operation on a plaintext connection, and the searches whose
+// results the document holds.
+type LDAPConfig struct {
+	BindDN   string       `yaml:"bind_dn,omitempty"`
+	StartTLS bool         `yaml:"start_tls,omitempty"`
+	Searches []LDAPSearch `yaml:"searches,omitempty"`
+}
+
+// LDAPSearch is one entry of an ldap collector's request.searches: the name
+// its result is put under in the document, where it searches, which
+// entries it matches and what of them it reads. Scope "" is sub, Filter ""
+// is (objectClass=*), no Attributes asks for the entries' DNs alone, and
+// MaxEntries 0 is the default bound.
+type LDAPSearch struct {
+	Name       string   `yaml:"name"`
+	Base       string   `yaml:"base,omitempty"`
+	Scope      string   `yaml:"scope,omitempty"`
+	Filter     string   `yaml:"filter,omitempty"`
+	Attributes []string `yaml:"attributes,omitempty"`
+	CountOnly  bool     `yaml:"count_only,omitempty"`
+	MaxEntries int      `yaml:"max_entries,omitempty"`
+}
+
+// ldapSearchNamePattern is what request.searches[].name is written with: a
+// name a jq path reaches as .searches.<name>.
+const ldapSearchNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
+
+// ldapScopeNames are the values of request.searches[].scope.
+var ldapScopeNames = []string{"base", "one", "sub"}
+
+// ldapAttributePattern is what an entry of request.searches[].attributes
+// is written with: an attribute's name or OID, with options after ; as in
+// cn;lang-de, or * for every user attribute and + for every operational
+// one. The exporter and the schema hold them to it alike.
+const ldapAttributePattern = `^(\*|\+|[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*|[0-9]+(\.[0-9]+)+(;[A-Za-z0-9-]+)*)$`
+
+// ldapRequest is an ldap collector's own request keys: the zero LDAPConfig
+// of a collector built in code whose request has not been validated, which
+// sets them (ValidateRequest).
+func ldapRequest(c *model.Collector) LDAPConfig {
+	own, _ := c.Request.Own.(LDAPConfig)
+	return own
+}
+
+// withLDAPTargetAccount is withTargetAccount with a static target's own
+// bind_dn, which comes only with its own password_file, in place of the
+// collector's.
+func withLDAPTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector {
+	x := withTargetAccount(c, o)
+	if o.BindDN == "" {
+		return x
+	}
+	if x == c {
+		copied := *c
+		x = &copied
+	}
+	own := ldapRequest(x)
+	own.BindDN = o.BindDN
+	x.Request.Own = own
+	return x
+}
+
 func init() {
 	registerRequestType(&RequestType{
-		Name:               RequestTypeLDAP,
-		Fields:             []string{"bind_dn", "password_file", "start_tls", "searches", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "bind_dn", "password_file", "tls"},
-		Validate:           validateLDAPRequest,
-		Fetch:              fetchLDAP,
-		CheckTarget:        checkLDAPTarget,
+		Name:         RequestTypeLDAP,
+		Fields:       []string{"password_file", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Config:       LDAPConfig{},
+		KeyRules:     ldapKeyRules,
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "bind_dn", "password_file", "tls"},
+		Requester:    ldapRequester{},
+		JSONAnswer:   true,
+		// ldap is said letter by letter.
+		Article:    "an",
+		TargetHint: func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
+		Templates:  ldapTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "the base or filter of its request.searches or its label values")
+		},
+		SchemaRule:         ldapSchemaRule,
 		CheckTargetRequest: checkLDAPTargetRequest,
-		Label:              ldapLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return ldapMethod },
-		Display:            ldapDisplay,
 		Stage:              "ldap",
 		CheckFiles:         checkLDAPFiles,
 	})
-	templateEscapers["ldap_dn"] = ldapEscapeDNValue
-	templateEscapers["ldap_filter"] = func(value string) (string, error) { return ldapEscapeFilterValue(value), nil }
+	templateEscapers["ldap_dn"] = func(where, name, value string) (string, error) {
+		written, err := ldapEscapeDNValue(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: the value of %s: %w", where, name, err)
+		}
+		return written, nil
+	}
+	templateEscapers["ldap_filter"] = func(_, _, value string) (string, error) { return ldapEscapeFilterValue(value), nil }
+}
+
+// ldapRequester is the ldap request type's Requester.
+type ldapRequester struct{}
+
+// Validate checks an ldap collector's request and fills in its defaults.
+func (ldapRequester) Validate(c *model.Collector) error {
+	return validateLDAPRequest(c)
+}
+
+// Fetch performs one request of an ldap collector.
+func (ldapRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchLDAP(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an ldap collector's target.
+func (ldapRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkLDAPTarget(c, target, static)
+}
+
+// Label is the url label of an ldap request.
+func (ldapRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return ldapLabel(target, c, overrides)
+}
+
+// Method is the http_method label of an ldap request.
+func (ldapRequester) Method(*model.Collector, RequestOverrides) string { return ldapMethod }
+
+// Display renders an ldap target for logs and labels.
+func (ldapRequester) Display(target string) string {
+	return ldapDisplay(target)
 }
 
 // The ports of a target that names none.
@@ -105,13 +212,14 @@ const ldapDefaultFilter = "(objectClass=*)"
 // ldapStartTLSOID is the StartTLS extended operation's (RFC 4511 § 4.14).
 const ldapStartTLSOID = "1.3.6.1.4.1.1466.20037"
 
-var ldapSearchName = regexp.MustCompile(model.LDAPSearchNamePattern)
+var ldapSearchName = regexp.MustCompile(ldapSearchNamePattern)
 
 // ldapScopes are the scopes' values in a SearchRequest, by name.
 var ldapScopes = map[string]int64{"base": 0, "one": 1, "sub": 2}
 
 func validateLDAPRequest(x *model.Collector) error {
 	r := &x.Request
+	own := ldapRequest(x)
 	t := r.TLS
 	if (t.CertFile == "") != (t.KeyFile == "") {
 		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
@@ -121,15 +229,15 @@ func validateLDAPRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q request.tls.server_name %q: %w", x.Name, t.ServerName, err)
 		}
 	}
-	if r.BindDN != "" {
-		if HasPathParams(r.BindDN) {
-			return fmt.Errorf("collector %q request.bind_dn %q has a placeholder; the account is used as it is written", x.Name, r.BindDN)
+	if own.BindDN != "" {
+		if HasPathParams(own.BindDN) {
+			return fmt.Errorf("collector %q request.bind_dn %q has a placeholder; the account is used as it is written", x.Name, own.BindDN)
 		}
-		if strings.TrimSpace(r.BindDN) == "" {
+		if strings.TrimSpace(own.BindDN) == "" {
 			return fmt.Errorf("collector %q request.bind_dn is blanks alone; name the account's DN, or take the key out for an anonymous bind", x.Name)
 		}
-		if err := checkLDAPDN(r.BindDN); err != nil {
-			return fmt.Errorf("collector %q request.bind_dn %q is not a DN: %w", x.Name, r.BindDN, err)
+		if err := checkLDAPDN(own.BindDN); err != nil {
+			return fmt.Errorf("collector %q request.bind_dn %q is not a DN: %w", x.Name, own.BindDN, err)
 		}
 		if r.PasswordFile == "" {
 			return fmt.Errorf("collector %q sets request.bind_dn without request.password_file; a simple bind with a DN and no password is an unauthenticated bind, which a server takes without checking anything, so name the file of the account's password", x.Name)
@@ -139,16 +247,17 @@ func validateLDAPRequest(x *model.Collector) error {
 		if strings.TrimSpace(r.PasswordFile) == "" {
 			return fmt.Errorf("collector %q request.password_file is blanks alone; name the file of the password, or take the key out", x.Name)
 		}
-		if r.BindDN == "" {
+		if own.BindDN == "" {
 			return fmt.Errorf("collector %q sets request.password_file without request.bind_dn; a password is sent with the DN of its account, so name it in bind_dn", x.Name)
 		}
 	}
-	if len(r.Searches) == 0 {
+	if len(own.Searches) == 0 {
 		return fmt.Errorf("collector %q has no request.searches; name at least one search, such as {name: people, base: \"ou=people,dc=example,dc=org\", filter: \"(objectClass=person)\"}", x.Name)
 	}
+	// The entries are written in place, in the list Own holds.
 	names := map[string]bool{}
-	for i := range r.Searches {
-		if err := checkLDAPSearch(&r.Searches[i], i, names); err != nil {
+	for i := range own.Searches {
+		if err := checkLDAPSearch(&own.Searches[i], i, names); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
@@ -156,7 +265,7 @@ func validateLDAPRequest(x *model.Collector) error {
 }
 
 // checkLDAPSearch checks an entry of request.searches.
-func checkLDAPSearch(s *model.LDAPSearch, i int, names map[string]bool) error {
+func checkLDAPSearch(s *LDAPSearch, i int, names map[string]bool) error {
 	where := fmt.Sprintf("request.searches[%d]", i)
 	if !ldapSearchName.MatchString(s.Name) {
 		return fmt.Errorf("%s.name %q is not a name the document can hold the result under; write letters, digits and _, starting with a letter or _, as .searches.%s reaches it", where, s.Name, "people")
@@ -279,11 +388,11 @@ func parseLDAPTarget(raw string) (ldapAddress, error) {
 func (a ldapAddress) security(c *model.Collector) (ldapSecurity, error) {
 	configured := c.Request.TLS != model.TLSConfig{}
 	switch {
-	case a.scheme == "ldaps" && c.Request.StartTLS:
+	case a.scheme == "ldaps" && ldapRequest(c).StartTLS:
 		return 0, errors.New("target asks for TLS from the start with ldaps://, but the collector sets request.start_tls, which begins TLS on a plaintext connection; use ldap:// or a bare host:port with start_tls")
 	case a.scheme == "ldaps":
 		return ldapImplicitTLS, nil
-	case c.Request.StartTLS:
+	case ldapRequest(c).StartTLS:
 		return ldapStartTLS, nil
 	case a.scheme == "ldap" && configured:
 		return 0, errors.New("target asks for plaintext with ldap://, but the collector sets request.tls; use ldaps://, a bare host:port, or set request.start_tls for StartTLS")
@@ -348,14 +457,14 @@ func checkLDAPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 		if strings.TrimSpace(r.PasswordFile) == "" {
 			return errors.New("request.password_file is blanks alone; name the file of the password, or take the key out")
 		}
-		if r.BindDN == "" && c.Request.BindDN == "" {
+		if r.BindDN == "" && ldapRequest(c).BindDN == "" {
 			return fmt.Errorf("sets request.password_file without request.bind_dn, and collector %q binds anonymously; a password is sent with the DN of its account, so name it in bind_dn beside it", c.Name)
 		}
 	}
 	if err := checkTargetTLS(t); err != nil {
 		return err
 	}
-	if a, err := parseLDAPTarget(t.Target); err == nil && a.scheme == "ldap" && r.TLS != nil && !c.Request.StartTLS {
+	if a, err := parseLDAPTarget(t.Target); err == nil && a.scheme == "ldap" && r.TLS != nil && !ldapRequest(c).StartTLS {
 		return errors.New("target asks for plaintext with ldap://, but sets request.tls of its own; use ldaps://, a bare host:port, or set the collector's request.start_tls for StartTLS")
 	}
 	return nil
@@ -371,7 +480,7 @@ func checkLDAPTarget(c *model.Collector, target string, _ bool) error {
 }
 
 func ldapLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
-	c = withTargetAccount(c, overrides)
+	c = withLDAPTargetAccount(c, overrides)
 	a, err := parseLDAPTarget(target)
 	if err != nil {
 		return "", err
@@ -408,7 +517,7 @@ type ldapDocument struct {
 // ldapCall is a search of a scrape, its placeholders filled and its filter
 // encoded.
 type ldapCall struct {
-	search *model.LDAPSearch
+	search *LDAPSearch
 	base   string
 	filter string
 	ber    []byte
@@ -419,9 +528,10 @@ type ldapCall struct {
 // escaped as it is (ldapEscapeFilterValue) cannot change its structure,
 // which the load checked, and the parse is what encodes it.
 func ldapCalls(c *model.Collector, params map[string]string) ([]ldapCall, error) {
-	calls := make([]ldapCall, 0, len(c.Request.Searches))
-	for i := range c.Request.Searches {
-		s := &c.Request.Searches[i]
+	searches := ldapRequest(c).Searches
+	calls := make([]ldapCall, 0, len(searches))
+	for i := range searches {
+		s := &searches[i]
 		where := fmt.Sprintf("request.searches[%d]", i)
 		base, err := templateField{where + ".base", s.Base, "ldap_dn"}.render(params)
 		if err != nil {
@@ -448,7 +558,7 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 	start := time.Now()
 	// A static target's own account and tls block, in place of the
 	// collector's.
-	c = withTargetAccount(c, overrides)
+	c = withLDAPTargetAccount(c, overrides)
 	address, err := parseLDAPTarget(target)
 	if err != nil {
 		return nil, err
@@ -528,7 +638,7 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 			return nil, err
 		}
 	}
-	if err := ldapBind(ctx, session, label, c.Request.BindDN, password); err != nil {
+	if err := ldapBind(ctx, session, label, ldapRequest(c).BindDN, password); err != nil {
 		return nil, err
 	}
 	doc := ldapDocument{Searches: map[string]*ldapSearchResult{}}
@@ -643,7 +753,7 @@ func ldapShownSearch(call ldapCall) string {
 	return fmt.Sprintf("SEARCH %s base=%q scope=%s filter=%s attributes=%s", call.search.Name, ldapShown(call.base), ldapScopeOf(call.search), ldapShown(call.filter), attributes)
 }
 
-func ldapScopeOf(s *model.LDAPSearch) string {
+func ldapScopeOf(s *LDAPSearch) string {
 	if s.Scope == "" {
 		return "sub"
 	}
@@ -715,7 +825,7 @@ func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapC
 // ldapSearchPage sends a page of a search and reads its entries,
 // references and end, adding them to result; it returns the cookie of the
 // next page, "" when there is none.
-func ldapSearchPage(session *ldapConn, op []byte, cookie string, s *model.LDAPSearch, result *ldapSearchResult, entries *[]ldapEntry, maxEntries int) (string, error) {
+func ldapSearchPage(session *ldapConn, op []byte, cookie string, s *LDAPSearch, result *ldapSearchResult, entries *[]ldapEntry, maxEntries int) (string, error) {
 	id, err := session.send(op, ldapPagedControl(ldapPageSize, cookie))
 	if err != nil {
 		return "", err
@@ -776,4 +886,53 @@ func ldapFailure(ctx context.Context, err error) error {
 // a static target names of its own.
 func checkLDAPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// ldapSchemaRule is what an ldap collector's request is held to beyond its keys,
+// as the exporter holds it (validateLDAPRequest): searches, and
+// bind_dn and password_file each only beside the other, since a simple
+// bind with a DN and no password is an unauthenticated one and a password
+// is sent with its account's DN.
+func ldapSchemaRule() map[string]any {
+	return map[string]any{
+		"required": []string{"searches"},
+		"allOf": []any{
+			map[string]any{"if": SchemaWrittenKey("bind_dn"), "then": SchemaWrittenKey("password_file")},
+			map[string]any{"if": SchemaWrittenKey("password_file"), "then": SchemaWrittenKey("bind_dn")},
+		},
+	}
+}
+
+// ldapTemplates are the base and the filter of an ldap collector's
+// searches, each value escaped as its place escapes one (ldapfilter.go).
+func ldapTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	for i, search := range ldapRequest(c).Searches {
+		if HasPathParams(search.Base) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].base", i), search.Base, "ldap_dn"})
+		}
+		if HasPathParams(search.Filter) {
+			out = append(out, templateField{fmt.Sprintf("request.searches[%d].filter", i), search.Filter, "ldap_filter"})
+		}
+	}
+	return out
+}
+
+// ldapKeyRules is what the configuration schema says of a ldap
+// collector's own keys.
+func ldapKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"bind_dn":                 {"not": SchemaOnlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding."},
+		"start_tls":               {"description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls."},
+		"searches":                {"minItems": 1, "description": "ldap, required: the searches whose results the document holds under .searches.<name>, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches."},
+		"searches[]":              {"required": []string{"name"}},
+		"searches[].name":         {"pattern": ldapSearchNamePattern, "description": "The name the result is put under in the document's searches: letters, digits and _, not starting with a digit, unique among the collector's searches."},
+		"searches[].base":         {"description": "The DN the search starts at, such as ou=people,dc=example,dc=org; left out or \"\", the root DSE. May contain {{param_name}} placeholders in its attribute values, filled escaped as RFC 4514 escapes a value."},
+		"searches[].scope":        {"enum": SchemaOptionalEnum(ldapScopeNames), "description": "base, the base entry alone; one, the entries right under it; sub, the base and everything under it. Defaults to sub."},
+		"searches[].filter":       {"description": "An RFC 4515 filter in parentheses, such as (&(objectClass=user)(cn=a*)); defaults to (objectClass=*). May contain {{param_name}} placeholders in its values, filled escaped as RFC 4515 escapes a value, so a probe cannot change the filter's structure."},
+		"searches[].attributes":   {"description": "The attributes each entry is read with, such as [cn, mail], * for every user attribute or + for every operational one; left out, the entries' DNs alone. Leave binary attributes, such as objectGUID or jpegPhoto, out: a value that is not UTF-8 fails the scrape."},
+		"searches[].attributes[]": {"pattern": ldapAttributePattern, "description": "An attribute's name or OID, with options after ;, or * or +."},
+		"searches[].count_only":   {"description": "Count the entries the search matches, holding none of them: the result has count and references and no entries. Not with attributes or max_entries."},
+		"searches[].max_entries":  {"minimum": 0, "description": "The most entries a search that is not count_only may match; one more fails the scrape. Defaults to 1000."},
+	}
 }

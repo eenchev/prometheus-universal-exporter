@@ -681,6 +681,37 @@ and the source MUST list the opt-in types.
   that only that type needs MUST live behind the same constraint, and so MUST
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
+- What the rest of the exporter knows of a type MUST be part of the type's
+  registration (`fetch.RequestType`): what every type does as its
+  `Requester` interface (validating a request, fetching, checking,
+  labelling and displaying a target), and what only some types have, or
+  what the core needs to know, as a field of its own, such as the
+  self-metric families its collectors have, its target hint, its decoder,
+  its rule in the configuration schema, the templated parts of its request
+  and whether the debug page writes it. The core (package `main`,
+  `internal/config`, `internal/decode`, `internal/exporter` and
+  `internal/transform`) MUST read these from the registry and MUST NOT name
+  a request type, so that adding a type touches its own files and the build
+  wiring alone. A test MUST find no `RequestType<Name>` constant and no
+  string literal that is a request type's name in the core's non-test
+  files, but for an exact allowlist of the same words meaning something
+  else, each with its reason. The encoding of a templated field of one
+  type, which filters it takes and whether a probe's overrides replace it
+  MUST be registered by that type for the field's kind, not keyed by the
+  field's place in the shared template code, and a test MUST find no
+  comparison of a templated field's place with a literal in a file of
+  `internal/fetch` every build compiles.
+- A request key that only one type accepts MUST be that type's own: read
+  into a struct its registration declares, behind the type's constraint,
+  so that a build without the type does not carry it. The request block's
+  common part MUST hold only `type` and the keys that several types accept,
+  and a test MUST enforce it. The configuration MUST stay as it is written,
+  a type's own keys flat beside the common ones under `request`. Every build
+  MUST know the own keys of every type of the tree, from a catalogue
+  generated from a build with every type: a key of a type the build left out,
+  set under another type, MUST be rejected as a key the type does not accept,
+  in the same words as in a build with every type, and the configuration
+  schema MUST describe it as that build's does.
 - Code that some types share and others do not, such as the rules of a
   request made over HTTP, which `http` and `graphite` share, or the credential
   keys' rules, which `http`, `graphite` and `grpc` share, MUST live behind a
@@ -736,6 +767,23 @@ and the source MUST list the opt-in types.
   type as any other. The Dockerfile's `REQUEST_TYPES`, `SQL_DRIVERS` and
   `OPT_IN_REQUEST_TYPES` build arguments and the Makefile's variables of
   those names MUST all use it.
+- `make new-request-type NAME=<name>`, with `OPT_IN=1` for an opt-in type,
+  MUST add a request type to the tree with `tools/new-request-type.sh`,
+  POSIX `sh`, `sed` and `awk` that macOS's run: it MUST refuse a name that
+  is not lowercase letters and digits starting with a letter, or that is a
+  type of the tree, before it writes anything; and it MUST write the type's
+  file, under its constraint, with a `Requester` whose `Fetch` answers that
+  the type is not implemented yet and an empty struct of its own keys, the
+  type's tests in `internal/fetch`, `internal/exporter` and its table of
+  schema rows, which pass, and `docs/<NAME>.md` with the sections of the
+  other types' pages, and add the type to every list in the tree that names
+  each type, then run `make schemas`. Each place left to a person MUST say `TODO(<name>)`, and
+  the script MUST end by printing what is left. A test MUST run it on a
+  copy of the tree, for an opt-in type and a type of every build, and find
+  that the copy builds and vets in the default build, with every opt-in
+  type and with each new type alone, that the generated tests pass, and
+  that the tests comparing the lists of the types pass. `make ci` MUST NOT
+  run it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
   log line, as `sql_drivers`, empty in a build without the type.
@@ -10747,7 +10795,13 @@ linters' job lints builds that carry every type, in which a helper only
 another type's code or tests call is used, so a helper a single-type build
 leaves unused is reported nowhere else. `make lint-request-types`, which
 `make ci` includes, MUST lint the same builds, and a test MUST keep its loop
-naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
+naming every request type of the tree. The scaffold test, which builds a
+copy of the tree with new request types (§ 5.1), MUST run in a job of its own
+under the `go` output, and the step that runs the repository's checks MUST
+skip it; `make ci` MUST skip it and run it the same way. A test that a go
+command of CI or of `make ci` skips MUST be run by another command there, by
+the same pattern over the same packages, under the same condition, and a test
+MUST fail for one that is not. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment; a job that sets up and runs neither Go nor Python, as the
@@ -25988,7 +26042,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   that did not succeed.
 - `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
   `ci.yml`'s job `test` has a step of that name that runs
-  `go test ./test/repository/` under the go output.
+  `go test -skip '^TestANewRequestTypeIsWiredByTheScaffold$' ./test/repository/`
+  under the go output.
 - With `allocator.enabled` and no `allocator.tokenSecret.name`, the chart
   renders a Secret `<fullname>-allocator-token` with the allocator's labels
   holding a random token of 32 characters or more under
@@ -27601,6 +27656,135 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   file the exporter's process can, and that `vertica` collectors are to be
   held by `allowed_targets` to trusted servers
   (TestSQLDocumentationSaysAVerticaServerCanReadTheExportersFiles).
+
+## 34.215 Per-type knowledge in the registry and the Requester interface
+
+- The non-test Go files of package `main`, `internal/config`,
+  `internal/decode`, `internal/exporter` and `internal/transform` hold no
+  `RequestType<Name>` constant and no string literal that is the name of a
+  request type of `internal/fetch/requesttype_<name>.go`, but for the
+  allowlist's words meaning something else (the graphite decoder, the
+  `http` scheme and reload trigger, `tcp` as a network or a setting's value,
+  `sql` as the rows' format), each held to the exact number of times its
+  file has it; on the code before the core read the registry it fails,
+  naming each list and switch (TestCorePackagesNameNoRequestType).
+- The check finds a `RequestType<Name>` constant, a literal the allowlist
+  does not hold for its file and an allowlist entry its file no longer
+  matches, and passes a word that is no type's name and an allowed literal
+  (TestTheCoreTypeNameCheckFindsANamedType).
+- Every registered request type has a `Requester`
+  (TestEveryRequestKeyBelongsToAType).
+- The self-metric families only some collectors have follow the types'
+  registrations: the login and rate limit families are of the built types
+  among http and graphite (TestTheLoginFamiliesAreThoseOfTheTypesThatLogIn,
+  TestAProbeRefusedByTheRateLimitIsCounted).
+
+## 34.216 Each request type's own configuration
+
+- No field of `model.RequestConfig`, the request block's common part, but
+  `type` is a key that fewer than two request types take, the types read
+  from the registrations of every `internal/fetch/requesttype_<name>.go`,
+  built or not; on the code before each type had its own struct it fails,
+  naming every key of one type, such as `request.send` taken by `tcp` alone
+  (TestTheCommonPartHoldsNoKeyOfOneType).
+- A key of another request type's own, written under a built type, is
+  refused with the message of a key the type does not take, `collector "c"
+  sets request.<key>, which does not apply to request.type "<type>"`, both
+  for a type the build carries and for one it left out, whose key the
+  catalogue holds; the key written as left out (`""`, `false`, `0`, `~`) is
+  not refused (TestAKeyOfAnotherTypesOwnIsRefusedWhetherTheBuildHasTheTypeOrNot).
+- A key of no type is refused as the decoder refuses an unknown key, `field
+  sned not found in type model.RequestConfig`, and a text key of a type's
+  own written as a list as the decoder refuses a list where text belongs,
+  whether the build has the type or not
+  (TestARequestBlockRefusesAnUnknownKeyAndAWrongKind).
+- No own key of a request type is a key of the common part or another
+  type's, and each built type's own keys are those the catalogue gives it
+  (TestEveryOwnKeyIsOneTypesAlone).
+- `internal/fetch/requestkeys_catalogue.go` holds each built type's own keys
+  with the Go types of their fields and their schemas as they are made now,
+  and, in the build with every request type, is the file that build writes;
+  a schema changed in the catalogue alone fails it
+  (TestTheRequestKeyCatalogueIsCurrent).
+- The configuration schema has a property for every key the request block
+  reads, its common part's, every built type's own and those of the types
+  the build left out, and none other (TestConfigSchemaCoversEveryKey).
+- Each leaf of a request type's own keys, set on its own, changes the cache
+  key of a collector of the type, as every setting of the common part does
+  (TestEverySettingChangesTheCacheKey).
+
+## 34.217 The new request type scaffold
+
+- `make new-request-type` run on a copy of the tree (the files git knows of,
+  the vendored modules linked, built with `-trimpath` so the build cache
+  serves what the copy shares with the tree) refuses `http`, `Zz-demo`,
+  `9zz` and no name before writing anything, then adds the opt-in `zzdemo`
+  and the default `zzdefault`, each printing a checklist naming
+  `TODO(<name>)`, writes their files, tests (internal/fetch,
+  internal/exporter, the schema rows) and pages, only the opt-in one's page
+  with "Building with"; the copy builds and vets in the default build, vets
+  with every opt-in type and builds and vets with each new type alone, the
+  generated tests pass in the default build, with every opt-in type and
+  with their type alone, and the tests comparing the lists of the types pass in
+  it: the selection constraints, the guard, the default build's
+  registrations, the unused-parameter refusals, the request key catalogue,
+  the marked lists, the type pages, CI's and the Makefile's loops and opt-in
+  builds, `make ci`'s commands, the schema comparisons' constraint and the
+  committed schemas, the common part, the schema rows' completeness, and the documentation's links and
+  index. It runs in the default build only, not under `-short` or the race
+  detector; without the script it fails
+  (TestANewRequestTypeIsWiredByTheScaffold).
+- The Makefile's `new-request-type` runs `tools/new-request-type.sh` with
+  `NAME` and, when `OPT_IN` is set, `opt-in`; `make ci` does not reach it;
+  the make targets of docs/DEVELOPMENT.md list it as not part of `make ci`,
+  and its "Adding a request type" names the command, the script,
+  `TODO(<name>)`, `make schemas` and the test that runs it
+  (TestTheNewRequestTypeTargetIsListedAndLeftOutOfCI).
+- The builds of one request type whose linked modules are checked are those
+  of every type of the tree, read from `internal/fetch/requesttype_*.go`
+  (TestOnlyTheTypesThatNeedThemLinkTheirModules); a type with an empty
+  `Fields`, as a new one has, is read as taking no key of the common part
+  (TestSentencesNameTheRequestTypesThatTakeAKey,
+  TestTheCommonPartHoldsNoKeyOfOneType); and a type whose collector has no
+  path and no placeholder in a key of its own is expected to fill its label
+  values alone, without naming it
+  (TestTheRefusalOfAnUnusedParameterNamesThePlacesOfTheRequestType).
+
+## 34.218 The scaffold's test in a job of its own, and template rules owned by their types
+
+- `ci.yml`'s job `test` skips the scaffold test in its step `Run the
+  repository's checks`, the job `scaffold` ends in a step running it alone
+  (`go test -run '^TestANewRequestTypeIsWiredByTheScaffold$'
+  ./test/repository/`) under the go output, and `make ci` reaches
+  `test-scaffold`, which runs it the same way; every test a go command of
+  `ci.yml` or of a target `make ci` reaches skips with `-skip` is run by
+  another command of the same file with `-run`, by the same pattern over the
+  same packages (or over `./...` in the Makefile) under the same condition,
+  and names a test of the tree; with the old `ci.yml` and Makefile, which ran
+  the scaffold test in the job `test`, it fails (§ 34.33)
+  (TestTheScaffoldTestRunsInAJobOfItsOwn).
+- `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
+  `ci.yml`'s job `test` has a step of that name that runs
+  `go test -skip '^TestANewRequestTypeIsWiredByTheScaffold$' ./test/repository/`
+  under the go output (TestTheCIGateFindsTheSuiteStepOfCI).
+- Every go command of `ci.yml` is run by a target `make ci` reaches, over
+  `./...` where CI names a side's packages or `test/repository`, or as CI
+  writes it, `make test`'s `-skip` of the scaffold test read past
+  (TestMakeCIRunsTheGoCommandsOfTheCIWorkflow).
+- No file of `internal/fetch` that every build compiles, those without a
+  request type's build constraint, compares a templated field's place
+  (`where`) with a literal, by `==`, `!=`, a switch or a `strings` function;
+  it fails on the shared template code that refused a message's filters by
+  the place `request.message` and knew the places the probe's body, message
+  and targets replace (§ 5.1) (TestTheSharedTemplateCodeKnowsNoFieldOfOneType,
+  and TestThePlaceComparisonCheckFindsARuleOfOneField for the check itself).
+- A grpc collector's message with `{{param_q|form}}` or `{{param_q|xml}}` is
+  refused as writing no JSON, and with no filter, `|json`, `|number` or
+  `|raw` is not, in the request's templated field, the message a call sends
+  and the message the configuration checks, by the rule grpc registers for
+  its message's kind; a probe's message replaces the collector's, whose
+  placeholders are then not checked; without the registration it fails
+  (TestAMessageTakesOnlyTheFiltersThatWriteJSON).
 
 # 35. Documentation requirements
 

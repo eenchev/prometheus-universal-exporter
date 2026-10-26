@@ -180,31 +180,56 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 }
 
 // requestTypeFamilies are the families only the collectors of some request
-// types have, by those types: a collector of another type has no series in
-// them, so an exporter without such collectors, or built without the types,
-// does not show the family at all.
-var requestTypeFamilies = map[string][]string{
-	"http_exporter_scrape_grpc_status_code": {"grpc"},
-	// A localfile collector reads files, and has no target to refuse.
-	"http_exporter_targets_refused_total":              {"http", "graphite", "grpc", "sshfile", "sql", "dns", "tlscert", "s3file", "redis", "tcp", "ldap"},
-	"http_exporter_pages_fetched_total":                {"http"},
-	"http_exporter_pagination_max_pages_reached_total": {"http"},
-	"http_exporter_sshfile_connections":                {"sshfile"},
-	"http_exporter_sshfile_connects_total":             {"sshfile"},
-	"http_exporter_sshfile_limit_waits_total":          {"sshfile"},
-	"http_exporter_sshfile_limit_failures_total":       {"sshfile"},
-	"http_exporter_sql_connections":                    {"sql"},
-	"http_exporter_sql_idle_connections":               {"sql"},
-	"http_exporter_sql_targets":                        {"sql"},
-	"http_exporter_sql_connects_total":                 {"sql"},
-	"http_exporter_sql_keepalive_failures_total":       {"sql"},
-	"http_exporter_sql_limit_waits_total":              {"sql"},
-	"http_exporter_sql_limit_failures_total":           {"sql"},
-	"http_exporter_sql_rows":                           {"sql"},
-	"http_exporter_logins_total":                       {"http", "graphite"},
-	"http_exporter_login_failures_total":               {"http", "graphite"},
-	"http_exporter_rate_limit_waits_total":             {"http", "graphite"},
-	"http_exporter_rate_limit_refused_total":           {"http", "graphite"},
+// types have, each with what says whether a type's registration
+// (fetch.RequestType) gives it the family: a collector of another type has
+// no series in them, so an exporter without such collectors, or built
+// without the types, does not show the family at all. The families are
+// listed here, whatever types are built, so that one is never shown for
+// every collector of a build that left its types out; which types have
+// them is the types' to say.
+var requestTypeFamilies = map[string]func(rt *fetch.RequestType, family string) bool{
+	"http_exporter_scrape_grpc_status_code": func(rt *fetch.RequestType, _ string) bool { return rt.StatusCodes },
+	// A collector that reads files, or lists what its configuration names,
+	// takes no target lists, and has no target to refuse.
+	"http_exporter_targets_refused_total":              takesKey("allowed_targets"),
+	"http_exporter_pages_fetched_total":                takesKey("pagination"),
+	"http_exporter_pagination_max_pages_reached_total": takesKey("pagination"),
+	"http_exporter_sshfile_connections":                ownFamily,
+	"http_exporter_sshfile_connects_total":             ownFamily,
+	"http_exporter_sshfile_limit_waits_total":          ownFamily,
+	"http_exporter_sshfile_limit_failures_total":       ownFamily,
+	"http_exporter_sql_connections":                    ownFamily,
+	"http_exporter_sql_idle_connections":               ownFamily,
+	"http_exporter_sql_targets":                        ownFamily,
+	"http_exporter_sql_connects_total":                 ownFamily,
+	"http_exporter_sql_keepalive_failures_total":       ownFamily,
+	"http_exporter_sql_limit_waits_total":              ownFamily,
+	"http_exporter_sql_limit_failures_total":           ownFamily,
+	"http_exporter_sql_rows":                           ownFamily,
+	"http_exporter_logins_total":                       logsIn,
+	"http_exporter_login_failures_total":               logsIn,
+	"http_exporter_rate_limit_waits_total":             takesKey("rate_limit"),
+	"http_exporter_rate_limit_refused_total":           takesKey("rate_limit"),
+}
+
+// takesKey gives a family to the types that take the request key.
+func takesKey(key string) func(*fetch.RequestType, string) bool {
+	return func(rt *fetch.RequestType, _ string) bool { return rt.Takes(key) }
+}
+
+// ownFamily gives a family to the types that list it as their own.
+func ownFamily(rt *fetch.RequestType, family string) bool {
+	return slices.Contains(rt.Families, family)
+}
+
+// logsIn gives a family to the types that log in.
+func logsIn(rt *fetch.RequestType, _ string) bool { return rt.Logins != nil }
+
+// typeHasFamily reports whether the collectors of a request type have a
+// family of requestTypeFamilies.
+func typeHasFamily(requestType, family string) bool {
+	rt := fetch.RequestTypes[requestType]
+	return rt != nil && requestTypeFamilies[family](rt, family)
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -437,9 +462,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	}
 	var out []model.Metric
 	for _, d := range selfMetricDescriptors {
-		only, typed := requestTypeFamilies[d.Name]
+		_, typed := requestTypeFamilies[d.Name]
 		for _, name := range names {
-			if typed && !slices.Contains(only, requestTypes[name]) {
+			if typed && !typeHasFamily(requestTypes[name], d.Name) {
 				continue
 			}
 			var value float64
@@ -454,7 +479,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			continue
 		}
 		for _, sample := range requests {
-			if typed && !slices.Contains(only, requestTypes[sample.Key.Collector]) {
+			if typed && !typeHasFamily(requestTypes[sample.Key.Collector], d.Name) {
 				continue
 			}
 			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key), Created: d.created(sample.Values)})
@@ -514,7 +539,7 @@ func cacheRevalidationMetrics(names []string, values map[string]statsValues, req
 	const name = "http_exporter_cache_revalidations_total"
 	var out []model.Metric
 	for _, collector := range names {
-		if t := requestTypes[collector]; t != fetch.RequestTypeHTTP && t != fetch.RequestTypeGraphite {
+		if rt := fetch.RequestTypes[requestTypes[collector]]; rt == nil || !rt.Revalidates {
 			continue
 		}
 		v := values[collector]

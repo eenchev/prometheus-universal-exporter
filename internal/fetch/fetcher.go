@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -704,7 +703,8 @@ func requestMethod(c *model.Collector, overrides RequestOverrides) string {
 	if overrides.Method != "" {
 		return overrides.Method
 	}
-	return c.Request.Method
+	method, _ := methodBody(c)
+	return method
 }
 
 // withTargetTLS is c with a static target's own tls block in place of the
@@ -773,11 +773,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		requestContext, cancel = context.WithTimeout(ctx, overrides.Timeout)
 	}
 	defer cancel()
-	method := c.Request.Method
+	method, requestBody := methodBody(c)
 	if overrides.Method != "" {
 		method = overrides.Method
 	}
-	requestBody := c.Request.Body
 	if overrides.Body != nil {
 		requestBody = *overrides.Body
 	} else if HasPathParams(requestBody) {
@@ -1179,7 +1178,7 @@ func RetryStatuses(c *model.Collector, overrides RequestOverrides) []string {
 // grpc, which retries by code.
 func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
 	rt := requestTypeOf(c)
-	if rt == nil || rt.StatusCodes || !slices.Contains(rt.Fields, "retry") {
+	if rt == nil || rt.StatusCodes || !rt.Takes("retry") {
 		return ""
 	}
 	attempts := c.Request.Retry.Attempts
@@ -1194,9 +1193,10 @@ func RetriesOf(c *model.Collector, overrides RequestOverrides) string {
 	if overrides.RetryNonIdempotent != nil {
 		anyMethod = *overrides.RetryNonIdempotent
 	}
-	// graphite's method is its own, a GET or a form that only reads, and
-	// is retried as a GET (fetch).
-	if attempts <= 0 || rt.Method == nil && !anyMethod && !IdempotentMethod(requestMethod(c, overrides)) {
+	// Only a type that takes request.method, http, sends a method that may
+	// not be idempotent: graphite's method is its own, a GET or a form that
+	// only reads, and is retried as a GET (fetch).
+	if attempts <= 0 || rt.Takes("method") && !anyMethod && !IdempotentMethod(requestMethod(c, overrides)) {
 		return ""
 	}
 	statuses := RetryStatuses(c, overrides)

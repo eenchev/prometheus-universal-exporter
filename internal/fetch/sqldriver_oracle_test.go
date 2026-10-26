@@ -34,7 +34,7 @@ func TestTheOracleDriver(t *testing.T) {
 		t.Errorf("%s", got)
 	}
 	f := newSQLFixture(t)
-	c := f.collector(t, "db", SQLDriverOracle, "SELECT 1 AS one FROM dual", func(r *model.RequestConfig) { r.ServiceName = "ORCL" })
+	c := f.collector(t, "db", SQLDriverOracle, "SELECT 1 AS one FROM dual", func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.ServiceName = "ORCL" }) })
 	if address, err := parseSQLTarget(c, "db.example"); err != nil || address.hostPort != "db.example:1521" {
 		t.Errorf("%+v %v", address, err)
 	}
@@ -42,12 +42,14 @@ func TestTheOracleDriver(t *testing.T) {
 		change func(*model.RequestConfig)
 		want   string
 	}{
-		{func(r *model.RequestConfig) { r.ServiceName = "" }, "request.service_name is required for the oracle driver"},
-		{func(r *model.RequestConfig) { r.Database = "app" }, "sets request.database, which the oracle driver does not take"},
+		{func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.ServiceName = "" }) }, "request.service_name is required for the oracle driver"},
+		{func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "app" }) }, "sets request.database, which the oracle driver does not take"},
 		{func(r *model.RequestConfig) { r.TLS.ServerName = "db" }, "sets request.tls.server_name, which the oracle driver cannot honour"},
-		{func(r *model.RequestConfig) { r.Options = map[string]string{"ssl": "yes"} }, `request.options.ssl is "yes"; the oracle driver takes one of false, true`},
+		{func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"ssl": "yes"} })
+		}, `request.options.ssl is "yes"; the oracle driver takes one of false, true`},
 	} {
-		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverOracle, Statement: "q", Username: "u", ServiceName: "ORCL"}}
+		c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverOracle, Statement: "q", ServiceName: "ORCL"}}}
 		tc.change(&c.Request)
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v, want %q", err, tc.want)

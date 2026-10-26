@@ -54,24 +54,52 @@ func init() {
 		Fields:       []string{"tls", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
-		Validate:     validateTLSCertRequest,
-		Fetch:        fetchTLSCert,
-		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
-			_, err := parseTLSCertTarget(target)
-			return err
+		Requester:    tlsCertRequester{},
+		JSONAnswer:   true,
+		TargetHint:   func(*model.Collector) string { return "host or host:port" },
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
 		},
-		Label: func(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-			address, err := parseTLSCertTarget(target)
-			if err != nil {
-				return "", err
-			}
-			return "tls://" + address.hostPort, nil
-		},
-		Method:     func(*model.Collector, RequestOverrides) string { return tlsCertMethod },
-		Display:    tlsCertDisplay,
+		SchemaRule: tlsCertSchemaRule,
 		Stage:      "tls",
 		CheckFiles: checkTLSCertFiles,
 	})
+}
+
+// tlsCertRequester is the tlscert request type's Requester.
+type tlsCertRequester struct{}
+
+// Validate checks a tlscert collector's request and fills in its defaults.
+func (tlsCertRequester) Validate(c *model.Collector) error {
+	return validateTLSCertRequest(c)
+}
+
+// Fetch performs one request of a tlscert collector.
+func (tlsCertRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchTLSCert(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a tlscert collector's target.
+func (tlsCertRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseTLSCertTarget(target)
+	return err
+}
+
+// Label is the url label of a tlscert request.
+func (tlsCertRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
+	address, err := parseTLSCertTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "tls://" + address.hostPort, nil
+}
+
+// Method is the http_method label of a tlscert request.
+func (tlsCertRequester) Method(*model.Collector, RequestOverrides) string { return tlsCertMethod }
+
+// Display renders a tlscert target for logs and labels.
+func (tlsCertRequester) Display(target string) string {
+	return tlsCertDisplay(target)
 }
 
 // tlsCertMethod is the http_method label of a handshake.
@@ -406,4 +434,12 @@ func checkTLSCertFiles(c *model.Collector, t *model.StaticTarget) []string {
 		return []string{fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each handshake, so one put in place later is used then)", c.Name, err)}
 	}
 	return nil
+}
+
+// tlsCertSchemaRule is what a tlscert collector's request is held to beyond its
+// keys, as the exporter holds it (validateTLSCertRequest): its tls
+// block takes no insecure_skip_verify true, since a chain that does not
+// verify is reported and never refused.
+func tlsCertSchemaRule() map[string]any {
+	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
 }

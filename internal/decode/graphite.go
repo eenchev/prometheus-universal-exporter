@@ -87,6 +87,14 @@ type graphiteSeries struct {
 	points []graphitePoint
 }
 
+// impliesGraphite reports whether the collector's request type is one whose
+// decoder is graphite (fetch.RequestType.Decoder), a Graphite render API,
+// which answers render JSON and never carbon lines.
+func impliesGraphite(c *model.Collector) bool {
+	rt := fetch.RequestTypes[c.Request.Type]
+	return rt != nil && rt.Decoder == "graphite"
+}
+
 // decodeGraphite reads render JSON, a body starting with [, or carbon lines.
 func decodeGraphite(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	settings := c.Response.Graphite
@@ -101,7 +109,7 @@ func decodeGraphite(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error)
 	switch {
 	case len(body) > 0 && body[0] == '[':
 		series, err = parseGraphiteRender(body, report)
-	case c.Request.Type == fetch.RequestTypeGraphite:
+	case impliesGraphite(c):
 		err = fmt.Errorf("the Graphite server did not answer with render JSON, a list of series; %s", answerStart(body))
 	default:
 		series, err = parseCarbonLines(r.Body, now, settings.InvalidLines == "skip", report)

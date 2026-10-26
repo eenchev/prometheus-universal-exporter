@@ -47,11 +47,25 @@ func deployments(namespace string, n int) []map[string]any {
 	return out
 }
 
+// kubernetesOwn edits a kubernetes request's own keys.
+func kubernetesOwn(r *model.RequestConfig, edit func(*KubernetesConfig)) {
+	own, _ := r.Own.(KubernetesConfig)
+	edit(&own)
+	r.Own = own
+}
+
+// editKubernetes edits a kubernetes collector's own keys.
+func editKubernetes(c *model.Collector, edit func(*KubernetesConfig)) {
+	r := kubernetesRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
+
 // kubernetesCollector is a validated kubernetes collector of resource in
 // group.
 func kubernetesCollector(t *testing.T, group, resource string, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
-	c := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Group: group, Resource: resource}}
+	c := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Own: KubernetesConfig{Group: group, Resource: resource}}}
 	for _, e := range edit {
 		e(c)
 	}
@@ -106,7 +120,7 @@ func TestAKubernetesCollectorListsEveryPageAsADocument(t *testing.T) {
 	s := kubeAPI(t)
 	s.Serve("/apis/apps/v1/namespaces/monitoring/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("monitoring", 250)})
 	c := kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
-		c.Request.LabelSelector, c.Request.FieldSelector = "app=shop", "metadata.name!=other"
+		editKubernetes(c, func(r *KubernetesConfig) { r.LabelSelector, r.FieldSelector = "app=shop", "metadata.name!=other" })
 	})
 	doc, err := listDoc(t, c)
 	if err != nil {
@@ -148,18 +162,24 @@ func TestAKubernetesCollectorListsTheNamespacesItNames(t *testing.T) {
 	s.Serve("/api/v1/nodes", kubetest.List{Kind: "NodeList", APIVersion: "v1", Items: []map[string]any{{"metadata": map[string]any{"name": "node-1"}}}})
 	s.Serve("/api/v1/namespaces/monitoring/pods", kubetest.List{Kind: "PodList", APIVersion: "v1"})
 
-	doc, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.Namespaces = []string{"shop", "billing"} }))
+	doc, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"shop", "billing"} })
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := itemNames(t, doc); !slices.Equal(got, []string{"shop/app-000", "shop/app-001", "billing/app-000"}) || doc.Count != 3 {
 		t.Errorf("listed %v", got)
 	}
-	doc, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.AllNamespaces = true }))
+	doc, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.AllNamespaces = true })
+	}))
 	if err != nil || doc.Count != 2 {
 		t.Errorf("every namespace: %+v, %v", doc, err)
 	}
-	doc, err = listDoc(t, kubernetesCollector(t, "", "nodes", func(c *model.Collector) { c.Request.AllNamespaces = true }))
+	doc, err = listDoc(t, kubernetesCollector(t, "", "nodes", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.AllNamespaces = true })
+	}))
 	if err != nil || doc.Kind != "Node" || doc.APIVersion != "v1" || !slices.Equal(itemNames(t, doc), []string{"/node-1"}) {
 		t.Errorf("nodes: %+v, %v", doc, err)
 	}
@@ -204,18 +224,25 @@ func TestAKubernetesListingIsBounded(t *testing.T) {
 	if got := kubernetesMaxObjects(kubernetesCollector(t, "apps", "deployments")); got != 10000 {
 		t.Errorf("max_objects left out is %d", got)
 	}
-	_, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxObjects = 29 }))
+	_, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.MaxObjects = 29 })
+	}))
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "more than the 29 objects request.max_objects allows") {
 		t.Errorf("30 objects over a bound of 29: %v", err)
 	}
-	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxObjects = 30 })); err != nil {
+	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.MaxObjects = 30 })
+	})); err != nil {
 		t.Errorf("30 objects at a bound of 30: %v", err)
 	}
 	// A page of one object over the limit cannot be made smaller.
 	huge := deployments("big", 1)
 	huge[0]["spec"] = map[string]any{"replicas": 3, "note": strings.Repeat("x", 5000)}
 	s.Serve("/apis/apps/v1/namespaces/big/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: huge})
-	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.Namespaces = []string{"big"} }))
+	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		c.Request.MaxResponseBytes = 5000
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"big"} })
+	}))
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "a page of a single one of the deployments, the least a listing can ask for, is larger than 5000 bytes, the response limit") {
 		t.Errorf("an object over the limit: %v", err)
 	}
@@ -223,11 +250,17 @@ func TestAKubernetesListingIsBounded(t *testing.T) {
 	// to about 5.6 kB without their managed fields and 9 kB with them.
 	s.Serve("/apis/apps/v1/namespaces/a/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("a", 20)})
 	s.Serve("/apis/apps/v1/namespaces/b/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("b", 20)})
-	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.Namespaces = []string{"a", "b"} }))
+	_, err = listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		c.Request.MaxResponseBytes = 5000
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"a", "b"} })
+	}))
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "come to more than the response limit, 5000 bytes") {
 		t.Errorf("two pages under the limit whose objects come to more: %v", err)
 	}
-	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 6000; c.Request.Namespaces = []string{"a", "b"} })); err != nil {
+	if _, err := listDoc(t, kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		c.Request.MaxResponseBytes = 6000
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"a", "b"} })
+	})); err != nil {
 		t.Errorf("two pages whose objects come to less than the limit without their managed fields: %v", err)
 	}
 }
@@ -241,7 +274,10 @@ func TestAKubernetesListingIsBounded(t *testing.T) {
 func TestAKubernetesPageOverTheLimitIsAskedForAgainSmaller(t *testing.T) {
 	s := kubeAPI(t)
 	s.Serve("/apis/apps/v1/namespaces/monitoring/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("monitoring", 30)})
-	c := kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) { c.Request.MaxResponseBytes = 5000; c.Request.MaxObjects = 30 })
+	c := kubernetesCollector(t, "apps", "deployments", func(c *model.Collector) {
+		c.Request.MaxResponseBytes = 5000
+		editKubernetes(c, func(r *KubernetesConfig) { r.MaxObjects = 30 })
+	})
 	ctx, trace := WithRequestTrace(context.Background())
 	resp, err := FetchCollector(ctx, "", c, RequestOverrides{}, nil)
 	if err != nil {
@@ -280,7 +316,9 @@ func TestAKubernetesListingsFailuresSayWhatToDo(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "listing deployments (apps/v1) in the namespace monitoring answered 403 Forbidden: deployments is forbidden: User") || !strings.Contains(err.Error(), "kubernetesAccess.rules") {
 		t.Errorf("forbidden: %v", err)
 	}
-	_, err = listDoc(t, kubernetesCollector(t, "example.com", "widgets", func(c *model.Collector) { c.Request.AllNamespaces = true }))
+	_, err = listDoc(t, kubernetesCollector(t, "example.com", "widgets", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.AllNamespaces = true })
+	}))
 	if err == nil || !strings.Contains(err.Error(), "across the cluster answered 404 Not Found") || !strings.Contains(err.Error(), "kubectl api-resources") {
 		t.Errorf("not found: %v", err)
 	}
@@ -314,10 +352,10 @@ func TestAKubernetesCollectorReachesTheAPIServerItNames(t *testing.T) {
 	s := kubetest.New(t)
 	s.Serve("/apis/cert-manager.io/v1/namespaces/shop/certificates", kubetest.List{Kind: "CertificateList", APIVersion: "cert-manager.io/v1", Items: []map[string]any{{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"name": "web", "namespace": "shop"}}}})
 	c := kubernetesCollector(t, "cert-manager.io", "certificates", func(c *model.Collector) {
-		c.Request.APIServer = s.URL + "/"
+		editKubernetes(c, func(r *KubernetesConfig) { r.APIServer = s.URL + "/" })
 		c.Request.TLS.CAFile = filepath.Join(s.Dir, "ca.crt")
 		c.Request.BearerTokenFile = filepath.Join(s.Dir, "token")
-		c.Request.Namespaces = []string{"shop"}
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"shop"} })
 	})
 	ctx, trace := WithRequestTrace(context.Background())
 	resp, err := FetchCollector(ctx, "", c, RequestOverrides{}, nil)
@@ -344,8 +382,8 @@ func TestAKubernetesCollectorReachesTheAPIServerItNames(t *testing.T) {
 		t.Errorf("warnings %v", warnings)
 	}
 	missing := kubernetesCollector(t, "", "pods", func(c *model.Collector) {
-		c.Request.APIServer = s.URL
-		c.Request.Namespaces = []string{"shop"}
+		editKubernetes(c, func(r *KubernetesConfig) { r.APIServer = s.URL })
+		editKubernetes(c, func(r *KubernetesConfig) { r.Namespaces = []string{"shop"} })
 		c.Request.TLS.CAFile = filepath.Join(t.TempDir(), "ca.crt")
 		c.Request.BearerTokenFile = filepath.Join(t.TempDir(), "token")
 	})
@@ -392,45 +430,73 @@ func TestAKubernetesCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 		edit func(*model.RequestConfig)
 		want string
 	}{
-		"no resource":                 {func(r *model.RequestConfig) { r.Resource = "" }, "has no request.resource"},
-		"a subresource":               {func(r *model.RequestConfig) { r.Resource = "pods/status" }, "subresource"},
-		"a kind":                      {func(r *model.RequestConfig) { r.Resource = "Pod" }, "plural name"},
-		"group core":                  {func(r *model.RequestConfig) { r.Group = "core" }, "leave group out"},
-		"a bad group":                 {func(r *model.RequestConfig) { r.Group = "Apps" }, "not an API group"},
-		"a bad version":               {func(r *model.RequestConfig) { r.Version = "V1" }, "not an API version"},
-		"secrets":                     {func(r *model.RequestConfig) { r.Resource = "secrets" }, "lists secrets"},
-		"both namespace keys":         {func(r *model.RequestConfig) { r.Namespaces, r.AllNamespaces = []string{"a"}, true }, "not both"},
-		"a bad namespace":             {func(r *model.RequestConfig) { r.Namespaces = []string{"a_b"} }, "not a namespace's name"},
-		"a namespace twice":           {func(r *model.RequestConfig) { r.Namespaces = []string{"a", "a"} }, "twice"},
-		"a blank selector":            {func(r *model.RequestConfig) { r.LabelSelector = " " }, "label_selector is written with blanks alone"},
-		"negative max_objects":        {func(r *model.RequestConfig) { r.MaxObjects = -1 }, "must not be negative"},
+		"no resource": {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "" }) }, "has no request.resource"},
+		"a subresource": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "pods/status" })
+		}, "subresource"},
+		"a kind":        {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "Pod" }) }, "plural name"},
+		"group core":    {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Group = "core" }) }, "leave group out"},
+		"a bad group":   {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Group = "Apps" }) }, "not an API group"},
+		"a bad version": {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Version = "V1" }) }, "not an API version"},
+		"secrets":       {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "secrets" }) }, "lists secrets"},
+		"both namespace keys": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Namespaces, o.AllNamespaces = []string{"a"}, true })
+		}, "not both"},
+		"a bad namespace": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Namespaces = []string{"a_b"} })
+		}, "not a namespace's name"},
+		"a namespace twice": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Namespaces = []string{"a", "a"} })
+		}, "twice"},
+		"a blank selector":            {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.LabelSelector = " " }) }, "label_selector is written with blanks alone"},
+		"negative max_objects":        {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.MaxObjects = -1 }) }, "must not be negative"},
 		"tls in the cluster":          {func(r *model.RequestConfig) { r.TLS.CAFile = "/ca" }, "without request.api_server"},
 		"a token file in the cluster": {func(r *model.RequestConfig) { r.BearerTokenFile = "/t" }, "without request.api_server"},
-		"an http api_server":          {func(r *model.RequestConfig) { r.APIServer, r.BearerTokenFile = "http://k8s.example:6443", "/t" }, "not an https URL"},
-		"a user in api_server":        {func(r *model.RequestConfig) { r.APIServer, r.BearerTokenFile = "https://u:p@k8s.example", "/t" }, "has a user"},
-		"a query in api_server":       {func(r *model.RequestConfig) { r.APIServer, r.BearerTokenFile = "https://k8s.example/?a=b", "/t" }, "query or fragment"},
-		"no credential":               {func(r *model.RequestConfig) { r.APIServer = "https://k8s.example" }, "no credential"},
+		"an http api_server": {func(r *model.RequestConfig) {
+			r.BearerTokenFile = "/t"
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "http://k8s.example:6443" })
+		}, "not an https URL"},
+		"a user in api_server": {func(r *model.RequestConfig) {
+			r.BearerTokenFile = "/t"
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://u:p@k8s.example" })
+		}, "has a user"},
+		"a query in api_server": {func(r *model.RequestConfig) {
+			r.BearerTokenFile = "/t"
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://k8s.example/?a=b" })
+		}, "query or fragment"},
+		"no credential": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://k8s.example" })
+		}, "no credential"},
 		"insecure_skip_verify": {func(r *model.RequestConfig) {
-			r.APIServer, r.BearerTokenFile, r.TLS.InsecureSkipVerify = "https://k8s.example", "/t", true
+			r.BearerTokenFile, r.TLS.InsecureSkipVerify = "/t", true
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://k8s.example" })
 		}, "always verified"},
-		"a lone cert_file": {func(r *model.RequestConfig) { r.APIServer, r.TLS.CertFile = "https://k8s.example", "/c" }, "only one of cert_file and key_file"},
-		"a path":           {func(r *model.RequestConfig) { r.Path = "/x" }, "request.path, which does not apply"},
-		"allowed_targets":  {func(r *model.RequestConfig) { r.AllowedTargets = []string{"10.0.0.0/8"} }, "request.allowed_targets, which does not apply"},
+		"a lone cert_file": {func(r *model.RequestConfig) {
+			r.TLS.CertFile = "/c"
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://k8s.example" })
+		}, "only one of cert_file and key_file"},
+		"a path":          {func(r *model.RequestConfig) { r.Path = "/x" }, "request.path, which does not apply"},
+		"allowed_targets": {func(r *model.RequestConfig) { r.AllowedTargets = []string{"10.0.0.0/8"} }, "request.allowed_targets, which does not apply"},
 	} {
-		collector := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Resource: "pods"}}
+		collector := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Own: KubernetesConfig{Resource: "pods"}}}
 		c.edit(&collector.Request)
 		if err := ValidateRequest(collector); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want it to say %q", name, err, c.want)
 		}
 	}
 	for name, edit := range map[string]func(*model.RequestConfig){
-		"secrets of another group": func(r *model.RequestConfig) { r.Group, r.Resource = "example.com", "secrets" },
-		"a client certificate": func(r *model.RequestConfig) {
-			r.APIServer, r.TLS.CertFile, r.TLS.KeyFile = "https://k8s.example:6443/proxy/", "/c", "/k"
+		"secrets of another group": func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Group, o.Resource = "example.com", "secrets" })
 		},
-		"a version": func(r *model.RequestConfig) { r.Group, r.Version = "example.com", "v1beta2" },
+		"a client certificate": func(r *model.RequestConfig) {
+			r.TLS.CertFile, r.TLS.KeyFile = "/c", "/k"
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.APIServer = "https://k8s.example:6443/proxy/" })
+		},
+		"a version": func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Group, o.Version = "example.com", "v1beta2" })
+		},
 	} {
-		collector := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Resource: "pods"}}
+		collector := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Own: KubernetesConfig{Resource: "pods"}}}
 		edit(&collector.Request)
 		if err := ValidateRequest(collector); err != nil {
 			t.Errorf("%s: %v", name, err)

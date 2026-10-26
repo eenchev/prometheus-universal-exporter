@@ -43,23 +43,79 @@ import (
 //
 // This file imports nothing outside the standard library.
 
+// DNSConfig is a dns collector's own request keys: the record type asked
+// for, A when left out; the server asked, host:port, the system's resolver
+// when left out; and udp or tcp.
+type DNSConfig struct {
+	RecordType string `yaml:"record_type,omitempty"`
+	Server     string `yaml:"server,omitempty"`
+	Transport  string `yaml:"transport,omitempty"`
+}
+
+// dnsRecordTypes are the values of a dns collector's request.record_type.
+var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
+
+// dnsRequest is a dns collector's own request keys: the zero DNSConfig of
+// a collector built in code whose request has not been validated, which
+// sets them (ValidateRequest).
+func dnsRequest(c *model.Collector) DNSConfig {
+	own, _ := c.Request.Own.(DNSConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeDNS,
-		Fields:       []string{"record_type", "server", "transport", "allowed_targets", "denied_targets"},
+		Fields:       []string{"allowed_targets", "denied_targets"},
+		Config:       DNSConfig{},
+		KeyRules:     dnsKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
-		Validate:     validateDNSRequest,
-		Fetch:        fetchDNS,
-		CheckTarget: func(c *model.Collector, target string, _ bool) error {
-			_, err := parseDNSTarget(c, target)
-			return err
+		Requester:    dnsRequester{},
+		JSONAnswer:   true,
+		TargetHint: func(c *model.Collector) string {
+			if dnsRequest(c).RecordType == "PTR" {
+				return "the IP address to resolve"
+			}
+			return "the name to resolve"
 		},
-		Label:   dnsLabel,
-		Method:  func(*model.Collector, RequestOverrides) string { return dnsMethod },
-		Display: dnsDisplay,
-		Stage:   "dns",
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
+		},
+		Stage: "dns",
 	})
+}
+
+// dnsRequester is the dns request type's Requester.
+type dnsRequester struct{}
+
+// Validate checks a dns collector's request and fills in its defaults.
+func (dnsRequester) Validate(c *model.Collector) error {
+	return validateDNSRequest(c)
+}
+
+// Fetch performs one request of a dns collector.
+func (dnsRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchDNS(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a dns collector's target.
+func (dnsRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
+	_, err := parseDNSTarget(c, target)
+	return err
+}
+
+// Label is the url label of a dns request.
+func (dnsRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return dnsLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a dns request.
+func (dnsRequester) Method(*model.Collector, RequestOverrides) string { return dnsMethod }
+
+// Display renders a dns target for logs and labels.
+func (dnsRequester) Display(target string) string {
+	return dnsDisplay(target)
 }
 
 // dnsMethod is the http_method label of a lookup.
@@ -79,17 +135,18 @@ const dnsLookupTimeout = 30 * time.Second
 // case, A when left out. A collector not yet validated has it worked out
 // the same way.
 func dnsRecordType(c *model.Collector) string {
-	if t := strings.ToUpper(strings.TrimSpace(c.Request.RecordType)); t != "" {
+	if t := strings.ToUpper(strings.TrimSpace(dnsRequest(c).RecordType)); t != "" {
 		return t
 	}
 	return "A"
 }
 
 func validateDNSRequest(x *model.Collector) error {
-	r := &x.Request
+	r := dnsRequest(x)
 	r.RecordType = dnsRecordType(x)
-	if !slices.Contains(model.DNSRecordTypes, r.RecordType) {
-		return fmt.Errorf("collector %q has unknown request.record_type %q; want one of %s, in any case", x.Name, r.RecordType, strings.Join(model.DNSRecordTypes, ", "))
+	x.Request.Own = r
+	if !slices.Contains(dnsRecordTypes, r.RecordType) {
+		return fmt.Errorf("collector %q has unknown request.record_type %q; want one of %s, in any case", x.Name, r.RecordType, strings.Join(dnsRecordTypes, ", "))
 	}
 	if r.Server != "" {
 		if _, err := ParseDNSServer(r.Server); err != nil {
@@ -155,10 +212,10 @@ func dnsLabel(target string, c *model.Collector, _ RequestOverrides) (string, er
 
 func dnsURI(c *model.Collector, name string) string {
 	query := "?type=" + dnsRecordType(c)
-	if c.Request.Server == "" {
+	if dnsRequest(c).Server == "" {
 		return "dns:" + name + query
 	}
-	server, _ := ParseDNSServer(c.Request.Server)
+	server, _ := ParseDNSServer(dnsRequest(c).Server)
 	return "dns://" + server + "/" + name + query
 }
 
@@ -192,10 +249,11 @@ type dnsAnswer struct {
 // request.transport.
 func dnsResolver(c *model.Collector) *net.Resolver {
 	server := ""
-	if c.Request.Server != "" {
-		server, _ = ParseDNSServer(c.Request.Server)
+	r := dnsRequest(c)
+	if r.Server != "" {
+		server, _ = ParseDNSServer(r.Server)
 	}
-	return DNSResolver(server, c.Request.Transport == dnsTCP)
+	return DNSResolver(server, r.Transport == dnsTCP)
 }
 
 // fetchDNS resolves a scrape's name and answers its records as JSON.
@@ -218,10 +276,11 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 		ctx, cancel = context.WithTimeout(ctx, dnsLookupTimeout)
 		defer cancel()
 	}
-	doc := dnsDocument{Name: name, RecordType: dnsRecordType(c), Transport: cmp.Or(c.Request.Transport, dnsUDP), Answers: []dnsAnswer{}}
+	r := dnsRequest(c)
+	doc := dnsDocument{Name: name, RecordType: dnsRecordType(c), Transport: cmp.Or(r.Transport, dnsUDP), Answers: []dnsAnswer{}}
 	shownServer := "the system's resolver"
-	if c.Request.Server != "" {
-		doc.Server, _ = ParseDNSServer(c.Request.Server)
+	if r.Server != "" {
+		doc.Server, _ = ParseDNSServer(r.Server)
 		shownServer = doc.Server
 	}
 	// The record type goes in a header of its own: a debug report masks the
@@ -401,4 +460,14 @@ func checkDNSPolicy(p *targetPolicy, name string) error {
 		return &TargetRefusedError{Host: name, Reason: "it is not in request.allowed_targets; a dns collector's names are matched by name, never by the addresses they resolve to"}
 	}
 	return nil
+}
+
+// dnsKeyRules is what the configuration schema says of a dns collector's
+// own keys.
+func dnsKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
+		"server":      {"not": SchemaOnlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
+		"transport":   {"enum": SchemaOptionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
+	}
 }

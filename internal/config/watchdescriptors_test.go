@@ -46,8 +46,9 @@ func TestTheDescriptorFilesAreTheOnesTheCollectorsName(t *testing.T) {
 		c := generatedConfig(r, dir)
 		var want []string
 		for i := range c.Collectors {
-			request := &c.Collectors[i].Request
-			for _, path := range append([]string{request.ProtosetFile}, request.ProtoFiles...) {
+			protoset, _ := ownKey(&c.Collectors[i], "protoset_file").(string)
+			protos, _ := ownKey(&c.Collectors[i], "proto_files").([]string)
+			for _, path := range append([]string{protoset}, protos...) {
 				if path != "" && !slices.Contains(want, path) {
 					want = append(want, path)
 				}
@@ -159,7 +160,9 @@ func TestAConfigurationWithoutDescriptorFilesIsWatchedAsItWas(t *testing.T) {
 			}
 		}
 	}
-	if without < 100 || with < 100 || changed < 20 {
+	// The descriptor files are a grpc collector's own keys, which a build
+	// without grpc reads none of.
+	if without < 100 || fetch.RequestTypes[fetch.RequestTypeGRPC] != nil && (with < 100 || changed < 20) {
 		t.Fatalf("the rounds held %d steps of configurations without descriptor files, %d with, %d of them changed by a descriptor file alone; too few to say", without, with, changed)
 	}
 }

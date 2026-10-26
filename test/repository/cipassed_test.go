@@ -33,6 +33,11 @@ type ciRun struct {
 // ciSuiteStep is the name tools/ci-passed.py looks for among a run's steps.
 const ciSuiteStep = "Run the repository's checks"
 
+// ciSuiteCommand is what that step runs: the repository's checks but the
+// scaffold test, which the job scaffold runs on its own
+// (TestTheScaffoldTestRunsInAJobOfItsOwn).
+const ciSuiteCommand = "go test -skip '^" + scaffoldTest + "$' ./test/repository/"
+
 const ciPassedSHA = "0123456789abcdef0123456789abcdef01234567"
 
 // pushRun is a run a push of ciPassedSHA started.
@@ -337,7 +342,10 @@ func TestTheCIGateOfTheReleasesFailsAtOnceWhenTheAPIRefusesIt(t *testing.T) {
 // the Go suite does, so the step has to be there under that name, in the job
 // test, running the repository's checks under the go output: renamed, the
 // gate would find no run that ran the suite and fail every release; moved
-// under another output, it would take a run that ran only part of CI.
+// under another output, it would take a run that ran only part of CI. The
+// checks it runs are all of test/repository's but the scaffold test, whose
+// job runs under the same output: a run that ran the step ran it too, and
+// its failure fails the run.
 func TestTheCIGateFindsTheSuiteStepOfCI(t *testing.T) {
 	script := read(t, "tools/ci-passed.py")
 	if !strings.Contains(script, "\nSUITE_STEP = "+strconv.Quote(ciSuiteStep)+"\n") {
@@ -350,7 +358,7 @@ func TestTheCIGateFindsTheSuiteStepOfCI(t *testing.T) {
 		t.Fatalf("ci.yml's job test has no step %q", ciSuiteStep)
 	}
 	step := workflowSteps(t, ".github/workflows/ci.yml")["test"][index]
-	if step["run"] != "go test ./test/repository/" || step["if"] != sideCondition("go") {
+	if step["run"] != ciSuiteCommand || step["if"] != sideCondition("go") {
 		t.Errorf("ci.yml's step %q runs %v under %v, not the repository's checks under the go output", ciSuiteStep, step["run"], step["if"])
 	}
 }

@@ -119,7 +119,7 @@ func fillerHeaders(n, size int) []hpack.HeaderField {
 // limit, in the words that say what to do, and is not retried, where one
 // just under it is taken whole.
 func TestAGRPCAnswersHeadersAreHeldToTheHTTPBound(t *testing.T) {
-	health := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, RPC: "grpc.health.v1.Health/Check"}, Transform: model.TransformConfig{Type: "jq"}}
+	health := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "grpc.health.v1.Health/Check"}}, Transform: model.TransformConfig{Type: "jq"}}
 	health.Request.Retry.Codes = []string{"INTERNAL"}
 	health.Request.Retry.Attempts = 2
 	c := validGRPC(t, health)

@@ -29,12 +29,27 @@ import (
 
 const getStats = grpctest.Service + "/GetStats"
 
+// A grpc collector's placeholders are in its message and its metadata
+// values.
+func init() {
+	ownPlaceholders[RequestTypeGRPC] = func(c *model.Collector) {
+		c.Request.Own = GRPCConfig{Message: `{"a": {{param_message:x|json}}}`, Metadata: map[string]string{"x-set": "{{param_metadata:x}}"}}
+	}
+}
+
+// editGRPC edits a grpc collector's own keys.
+func editGRPC(c *model.Collector, edit func(*GRPCConfig)) {
+	r := grpcRequest(c)
+	edit(&r)
+	c.Request.Own = r
+}
+
 // grpcCollector calls GetStats with descriptors from the server's
 // reflection service.
 func grpcCollector() model.Collector {
 	return model.Collector{
 		Name:      "queue",
-		Request:   model.RequestConfig{Type: RequestTypeGRPC, RPC: getStats, Descriptors: "reflection"},
+		Request:   model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: getStats, Descriptors: "reflection"}},
 		Transform: model.TransformConfig{Type: "jq"},
 	}
 }
@@ -58,12 +73,12 @@ func wantRefused(t *testing.T, c model.Collector, fragment string) {
 // The health service's types are built in: it needs no descriptors, and
 // its streaming Watch is refused at load.
 func TestGRPCHealthNeedsNoDescriptors(t *testing.T) {
-	c := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, RPC: "grpc.health.v1.Health/Check"}, Transform: model.TransformConfig{Type: "jq"}}
+	c := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "grpc.health.v1.Health/Check"}}, Transform: model.TransformConfig{Type: "jq"}}
 	checked := validGRPC(t, c)
-	c.Request.RPC = "grpc.health.v1.Health/Watch"
+	editGRPC(&c, func(r *GRPCConfig) { r.RPC = "grpc.health.v1.Health/Watch" })
 	wantRefused(t, c, "server streaming method")
-	c.Request.RPC = "grpc.health.v1.Health/Check"
-	c.Request.Message = `{"servce": "x"}`
+	editGRPC(&c, func(r *GRPCConfig) { r.RPC = "grpc.health.v1.Health/Check" })
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"servce": "x"}` })
 	wantRefused(t, c, `unknown field "servce"`)
 
 	server := grpctest.Start(t, grpctest.Options{})
@@ -82,8 +97,8 @@ func TestGRPCProtoset(t *testing.T) {
 	dir := t.TempDir()
 	set := grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", set
-	c.Request.Message = `{"queue": "orders", "include_shards": true}`
+	editGRPC(&c, func(r *GRPCConfig) { r.Descriptors, r.ProtosetFile = "protoset", set })
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"queue": "orders", "include_shards": true}` })
 	validGRPC(t, c)
 
 	for _, tc := range []struct{ rpc, message, fragment string }{
@@ -96,25 +111,25 @@ func TestGRPCProtoset(t *testing.T) {
 		{getStats, `{"limit": "many"}`, "does not fit"},
 	} {
 		c := c
-		c.Request.RPC, c.Request.Message = tc.rpc, tc.message
+		editGRPC(&c, func(r *GRPCConfig) { r.RPC, r.Message = tc.rpc, tc.message })
 		wantRefused(t, c, tc.fragment)
 	}
 	// A placeholder with no default stands in with a value no probe need
 	// send, so the message is checked only for being JSON.
-	c.Request.Message = `{"limit": {{param_limit|json}}}`
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"limit": {{param_limit|json}}}` })
 	validGRPC(t, c)
 
 	// A set without an import it needs names it.
 	full := grpctest.WriteProtoset(t, filepath.Join(dir, "full.pb"), true)
-	c.Request.Message, c.Request.ProtosetFile = "", full
+	editGRPC(&c, func(r *GRPCConfig) { r.Message, r.ProtosetFile = "", full })
 	validGRPC(t, c)
 	missing := filepath.Join(dir, "missing.pb")
 	if err := os.WriteFile(missing, []byte("not a descriptor set"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c.Request.ProtosetFile = missing
+	editGRPC(&c, func(r *GRPCConfig) { r.ProtosetFile = missing })
 	wantRefused(t, c, "is not a FileDescriptorSet")
-	c.Request.ProtosetFile = filepath.Join(dir, "absent.pb")
+	editGRPC(&c, func(r *GRPCConfig) { r.ProtosetFile = filepath.Join(dir, "absent.pb") })
 	wantRefused(t, c, "reading protoset_file")
 }
 
@@ -127,7 +142,7 @@ func TestGRPCProtosetIsReadAgainWhenItChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", set
+	editGRPC(&c, func(r *GRPCConfig) { r.Descriptors, r.ProtosetFile = "protoset", set })
 	checked := validGRPC(t, c)
 	if _, err := staticMethod(checked); err != nil {
 		t.Fatal(err)
@@ -146,8 +161,10 @@ func TestGRPCProtoSources(t *testing.T) {
 	dir := t.TempDir()
 	queue := grpctest.WriteSources(t, dir)
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtoFiles, c.Request.ProtoImportPaths = "proto", []string{queue}, []string{dir}
-	c.Request.Message = `{"queue": "orders"}`
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Descriptors, r.ProtoFiles, r.ProtoImportPaths = "proto", []string{queue}, []string{dir}
+	})
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"queue": "orders"}` })
 	checked := validGRPC(t, c)
 	method, err := staticMethod(checked)
 	if err != nil || method.path() != "/"+getStats {
@@ -156,17 +173,17 @@ func TestGRPCProtoSources(t *testing.T) {
 
 	// Without import paths, each file's directory is one, and queue.proto's
 	// import by its path from the root is not found there.
-	c.Request.ProtoImportPaths = nil
+	editGRPC(&c, func(r *GRPCConfig) { r.ProtoImportPaths = nil })
 	wantRefused(t, c, "acme/queue/v1/shard.proto")
 	// A file outside every import path.
-	c.Request.ProtoImportPaths = []string{filepath.Join(dir, "elsewhere")}
+	editGRPC(&c, func(r *GRPCConfig) { r.ProtoImportPaths = []string{filepath.Join(dir, "elsewhere")} })
 	wantRefused(t, c, "is not under any of proto_import_paths")
 
 	broken := filepath.Join(t.TempDir(), "broken.proto")
 	if err := os.WriteFile(broken, []byte("syntax = \"proto3\";\npackage x;\nmessage M {\n  strin a = 1;\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c.Request.RPC, c.Request.ProtoFiles, c.Request.ProtoImportPaths = "x.S/M", []string{broken}, nil
+	editGRPC(&c, func(r *GRPCConfig) { r.RPC, r.ProtoFiles, r.ProtoImportPaths = "x.S/M", []string{broken}, nil })
 	wantRefused(t, c, "broken.proto:4:")
 }
 
@@ -231,7 +248,9 @@ func TestGRPCTargets(t *testing.T) {
 func TestGRPCStaticTargetRequest(t *testing.T) {
 	dir := t.TempDir()
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "q.pb"), false)
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Descriptors, r.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "q.pb"), false)
+	})
 	checked := validGRPC(t, c)
 	attempts := 2
 	good := &model.StaticTarget{Name: "t", Target: "q:1", Request: model.TargetRequestConfig{
@@ -289,8 +308,10 @@ func TestGRPCCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := grpcCollector()
-	c.Request.Message = `{"queue": {{param_queue|json}}, "include_shards": true}`
-	c.Request.Metadata = map[string]string{"x-tenant": "{{param_tenant:default}}", "x-static": "one"}
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"queue": {{param_queue|json}}, "include_shards": true}` })
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Metadata = map[string]string{"x-tenant": "{{param_tenant:default}}", "x-static": "one"}
+	})
 	c.Request.BearerTokenFile = token
 	checked := validGRPC(t, c)
 	// The probe's timeout is the deadline the server is to see, and no
@@ -350,13 +371,17 @@ func TestGRPCAnAnswerWithAnyOfTheServicesOwnTypes(t *testing.T) {
 	want := `{"details":[{"@type":"type.googleapis.com/acme.queue.v1.Detail","reason":"slow consumer","waiting":"7"},{"@type":"type.googleapis.com/google.protobuf.Duration","value":"1.500s"}]}`
 	for name, configure := range map[string]func(*model.Collector){
 		"reflection": func(*model.Collector) {},
-		"protoset":   func(c *model.Collector) { c.Request.Descriptors, c.Request.ProtosetFile = "protoset", set },
+		"protoset": func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Descriptors, r.ProtosetFile = "protoset", set })
+		},
 		"proto": func(c *model.Collector) {
-			c.Request.Descriptors, c.Request.ProtoFiles, c.Request.ProtoImportPaths = "proto", []string{queue}, []string{dir}
+			editGRPC(c, func(r *GRPCConfig) {
+				r.Descriptors, r.ProtoFiles, r.ProtoImportPaths = "proto", []string{queue}, []string{dir}
+			})
 		},
 	} {
 		c := grpcCollector()
-		c.Request.RPC = grpctest.Service + "/Explain"
+		editGRPC(&c, func(r *GRPCConfig) { r.RPC = grpctest.Service + "/Explain" })
 		configure(&c)
 		checked := validGRPC(t, c)
 		resp, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil)
@@ -384,7 +409,9 @@ func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
 	addr := server.Addr
 	dir := t.TempDir()
 	c := grpcCollector()
-	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Descriptors, r.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
+	})
 	checked := validGRPC(t, c)
 	probe := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -570,7 +597,7 @@ func TestGRPCReflection(t *testing.T) {
 
 	// A service the reflection service does not know.
 	missing := grpcCollector()
-	missing.Request.RPC = "acme.queue.v1.Missing/Get"
+	editGRPC(&missing, func(r *GRPCConfig) { r.RPC = "acme.queue.v1.Missing/Get" })
 	_, err = FetchCollector(context.Background(), server.Addr, validGRPC(t, missing), RequestOverrides{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not know the service acme.queue.v1.Missing") {
 		t.Fatalf("%v", err)
@@ -886,7 +913,7 @@ func TestGRPCReflectionCarriesTheCallsCredentials(t *testing.T) {
 	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
 	c := grpcCollector()
 	c.Request.BearerToken = "s3cret"
-	c.Request.Metadata = map[string]string{"x-tenant": "a"}
+	editGRPC(&c, func(r *GRPCConfig) { r.Metadata = map[string]string{"x-tenant": "a"} })
 	checked := validGRPC(t, c)
 	if _, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
@@ -906,8 +933,8 @@ func TestGRPCReflectionCarriesTheCallsCredentials(t *testing.T) {
 // collector are in TestTheKeysOfOtherTypesDoNotApplyToHTTP.
 func TestGRPCValidation(t *testing.T) {
 	c := grpcCollector()
-	c.Request.RPC = " /" + getStats + " "
-	if got := validGRPC(t, c).Request.RPC; got != getStats {
+	editGRPC(&c, func(r *GRPCConfig) { r.RPC = " /" + getStats + " " })
+	if got := grpcRequest(validGRPC(t, c)).RPC; got != getStats {
 		t.Fatalf("rpc normalized to %q", got)
 	}
 	for _, tc := range []struct {
@@ -915,22 +942,32 @@ func TestGRPCValidation(t *testing.T) {
 		change   func(*model.Collector)
 		fragment string
 	}{
-		{"no rpc", func(c *model.Collector) { c.Request.RPC = "" }, "has no request.rpc"},
-		{"no method", func(c *model.Collector) { c.Request.RPC = grpctest.Service }, "is not a method"},
-		{"placeholder rpc", func(c *model.Collector) { c.Request.RPC = "a.{{param_x}}/M" }, "has a placeholder"},
-		{"no descriptors", func(c *model.Collector) { c.Request.Descriptors = "" }, "has no request.descriptors"},
-		{"unknown source", func(c *model.Collector) { c.Request.Descriptors = "buf" }, "want reflection, protoset or proto"},
-		{"protoset file without protoset", func(c *model.Collector) { c.Request.ProtosetFile = "x.pb" }, "applies only with descriptors: protoset"},
-		{"proto files without proto", func(c *model.Collector) { c.Request.ProtoFiles = []string{"x.proto"} }, "apply only with descriptors: proto"},
-		{"protoset without file", func(c *model.Collector) { c.Request.Descriptors = "protoset" }, "no request.protoset_file"},
-		{"proto without files", func(c *model.Collector) { c.Request.Descriptors = "proto" }, "no request.proto_files"},
-		{"upper-case metadata", func(c *model.Collector) { c.Request.Metadata = map[string]string{"X-Tenant": "a"} }, "lower-case"},
-		{"binary metadata", func(c *model.Collector) { c.Request.Metadata = map[string]string{"trace-bin": "a"} }, "binary metadata"},
-		{"reserved metadata", func(c *model.Collector) { c.Request.Metadata = map[string]string{"grpc-timeout": "1S"} }, "reserved"},
-		{"content-type metadata", func(c *model.Collector) { c.Request.Metadata = map[string]string{"content-type": "x"} }, "reserved"},
-		{"control character", func(c *model.Collector) { c.Request.Metadata = map[string]string{"x-a": "a\nb"} }, "control character"},
+		{"no rpc", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.RPC = "" }) }, "has no request.rpc"},
+		{"no method", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.RPC = grpctest.Service }) }, "is not a method"},
+		{"placeholder rpc", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.RPC = "a.{{param_x}}/M" }) }, "has a placeholder"},
+		{"no descriptors", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.Descriptors = "" }) }, "has no request.descriptors"},
+		{"unknown source", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.Descriptors = "buf" }) }, "want reflection, protoset or proto"},
+		{"protoset file without protoset", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.ProtosetFile = "x.pb" }) }, "applies only with descriptors: protoset"},
+		{"proto files without proto", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.ProtoFiles = []string{"x.proto"} }) }, "apply only with descriptors: proto"},
+		{"protoset without file", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.Descriptors = "protoset" }) }, "no request.protoset_file"},
+		{"proto without files", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.Descriptors = "proto" }) }, "no request.proto_files"},
+		{"upper-case metadata", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"X-Tenant": "a"} })
+		}, "lower-case"},
+		{"binary metadata", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"trace-bin": "a"} })
+		}, "binary metadata"},
+		{"reserved metadata", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"grpc-timeout": "1S"} })
+		}, "reserved"},
+		{"content-type metadata", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"content-type": "x"} })
+		}, "reserved"},
+		{"control character", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"x-a": "a\nb"} })
+		}, "control character"},
 		{"authorization twice", func(c *model.Collector) {
-			c.Request.Metadata = map[string]string{"authorization": "x"}
+			editGRPC(c, func(r *GRPCConfig) { r.Metadata = map[string]string{"authorization": "x"} })
 			c.Request.BearerToken = "t"
 		}, "credential keys already send it"},
 		{"forwarded reserved header", func(c *model.Collector) { c.Request.ForwardHeaders = []string{"Grpc-Timeout"} }, "reserved"},
@@ -941,9 +978,13 @@ func TestGRPCValidation(t *testing.T) {
 		{"http statuses", func(c *model.Collector) { c.Request.Retry.Statuses = []string{"503"} }, `sets request.retry.statuses, which does not apply to request.type "grpc"; retry.codes says which gRPC status codes are retried`},
 		{"no http status", func(c *model.Collector) { c.Request.Retry.Statuses = []string{} }, "sets request.retry.statuses, which does not apply"},
 		{"negative attempts", func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "must be from 0 to 10"},
-		{"not JSON", func(c *model.Collector) { c.Request.Message = `{"queue": }` }, "is not JSON"},
-		{"unquoted string placeholder", func(c *model.Collector) { c.Request.Message = `{"queue": {{param_q:orders}}}` }, "is not JSON"},
-		{"form filter", func(c *model.Collector) { c.Request.Message = `{"queue": "{{param_q|form}}"}` }, "does not write JSON"},
+		{"not JSON", func(c *model.Collector) { editGRPC(c, func(r *GRPCConfig) { r.Message = `{"queue": }` }) }, "is not JSON"},
+		{"unquoted string placeholder", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Message = `{"queue": {{param_q:orders}}}` })
+		}, "is not JSON"},
+		{"form filter", func(c *model.Collector) {
+			editGRPC(c, func(r *GRPCConfig) { r.Message = `{"queue": "{{param_q|form}}"}` })
+		}, "does not write JSON"},
 		{"http key", func(c *model.Collector) { c.Request.Path = "/x" }, "request.path, which does not apply"},
 		{"both credentials", func(c *model.Collector) {
 			c.Request.BearerToken = "t"
@@ -966,8 +1007,10 @@ func TestGRPCValidation(t *testing.T) {
 	// Placeholders: a string with |json, a number with |number, each
 	// JSON once it takes its default or a stand-in.
 	c = grpcCollector()
-	c.Request.Message = `{"queue": {{param_q|json}}, "limit": {{param_limit|number}}, "include_shards": {{param_shards:true|raw}}}`
-	c.Request.Metadata = map[string]string{"x-tenant": "{{param_tenant:default}}"}
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Message = `{"queue": {{param_q|json}}, "limit": {{param_limit|number}}, "include_shards": {{param_shards:true|raw}}}`
+	})
+	editGRPC(&c, func(r *GRPCConfig) { r.Metadata = map[string]string{"x-tenant": "{{param_tenant:default}}"} })
 	validGRPC(t, c)
 }
 
@@ -981,7 +1024,7 @@ func TestGRPCAcceptedCodes(t *testing.T) {
 		return "", status.Error(codes.NotFound, "no such queue")
 	}})
 	c := grpcCollector()
-	c.Request.AcceptCodes = []string{"not_found"}
+	editGRPC(&c, func(r *GRPCConfig) { r.AcceptCodes = []string{"not_found"} })
 	c.Request.Retry.Attempts = 2
 	checked := validGRPC(t, c)
 	response, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil)
@@ -998,7 +1041,7 @@ func TestGRPCAcceptedCodes(t *testing.T) {
 		t.Fatalf("%d %v", code, ok)
 	}
 	other := grpcCollector()
-	other.Request.AcceptCodes = []string{"UNAVAILABLE"}
+	editGRPC(&other, func(r *GRPCConfig) { r.AcceptCodes = []string{"UNAVAILABLE"} })
 	if _, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, other), RequestOverrides{}, nil); err == nil {
 		t.Fatal("a status the collector does not accept was an answer")
 	}
@@ -1017,7 +1060,7 @@ func TestGRPCAcceptedCodes(t *testing.T) {
 	}
 	for _, bad := range []string{"OK", "NOPE"} {
 		refused := grpcCollector()
-		refused.Request.AcceptCodes = []string{bad}
+		editGRPC(&refused, func(r *GRPCConfig) { r.AcceptCodes = []string{bad} })
 		wantRefused(t, refused, "request.accept_codes")
 	}
 }

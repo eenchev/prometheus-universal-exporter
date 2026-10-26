@@ -39,6 +39,7 @@ func registeredRequestTypeKeys(t *testing.T) map[string]requestTypeKeys {
 			t.Fatal(err)
 		}
 		var found requestTypeKeys
+		listed := false
 		ast.Inspect(file, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
 			if !ok {
@@ -55,13 +56,17 @@ func registeredRequestTypeKeys(t *testing.T) map[string]requestTypeKeys {
 				switch kv.Key.(*ast.Ident).Name {
 				case "Fields":
 					found.fields = stringLiterals(t, path, kv.Value)
+					listed = true
 				case "TargetFields":
 					found.targetFields = stringLiterals(t, path, kv.Value)
 				}
 			}
 			return false
 		})
-		if len(found.fields) == 0 {
+		// A type may take no key of the common part, as a new one does
+		// (tools/new-request-type.sh), but its registration still lists
+		// them, empty.
+		if !listed {
 			t.Fatalf("%s registers no request type with Fields; the registration has moved", path)
 		}
 		keys[typ] = found

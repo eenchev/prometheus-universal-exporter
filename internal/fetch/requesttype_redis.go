@@ -64,22 +64,84 @@ import (
 // The type is opt-in, built under its tag alone, and imports nothing
 // outside the standard library: the client is the RESP2 of redisresp.go.
 
+// RedisConfig is a redis collector's own request keys: the logical
+// database selected, 0 when left out, the sections of INFO read, and the
+// read-only commands whose replies the document holds besides.
+type RedisConfig struct {
+	DB           int            `yaml:"db,omitempty"`
+	InfoSections []string       `yaml:"info_sections,omitempty"`
+	Commands     []RedisCommand `yaml:"commands,omitempty"`
+}
+
+// RedisCommand is one entry of a redis collector's request.commands: the
+// name its reply is put under in the document, and the command with its
+// arguments, each argument sent as it is written, its placeholders filled.
+type RedisCommand struct {
+	Name    string   `yaml:"name"`
+	Command []string `yaml:"command"`
+}
+
+// redisRequest is a redis collector's own request keys: the zero
+// RedisConfig of a collector built in code whose request has not been
+// validated, which sets them (ValidateRequest).
+func redisRequest(c *model.Collector) RedisConfig {
+	own, _ := c.Request.Own.(RedisConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
-		Name:               RequestTypeRedis,
-		Fields:             []string{"username", "password_file", "db", "info_sections", "commands", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "username", "password_file", "tls"},
-		Validate:           validateRedisRequest,
-		Fetch:              fetchRedis,
-		CheckTarget:        checkRedisTarget,
+		Name:         RequestTypeRedis,
+		Fields:       []string{"username", "password_file", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Config:       RedisConfig{},
+		KeyRules:     redisKeyRules,
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "username", "password_file", "tls"},
+		Requester:    redisRequester{},
+		JSONAnswer:   true,
+		TargetHint:   func(*model.Collector) string { return "host, host:port or rediss://host:port" },
+		Templates:    redisTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "the arguments of its request.commands or its label values")
+		},
+		SchemaRule:         redisSchemaRule,
 		CheckTargetRequest: checkRedisTargetRequest,
-		Label:              redisLabel,
-		Method:             redisMethod,
-		Display:            redisDisplay,
 		Stage:              "redis",
 		CheckFiles:         checkRedisFiles,
 	})
+}
+
+// redisRequester is the redis request type's Requester.
+type redisRequester struct{}
+
+// Validate checks a redis collector's request and fills in its defaults.
+func (redisRequester) Validate(c *model.Collector) error {
+	return validateRedisRequest(c)
+}
+
+// Fetch performs one request of a redis collector.
+func (redisRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchRedis(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a redis collector's target.
+func (redisRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkRedisTarget(c, target, static)
+}
+
+// Label is the url label of a redis request.
+func (redisRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return redisLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a redis request.
+func (redisRequester) Method(c *model.Collector, overrides RequestOverrides) string {
+	return redisMethod(c, overrides)
+}
+
+// Display renders a redis target for logs and labels.
+func (redisRequester) Display(target string) string {
+	return redisDisplay(target)
 }
 
 // redisDefaultPort is the port of a target that names none.
@@ -164,9 +226,18 @@ func redisAllowedNames() string {
 	return strings.Join(names, ", ")
 }
 
+// redisInfoSectionPattern is what a section of a redis collector's
+// request.info_sections is written with: INFO's own section names are
+// lower-case words. The exporter and the schema hold them to it alike.
+const redisInfoSectionPattern = `^[a-z_]+$`
+
+// redisCommandNamePattern is what request.commands[].name is written with:
+// a name a jq path reaches as .commands.<name>.
+const redisCommandNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
+
 var (
-	redisInfoSection = regexp.MustCompile(model.RedisInfoSectionPattern)
-	redisCommandName = regexp.MustCompile(model.RedisCommandNamePattern)
+	redisInfoSection = regexp.MustCompile(redisInfoSectionPattern)
+	redisCommandName = regexp.MustCompile(redisCommandNamePattern)
 )
 
 // redisCommandKey is the name, or name and subcommand, a command is allowed
@@ -181,6 +252,7 @@ func redisCommandKey(command []string) (string, []string) {
 
 func validateRedisRequest(x *model.Collector) error {
 	r := &x.Request
+	own := redisRequest(x)
 	t := r.TLS
 	if (t.CertFile == "") != (t.KeyFile == "") {
 		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
@@ -204,11 +276,11 @@ func validateRedisRequest(x *model.Collector) error {
 	if r.PasswordFile != "" && strings.TrimSpace(r.PasswordFile) == "" {
 		return fmt.Errorf("collector %q request.password_file is blanks alone; name the file of the password, or take the key out", x.Name)
 	}
-	if r.DB < 0 {
-		return fmt.Errorf("collector %q request.db is %d; a logical database is numbered from 0", x.Name, r.DB)
+	if own.DB < 0 {
+		return fmt.Errorf("collector %q request.db is %d; a logical database is numbered from 0", x.Name, own.DB)
 	}
 	seen := map[string]bool{}
-	for i, section := range r.InfoSections {
+	for i, section := range own.InfoSections {
 		if !redisInfoSection.MatchString(section) {
 			return fmt.Errorf("collector %q request.info_sections[%d] %q is not a section of INFO, which are named in lower case, such as server, memory or keyspace", x.Name, i, section)
 		}
@@ -218,8 +290,9 @@ func validateRedisRequest(x *model.Collector) error {
 		seen[section] = true
 	}
 	names := map[string]bool{}
-	for i := range r.Commands {
-		if err := checkRedisCommand(&r.Commands[i], i, names); err != nil {
+	// The entries are written in place, in the list Own holds.
+	for i := range own.Commands {
+		if err := checkRedisCommand(&own.Commands[i], i, names); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
@@ -273,7 +346,7 @@ func checkRedisTargetRequest(_ *model.Collector, t *model.StaticTarget) error {
 // checkRedisCommand checks an entry of request.commands, and writes its
 // name, and subcommand, in upper case, as the debug report and the refusal
 // show them.
-func checkRedisCommand(cmd *model.RedisCommand, i int, names map[string]bool) error {
+func checkRedisCommand(cmd *RedisCommand, i int, names map[string]bool) error {
 	where := fmt.Sprintf("request.commands[%d]", i)
 	if !redisCommandName.MatchString(cmd.Name) {
 		return fmt.Errorf("%s.name %q is not a name the document can hold the reply under; write letters, digits and _, starting with a letter or _, as .commands.%s reaches it", where, cmd.Name, "queue_len")
@@ -405,7 +478,7 @@ func redisLabel(target string, c *model.Collector, overrides RequestOverrides) (
 	if err != nil {
 		return "", err
 	}
-	return redisURL(a, secure, c.Request.DB), nil
+	return redisURL(a, secure, redisRequest(c).DB), nil
 }
 
 func redisURL(a redisAddress, secure bool, db int) string {
@@ -417,10 +490,10 @@ func redisURL(a redisAddress, secure bool, db int) string {
 }
 
 func redisMethod(c *model.Collector, _ RequestOverrides) string {
-	switch {
-	case len(c.Request.Commands) == 0:
+	switch own := redisRequest(c); {
+	case len(own.Commands) == 0:
 		return redisMethodInfo
-	case len(c.Request.InfoSections) > 0:
+	case len(own.InfoSections) > 0:
 		return redisMethodBoth
 	}
 	return redisMethodCommands
@@ -449,7 +522,7 @@ type redisCall struct {
 // redisCalls is what a scrape of c sends after it has logged in and
 // selected its database.
 func redisCalls(c *model.Collector, params map[string]string) ([]redisCall, error) {
-	r := &c.Request
+	r := redisRequest(c)
 	var calls []redisCall
 	switch {
 	case len(r.InfoSections) > 0:
@@ -555,7 +628,8 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
-	label := redisURL(address, secure, c.Request.DB)
+	own := redisRequest(c)
+	label := redisURL(address, secure, own.DB)
 	dialer := &net.Dialer{}
 	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
 	if err != nil {
@@ -588,8 +662,8 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 			return nil, err
 		}
 	}
-	if c.Request.DB != 0 {
-		if _, err := redisSend(ctx, session, label, []string{"SELECT", strconv.Itoa(c.Request.DB)}); err != nil {
+	if own.DB != 0 {
+		if _, err := redisSend(ctx, session, label, []string{"SELECT", strconv.Itoa(own.DB)}); err != nil {
 			return nil, err
 		}
 	}
@@ -689,4 +763,42 @@ func redisFailure(ctx context.Context, err error) error {
 // them, since a file may be mounted after the exporter starts.
 func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// redisSchemaRule is what a redis collector's request is held to beyond its
+// keys, as the exporter holds it (validateRedisRequest): username only
+// beside password_file, since an ACL user logs in with both. "" is a key
+// left out to the exporter, so each is "written" when it is something else
+// (SchemaWrittenKey).
+func redisSchemaRule() map[string]any {
+	return map[string]any{"if": SchemaWrittenKey("username"), "then": SchemaWrittenKey("password_file")}
+}
+
+// redisTemplates are the arguments of a redis collector's commands, sent as
+// values, as a sql collector's args are; a command's name takes no
+// placeholder.
+func redisTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	for i, cmd := range redisRequest(c).Commands {
+		for j, arg := range cmd.Command {
+			if j > 0 && HasPathParams(arg) {
+				out = append(out, templateField{fmt.Sprintf("request.commands[%d].command[%d]", i, j), arg, "arg"})
+			}
+		}
+	}
+	return out
+}
+
+// redisKeyRules is what the configuration schema says of a redis
+// collector's own keys.
+func redisKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"db":                 {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
+		"info_sections":      {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
+		"info_sections[]":    {"pattern": redisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
+		"commands":           {"description": "redis: read-only commands whose replies the document holds under .commands.<name>, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands."},
+		"commands[]":         {"required": []string{"name", "command"}},
+		"commands[].name":    {"pattern": redisCommandNamePattern, "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands."},
+		"commands[].command": {"minItems": 1, "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold."},
+	}
 }

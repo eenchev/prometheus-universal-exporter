@@ -3,6 +3,7 @@
 package config
 
 import (
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"log/slog"
 	"os"
 	"strings"
@@ -291,10 +292,10 @@ func TestRequiredLabelsNeedAnExpression(t *testing.T) {
 // which the load warns about.
 func TestRetriesOfANonIdempotentMethodAreWarnedAbout(t *testing.T) {
 	post := testutil.Collector("post", "text")
-	post.Request.Method = "POST"
+	editHTTP(&post, func(r *fetch.HTTPConfig) { r.Method = "POST" })
 	post.Request.Retry.Attempts = 2
 	allowed := testutil.Collector("allowed", "text")
-	allowed.Request.Method = "POST"
+	editHTTP(&allowed, func(r *fetch.HTTPConfig) { r.Method = "POST" })
 	allowed.Request.Retry = model.RetryConfig{Attempts: 2, NonIdempotent: true}
 	get := testutil.Collector("get", "text")
 	get.Request.Retry.Attempts = 2

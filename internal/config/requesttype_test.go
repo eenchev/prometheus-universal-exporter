@@ -22,6 +22,29 @@ func typedCollector(requestType string) model.Collector {
 	return c
 }
 
+// fetchOnly is the Requester of a request type the tests register: its
+// fetch is the function, it accepts any request and any target, and its
+// target is shown and labelled as a URL's is (fetch.URLTarget).
+type fetchOnly func(ctx context.Context, target string, c *model.Collector, overrides fetch.RequestOverrides, forwarded http.Header) (*fetch.HTTPResponse, error)
+
+func (fetchOnly) Validate(*model.Collector) error { return nil }
+
+func (f fetchOnly) Fetch(ctx context.Context, target string, c *model.Collector, overrides fetch.RequestOverrides, forwarded http.Header) (*fetch.HTTPResponse, error) {
+	return f(ctx, target, c, overrides, forwarded)
+}
+
+func (fetchOnly) CheckTarget(*model.Collector, string, bool) error { return nil }
+
+func (fetchOnly) Label(target string, c *model.Collector, overrides fetch.RequestOverrides) (string, error) {
+	return fetch.URLTarget{}.Label(target, c, overrides)
+}
+
+func (fetchOnly) Method(c *model.Collector, overrides fetch.RequestOverrides) string {
+	return fetch.URLTarget{}.Method(c, overrides)
+}
+
+func (fetchOnly) Display(target string) string { return fetch.URLTarget{}.Display(target) }
+
 // fixtureType is a second request type registered only for these tests, so
 // the per-type rules can be exercised while http is the only real one. It
 // accepts path and nothing else, and its fetch returns a canned body.
@@ -32,10 +55,9 @@ func registerFixtureType(t *testing.T) {
 		Fields:       []string{"path"},
 		Overrides:    []string{"path"},
 		TargetFields: []string{"path"},
-		Validate:     func(*model.Collector) error { return nil },
-		Fetch: func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(_ context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			return &fetch.HTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"text/plain"}}, Body: []byte("value=5\n"), Target: target, Collector: c.Name}, nil
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "fixture") })
 }

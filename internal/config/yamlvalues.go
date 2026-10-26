@@ -218,6 +218,27 @@ func withValueProblems(err error, document []byte, decoded any) error {
 	return err
 }
 
+// yamlFields holds the yaml keys of the fields of each struct type the walk
+// came to, by their keys (yamlFieldsOf).
+var yamlFields sync.Map
+
+// yamlFieldsOf is the index of each field of the struct type t that is read
+// from YAML, by its key, read from the tags once for each type.
+func yamlFieldsOf(t reflect.Type) map[string]int {
+	if known, ok := yamlFields.Load(t); ok {
+		return known.(map[string]int)
+	}
+	fields := map[string]int{}
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			fields[name] = i
+		}
+	}
+	known, _ := yamlFields.LoadOrStore(t, fields)
+	return known.(map[string]int)
+}
+
 // valueProblems walks the document beside the type it is decoded into, as
 // the decoder does: an alias is what it names, a key that is an alias the
 // key it names (model.KeyName), and a merge key supplies the keys of what it
@@ -242,6 +263,8 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 	}
 	readAgain = map[string]bool{}
 	visiting := map[*yaml.Node]bool{}
+	// written counts the values the walk writes into decoded.
+	written := 0
 	// at is the place for a message, kinds what its schema says the place
 	// takes, and out the value decoded there, which is not valid where
 	// nothing was.
@@ -263,18 +286,30 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 				out = out.Elem()
 			}
 		}
+		// A request block is walked as it is read, as its common part and
+		// every request type's own keys (model.RequestView), and what the
+		// walk writes into the view is written back into the block.
+		if t == requestConfigType {
+			t = model.RequestViewType()
+			if out.IsValid() && out.CanAddr() {
+				request := out.Addr().Interface().(*model.RequestConfig)
+				view, before := model.RequestView(request), written
+				defer func() {
+					if written != before {
+						model.StoreRequestView(view, request)
+					}
+				}()
+				out = view
+			} else {
+				out = reflect.Value{}
+			}
+		}
 		switch t.Kind() {
 		case reflect.Struct:
 			if n.Kind != yaml.MappingNode {
 				return
 			}
-			fields := map[string]int{}
-			for i := 0; i < t.NumField(); i++ {
-				name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-				if name != "" && name != "-" {
-					fields[name] = i
-				}
-			}
+			fields := yamlFieldsOf(t)
 			for _, entry := range model.DecodedEntries(n) {
 				name := model.KeyName(entry.Key)
 				field, ok := fields[name]
@@ -335,6 +370,7 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 			if n.Kind == yaml.ScalarNode && kinds != nil && kinds.number && out.CanSet() {
 				if text, ok := wholeNumberText(n, kinds.least, kinds.most); ok {
 					out.SetString(text)
+					written++
 				}
 				return
 			}
@@ -392,6 +428,7 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 			}
 			if out.CanSet() {
 				out.SetInt(value)
+				written++
 			}
 		}
 	}

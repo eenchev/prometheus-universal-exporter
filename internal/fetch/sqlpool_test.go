@@ -28,7 +28,7 @@ func TestASQLStatementOverMaxRowsIsEndedBeforeTheRestIsRead(t *testing.T) {
 		rows[i] = []driver.Value{int64(i)}
 	}
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: rows}
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.MaxRows = 1 })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.MaxRows = 1 }) })
 	_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 10 * time.Second}, nil)
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "the statement returned more than request.max_rows, 1, rows") {
 		t.Fatalf("%v", err)
@@ -57,7 +57,9 @@ func TestAReloadLetsTheScrapesUsingASQLPoolFinishOnIt(t *testing.T) {
 	f.db.Block, f.db.Started = make(chan struct{}), make(chan string, 4)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	one := 1
-	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) { r.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	c := f.collector(t, "db", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) { o.Connections = &model.SQLConnections{MaxPerTarget: &one} })
+	})
 	first, second := make(chan error, 1), make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil)
@@ -70,7 +72,7 @@ func TestAReloadLetsTheScrapesUsingASQLPoolFinishOnIt(t *testing.T) {
 	}()
 	events.await(t, "waiting: max_per_target", 1)
 	changed := *c
-	changed.Request.Database = "other"
+	editSQL(&changed, func(r *SQLConfig) { r.Database = "other" })
 	FollowConfiguration([]model.Collector{changed}, nil)
 	events.await(t, "closed: reload", 1)
 	if size := sqlPools.size(); size != 0 {
@@ -111,8 +113,7 @@ func TestAPingedSQLConnectionIsClosedAtItsIdleTimeout(t *testing.T) {
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
 	interval, idle := model.Duration(5*time.Millisecond), model.Duration(200*time.Millisecond)
-	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Driver: SQLDriverPostgres, Statement: "q", Username: "u",
-		Connections: &model.SQLConnections{IdleTimeout: &idle, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}
+	c := &model.Collector{Name: "db", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "u", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Connections: &model.SQLConnections{IdleTimeout: &idle, Keepalive: &model.SQLKeepalive{Interval: &interval, Check: sqlCheckPing}}}}}
 	start := time.Now()
 	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)

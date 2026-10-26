@@ -11,10 +11,12 @@ import (
 // each series with jq. The tests of the graphite decoder's settings start
 // from it, those of a localfile collector's replacing its request.
 func graphiteTestCollector() model.Collector {
-	return model.Collector{
+	c := model.Collector{
 		Name:      "graphite",
-		Request:   model.RequestConfig{Type: fetch.RequestTypeGraphite, Targets: []string{"a.b"}},
+		Request:   model.RequestConfig{Type: fetch.RequestTypeGraphite},
 		Transform: model.TransformConfig{Type: "jq"},
 		Metrics:   []model.MetricRule{{Name: "v", Items: ".series[]", Expression: ".value"}},
 	}
+	setOwnKey(&c, "targets", []string{"a.b"})
+	return c
 }

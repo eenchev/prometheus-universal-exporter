@@ -64,8 +64,7 @@ func writeProto(t *testing.T, dir, name, content string) string {
 // under root and resolves imports in importPaths.
 func importingCollector(root string, importPaths ...string) *model.Collector {
 	return &model.Collector{Name: "imports", Request: model.RequestConfig{
-		Type: RequestTypeGRPC, RPC: "w.api.S/Get", Descriptors: descriptorsProto,
-		ProtoFiles: []string{filepath.Join(root, filepath.FromSlash(importingService))}, ProtoImportPaths: importPaths,
+		Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "w.api.S/Get", Descriptors: descriptorsProto, ProtoFiles: []string{filepath.Join(root, filepath.FromSlash(importingService))}, ProtoImportPaths: importPaths},
 	}}
 }
 
@@ -286,13 +285,13 @@ func TestOnlyProtoDescriptorsLeadToFilesTheRequestDoesNotName(t *testing.T) {
 	dir := t.TempDir()
 	writeProto(t, dir, importingService, serviceSource)
 	for name, c := range map[string]*model.Collector{
-		"a descriptor set":     {Request: model.RequestConfig{Type: RequestTypeGRPC, Descriptors: descriptorsProtoset, ProtosetFile: filepath.Join(dir, "set.pb")}},
-		"reflection":           {Request: model.RequestConfig{Type: RequestTypeGRPC, Descriptors: descriptorsReflection}},
+		"a descriptor set":     {Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{Descriptors: descriptorsProtoset, ProtosetFile: filepath.Join(dir, "set.pb")}}},
+		"reflection":           {Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{Descriptors: descriptorsReflection}}},
 		"the health service":   {Request: model.RequestConfig{Type: RequestTypeGRPC}},
-		"no request type":      {Request: model.RequestConfig{Descriptors: descriptorsProto, ProtoFiles: []string{filepath.Join(dir, importingService)}}},
-		"an unknown type":      {Request: model.RequestConfig{Type: "carrier-pigeon", ProtoFiles: []string{filepath.Join(dir, importingService)}}},
-		"proto files unused":   {Request: model.RequestConfig{Type: RequestTypeGRPC, Descriptors: descriptorsReflection, ProtoFiles: []string{filepath.Join(dir, importingService)}}},
-		"proto, no file named": {Request: model.RequestConfig{Type: RequestTypeGRPC, Descriptors: descriptorsProto}},
+		"no request type":      {Request: model.RequestConfig{Own: GRPCConfig{Descriptors: descriptorsProto, ProtoFiles: []string{filepath.Join(dir, importingService)}}}},
+		"an unknown type":      {Request: model.RequestConfig{Type: "carrier-pigeon", Own: GRPCConfig{ProtoFiles: []string{filepath.Join(dir, importingService)}}}},
+		"proto files unused":   {Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{Descriptors: descriptorsReflection, ProtoFiles: []string{filepath.Join(dir, importingService)}}}},
+		"proto, no file named": {Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{Descriptors: descriptorsProto}}},
 	} {
 		if n := compiles(func() {
 			if paths, read := ReadFiles(c); len(paths) != 0 || read != "" {
@@ -485,7 +484,7 @@ func TestReadFilesTakesTheTypeAsItIsNamedHoweverItIsWritten(t *testing.T) {
 			for _, descriptors := range []string{"", descriptorsProto, descriptorsProtoset, descriptorsReflection, "Proto"} {
 				for _, files := range [][]string{nil, {service}} {
 					for _, importPaths := range [][]string{nil, {dir}} {
-						c := &model.Collector{Name: "c", Request: model.RequestConfig{Type: name, Descriptors: descriptors, ProtoFiles: files, ProtoImportPaths: importPaths}}
+						c := &model.Collector{Name: "c", Request: model.RequestConfig{Type: name, Own: GRPCConfig{Descriptors: descriptors, ProtoFiles: files, ProtoImportPaths: importPaths}}}
 						paths, read := ReadFiles(c)
 						wantPaths, wantRead := oldReadFiles(c)
 						if !slices.Equal(paths, wantPaths) || read != wantRead {

@@ -39,9 +39,12 @@ func oldNamedFiles(configs ...*model.Config) []string {
 			add(auth.UsernameFile, auth.PasswordFile)
 		}
 		for i := range c.Collectors {
-			request := &c.Collectors[i].Request
-			add(request.ProtosetFile)
-			add(request.ProtoFiles...)
+			if file, ok := ownKey(&c.Collectors[i], "protoset_file").(string); ok {
+				add(file)
+			}
+			if files, ok := ownKey(&c.Collectors[i], "proto_files").([]string); ok {
+				add(files...)
+			}
 		}
 	}
 	return files
@@ -51,7 +54,8 @@ func oldNamedFiles(configs ...*model.Config) []string {
 // off, with files that are there or not, and whose collectors are of the
 // types that compile no .proto file: http, localfile and graphite ones, grpc
 // ones that read a descriptor set, ask the reflection service or call the
-// health service, and one of no type that names .proto files.
+// health service, and grpc ones that name .proto files without descriptors:
+// proto, which compile none.
 func generatedConfig(r *rand.Rand, dir string) *model.Config {
 	file := func() string {
 		switch r.IntN(4) {
@@ -78,13 +82,20 @@ func generatedConfig(r *rand.Rand, dir string) *model.Config {
 		case 2:
 			collector.Request = model.RequestConfig{Type: "graphite"}
 		case 3:
-			collector.Request = model.RequestConfig{Type: "grpc", Descriptors: "protoset", ProtosetFile: file()}
+			collector.Request = model.RequestConfig{Type: "grpc"}
+			setOwnKey(&collector, "descriptors", "protoset")
+			setOwnKey(&collector, "protoset_file", file())
 		case 4:
-			collector.Request = model.RequestConfig{Type: "grpc", Descriptors: "reflection"}
+			collector.Request = model.RequestConfig{Type: "grpc"}
+			setOwnKey(&collector, "descriptors", "reflection")
 		case 5:
 			collector.Request = model.RequestConfig{Type: "grpc"}
 		case 6:
-			collector.Request = model.RequestConfig{ProtoFiles: []string{file(), file()}, ProtoImportPaths: []string{dir}}
+			// Without descriptors: proto, the .proto files are named and
+			// compiled by none (fetch.ReadFiles).
+			collector.Request = model.RequestConfig{Type: "grpc"}
+			setOwnKey(&collector, "proto_files", []string{file(), file()})
+			setOwnKey(&collector, "proto_import_paths", []string{dir})
 		}
 		c.Collectors = append(c.Collectors, collector)
 	}

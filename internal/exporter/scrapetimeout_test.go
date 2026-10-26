@@ -77,15 +77,14 @@ func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
 	var stall atomic.Bool
 	stall.Store(true)
 	fetch.RequestTypes["stalling"] = &fetch.RequestType{
-		Name:     "stalling",
-		Validate: func(*model.Collector) error { return nil },
-		Fetch: func(ctx context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Name: "stalling",
+		Requester: fetchOnly(func(ctx context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			if stall.Load() {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			}
 			return &fetch.HTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"text/plain"}}, Body: []byte("value=5\n"), Target: target, Collector: c.Name}, nil
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "stalling") })
 	c := testutil.Collector("stalled", "text")
@@ -118,11 +117,10 @@ func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 	fetch.RequestTypes["hanging"] = &fetch.RequestType{
 		Name:      "hanging",
 		Overrides: []string{"timeout"},
-		Validate:  func(*model.Collector) error { return nil },
-		Fetch: func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Requester: fetchOnly(func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "hanging") })
 	c := testutil.Collector("hung", "text")
@@ -159,12 +157,11 @@ func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 // the probe at once, rather than counting as no header.
 func TestANonFiniteScrapeTimeoutIsNoneAndATinyOneIsABudget(t *testing.T) {
 	fetch.RequestTypes["hanging"] = &fetch.RequestType{
-		Name:     "hanging",
-		Validate: func(*model.Collector) error { return nil },
-		Fetch: func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+		Name: "hanging",
+		Requester: fetchOnly(func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
-		},
+		}),
 	}
 	t.Cleanup(func() { delete(fetch.RequestTypes, "hanging") })
 	c := testutil.Collector("hung", "text")

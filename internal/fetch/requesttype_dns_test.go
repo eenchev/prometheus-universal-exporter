@@ -32,10 +32,19 @@ var (
 	recTXT     = testutil.DNSTXT
 )
 
+// dnsKeys is an edit of a dns collector's own keys.
+func dnsKeys(edit func(*DNSConfig)) func(*model.Collector) {
+	return func(c *model.Collector) {
+		r := dnsRequest(c)
+		edit(&r)
+		c.Request.Own = r
+	}
+}
+
 // dnsCollector is a validated dns collector asking server for recordType.
 func dnsCollector(t *testing.T, server, recordType string, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
-	c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS, RecordType: recordType, Server: server}}
+	c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS, Own: DNSConfig{RecordType: recordType, Server: server}}}
 	for _, e := range edit {
 		e(c)
 	}
@@ -155,7 +164,7 @@ func TestADNSCollectorAsksOverTheTransportItNames(t *testing.T) {
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
 	for _, transport := range []string{"", "tcp", "udp"} {
 		before := len(s.Questions())
-		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "A", func(c *model.Collector) { c.Request.Transport = transport }), "www.example.test")
+		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "A", dnsKeys(func(r *DNSConfig) { r.Transport = transport })), "www.example.test")
 		if err != nil || doc.Count != 1 {
 			t.Fatalf("%q: %+v, %v", transport, doc, err)
 		}
@@ -179,12 +188,12 @@ func TestADNSCollectorAsksOverTheTransportItNames(t *testing.T) {
 // host:port; udp or tcp. A key of another type is refused.
 func TestADNSCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 	for name, edit := range map[string]func(*model.Collector){
-		"an unknown record type":   func(c *model.Collector) { c.Request.RecordType = "SOA" },
-		"a server with a scheme":   func(c *model.Collector) { c.Request.Server = "udp://10.0.0.53" },
-		"a server with a bad port": func(c *model.Collector) { c.Request.Server = "10.0.0.53:99999" },
-		"a server of blanks":       func(c *model.Collector) { c.Request.Server = "  " },
-		"an unknown transport":     func(c *model.Collector) { c.Request.Transport = "quic" },
-		"a transport in capitals":  func(c *model.Collector) { c.Request.Transport = "TCP" },
+		"an unknown record type":   dnsKeys(func(r *DNSConfig) { r.RecordType = "SOA" }),
+		"a server with a scheme":   dnsKeys(func(r *DNSConfig) { r.Server = "udp://10.0.0.53" }),
+		"a server with a bad port": dnsKeys(func(r *DNSConfig) { r.Server = "10.0.0.53:99999" }),
+		"a server of blanks":       dnsKeys(func(r *DNSConfig) { r.Server = "  " }),
+		"an unknown transport":     dnsKeys(func(r *DNSConfig) { r.Transport = "quic" }),
+		"a transport in capitals":  dnsKeys(func(r *DNSConfig) { r.Transport = "TCP" }),
 		"another type's key":       func(c *model.Collector) { c.Request.Path = "/x" },
 	} {
 		c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS}}
@@ -194,9 +203,9 @@ func TestADNSCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 		}
 	}
 	for _, server := range []string{"10.0.0.53", "10.0.0.53:5353", "[2001:db8::53]:53", "[2001:db8::53]", "2001:db8::53", "dns.example.test"} {
-		c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS, Server: server}}
-		if err := ValidateRequest(c); err != nil || c.Request.RecordType != "A" {
-			t.Errorf("server %q: %v, record type %q", server, err, c.Request.RecordType)
+		c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS, Own: DNSConfig{Server: server}}}
+		if err := ValidateRequest(c); err != nil || dnsRequest(c).RecordType != "A" {
+			t.Errorf("server %q: %v, record type %q", server, err, dnsRequest(c).RecordType)
 		}
 	}
 }
@@ -335,7 +344,7 @@ func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 		}
 	}
 	before := len(s.Questions())
-	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME", func(c *model.Collector) { c.Request.Transport = "tcp" }), "alias.example.test"); err != nil || doc.Count != 1 {
+	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME", dnsKeys(func(r *DNSConfig) { r.Transport = "tcp" })), "alias.example.test"); err != nil || doc.Count != 1 {
 		t.Errorf("CNAME over tcp: %+v, %v", doc, err)
 	}
 	if asked := s.Questions()[before:]; len(asked) != 1 || asked[0] != "alias.example.test. CNAME tcp" {

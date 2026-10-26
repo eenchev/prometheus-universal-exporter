@@ -11,6 +11,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
+// An http collector's own placeholder is in its body.
+func init() {
+	ownPlaceholders[RequestTypeHTTP] = func(c *model.Collector) { c.Request.Own = HTTPConfig{Body: "{{param_body:x}}"} }
+}
+
 // The keys of the other request types do not apply to an http collector,
 // which is refused by the key's name, whether or not the build has the type
 // the key belongs to. The tests of each type's own validation have what a
@@ -20,7 +25,7 @@ import (
 func TestTheKeysOfOtherTypesDoNotApplyToHTTP(t *testing.T) {
 	t.Run("graphite's targets", func(t *testing.T) {
 		// The graphite keys are graphite's alone.
-		h := model.Collector{Name: "web", Request: model.RequestConfig{Type: RequestTypeHTTP, Targets: []string{"a"}}}
+		h := model.Collector{Name: "web", Request: model.RequestConfig{Type: RequestTypeHTTP, Foreign: []string{"targets"}}}
 		if err := ValidateRequest(&h); err == nil || !strings.Contains(err.Error(), `request.targets, which does not apply to request.type "http"`) {
 			t.Fatalf("an http collector with targets: err=%v", err)
 		}
@@ -43,7 +48,7 @@ func TestTheKeysOfOtherTypesDoNotApplyToHTTP(t *testing.T) {
 		}
 	})
 	t.Run("grpc's accept_codes", func(t *testing.T) {
-		http := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, AcceptCodes: []string{"NOT_FOUND"}}}
+		http := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, Foreign: []string{"accept_codes"}}}
 		if err := ValidateRequest(&http); err == nil || !strings.Contains(err.Error(), "does not apply") {
 			t.Fatalf("%v", err)
 		}

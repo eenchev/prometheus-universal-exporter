@@ -168,16 +168,16 @@ type Collector struct {
 }
 
 // RequestConfig is a collector's request block: how the target is reached.
-// Which keys apply depends on Type.
+// Which keys apply depends on Type. Its fields are the common part, type and
+// the keys several request types take; a key only one type takes is a field
+// of that type's own struct, which Own holds (requestkeys.go).
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
 	// fetch/requesttype.go for the types and the keys each accepts.
 	Type                 string            `yaml:"type"`
-	Method               string            `yaml:"method"`
 	Path                 string            `yaml:"path"`
 	Query                map[string]string `yaml:"query"`
 	Headers              map[string]string `yaml:"headers"`
-	Body                 string            `yaml:"body"`
 	BasicAuth            *BasicAuth        `yaml:"basic_auth"`
 	BasicAuthFile        *BasicAuthFile    `yaml:"basic_auth_file"`
 	BearerToken          string            `yaml:"bearer_token"`
@@ -190,12 +190,6 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
-	// Pagination fetches the further pages of a paginated answer and merges
-	// them into one JSON document, the first page with its items array
-	// holding every page's items (fetch/pagination.go). Left out of a
-	// collector written as YAML when unset, as the sql keys are below, so
-	// the fingerprint of a collector without it is what it was.
-	Pagination *PaginationConfig `yaml:"pagination,omitempty"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses
@@ -208,150 +202,46 @@ type RequestConfig struct {
 	// AcceptStatus is the HTTP statuses whose answers are decoded, such as
 	// [200, 503] or ["2xx", 503]; every 2xx when empty.
 	AcceptStatus []string `yaml:"accept_status"`
-	// AcceptCodes is the gRPC status codes, other than OK, whose calls are
-	// answers rather than failures, such as [NOT_FOUND].
-	AcceptCodes []string `yaml:"accept_codes"`
-	// Root and MaxAge belong to the localfile type: the directory it may read
-	// under, and how old a file may be before a scrape refuses it as stale.
+	// Root and MaxAge belong to the types that read files, localfile,
+	// sshfile and s3file: the directory they may read under, and how old a
+	// file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
 	MaxAge Duration `yaml:"max_age"`
-	// Files, MaxFiles and MaxTotalBytes turn a localfile collector into a
+	// Files, MaxFiles and MaxTotalBytes turn such a collector into a
 	// directory reader: every file of the directory whose name matches one of
 	// the patterns is read and checked on its own (fetch/localfile_directory.go).
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
-	// Targets, From and Until belong to the graphite type: the Graphite
-	// expressions asked of the render API, each sent as a target parameter,
-	// and the window they are rendered over (fetch/requesttype_graphite.go).
-	Targets []string `yaml:"targets"`
-	From    string   `yaml:"from"`
-	Until   string   `yaml:"until"`
-	// RPC, Message, Metadata and the descriptor keys belong to the grpc
-	// type: the method called, package.Service/Method; the request message
-	// in the protobuf JSON mapping; the request metadata; and where the
-	// message types come from — reflection, protoset (ProtosetFile) or
-	// proto (ProtoFiles, compiled with ProtoImportPaths). See
-	// fetch/requesttype_grpc.go.
-	RPC              string            `yaml:"rpc"`
-	Message          string            `yaml:"message"`
-	Metadata         map[string]string `yaml:"metadata"`
-	Descriptors      string            `yaml:"descriptors"`
-	ProtosetFile     string            `yaml:"protoset_file"`
-	ProtoFiles       []string          `yaml:"proto_files"`
-	ProtoImportPaths []string          `yaml:"proto_import_paths"`
-	// Username, the credential files and KnownHostsFile belong to the
-	// sshfile type: the account a file is read as on the remote host, its
-	// private key (with the file of the key's passphrase) or password, and
-	// the known_hosts file the host's key is verified against. The
-	// keepalive settings and IdleTimeout say how long the connection it
-	// keeps to a host lives; nil is the default, and 0 switches each off.
-	// MaxOpenConnections is the most connections the collector holds open
-	// at once, 0 for no limit (fetch/requesttype_sshfile.go).
-	Username           string    `yaml:"username"`
-	PrivateKeyFile     string    `yaml:"private_key_file"`
-	PassphraseFile     string    `yaml:"passphrase_file"`
-	PasswordFile       string    `yaml:"password_file"`
-	KnownHostsFile     string    `yaml:"known_hosts_file"`
-	KeepaliveInterval  *Duration `yaml:"keepalive_interval"`
-	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
-	IdleTimeout        *Duration `yaml:"idle_timeout"`
-	MaxOpenConnections int       `yaml:"max_open_connections"`
-	// Driver, Database, Statement, Args, Options and ServiceName belong to
-	// the sql type, with Username, PasswordFile, PrivateKeyFile and
-	// PassphraseFile above: the database driver, the database, the one
-	// statement run and the values bound to its placeholders, the driver's
-	// allow-listed settings, and an Oracle database's service. MaxRows
-	// bounds the rows a statement may return, 0 for the default, and
-	// Connections how the type keeps connections to a target
-	// (fetch/requesttype_sql.go).
-	//
-	// They are left out of a collector written as YAML when empty, as the
-	// fingerprint of its cache writes it (exporter/cache.go): a collector of
-	// another type is written, and costs, as it did before they were added.
-	Driver      string            `yaml:"driver,omitempty"`
-	Database    string            `yaml:"database,omitempty"`
-	Statement   string            `yaml:"statement,omitempty"`
-	Args        []string          `yaml:"args,omitempty"`
-	Options     map[string]string `yaml:"options,omitempty"`
-	ServiceName string            `yaml:"service_name,omitempty"`
-	MaxRows     int               `yaml:"max_rows,omitempty"`
-	Connections *SQLConnections   `yaml:"connections,omitempty"`
-	// RecordType, Server and Transport belong to the dns type: the record
-	// type asked for, A when left out; the server asked, host:port, the
-	// system's resolver when left out; and udp or tcp (fetch/requesttype_dns.go).
-	// Left out of a collector written as YAML when empty, as the sql keys.
-	RecordType string `yaml:"record_type,omitempty"`
-	Server     string `yaml:"server,omitempty"`
-	Transport  string `yaml:"transport,omitempty"`
-	// Region, Endpoint and PathStyle belong to the s3file type, with Root,
-	// Path and the directory keys above: the region requests are signed
-	// for, the URL of an S3-compatible store in place of AWS's, and whether
-	// the bucket is named in the URL's path rather than its host.
-	// AccessKeyIDFile, SecretAccessKeyFile and SessionTokenFile are the
-	// files of static credentials, read at each request; without them the
-	// AWS SDK's default chain finds credentials (fetch/requesttype_s3file.go).
-	// Left out of a collector written as YAML when empty, as the sql keys
-	// are.
-	Region              string `yaml:"region,omitempty"`
-	Endpoint            string `yaml:"endpoint,omitempty"`
-	PathStyle           bool   `yaml:"path_style,omitempty"`
-	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
-	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
-	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
-	// Resource, Group and Version belong to the kubernetes type: the
-	// objects listed, by the plural name of their resource, its API group,
-	// "" for the core group, and its version, v1 when left out.
-	// Namespaces, AllNamespaces, LabelSelector and FieldSelector say which
-	// of them are listed, MaxObjects how many a listing may hold, 0 for the
-	// default, and APIServer the API server's URL when the exporter does not
-	// list its own cluster's (fetch/requesttype_kubernetes.go). Left out of
-	// a collector written as YAML when empty, as the sql keys are.
-	Resource      string   `yaml:"resource,omitempty"`
-	Group         string   `yaml:"group,omitempty"`
-	Version       string   `yaml:"version,omitempty"`
-	Namespaces    []string `yaml:"namespaces,omitempty"`
-	AllNamespaces bool     `yaml:"all_namespaces,omitempty"`
-	LabelSelector string   `yaml:"label_selector,omitempty"`
-	FieldSelector string   `yaml:"field_selector,omitempty"`
-	MaxObjects    int      `yaml:"max_objects,omitempty"`
-	APIServer     string   `yaml:"api_server,omitempty"`
-	// DB, InfoSections and Commands belong to the redis type, with
-	// Username and PasswordFile above: the logical database selected, 0
-	// when left out, the sections of INFO read, and the read-only commands
-	// whose replies the document holds besides (fetch/requesttype_redis.go).
-	// Left out of a collector written as YAML when empty, as the sql keys
-	// are.
-	DB           int            `yaml:"db,omitempty"`
-	InfoSections []string       `yaml:"info_sections,omitempty"`
-	Commands     []RedisCommand `yaml:"commands,omitempty"`
-	// Send and Terminator belong to the tcp type: the text written once
-	// the connection is made, nothing when empty, and what the answer ends
-	// with, the answer ending when the server closes the connection when
-	// it is empty (fetch/requesttype_tcp.go). Left out of a collector
-	// written as YAML when empty, as the sql keys are.
-	Send       string `yaml:"send,omitempty"`
-	Terminator string `yaml:"terminator,omitempty"`
-	// BindDN, StartTLS and Searches belong to the ldap type, with
-	// PasswordFile above: the DN a simple bind is made as, none for an
-	// anonymous bind, whether TLS is begun with the StartTLS operation on
-	// a plaintext connection, and the searches whose results the document
-	// holds (fetch/requesttype_ldap.go). Left out of a collector written as
-	// YAML when empty, as the sql keys are.
-	BindDN   string       `yaml:"bind_dn,omitempty"`
-	StartTLS bool         `yaml:"start_tls,omitempty"`
-	Searches []LDAPSearch `yaml:"searches,omitempty"`
+	// Username and the credential files belong to the types that log in
+	// as an account: sshfile, the account a file is read as on the remote
+	// host, with its private key or password; sql, redis and ldap, with
+	// theirs (fetch/requesttype_<name>.go).
+	Username       string `yaml:"username"`
+	PrivateKeyFile string `yaml:"private_key_file"`
+	PasswordFile   string `yaml:"password_file"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
-	// when unset, as the sql keys are.
+	// when unset.
 	Login *LoginConfig `yaml:"login,omitempty"`
 	// RateLimit belongs to the http and graphite types: how many requests
 	// a second the collector sends to one origin of a target, so a target
 	// that many probes, static targets, retries or pages ask at once is
 	// not asked faster than it can answer (fetch/ratelimit.go). Left out
-	// of a collector written as YAML when unset, as the sql keys are.
+	// of a collector written as YAML when unset.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+
+	// Own holds the keys only the collector's request type takes, read
+	// into the struct its registration declares (fetch.RequestType.Config;
+	// requestkeys.go), as a value of that struct: nil for a type that
+	// takes none, or that the build left out. A key of the struct is
+	// written flat beside the ones above, as a key of the request block.
+	Own any `yaml:"-"`
+	// Foreign are the keys of other request types' own that the request
+	// block sets, which the validation refuses: a collector it accepts has
+	// none.
+	Foreign []string `yaml:"-"`
 }
 
 // RateLimitConfig is request.rate_limit: the requests a second a collector
@@ -420,65 +310,6 @@ var (
 	LoginTypes      = []string{"json", "oauth2"}
 	LoginAuthStyles = []string{"header", "params"}
 )
-
-// KubernetesNamePattern is what a kubernetes collector's request.resource,
-// request.version and each of its request.namespaces are made of: a DNS
-// label, lower case (RFC 1123), of at most 63 characters, as Kubernetes
-// names them. The exporter and the schema hold them to it alike.
-const KubernetesNamePattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-
-// KubernetesGroupPattern is what a kubernetes collector's request.group is
-// made of: a DNS subdomain, lower case, of at most 253 characters.
-const KubernetesGroupPattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-
-// DNSRecordTypes are the values of a dns collector's request.record_type.
-var DNSRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
-
-// RedisCommand is one entry of a redis collector's request.commands: the
-// name its reply is put under in the document, and the command with its
-// arguments, each argument sent as it is written, its placeholders filled.
-type RedisCommand struct {
-	Name    string   `yaml:"name"`
-	Command []string `yaml:"command"`
-}
-
-// RedisInfoSectionPattern is what a section of a redis collector's
-// request.info_sections is written with: INFO's own section names are
-// lower-case words. The exporter and the schema hold them to it alike.
-const RedisInfoSectionPattern = `^[a-z_]+$`
-
-// RedisCommandNamePattern is what request.commands[].name is written with:
-// a name a jq path reaches as .commands.<name>.
-const RedisCommandNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
-
-// LDAPSearch is one entry of an ldap collector's request.searches: the name
-// its result is put under in the document, where it searches, which
-// entries it matches and what of them it reads. Scope "" is sub, Filter ""
-// is (objectClass=*), no Attributes asks for the entries' DNs alone, and
-// MaxEntries 0 is the default bound.
-type LDAPSearch struct {
-	Name       string   `yaml:"name"`
-	Base       string   `yaml:"base,omitempty"`
-	Scope      string   `yaml:"scope,omitempty"`
-	Filter     string   `yaml:"filter,omitempty"`
-	Attributes []string `yaml:"attributes,omitempty"`
-	CountOnly  bool     `yaml:"count_only,omitempty"`
-	MaxEntries int      `yaml:"max_entries,omitempty"`
-}
-
-// LDAPSearchNamePattern is what request.searches[].name is written with: a
-// name a jq path reaches as .searches.<name>.
-const LDAPSearchNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
-
-// LDAPScopes are the values of request.searches[].scope.
-var LDAPScopes = []string{"base", "one", "sub"}
-
-// LDAPAttributePattern is what an entry of request.searches[].attributes
-// is written with: an attribute's name or OID, with options after ; as in
-// cn;lang-de, or * for every user attribute and + for every operational
-// one. The exporter and
-// the schema hold them to it alike.
-const LDAPAttributePattern = `^(\*|\+|[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*|[0-9]+(\.[0-9]+)+(;[A-Za-z0-9-]+)*)$`
 
 // SQLConnections is a sql collector's request.connections, and a static
 // target's: how many connections the collector keeps to a target, how

@@ -142,23 +142,23 @@ func findMethod(files *protoregistry.Files, rpc, source string) (grpcMethod, err
 // without asking the server: protoset, proto, or the built-in health
 // service's when descriptors is left out.
 func staticMethod(c *model.Collector) (grpcMethod, error) {
-	switch c.Request.Descriptors {
+	switch grpcRequest(c).Descriptors {
 	case "":
-		return findMethod(protoregistry.GlobalFiles, c.Request.RPC, "the built-in health service")
+		return findMethod(protoregistry.GlobalFiles, grpcRequest(c).RPC, "the built-in health service")
 	case descriptorsProtoset:
-		files, err := descriptorFiles.protoset(c.Request.ProtosetFile)
+		files, err := descriptorFiles.protoset(grpcRequest(c).ProtosetFile)
 		if err != nil {
 			return grpcMethod{}, err
 		}
-		return findMethod(files, c.Request.RPC, "protoset_file "+c.Request.ProtosetFile)
+		return findMethod(files, grpcRequest(c).RPC, "protoset_file "+grpcRequest(c).ProtosetFile)
 	case descriptorsProto:
-		files, err := descriptorFiles.proto(c.Request.ProtoFiles, c.Request.ProtoImportPaths)
+		files, err := descriptorFiles.proto(grpcRequest(c).ProtoFiles, grpcRequest(c).ProtoImportPaths)
 		if err != nil {
 			return grpcMethod{}, err
 		}
-		return findMethod(files, c.Request.RPC, "proto_files")
+		return findMethod(files, grpcRequest(c).RPC, "proto_files")
 	}
-	return grpcMethod{}, fmt.Errorf("descriptors %q are not read from files", c.Request.Descriptors)
+	return grpcMethod{}, fmt.Errorf("descriptors %q are not read from files", grpcRequest(c).Descriptors)
 }
 
 // fileSets keeps what protoset and proto read, by the files they read, and

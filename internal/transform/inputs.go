@@ -48,7 +48,7 @@ func validateTransformInput(d *decode.Decoded, transformType string) error {
 	// A sql collector's rows, which no decoder.type names, are read by a
 	// csv transform by column, and by jq and yq as the list of objects they
 	// are; the configuration allows it no other transform.
-	if d.Kind == "sql" && (transformType == "csv" || jqFamily(transformType)) {
+	if d.Kind == decode.KindRows && (transformType == "csv" || jqFamily(transformType)) {
 		return nil
 	}
 	if jqFamily(transformType) {

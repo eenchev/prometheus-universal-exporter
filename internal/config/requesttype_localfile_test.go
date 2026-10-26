@@ -36,7 +36,7 @@ func TestLocalFileValidation(t *testing.T) {
 		"escaping deeper":     {func(c *model.Collector) { c.Request.Path = "a/../../secret" }, "leads outside request.root"},
 		"negative max_age":    {func(c *model.Collector) { c.Request.MaxAge = model.Duration(-time.Second) }, "max_age must not be negative"},
 		"bad placeholder":     {func(c *model.Collector) { c.Request.Path = "{{tenant}}.json" }, "not a path parameter"},
-		"an http key":         {func(c *model.Collector) { c.Request.Method = "POST" }, `request.method, which does not apply to request.type "localfile"`},
+		"an http key":         {func(c *model.Collector) { c.Request.Foreign = []string{"method"} }, `request.method, which does not apply to request.type "localfile"`},
 		"an http credential":  {func(c *model.Collector) { c.Request.BearerToken = "t" }, "request.bearer_token, which does not apply"},
 		"negative size limit": {func(c *model.Collector) { c.Request.MaxResponseBytes = -1 }, "max_response_bytes must not be negative"},
 	} {

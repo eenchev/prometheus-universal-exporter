@@ -57,32 +57,53 @@ import (
 // alone of the types imports. This file and s3source.go are built under its
 // tag alone, so only a build that asks for it links the SDK's S3 client.
 
+// S3FileConfig is an s3file collector's own request keys: the region
+// requests are signed for, the URL of an S3-compatible store in place of
+// AWS's, and whether the bucket is named in the URL's path rather than its
+// host; and the files of static credentials, read at each request, without
+// which the AWS SDK's default chain finds credentials.
+type S3FileConfig struct {
+	Region              string `yaml:"region,omitempty"`
+	Endpoint            string `yaml:"endpoint,omitempty"`
+	PathStyle           bool   `yaml:"path_style,omitempty"`
+	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
+	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
+	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
+}
+
+// s3FileRequest is an s3file collector's own request keys: the zero
+// S3FileConfig of a collector built in code whose request has not been
+// validated, which sets them (ValidateRequest).
+func s3FileRequest(c *model.Collector) S3FileConfig {
+	own, _ := c.Request.Own.(S3FileConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeS3File,
 		Fields: []string{
 			"root", "path", "files", "max_files", "max_total_bytes", "max_age", "max_response_bytes",
-			"region", "endpoint", "path_style", "access_key_id_file", "secret_access_key_file", "session_token_file",
 			"allowed_targets", "denied_targets",
 		},
-		Overrides:    []string{"path", "timeout", PathParamPrefix},
-		TargetFields: []string{"path", "timeout"},
-		Validate:     validateS3FileRequest,
-		Fetch:        fetchS3File,
-		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
-			_, err := parseS3Target(target)
-			return err
+		Config:         S3FileConfig{},
+		KeyRules:       s3FileKeyRules,
+		Overrides:      []string{"path", "timeout", PathParamPrefix},
+		TargetFields:   []string{"path", "timeout"},
+		Requester:      s3FileRequester{},
+		FileExtensions: true,
+		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},
+		SchemaRule: s3FileSchemaRule,
 		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error {
 			if t.Request.PathSet {
 				return checkLocalFileName("request.path", t.Request.Path)
 			}
 			return nil
 		},
-		Label:   s3FileLabel,
-		Method:  func(*model.Collector, RequestOverrides) string { return localFileMethod },
-		Display: s3Display,
-		Stage:   "s3",
+		Stage: "s3",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// As for localfile: a param_ parameter can still fill a label
 			// value of a collector reading a directory.
@@ -94,6 +115,38 @@ func init() {
 		CheckFiles: checkS3Files,
 		Follow:     s3Clients.follow,
 	})
+}
+
+// s3FileRequester is the s3file request type's Requester.
+type s3FileRequester struct{}
+
+// Validate checks an s3file collector's request and fills in its defaults.
+func (s3FileRequester) Validate(c *model.Collector) error {
+	return validateS3FileRequest(c)
+}
+
+// Fetch performs one request of an s3file collector.
+func (s3FileRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchS3File(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks an s3file collector's target.
+func (s3FileRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseS3Target(target)
+	return err
+}
+
+// Label is the url label of an s3file request.
+func (s3FileRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return s3FileLabel(target, c, overrides)
+}
+
+// Method is the http_method label of an s3file request.
+func (s3FileRequester) Method(*model.Collector, RequestOverrides) string { return localFileMethod }
+
+// Display renders an s3file target for logs and labels.
+func (s3FileRequester) Display(target string) string {
+	return s3Display(target)
 }
 
 // s3DefaultRegion is the region of a collector that sets none, when the
@@ -112,22 +165,23 @@ var s3RegionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var s3BucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 func validateS3FileRequest(x *model.Collector) error {
-	if err := validateFileRequest(x, RequestTypeS3File); err != nil {
+	if err := validateFileRequest(x, RequestTypeS3File, false); err != nil {
 		return err
 	}
 	if err := validateLocalDirectory(x); err != nil {
 		return err
 	}
 	r := &x.Request
-	if r.Region != "" && !s3RegionPattern.MatchString(r.Region) {
-		return fmt.Errorf("collector %q request.region %q is not a region; write it as the store names it, such as eu-west-1, with letters, digits, - and _ alone", x.Name, r.Region)
+	own := s3FileRequest(x)
+	if own.Region != "" && !s3RegionPattern.MatchString(own.Region) {
+		return fmt.Errorf("collector %q request.region %q is not a region; write it as the store names it, such as eu-west-1, with letters, digits, - and _ alone", x.Name, own.Region)
 	}
-	if r.Endpoint != "" {
-		if err := checkS3Endpoint(r.Endpoint); err != nil {
+	if own.Endpoint != "" {
+		if err := checkS3Endpoint(own.Endpoint); err != nil {
 			return fmt.Errorf("collector %q request.endpoint %w", x.Name, err)
 		}
 	}
-	if err := checkS3CredentialKeys(r.AccessKeyIDFile, r.SecretAccessKeyFile, r.SessionTokenFile); err != nil {
+	if err := checkS3CredentialKeys(own.AccessKeyIDFile, own.SecretAccessKeyFile, own.SessionTokenFile); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	policy, err := compileTargetPolicy(r.AllowedTargets, r.DeniedTargets)
@@ -336,7 +390,7 @@ type s3Settings struct {
 }
 
 func s3SettingsOf(c *model.Collector) s3Settings {
-	r := &c.Request
+	r := s3FileRequest(c)
 	return s3Settings{
 		region: r.Region, endpoint: r.Endpoint, pathStyle: r.PathStyle,
 		accessKeyIDFile: r.AccessKeyIDFile, secretAccessKeyFile: r.SecretAccessKeyFile, sessionTokenFile: r.SessionTokenFile,
@@ -439,7 +493,7 @@ func (f s3FileCredentials) Retrieve(context.Context) (aws.Credentials, error) {
 // the exporter starts. The default chain is not asked: what it finds
 // depends on where the exporter runs, which a dry run need not be.
 func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil || c.Request.AccessKeyIDFile == "" {
+	if t != nil || s3FileRequest(c).AccessKeyIDFile == "" {
 		return nil
 	}
 	s := s3SettingsOf(c)
@@ -447,4 +501,32 @@ func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
 		return []string{fmt.Sprintf("collector %q: %v; a scrape would fail on it now (the file is read at every request, so one put in place later is used then)", c.Name, err)}
 	}
 	return nil
+}
+
+// s3FileSchemaRule is what an s3file collector's request requires, as the
+// exporter does (validateS3FileRequest): root, written with something
+// other than ""; access_key_id_file and secret_access_key_file together, if
+// at all; and session_token_file only beside them. "" is a key left out to
+// the exporter, so each is "written" when it is something else (SchemaWrittenKey).
+func s3FileSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("root")
+	rule["allOf"] = []any{
+		map[string]any{"if": SchemaWrittenKey("access_key_id_file"), "then": SchemaWrittenKey("secret_access_key_file")},
+		map[string]any{"if": SchemaWrittenKey("secret_access_key_file"), "then": SchemaWrittenKey("access_key_id_file")},
+		map[string]any{"if": SchemaWrittenKey("session_token_file"), "then": SchemaWrittenKey("access_key_id_file")},
+	}
+	return rule
+}
+
+// s3FileKeyRules is what the configuration schema says of a s3file
+// collector's own keys.
+func s3FileKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"region":                 {"pattern": SchemaOptionalPattern(`^[A-Za-z0-9_-]+$`), "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md."},
+		"endpoint":               {"pattern": SchemaOptionalPattern(`^https?://[^/?#@]+/?$`), "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores."},
+		"path_style":             {"description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false."},
+		"access_key_id_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},
+		"secret_access_key_file": {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file: the file of the static access key's secret."},
+		"session_token_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token."},
+	}
 }

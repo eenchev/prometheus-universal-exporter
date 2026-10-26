@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -100,6 +101,14 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				out = append(out, leaf{prefix + field.Name, append(append([]int(nil), index...), i)})
 				continue
 			}
+			if key == "-" && typ == reflect.TypeOf(model.RequestConfig{}) && (field.Name == "Own" || field.Name == "Foreign") {
+				// Own is written by RequestConfig's MarshalYAML, its keys
+				// flat beside the common part's; its leaves are those of
+				// each request type's own struct, below. Foreign is what
+				// the validation refuses, and no collector it accepts has
+				// it.
+				continue
+			}
 			if key == "-" {
 				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" {
 					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
@@ -170,6 +179,23 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 		target.Set(sample(target.Type()))
 		if collectorFingerprint(&c) == base {
 			t.Errorf("%s does not change the cache key", l.name)
+		}
+	}
+	// Each leaf of a request type's own keys, set on its own, changes the
+	// key of a collector of the type.
+	for _, rt := range fetch.OwnKeyTypes() {
+		own := reflect.TypeOf(rt.Config)
+		typed := model.Collector{Request: model.RequestConfig{Type: rt.Name, Own: rt.Config}}
+		base := collectorFingerprint(&typed)
+		for _, l := range leaves(own, "request.", nil) {
+			value := reflect.New(own).Elem()
+			target := fieldAt(value, l.index)
+			target.Set(sample(target.Type()))
+			c := typed
+			c.Request.Own = value.Interface()
+			if collectorFingerprint(&c) == base {
+				t.Errorf("%s of a %s collector does not change the cache key", l.name, rt.Name)
+			}
 		}
 	}
 }

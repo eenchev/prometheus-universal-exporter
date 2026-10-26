@@ -53,7 +53,7 @@ func TestHTTPRequiresOnlyTheType(t *testing.T) {
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Collectors[0].Request.Method; got != http.MethodGet {
+	if got := cfg.Collectors[0].Request.Own.(fetch.HTTPConfig).Method; got != http.MethodGet {
 		t.Fatalf("method defaulted to %q, want GET", got)
 	}
 }
@@ -63,11 +63,11 @@ func TestHTTPRequiresOnlyTheType(t *testing.T) {
 func TestHTTPAcceptsEveryHTTPKey(t *testing.T) {
 	c := typedCollector(fetch.RequestTypeHTTP)
 	c.Request = model.RequestConfig{
-		Type: fetch.RequestTypeHTTP, Method: "POST", Path: "/api/{{param_tenant:acme}}", Query: map[string]string{"a": "b"},
-		Headers: map[string]string{"Accept": "application/json"}, Body: "{}",
+		Type: fetch.RequestTypeHTTP, Path: "/api/{{param_tenant:acme}}", Query: map[string]string{"a": "b"},
+		Headers:         map[string]string{"Accept": "application/json"},
 		BearerTokenFile: "/run/token", ForwardHeaders: []string{"X-Tenant"},
 		TLS: model.TLSConfig{InsecureSkipVerify: true}, Retry: model.RetryConfig{Attempts: 2, Backoff: model.Duration(1)},
-		MaxResponseBytes: 1024, FollowRedirects: true, EnableHTTP2: true, AllowedSchemes: []string{"https"},
+		MaxResponseBytes: 1024, FollowRedirects: true, EnableHTTP2: true, AllowedSchemes: []string{"https"}, Own: fetch.HTTPConfig{Method: "POST", Body: "{}"},
 	}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestHTTPRulesStillApply(t *testing.T) {
 		adjust func(*model.RequestConfig)
 		want   string
 	}{
-		{"unsupported method", func(r *model.RequestConfig) { r.Method = "TRACE" }, "unsupported method"},
+		{"unsupported method", func(r *model.RequestConfig) { httpOwn(r, func(o *fetch.HTTPConfig) { o.Method = "TRACE" }) }, "unsupported method"},
 		{"two bearer sources", func(r *model.RequestConfig) { r.BearerToken, r.BearerTokenFile = "t", "/f" }, "bearer_token_file"},
 		{"two basic sources", func(r *model.RequestConfig) {
 			r.BasicAuth, r.BasicAuthFile = &model.BasicAuth{Username: "u"}, &model.BasicAuthFile{Username: "/u", Password: "/p"}
@@ -105,7 +105,7 @@ func TestHTTPRulesStillApply(t *testing.T) {
 func TestAKeyThatBelongsToAnotherTypeIsRejected(t *testing.T) {
 	registerFixtureType(t)
 	c := fixtureCollector()
-	c.Request.Method = "GET"
+	editHTTP(&c, func(r *fetch.HTTPConfig) { r.Method = "GET" })
 	err := Validate(&model.Config{Collectors: []model.Collector{c}})
 	if err == nil || !strings.Contains(err.Error(), `request.method, which does not apply to request.type "fixture"`) {
 		t.Fatalf("err=%v", err)

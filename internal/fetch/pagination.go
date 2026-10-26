@@ -63,7 +63,7 @@ import (
 // offset. The expressions are compiled, so a mistake in one is refused now
 // rather than by every scrape.
 func validatePagination(c *model.Collector) error {
-	p := c.Request.Pagination
+	p := httpRequest(c).Pagination
 	if p == nil {
 		return nil
 	}
@@ -75,7 +75,7 @@ func validatePagination(c *model.Collector) error {
 	default:
 		return fmt.Errorf("collector %q request.pagination.type is %q; want one of %s", c.Name, p.Type, strings.Join(model.PaginationTypes, ", "))
 	}
-	if c.Request.Method == http.MethodHead {
+	if httpRequest(c).Method == http.MethodHead {
 		return fmt.Errorf("collector %q sets request.pagination with method HEAD; the pages are read from their bodies, which the answer to a HEAD request has none of", c.Name)
 	}
 	if strings.TrimSpace(p.Items) == "" {
@@ -248,7 +248,7 @@ func setPath(v any, path []any, value any) any {
 // fetchHTTP is the http type's fetch: one request, or the pages of
 // request.pagination.
 func fetchHTTP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-	if c.Request.Pagination == nil {
+	if httpRequest(c).Pagination == nil {
 		return fetch(ctx, target, c, overrides, forwarded)
 	}
 	return fetchPages(ctx, target, c, overrides, forwarded)
@@ -256,7 +256,7 @@ func fetchHTTP(ctx context.Context, target string, c *model.Collector, overrides
 
 // fetchPages fetches the pages of request.pagination and merges them.
 func fetchPages(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-	p := c.Request.Pagination
+	p := httpRequest(c).Pagination
 	start := time.Now()
 	// The probe's timeout covers every page, so it is applied once, here,
 	// and not again by each page's fetch.
@@ -421,7 +421,7 @@ func onVirtualHost(c *model.Collector, overrides RequestOverrides, forwarded htt
 // pageURL that held count items, or nil when there is none. offset is the
 // offset of an offset pagination, moved on here.
 func nextPage(c *model.Collector, response *HTTPResponse, page any, pageURL *url.URL, count int, offset *int) (*url.URL, error) {
-	p := c.Request.Pagination
+	p := httpRequest(c).Pagination
 	switch p.Type {
 	case model.PaginationLink:
 		link := nextLink(response.Headers)

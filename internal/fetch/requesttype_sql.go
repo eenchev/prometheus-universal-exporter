@@ -64,24 +64,56 @@ import (
 // type, the others only with their sql_driver_<name> tag. Without this
 // type's build constraint none of them is linked.
 
+// SQLConfig is a sql collector's own request keys: the database driver,
+// the database, the one statement run and the values bound to its
+// placeholders, the driver's allow-listed settings, and an Oracle
+// database's service; the most rows a statement may return, 0 for the
+// default; and how the type keeps connections to a target. The account and
+// its credential files are of the common part, which other types take too.
+type SQLConfig struct {
+	Driver      string                `yaml:"driver,omitempty"`
+	Database    string                `yaml:"database,omitempty"`
+	Statement   string                `yaml:"statement,omitempty"`
+	Args        []string              `yaml:"args,omitempty"`
+	Options     map[string]string     `yaml:"options,omitempty"`
+	ServiceName string                `yaml:"service_name,omitempty"`
+	MaxRows     int                   `yaml:"max_rows,omitempty"`
+	Connections *model.SQLConnections `yaml:"connections,omitempty"`
+}
+
+// sqlRequest is a sql collector's own request keys: the zero SQLConfig of a
+// collector built in code whose request has not been validated, which sets
+// them (ValidateRequest).
+func sqlRequest(c *model.Collector) SQLConfig {
+	own, _ := c.Request.Own.(SQLConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeSQL,
 		Fields: []string{
-			"driver", "database", "statement", "args", "options", "service_name",
-			"username", "password_file", "private_key_file", "tls",
-			"max_rows", "max_response_bytes", "connections",
+			"username", "password_file", "private_key_file", "tls", "max_response_bytes",
 			"allowed_targets", "denied_targets",
 		},
-		Overrides:          []string{"timeout", PathParamPrefix},
-		TargetFields:       []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
-		Validate:           validateSQLRequest,
-		Fetch:              fetchSQL,
-		CheckTarget:        checkSQLTarget,
+		Config:       SQLConfig{},
+		KeyRules:     sqlKeyRules,
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
+		Requester:    sqlRequester{},
+		Rows:         true,
+		TargetHint: func(c *model.Collector) string {
+			if sqlRequest(c).Driver == SQLDriverSnowflake {
+				return "the Snowflake account identifier"
+			}
+			return "the database server, host or host:port"
+		},
+		Templates: sqlTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its request.database, its args or its label values")
+		},
+		SchemaRule:         sqlSchemaRule,
 		CheckTargetRequest: checkSQLTargetRequest,
-		Label:              sqlLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return sqlMethod },
-		Display:            sqlDisplay,
 		Stage:              "sql",
 		CheckFiles:         checkSQLFiles,
 		Follow:             sqlPools.follow,
@@ -89,7 +121,44 @@ func init() {
 		Connections:        sqlPools.collectorConnections,
 		ConnectionLimit:    sqlPools.limitCounts,
 		ConnectionPools:    sqlPools.collectorPools,
+		Families: []string{
+			"http_exporter_sql_connections", "http_exporter_sql_idle_connections", "http_exporter_sql_targets",
+			"http_exporter_sql_connects_total", "http_exporter_sql_keepalive_failures_total",
+			"http_exporter_sql_limit_waits_total", "http_exporter_sql_limit_failures_total", "http_exporter_sql_rows",
+		},
 	})
+	templateEscapers["database"] = escapeSQLDatabase
+}
+
+// sqlRequester is the sql request type's Requester.
+type sqlRequester struct{}
+
+// Validate checks a sql collector's request and fills in its defaults.
+func (sqlRequester) Validate(c *model.Collector) error {
+	return validateSQLRequest(c)
+}
+
+// Fetch performs one request of a sql collector.
+func (sqlRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchSQL(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a sql collector's target.
+func (sqlRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkSQLTarget(c, target, static)
+}
+
+// Label is the url label of a sql request.
+func (sqlRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return sqlLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a sql request.
+func (sqlRequester) Method(*model.Collector, RequestOverrides) string { return sqlMethod }
+
+// Display renders a sql target for logs and labels.
+func (sqlRequester) Display(target string) string {
+	return sqlDisplay(target)
 }
 
 // sqlMethod is the http_method label of a statement.
@@ -122,21 +191,23 @@ var sqlAccount = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 
 // sqlDriverOf is the driver of a validated collector.
 func sqlDriverOf(c *model.Collector) *sqlDriver {
-	return sqlDriverTable[c.Request.Driver]
+	return sqlDriverTable[sqlRequest(c).Driver]
 }
 
 func validateSQLRequest(x *model.Collector) error {
 	r := &x.Request
-	r.Driver = strings.ToLower(strings.TrimSpace(r.Driver))
-	d, err := checkSQLDriver(x.Name, r.Driver)
+	own := sqlRequest(x)
+	own.Driver = strings.ToLower(strings.TrimSpace(own.Driver))
+	x.Request.Own = own
+	d, err := checkSQLDriver(x.Name, own.Driver)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(r.Statement) == "" {
+	if strings.TrimSpace(own.Statement) == "" {
 		return fmt.Errorf("collector %q has no request.statement; a sql collector runs one statement, such as SELECT state, count(*) AS n FROM jobs GROUP BY state", x.Name)
 	}
 	if d.statement != nil {
-		if err := d.statement(r.Statement); err != nil {
+		if err := d.statement(own.Statement); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
@@ -147,34 +218,34 @@ func validateSQLRequest(x *model.Collector) error {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	switch {
-	case d.serviceName && strings.TrimSpace(r.ServiceName) == "":
+	case d.serviceName && strings.TrimSpace(own.ServiceName) == "":
 		return fmt.Errorf("collector %q request.service_name is required for the %s driver: the service of the database the statement runs on", x.Name, d.name)
-	case d.serviceName && r.Database != "":
+	case d.serviceName && own.Database != "":
 		return fmt.Errorf("collector %q sets request.database, which the %s driver does not take; the database is named by request.service_name", x.Name, d.name)
-	case !d.serviceName && r.ServiceName != "":
+	case !d.serviceName && own.ServiceName != "":
 		return fmt.Errorf("collector %q sets request.service_name, which only the oracle driver takes; name the database with request.database", x.Name)
 	}
-	if err := checkSQLNameKey("request.service_name", r.ServiceName); err != nil {
+	if err := checkSQLNameKey("request.service_name", own.ServiceName); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if r.Database != "" && strings.TrimSpace(r.Database) == "" {
+	if own.Database != "" && strings.TrimSpace(own.Database) == "" {
 		return fmt.Errorf("collector %q request.database is written with blanks alone; name the database, or leave the key out for the account's default", x.Name)
 	}
-	if _, err := (templateField{"request.database", r.Database, "database"}).parse(); err != nil {
+	if _, err := (templateField{"request.database", own.Database, "database"}).parse(); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	for i, arg := range r.Args {
+	for i, arg := range own.Args {
 		if _, err := (templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"}).parse(); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
-	if err := checkSQLOptions(d, r.Options, r.TLS); err != nil {
+	if err := checkSQLOptions(d, own.Options, r.TLS); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if r.MaxRows < 0 {
+	if own.MaxRows < 0 {
 		return fmt.Errorf("collector %q request.max_rows must not be negative; 0, or leaving it out, is %d", x.Name, defaultSQLMaxRows)
 	}
-	if err := checkSQLConnections(r.Connections, false); err != nil {
+	if err := checkSQLConnections(own.Connections, false); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	return nil
@@ -358,7 +429,7 @@ func checkSQLTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	if d == nil {
 		// A collector that was never validated: its target's keys are held
 		// to the rules every driver's are.
-		d = &sqlDriver{name: c.Request.Driver}
+		d = &sqlDriver{name: sqlRequest(c).Driver}
 	}
 	if err := checkSQLAccountKeys(d, r.Username, r.PasswordFile, r.PrivateKeyFile, false); err != nil {
 		return err
@@ -367,7 +438,7 @@ func checkSQLTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 		if err := checkTargetTLS(t); err != nil {
 			return err
 		}
-		if err := checkSQLTLS(d, c.Request.Options, *r.TLS); err != nil {
+		if err := checkSQLTLS(d, sqlRequest(c).Options, *r.TLS); err != nil {
 			return err
 		}
 	}
@@ -403,10 +474,10 @@ func parseSQLTarget(c *model.Collector, raw string) (sqlAddress, error) {
 			return sqlAddress{}, fmt.Errorf("target %q is not a Snowflake account identifier; write the account as myorg-myaccount, or its locator as xy12345.eu-west-1", raw)
 		}
 		host := d.host(account)
-		port := d.port(c.Request.Options)
+		port := d.port(sqlRequest(c).Options)
 		return sqlAddress{host: host, port: port, hostPort: net.JoinHostPort(host, port), account: account}, nil
 	}
-	host, port := raw, d.port(c.Request.Options)
+	host, port := raw, d.port(sqlRequest(c).Options)
 	if h, p, err := net.SplitHostPort(raw); err == nil {
 		if p == "" {
 			return sqlAddress{}, fmt.Errorf("target %q ends in a colon with no port after it; write the port after the colon, or leave the colon out for the driver's port", raw)
@@ -463,11 +534,11 @@ func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, er
 	if err != nil {
 		return "", err
 	}
-	database := c.Request.Database
+	database := sqlRequest(c).Database
 	if d := sqlDriverOf(c); d != nil && d.serviceName {
-		database = c.Request.ServiceName
+		database = sqlRequest(c).ServiceName
 	}
-	return c.Request.Driver + "://" + address.hostPort + "/" + database, nil
+	return sqlRequest(c).Driver + "://" + address.hostPort + "/" + database, nil
 }
 
 // sqlBase is what a pool depends on of a collector's configuration and of a
@@ -501,23 +572,24 @@ type sqlConnSettings struct {
 // connection settings over them.
 func sqlBaseOf(c *model.Collector, overrides RequestOverrides) sqlBase {
 	r := &c.Request
+	own := sqlRequest(c)
 	b := sqlBase{
-		driver:         r.Driver,
+		driver:         own.Driver,
 		username:       strings.TrimSpace(r.Username),
 		passwordFile:   r.PasswordFile,
 		privateKeyFile: r.PrivateKeyFile,
-		database:       r.Database,
-		serviceName:    r.ServiceName,
+		database:       own.Database,
+		serviceName:    own.ServiceName,
 		tls:            r.TLS,
-		conns:          sqlConnSettingsOf(r.Connections, overrides.SQLConnections),
+		conns:          sqlConnSettingsOf(own.Connections, overrides.SQLConnections),
 		policy:         policyOf(c),
 		limit:          responseLimit(c),
 	}
 	var options strings.Builder
-	for _, name := range model.SortedKeys(r.Options) {
+	for _, name := range model.SortedKeys(own.Options) {
 		options.WriteString(name)
 		options.WriteByte('=')
-		options.WriteString(r.Options[name])
+		options.WriteString(own.Options[name])
 		options.WriteByte(0)
 	}
 	b.options = options.String()
@@ -576,16 +648,16 @@ func sqlConnSettingsOf(collector, target *model.SQLConnections) sqlConnSettings 
 
 // sqlDatabase is the database of a scrape, its placeholders filled.
 func sqlDatabase(c *model.Collector, overrides RequestOverrides) (string, error) {
-	if !HasPathParams(c.Request.Database) {
-		return c.Request.Database, nil
+	if !HasPathParams(sqlRequest(c).Database) {
+		return sqlRequest(c).Database, nil
 	}
-	return templateField{"request.database", c.Request.Database, "database"}.render(overrides.Params)
+	return templateField{"request.database", sqlRequest(c).Database, "database"}.render(overrides.Params)
 }
 
 // sqlArgs is the values bound to the statement, their placeholders filled.
 func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
-	args := make([]any, len(c.Request.Args))
-	for i, arg := range c.Request.Args {
+	args := make([]any, len(sqlRequest(c).Args))
+	for i, arg := range sqlRequest(c).Args {
 		if !HasPathParams(arg) {
 			args[i] = arg
 			continue
@@ -601,8 +673,8 @@ func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
 
 // sqlMaxRows is the most rows a statement of c may return.
 func sqlMaxRows(c *model.Collector) int {
-	if c.Request.MaxRows > 0 {
-		return c.Request.MaxRows
+	if sqlRequest(c).MaxRows > 0 {
+		return sqlRequest(c).MaxRows
 	}
 	return defaultSQLMaxRows
 }
@@ -790,7 +862,7 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 		}
 	}
 	if d := sqlDriverOf(c); ownTLS && d != nil {
-		if _, _, err := sqlTLSConfig(d, &base, c.Request.Options, "localhost"); err != nil {
+		if _, _, err := sqlTLSConfig(d, &base, sqlRequest(c).Options, "localhost"); err != nil {
 			problems = append(problems, err)
 		}
 	}
@@ -799,4 +871,88 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 		warnings = append(warnings, fmt.Sprintf("%s: %v; a scrape would fail on it now (the file is read when a connection is made, so one put in place later is used then)", who, err))
 	}
 	return warnings
+}
+
+// sqlSchemaRule is what a sql collector's request requires, as the exporter
+// does (validateSQLRequest): driver, statement and username, each
+// written with something other than ""; for the oracle driver, when it is
+// built, service_name; and for the snowflake driver, when it is built,
+// password_file or private_key_file; each driver named as the exporter
+// matches it (SchemaCaselessOneOf).
+func sqlSchemaRule() map[string]any {
+	keys := []string{"driver", "statement", "username"}
+	properties := map[string]any{}
+	for _, key := range keys {
+		properties[key] = SchemaWrittenKey(key)["properties"].(map[string]any)[key]
+	}
+	rule := map[string]any{"required": keys, "properties": properties}
+	driverIs := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(name)}}, "required": []string{"driver"}}
+	}
+	var conditions []any
+	for _, name := range BuiltSQLDrivers() {
+		switch name {
+		case SQLDriverOracle:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": SchemaWrittenKey("service_name")})
+		case SQLDriverSnowflake:
+			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{SchemaWrittenKey("password_file"), SchemaWrittenKey("private_key_file")}}})
+		}
+	}
+	if len(conditions) > 0 {
+		rule["allOf"] = conditions
+	}
+	return rule
+}
+
+// sqlDatabaseName is what a placeholder may be filled with in a sql
+// collector's request.database: the characters of a database name that
+// need no quoting in any of the databases.
+var sqlDatabaseName = regexp.MustCompile(`^[A-Za-z0-9_.$-]+$`)
+
+// sqlTemplates are a sql collector's database, which names the database
+// the statement runs on (sqlDatabaseName), and the values bound to its
+// statement, sent as values.
+func sqlTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	var out []templateField
+	if HasPathParams(sqlRequest(c).Database) {
+		out = append(out, templateField{"request.database", sqlRequest(c).Database, "database"})
+	}
+	for i, arg := range sqlRequest(c).Args {
+		if HasPathParams(arg) {
+			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
+		}
+	}
+	return out
+}
+
+// escapeSQLDatabase refuses a value that is no database name
+// (sqlDatabaseName).
+func escapeSQLDatabase(where, name, value string) (string, error) {
+	if !sqlDatabaseName.MatchString(value) {
+		return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . $, since it names the database the statement runs on", where, name, value)
+	}
+	return value, nil
+}
+
+// sqlKeyRules is what the configuration schema says of a sql
+// collector's own keys.
+func sqlKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"driver":                          {"type": "string", "pattern": SchemaCaselessOneOf(BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
+		"database":                        {"not": SchemaOnlyBlanks(), "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only."},
+		"statement":                       {"not": SchemaOnlyBlanks(), "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
+		"args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
+		"options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
+		"service_name":                    {"not": SchemaOnlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
+		"max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},
+		"connections":                     {"description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections."},
+		"connections.max_per_target":      {"minimum": 0, "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools."},
+		"connections.max_idle_per_target": {"minimum": 0, "description": "How many connections to a target are kept idle between scrapes, across its databases and accounts. Defaults to 1; 0 keeps none."},
+		"connections.max_targets":         {"minimum": 0, "description": "The most targets, servers or Snowflake accounts, the collector keeps connections to, whatever databases and accounts it reaches there; at the limit the pools of the target used longest ago are closed. Defaults to 50; 0 sets no limit."},
+		"connections.idle_timeout":        {"description": "How long an idle connection is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
+		"connections.max_lifetime":        {"description": "How long a connection is used before it is closed and made again. Defaults to 1h; 0 uses it as long as it works."},
+		"connections.keepalive":           {"description": "How a kept connection is found broken."},
+		"connections.keepalive.interval":  {"description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 checks none."},
+		"connections.keepalive.check":     {"enum": SchemaOptionalEnum([]string{"tcp", "ping"}), "description": "tcp, the default: TCP keepalives on every connection. ping: every idle connection is pinged every interval."},
+	}
 }

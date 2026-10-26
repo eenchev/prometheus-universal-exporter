@@ -62,7 +62,7 @@ func TestATCPCollectorDecodesAsItsTransformReads(t *testing.T) {
 	if got := strings.Join(decoders, " "); got != "text csv json" {
 		t.Errorf("decoders %s", got)
 	}
-	if r := cfg.Collectors[0].Request; r.Send != "stats\r\n" || r.Terminator != "END\r\n" {
+	if r := cfg.Collectors[0].Request.Own.(fetch.TCPConfig); r.Send != "stats\r\n" || r.Terminator != "END\r\n" {
 		t.Errorf("send %q, terminator %q", r.Send, r.Terminator)
 	}
 }

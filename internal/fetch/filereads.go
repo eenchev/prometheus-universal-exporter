@@ -78,8 +78,10 @@ const localFileAttempts = 2
 // account confined to it (a chroot), and is the host's alone in any case,
 // and s3file's, which is a bucket's every key; max_age
 // is not negative; and path, with its placeholders, names a file under root.
-// typeName is the type the message for a missing root names.
-func validateFileRequest(x *model.Collector, typeName string) error {
+// typeName is the type the message for a missing root names, and
+// ownFilesystem says the root is on the exporter's own filesystem, as
+// localfile's is, where / is refused.
+func validateFileRequest(x *model.Collector, typeName string, ownFilesystem bool) error {
 	root := strings.TrimSpace(x.Request.Root)
 	if root == "" {
 		return fmt.Errorf("collector %q request.root is required for request.type %s: the directory the collector may read files under", x.Name, typeName)
@@ -88,7 +90,7 @@ func validateFileRequest(x *model.Collector, typeName string) error {
 		return fmt.Errorf("collector %q request.root %q must be an absolute path", x.Name, root)
 	}
 	root = filepath.Clean(root)
-	if root == string(filepath.Separator) && typeName == RequestTypeLocalFile {
+	if root == string(filepath.Separator) && ownFilesystem {
 		return fmt.Errorf("collector %q request.root must not be the filesystem root; name the narrowest directory that holds the files", x.Name)
 	}
 	x.Request.Root = root

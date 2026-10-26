@@ -31,12 +31,14 @@ func TestGRPCATargetsOwnCredentialDoesNotNeedTheCollectors(t *testing.T) {
 // value that a header cannot hold, is refused when the configuration loads.
 func TestGRPCAnUnusableDefaultIsRefusedAtLoad(t *testing.T) {
 	c := grpcCollector()
-	c.Request.Message = `{"queue": {{param_queue|json}}, "limit": {{param_limit:ten|number}}}`
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Message = `{"queue": {{param_queue|json}}, "limit": {{param_limit:ten|number}}}`
+	})
 	wantRefused(t, c, `request.message: param_limit must be a number for its |number filter, not "ten"; that value is the placeholder's default`)
 	c = grpcCollector()
-	c.Request.Metadata = map[string]string{"x-tenant": "{{param_tenant:a\nb}}"}
+	editGRPC(&c, func(r *GRPCConfig) { r.Metadata = map[string]string{"x-tenant": "{{param_tenant:a\nb}}"} })
 	wantRefused(t, c, "request.metadata.x-tenant")
 	c = grpcCollector()
-	c.Request.Message = `{"queue": {{param_queue:orders|json}}}`
+	editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"queue": {{param_queue:orders|json}}}` })
 	validGRPC(t, c)
 }

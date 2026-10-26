@@ -5,7 +5,6 @@ package fetch
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -133,19 +132,7 @@ func validateHTTPRequest(x *model.Collector) error {
 			}
 		}
 	}
-	if err := validateRequestTemplates(x); err != nil {
-		return err
-	}
-	if x.Request.Method == "" {
-		x.Request.Method = http.MethodGet
-	}
-	x.Request.Method = strings.ToUpper(x.Request.Method)
-	switch x.Request.Method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-	default:
-		return fmt.Errorf("collector %q has unsupported method %q", x.Name, x.Request.Method)
-	}
-	return nil
+	return validateRequestTemplates(x)
 }
 
 // validateRequestTemplates checks the templated fields of an http collector

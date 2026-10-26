@@ -15,6 +15,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
+// A tcp collector's placeholders are in its send.
+func init() {
+	ownPlaceholders[RequestTypeTCP] = func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "get {{param_key:x}}\r\n"} }
+}
+
 // tcpCollector is a validated tcp collector, as edit makes it.
 func tcpCollector(t *testing.T, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
@@ -69,7 +74,7 @@ func memcached(sent chan<- string) func(net.Conn) {
 func TestATCPCollectorReadsUntilItsTerminator(t *testing.T) {
 	sent := make(chan string, 1)
 	server := testutil.NewTCPStub(t, memcached(sent))
-	c := tcpCollector(t, func(c *model.Collector) { c.Request.Send, c.Request.Terminator = "stats\r\n", "END\r\n" })
+	c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"} })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil)
@@ -100,7 +105,7 @@ func TestATCPCollectorWithoutATerminatorReadsUntilTheServerCloses(t *testing.T) 
 			_, _ = io.WriteString(conn, mntr)
 		}
 	})
-	body, err := tcpScrape(t, tcpCollector(t, func(c *model.Collector) { c.Request.Send = "mntr" }), zookeeper.Addr, nil)
+	body, err := tcpScrape(t, tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "mntr"} }), zookeeper.Addr, nil)
 	if err != nil || body != mntr {
 		t.Errorf("body %q, %v", body, err)
 	}
@@ -115,7 +120,7 @@ func TestATCPCollectorWithoutATerminatorReadsUntilTheServerCloses(t *testing.T) 
 	// A server that closes before the terminator came cut the answer
 	// short.
 	cut := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = io.WriteString(conn, "STAT pid 1\r\n") })
-	_, err = tcpScrape(t, tcpCollector(t, func(c *model.Collector) { c.Request.Terminator = "END\r\n" }), cut.Addr, nil)
+	_, err = tcpScrape(t, tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Terminator: "END\r\n"} }), cut.Addr, nil)
 	if err == nil || !strings.Contains(err.Error(), `the server closed the connection after 12 bytes, and the answer does not end with request.terminator "END\r\n"`) {
 		t.Errorf("an answer cut short: %v", err)
 	}
@@ -137,7 +142,7 @@ func TestATCPServerThatNeverEndsItsAnswerFailsAtTheDeadline(t *testing.T) {
 		"a terminator": {"END\r\n", `no answer ending with request.terminator "END\r\n" came, 12 bytes read`},
 		"none":         {"", "the server kept the connection open, 12 bytes read; without request.terminator the answer ends when the server closes it"},
 	} {
-		c := tcpCollector(t, func(c *model.Collector) { c.Request.Send, c.Request.Terminator = "stats\r\n", tc.terminator })
+		c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "stats\r\n", Terminator: tc.terminator} })
 		start := time.Now()
 		_, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{Timeout: 300 * time.Millisecond}, nil)
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), tc.want) {
@@ -163,7 +168,9 @@ func TestATCPAnswerIsHeldToTheResponseLimit(t *testing.T) {
 	})
 	exact := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = io.WriteString(conn, strings.Repeat("x", 1020)+"END\n") })
 	for _, terminator := range []string{"", "END\n"} {
-		c := tcpCollector(t, func(c *model.Collector) { c.Request.Terminator, c.Request.MaxResponseBytes = terminator, 1024 })
+		c := tcpCollector(t, func(c *model.Collector) {
+			c.Request.Own, c.Request.MaxResponseBytes = TCPConfig{Terminator: terminator}, 1024
+		})
 		start := time.Now()
 		if _, err := tcpScrape(t, c, big.Addr, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "larger than the response limit") {
 			t.Errorf("terminator %q: %v", terminator, err)
@@ -187,7 +194,7 @@ func TestATCPAnswerIsHeldToTheResponseLimit(t *testing.T) {
 func TestATCPCollectorSpeaksTLS(t *testing.T) {
 	server := testutil.NewTLSTCPStub(t, memcached(nil))
 	verified := tcpCollector(t, func(c *model.Collector) {
-		c.Request.Send, c.Request.Terminator, c.Request.TLS.CAFile = "stats\r\n", "END\r\n", server.CAFile
+		c.Request.Own, c.Request.TLS.CAFile = TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"}, server.CAFile
 	})
 	if body, err := tcpScrape(t, verified, server.Addr, nil); err != nil || body != memcachedStats {
 		t.Errorf("body %q, %v", body, err)
@@ -199,7 +206,7 @@ func TestATCPCollectorSpeaksTLS(t *testing.T) {
 	if _, err := tcpScrape(t, unknown, server.Addr, nil); err == nil || !strings.Contains(err.Error(), "TLS handshake with "+server.Addr) {
 		t.Errorf("an unknown authority: %v", err)
 	}
-	plain := tcpCollector(t, func(c *model.Collector) { c.Request.Send, c.Request.Terminator = "stats\r\n", "END\r\n" })
+	plain := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"} })
 	if body, err := FetchCollector(context.Background(), server.Addr, plain, RequestOverrides{Timeout: 500 * time.Millisecond}, nil); err == nil {
 		t.Errorf("plaintext to a TLS server was taken: %q", body.Body)
 	}
@@ -224,7 +231,7 @@ func TestATCPCollectorKeepsToItsTargetLists(t *testing.T) {
 		t.Errorf("a refused target was connected to %d times", n)
 	}
 	allowed := tcpCollector(t, func(c *model.Collector) {
-		c.Request.Send, c.Request.Terminator, c.Request.AllowedTargets = "stats\r\n", "END\r\n", []string{"127.0.0.0/8"}
+		c.Request.Own, c.Request.AllowedTargets = TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"}, []string{"127.0.0.0/8"}
 	})
 	if _, err := tcpScrape(t, allowed, server.Addr, nil); err != nil {
 		t.Errorf("allowed: %v", err)
@@ -243,7 +250,7 @@ func TestATCPCollectorFillsSendsPlaceholders(t *testing.T) {
 		_, _ = io.WriteString(conn, "VAR ups battery.charge \"100\"\nEND LIST VAR ups\n")
 	})
 	c := tcpCollector(t, func(c *model.Collector) {
-		c.Request.Send, c.Request.Terminator = "LIST VAR {{param_ups:ups}}\n", "END LIST VAR ups\n"
+		c.Request.Own = TCPConfig{Send: "LIST VAR {{param_ups:ups}}\n", Terminator: "END LIST VAR ups\n"}
 	})
 	if _, err := tcpScrape(t, c, server.Addr, map[string]string{"param_ups": "rack1"}); err != nil {
 		t.Fatal(err)
@@ -278,7 +285,7 @@ func TestATCPCollectorHoldsSendsValuesToOneArgument(t *testing.T) {
 		line, _ := testutil.ReadUntil(conn, "\n")
 		sent <- line
 	})
-	c := tcpCollector(t, func(c *model.Collector) { c.Request.Send = "show stat {{param_proxy:-1}} -1 -1\n" })
+	c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "show stat {{param_proxy:-1}} -1 -1\n"} })
 	for value, character := range map[string]string{
 		"-1;disable server app/app1": `';' (U+003B)`,
 		"web 2":                      "a blank (U+0020)",
@@ -310,7 +317,7 @@ func TestATCPCollectorHoldsSendsValuesToOneArgument(t *testing.T) {
 	if got := <-sent; got != "show stat "+allowed+" -1 -1\n" {
 		t.Errorf("sent %q", got)
 	}
-	bad := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Send: "show stat {{param_proxy:-1;x}}\n"}}
+	bad := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Own: TCPConfig{Send: "show stat {{param_proxy:-1;x}}\n"}}}
 	if err := ValidateRequest(bad); err == nil || !strings.Contains(err.Error(), `collector "stats" request.send: the default of param_proxy holds ';' (U+003B)`) {
 		t.Errorf("a default with ';': %v", err)
 	}
@@ -325,13 +332,13 @@ func TestATCPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 		edit func(*model.Collector)
 		want string
 	}{
-		"a send too long":       {func(c *model.Collector) { c.Request.Send = strings.Repeat("x", 64<<10+1) }, "request.send is 65537 bytes, more than the 65536"},
-		"a terminator too long": {func(c *model.Collector) { c.Request.Terminator = strings.Repeat("x", 64<<10+1) }, "request.terminator is 65537 bytes"},
-		"a placeholder ending":  {func(c *model.Collector) { c.Request.Terminator = "END {{param_x}}\n" }, "request.terminator \"END {{param_x}}\\n\" has a placeholder"},
-		"a broken placeholder":  {func(c *model.Collector) { c.Request.Send = "get {{param_\r\n" }, "request.send has an unclosed placeholder"},
-		"a filter":              {func(c *model.Collector) { c.Request.Send = "get {{param_k|json}}\r\n" }, "has a filter"},
+		"a send too long":       {func(c *model.Collector) { c.Request.Own = TCPConfig{Send: strings.Repeat("x", 64<<10+1)} }, "request.send is 65537 bytes, more than the 65536"},
+		"a terminator too long": {func(c *model.Collector) { c.Request.Own = TCPConfig{Terminator: strings.Repeat("x", 64<<10+1)} }, "request.terminator is 65537 bytes"},
+		"a placeholder ending":  {func(c *model.Collector) { c.Request.Own = TCPConfig{Terminator: "END {{param_x}}\n"} }, "request.terminator \"END {{param_x}}\\n\" has a placeholder"},
+		"a broken placeholder":  {func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "get {{param_\r\n"} }, "request.send has an unclosed placeholder"},
+		"a filter":              {func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "get {{param_k|json}}\r\n"} }, "has a filter"},
 		"a key of another type": {func(c *model.Collector) {
-			c.Request.Commands = []model.RedisCommand{{Name: "x", Command: []string{"DBSIZE"}}}
+			c.Request.Foreign = []string{"commands"}
 		}, "sets request.commands, which does not apply"},
 		"a header":                  {func(c *model.Collector) { c.Request.Headers = map[string]string{"X": "y"} }, "sets request.headers, which does not apply"},
 		"half a client certificate": {func(c *model.Collector) { c.Request.TLS.CertFile = "/c.pem" }, "only one of cert_file and key_file"},
@@ -343,7 +350,7 @@ func TestATCPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 		}
 	}
 	tcpCollector(t, func(c *model.Collector) {
-		c.Request.Send, c.Request.Terminator = strings.Repeat("x", 64<<10), strings.Repeat("x", 64<<10)
+		c.Request.Own = TCPConfig{Send: strings.Repeat("x", 64<<10), Terminator: strings.Repeat("x", 64<<10)}
 	})
 	c := tcpCollector(t)
 	for target, want := range map[string]string{
@@ -375,7 +382,7 @@ func TestATCPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 // connection names the address; --dry-run reads the tls block's files.
 func TestATCPScrapeIsTraced(t *testing.T) {
 	server := testutil.NewTCPStub(t, memcached(nil))
-	c := tcpCollector(t, func(c *model.Collector) { c.Request.Send, c.Request.Terminator = "stats\r\n", "END\r\n" })
+	c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"} })
 	ctx, trace := WithRequestTrace(context.Background())
 	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)

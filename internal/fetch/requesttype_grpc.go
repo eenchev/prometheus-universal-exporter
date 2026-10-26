@@ -77,16 +77,44 @@ var grpcRPC = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-
 // digits and - _ . , as gRPC requires of a header name.
 var grpcMetadataKey = regexp.MustCompile(`^[0-9a-z_.-]+$`)
 
+// GRPCConfig is a grpc collector's own request keys: the method called,
+// package.Service/Method; the request message in the protobuf JSON
+// mapping; the request metadata; where the message types come from,
+// reflection, protoset (ProtosetFile) or proto (ProtoFiles, compiled with
+// ProtoImportPaths); and the gRPC status codes, other than OK, whose calls
+// are answers rather than failures, such as [NOT_FOUND].
+type GRPCConfig struct {
+	RPC              string            `yaml:"rpc"`
+	Message          string            `yaml:"message"`
+	Metadata         map[string]string `yaml:"metadata"`
+	Descriptors      string            `yaml:"descriptors"`
+	ProtosetFile     string            `yaml:"protoset_file"`
+	ProtoFiles       []string          `yaml:"proto_files"`
+	ProtoImportPaths []string          `yaml:"proto_import_paths"`
+	AcceptCodes      []string          `yaml:"accept_codes"`
+}
+
+// grpcRequest is a grpc collector's own request keys: the zero GRPCConfig
+// of a collector built in code whose request has not been validated, which
+// sets them (ValidateRequest).
+func grpcRequest(c *model.Collector) GRPCConfig {
+	own, _ := c.Request.Own.(GRPCConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name: RequestTypeGRPC,
 		Fields: []string{
-			"rpc", "message", "metadata",
-			"descriptors", "protoset_file", "proto_files", "proto_import_paths",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
-			"allowed_targets", "denied_targets", "accept_codes",
+			"allowed_targets", "denied_targets",
+		},
+		Config:   GRPCConfig{},
+		KeyRules: grpcKeyRules,
+		Policy: func(c *model.Collector) RequestPolicy {
+			return RequestPolicy{AcceptCodes: grpcRequest(c).AcceptCodes}
 		},
 		Overrides: []string{
 			"timeout", "insecure_skip_verify", "retry_attempts", "retry_backoff",
@@ -97,28 +125,91 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_codes", "tls",
 		},
+		Requester:          grpcRequester{},
 		StatusCodes:        true,
-		Validate:           validateGRPCRequest,
-		CheckTarget:        checkGRPCTarget,
+		JSONAnswer:         true,
+		TargetHint:         func(*model.Collector) string { return "host:port" },
 		CheckTargetRequest: checkGRPCTargetRequest,
-		Label:              grpcLabel,
-		Method:             func(*model.Collector, RequestOverrides) string { return http.MethodPost },
-		Display:            grpcDisplay,
 		Stage:              "grpc",
-		Fetch:              fetchGRPC,
-		ReadFiles:          grpcReadFiles,
-		CheckFiles:         checkGRPCFiles,
+		Templates:          grpcTemplates,
+		UnusedParams: func(c *model.Collector, overrides RequestOverrides, unused string) error {
+			if overrides.Message != nil {
+				return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request and no label value of the collector names them", unused)
+			}
+			return unusedParamsIn(c, unused, "its request.message, its metadata values or its label values")
+		},
+		SchemaRule: grpcSchemaRule,
+		ReadFiles:  grpcReadFiles,
+		NamedFiles: func(c *model.Collector) []string {
+			own := grpcRequest(c)
+			return append([]string{own.ProtosetFile}, own.ProtoFiles...)
+		},
+		CheckFiles: checkGRPCFiles,
 	})
+	templateFilterRules[grpcMessageKind] = grpcMessageFilter
+	// The message probe parameter replaces request.message whole.
+	templateReplacers[grpcMessageKind] = func(overrides RequestOverrides) bool { return overrides.Message != nil }
+}
+
+// grpcMessageKind is the kind of templated field of a grpc collector's
+// request.message (templateFilterRules): it takes the body's filters and is
+// written as the body is, but only by the filters that write JSON.
+const grpcMessageKind = "message"
+
+// grpcMessageField is a grpc collector's message as a templated field.
+func grpcMessageField(text string) templateField {
+	return templateField{"request.message", text, grpcMessageKind}
+}
+
+// grpcMessageFilter says why a placeholder of a message may not have its
+// filter: a message is JSON, so only the filters that write JSON apply.
+func grpcMessageFilter(where string, p pathPlaceholder) error {
+	switch p.Filter {
+	case "", "json", "number", "raw":
+		return nil
+	}
+	return fmt.Errorf("%s placeholder {{%s}} has the filter |%s, which does not write JSON; a message takes |json for a string, |number for a number, or |raw", where, p.Name, p.Filter)
+}
+
+// grpcRequester is the grpc request type's Requester.
+type grpcRequester struct{}
+
+// Validate checks a grpc collector's request and fills in its defaults.
+func (grpcRequester) Validate(c *model.Collector) error {
+	return validateGRPCRequest(c)
+}
+
+// Fetch performs one request of a grpc collector.
+func (grpcRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchGRPC(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a grpc collector's target.
+func (grpcRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	return checkGRPCTarget(c, target, static)
+}
+
+// Label is the url label of a grpc request.
+func (grpcRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return grpcLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a grpc request.
+func (grpcRequester) Method(*model.Collector, RequestOverrides) string { return http.MethodPost }
+
+// Display renders a grpc target for logs and labels.
+func (grpcRequester) Display(target string) string {
+	return grpcDisplay(target)
 }
 
 // grpcReadFiles is what compiling a collector's proto_files looked at
 // (fileSets.protoLooked). A descriptor set is one file, which the request
 // names, and reflection reads none.
 func grpcReadFiles(c *model.Collector) (paths []string, read string) {
-	if len(c.Request.ProtoFiles) == 0 || strings.ToLower(strings.TrimSpace(c.Request.Descriptors)) != descriptorsProto {
+	if len(grpcRequest(c).ProtoFiles) == 0 || strings.ToLower(strings.TrimSpace(grpcRequest(c).Descriptors)) != descriptorsProto {
 		return nil, ""
 	}
-	return descriptorFiles.protoLooked(c.Request.ProtoFiles, c.Request.ProtoImportPaths)
+	return descriptorFiles.protoLooked(grpcRequest(c).ProtoFiles, grpcRequest(c).ProtoImportPaths)
 }
 
 // validateGRPCRequest holds the grpc type's rules: the method's shape, the
@@ -128,14 +219,16 @@ func grpcReadFiles(c *model.Collector) (paths []string, read string) {
 // configuration rather than every scrape.
 func validateGRPCRequest(x *model.Collector) error {
 	r := &x.Request
-	r.RPC = strings.TrimPrefix(strings.TrimSpace(r.RPC), "/")
+	own := grpcRequest(x)
+	own.RPC = strings.TrimPrefix(strings.TrimSpace(own.RPC), "/")
+	x.Request.Own = own
 	switch {
-	case r.RPC == "":
+	case own.RPC == "":
 		return fmt.Errorf("collector %q has no request.rpc; a grpc collector calls one method, written package.Service/Method, such as grpc.health.v1.Health/Check", x.Name)
-	case strings.Contains(r.RPC, "{{"):
-		return fmt.Errorf("collector %q request.rpc %q has a placeholder; a collector calls one method, so rpc takes none", x.Name, r.RPC)
-	case !grpcRPC.MatchString(r.RPC):
-		return fmt.Errorf("collector %q request.rpc %q is not a method; write the service's full name, a slash and the method, such as acme.queue.v1.QueueService/GetStats", x.Name, r.RPC)
+	case strings.Contains(own.RPC, "{{"):
+		return fmt.Errorf("collector %q request.rpc %q has a placeholder; a collector calls one method, so rpc takes none", x.Name, own.RPC)
+	case !grpcRPC.MatchString(own.RPC):
+		return fmt.Errorf("collector %q request.rpc %q is not a method; write the service's full name, a slash and the method, such as acme.queue.v1.QueueService/GetStats", x.Name, own.RPC)
 	}
 	if err := validateCredentials(x); err != nil {
 		return err
@@ -143,7 +236,7 @@ func validateGRPCRequest(x *model.Collector) error {
 	if err := checkTLSSettings(r.TLS); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if err := checkGRPCMetadata(r.Metadata, true, r.BasicAuth != nil || r.BasicAuthFile != nil || r.BearerToken != "" || r.BearerTokenFile != ""); err != nil {
+	if err := checkGRPCMetadata(own.Metadata, true, r.BasicAuth != nil || r.BasicAuthFile != nil || r.BearerToken != "" || r.BearerTokenFile != ""); err != nil {
 		return fmt.Errorf("collector %q request.metadata %w", x.Name, err)
 	}
 	if err := checkForwardHeaders(r.ForwardHeaders); err != nil {
@@ -163,7 +256,7 @@ func validateGRPCRequest(x *model.Collector) error {
 	if err := normalizeRetryCodes(r.Retry.Codes); err != nil {
 		return fmt.Errorf("collector %q request.retry.codes %w", x.Name, err)
 	}
-	if err := normalizeRetryCodes(r.AcceptCodes); err != nil {
+	if err := normalizeRetryCodes(own.AcceptCodes); err != nil {
 		return fmt.Errorf("collector %q request.accept_codes %s", x.Name, strings.Replace(err.Error(), "never retried", "always accepted", 1))
 	}
 	// The placeholders of the message and the metadata values.
@@ -172,18 +265,19 @@ func validateGRPCRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
 		}
 	}
-	message, typed, err := messageForCheck(r.Message)
+	message, typed, err := messageForCheck(own.Message)
 	if err != nil {
 		return fmt.Errorf("collector %q request.message %w", x.Name, err)
 	}
 	if err := validateDescriptorKeys(x); err != nil {
 		return err
 	}
-	if r.Descriptors == descriptorsReflection {
+	own = grpcRequest(x)
+	if own.Descriptors == descriptorsReflection {
 		// The server is asked at the first call; nothing more is known now.
 		return nil
 	}
-	if x.DescriptorFilesUnread && r.Descriptors != "" {
+	if x.DescriptorFilesUnread && own.Descriptors != "" {
 		// The descriptor files are not opened (config.WithoutNamedFiles):
 		// the replicas that mount them check the method and the message.
 		return nil
@@ -204,8 +298,9 @@ func validateGRPCRequest(x *model.Collector) error {
 // descriptors is required, but for the health service, and each source's
 // keys go only with it.
 func validateDescriptorKeys(x *model.Collector) error {
-	r := &x.Request
+	r := grpcRequest(x)
 	r.Descriptors = strings.ToLower(strings.TrimSpace(r.Descriptors))
+	x.Request.Own = r
 	service, _, _ := strings.Cut(r.RPC, "/")
 	switch {
 	case r.Descriptors == "" && service == grpcHealthService:
@@ -250,7 +345,7 @@ func messageForCheck(text string) (message string, typed bool, err error) {
 	if strings.TrimSpace(text) == "" {
 		return "{}", true, nil
 	}
-	f := templateField{"request.message", text, "body"}
+	f := grpcMessageField(text)
 	placeholders, err := f.parse()
 	if err != nil {
 		return "", false, err
@@ -373,7 +468,7 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	if !json.Valid([]byte(t.Request.Message)) {
 		return errors.New("request.message is not JSON; write the message in the protobuf JSON mapping")
 	}
-	if (c.Request.Descriptors == descriptorsProtoset || c.Request.Descriptors == descriptorsProto) && !c.DescriptorFilesUnread || c.Request.Descriptors == "" {
+	if (grpcRequest(c).Descriptors == descriptorsProtoset || grpcRequest(c).Descriptors == descriptorsProto) && !c.DescriptorFilesUnread || grpcRequest(c).Descriptors == "" {
 		method, err := staticMethod(c)
 		if err != nil {
 			return err
@@ -474,7 +569,7 @@ func grpcLabel(target string, c *model.Collector, overrides RequestOverrides) (s
 	if secure {
 		scheme = "grpcs"
 	}
-	return scheme + "://" + a.hostPort + "/" + c.Request.RPC, nil
+	return scheme + "://" + a.hostPort + "/" + grpcRequest(c).RPC, nil
 }
 
 // grpcDisplay renders a target for logs and labels: as written, since a
@@ -500,4 +595,47 @@ func fetchGRPC(ctx context.Context, target string, c *model.Collector, overrides
 // mounted after the exporter starts.
 func checkGRPCFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// grpcSchemaRule is what a grpc collector's request requires, as the
+// exporter does (validateGRPCRequest): rpc, written with something other
+// than "", and where its message types come from, descriptors, unless it
+// calls the health service, whose types are built in
+// (validateDescriptorKeys).
+func grpcSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("rpc")
+	rule["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
+	rule["then"] = SchemaWrittenKey("descriptors")
+	return rule
+}
+
+// grpcTemplates are a grpc collector's message, which takes the body's
+// filters that write JSON (grpcMessageKind), unless the probe replaced it,
+// and its metadata values, which take the header rule.
+func grpcTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
+	var out []templateField
+	if overrides.Message == nil && HasPathParams(grpcRequest(c).Message) {
+		out = append(out, grpcMessageField(grpcRequest(c).Message))
+	}
+	for _, name := range model.SortedKeys(grpcRequest(c).Metadata) {
+		if value := grpcRequest(c).Metadata[name]; HasPathParams(value) {
+			out = append(out, templateField{"request.metadata." + name, value, "header"})
+		}
+	}
+	return out
+}
+
+// grpcKeyRules is what the configuration schema says of a grpc
+// collector's own keys.
+func grpcKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"rpc":                {"pattern": SchemaOptionalPattern(`^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`), "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
+		"message":            {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
+		"metadata":           {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
+		"descriptors":        {"enum": SchemaOptionalEnum([]string{"reflection", "protoset", "proto"}), "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
+		"protoset_file":      {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
+		"proto_files":        {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
+		"proto_import_paths": {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
+		"accept_codes":       {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
+	}
 }

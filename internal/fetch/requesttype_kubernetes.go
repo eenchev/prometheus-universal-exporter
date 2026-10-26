@@ -61,32 +61,90 @@ import (
 // This file imports nothing outside the standard library and the
 // repository's own packages.
 
+// KubernetesConfig is a kubernetes collector's own request keys: the
+// objects listed, by the plural name of their resource, its API group, ""
+// for the core group, and its version, v1 when left out; which of them are
+// listed, by namespace and by selector; how many a listing may hold, 0 for
+// the default; and the API server's URL when the exporter does not list
+// its own cluster's.
+type KubernetesConfig struct {
+	Resource      string   `yaml:"resource,omitempty"`
+	Group         string   `yaml:"group,omitempty"`
+	Version       string   `yaml:"version,omitempty"`
+	Namespaces    []string `yaml:"namespaces,omitempty"`
+	AllNamespaces bool     `yaml:"all_namespaces,omitempty"`
+	LabelSelector string   `yaml:"label_selector,omitempty"`
+	FieldSelector string   `yaml:"field_selector,omitempty"`
+	MaxObjects    int      `yaml:"max_objects,omitempty"`
+	APIServer     string   `yaml:"api_server,omitempty"`
+}
+
+// kubernetesRequest is a kubernetes collector's own request keys: the zero
+// KubernetesConfig of a collector built in code whose request has not been
+// validated, which sets them (ValidateRequest).
+func kubernetesRequest(c *model.Collector) KubernetesConfig {
+	own, _ := c.Request.Own.(KubernetesConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
-		Name:           RequestTypeKubernetes,
-		Fields:         []string{"resource", "group", "version", "namespaces", "all_namespaces", "label_selector", "field_selector", "max_objects", "api_server", "tls", "bearer_token_file", "max_response_bytes"},
-		Overrides:      []string{"timeout", PathParamPrefix},
-		TargetFields:   []string{"timeout"},
-		Validate:       validateKubernetesRequest,
-		Fetch:          fetchKubernetes,
+		Name:         RequestTypeKubernetes,
+		Fields:       []string{"tls", "bearer_token_file", "max_response_bytes"},
+		Config:       KubernetesConfig{},
+		KeyRules:     kubernetesKeyRules,
+		Overrides:    []string{"timeout", PathParamPrefix},
+		TargetFields: []string{"timeout"},
+		Requester:    kubernetesRequester{},
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its label values")
+		},
+		SchemaRule:     kubernetesSchemaRule,
 		OptionalTarget: true,
-		CheckTarget: func(c *model.Collector, target string, static bool) error {
-			if strings.TrimSpace(target) == "" {
-				return nil
-			}
-			if static {
-				return fmt.Errorf("names a target, %q, which a kubernetes collector takes none of: it lists what collector %q's request names; leave target out", target, c.Name)
-			}
-			return fmt.Errorf("target %q is not taken: a kubernetes collector lists what its configuration names, so a probe of collector %q leaves target out", target, c.Name)
-		},
-		Label: func(_ string, c *model.Collector, _ RequestOverrides) (string, error) {
-			return kubernetesLabel(c), nil
-		},
-		Method:     func(*model.Collector, RequestOverrides) string { return kubernetesMethod },
-		Display:    strings.TrimSpace,
+		// A kubernetes collector lists what its configuration names, and
+		// takes no target at all.
+		NoTarget:   true,
+		JSONAnswer: true,
 		Stage:      "kubernetes",
 		CheckFiles: checkKubernetesFiles,
 	})
+}
+
+// kubernetesRequester is the kubernetes request type's Requester.
+type kubernetesRequester struct{}
+
+// Validate checks a kubernetes collector's request and fills in its defaults.
+func (kubernetesRequester) Validate(c *model.Collector) error {
+	return validateKubernetesRequest(c)
+}
+
+// Fetch performs one request of a kubernetes collector.
+func (kubernetesRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchKubernetes(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a kubernetes collector's target.
+func (kubernetesRequester) CheckTarget(c *model.Collector, target string, static bool) error {
+	if strings.TrimSpace(target) == "" {
+		return nil
+	}
+	if static {
+		return fmt.Errorf("names a target, %q, which a kubernetes collector takes none of: it lists what collector %q's request names; leave target out", target, c.Name)
+	}
+	return fmt.Errorf("target %q is not taken: a kubernetes collector lists what its configuration names, so a probe of collector %q leaves target out", target, c.Name)
+}
+
+// Label is the url label of a kubernetes request.
+func (kubernetesRequester) Label(_ string, c *model.Collector, _ RequestOverrides) (string, error) {
+	return kubernetesLabel(c), nil
+}
+
+// Method is the http_method label of a kubernetes request.
+func (kubernetesRequester) Method(*model.Collector, RequestOverrides) string { return kubernetesMethod }
+
+// Display renders a kubernetes target for logs and labels.
+func (kubernetesRequester) Display(target string) string {
+	return strings.TrimSpace(target)
 }
 
 // kubernetesMethod is the http_method label of a listing.
@@ -104,59 +162,70 @@ const DefaultKubernetesMaxObjects = 10000
 // mounted. Tests point it at a directory of their own.
 var kubernetesServiceAccountDir = kubeapi.ServiceAccountDir
 
+// kubernetesNamePattern is what a kubernetes collector's request.resource,
+// request.version and each of its request.namespaces are made of: a DNS
+// label, lower case (RFC 1123), of at most 63 characters, as Kubernetes
+// names them. The exporter and the schema hold them to it alike.
+const kubernetesNamePattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+
+// kubernetesGroupPattern is what a kubernetes collector's request.group is
+// made of: a DNS subdomain, lower case, of at most 253 characters.
+const kubernetesGroupPattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+
 var (
-	kubernetesName  = regexp.MustCompile(model.KubernetesNamePattern)
-	kubernetesGroup = regexp.MustCompile(model.KubernetesGroupPattern)
+	kubernetesName  = regexp.MustCompile(kubernetesNamePattern)
+	kubernetesGroup = regexp.MustCompile(kubernetesGroupPattern)
 )
 
 func validateKubernetesRequest(x *model.Collector) error {
 	r := &x.Request
+	own := kubernetesRequest(x)
 	switch {
-	case r.Resource == "":
+	case own.Resource == "":
 		return fmt.Errorf("collector %q has no request.resource; name the plural of the objects to list, such as pods or deployments, as kubectl api-resources lists it", x.Name)
-	case strings.Contains(r.Resource, "/"):
-		return fmt.Errorf("collector %q request.resource %q names a subresource; a listing is of a resource, such as pods, whose status every object carries", x.Name, r.Resource)
-	case len(r.Resource) > 63 || !kubernetesName.MatchString(r.Resource):
-		return fmt.Errorf("collector %q request.resource %q is not a resource's plural name, lower case letters, digits and hyphens, such as deployments", x.Name, r.Resource)
+	case strings.Contains(own.Resource, "/"):
+		return fmt.Errorf("collector %q request.resource %q names a subresource; a listing is of a resource, such as pods, whose status every object carries", x.Name, own.Resource)
+	case len(own.Resource) > 63 || !kubernetesName.MatchString(own.Resource):
+		return fmt.Errorf("collector %q request.resource %q is not a resource's plural name, lower case letters, digits and hyphens, such as deployments", x.Name, own.Resource)
 	}
-	if r.Group == "core" || r.Group == "v1" {
-		return fmt.Errorf("collector %q request.group is %q; the core group, of pods, services and nodes, has no name: leave group out", x.Name, r.Group)
+	if own.Group == "core" || own.Group == "v1" {
+		return fmt.Errorf("collector %q request.group is %q; the core group, of pods, services and nodes, has no name: leave group out", x.Name, own.Group)
 	}
-	if r.Group != "" && (len(r.Group) > 253 || !kubernetesGroup.MatchString(r.Group)) {
-		return fmt.Errorf("collector %q request.group %q is not an API group, such as apps or cert-manager.io; leave it out for the core group", x.Name, r.Group)
+	if own.Group != "" && (len(own.Group) > 253 || !kubernetesGroup.MatchString(own.Group)) {
+		return fmt.Errorf("collector %q request.group %q is not an API group, such as apps or cert-manager.io; leave it out for the core group", x.Name, own.Group)
 	}
-	if r.Version != "" && (len(r.Version) > 63 || !kubernetesName.MatchString(r.Version)) {
-		return fmt.Errorf("collector %q request.version %q is not an API version, such as v1 or v1beta1", x.Name, r.Version)
+	if own.Version != "" && (len(own.Version) > 63 || !kubernetesName.MatchString(own.Version)) {
+		return fmt.Errorf("collector %q request.version %q is not an API version, such as v1 or v1beta1", x.Name, own.Version)
 	}
-	if r.Group == "" && r.Resource == "secrets" {
+	if own.Group == "" && own.Resource == "secrets" {
 		return fmt.Errorf("collector %q lists secrets, which a kubernetes collector may not: their values would pass through the transforms, and could be shown by their errors and by a debug report; a metric of a Secret's existence or age comes from another resource, or from an exporter made for it", x.Name)
 	}
-	if r.AllNamespaces && len(r.Namespaces) > 0 {
+	if own.AllNamespaces && len(own.Namespaces) > 0 {
 		return fmt.Errorf("collector %q sets both request.namespaces and request.all_namespaces; list namespaces, or every namespace, not both", x.Name)
 	}
-	for i, ns := range r.Namespaces {
+	for i, ns := range own.Namespaces {
 		if len(ns) > 63 || !kubernetesName.MatchString(ns) {
 			return fmt.Errorf("collector %q request.namespaces entry %q is not a namespace's name", x.Name, ns)
 		}
-		if slices.Contains(r.Namespaces[:i], ns) {
+		if slices.Contains(own.Namespaces[:i], ns) {
 			return fmt.Errorf("collector %q request.namespaces lists %q twice; its objects would be listed twice", x.Name, ns)
 		}
 	}
-	for key, selector := range map[string]string{"label_selector": r.LabelSelector, "field_selector": r.FieldSelector} {
+	for key, selector := range map[string]string{"label_selector": own.LabelSelector, "field_selector": own.FieldSelector} {
 		if selector != "" && strings.TrimSpace(selector) == "" {
 			return fmt.Errorf("collector %q request.%s is written with blanks alone; leave it out to list every object", x.Name, key)
 		}
 	}
-	if r.MaxObjects < 0 {
+	if own.MaxObjects < 0 {
 		return fmt.Errorf("collector %q request.max_objects must not be negative; leave it out for %d", x.Name, DefaultKubernetesMaxObjects)
 	}
-	if r.APIServer == "" {
+	if own.APIServer == "" {
 		if r.BearerTokenFile != "" || r.TLS != (model.TLSConfig{}) {
 			return fmt.Errorf("collector %q sets request.tls or request.bearer_token_file without request.api_server; the API server of the exporter's own cluster is reached with the pod's service account, its token and CA, and these are for one named by api_server", x.Name)
 		}
 		return nil
 	}
-	if _, err := parseKubernetesAPIServer(r.APIServer); err != nil {
+	if _, err := parseKubernetesAPIServer(own.APIServer); err != nil {
 		return fmt.Errorf("collector %q request.api_server %w", x.Name, err)
 	}
 	if r.TLS.InsecureSkipVerify {
@@ -193,41 +262,41 @@ func parseKubernetesAPIServer(raw string) (string, error) {
 
 // kubernetesVersion is the version of c, v1 when left out.
 func kubernetesVersion(c *model.Collector) string {
-	if c.Request.Version == "" {
+	if kubernetesRequest(c).Version == "" {
 		return "v1"
 	}
-	return c.Request.Version
+	return kubernetesRequest(c).Version
 }
 
 // kubernetesMaxObjects is the most objects a listing of c may hold.
 func kubernetesMaxObjects(c *model.Collector) int {
-	if c.Request.MaxObjects == 0 {
+	if kubernetesRequest(c).MaxObjects == 0 {
 		return DefaultKubernetesMaxObjects
 	}
-	return c.Request.MaxObjects
+	return kubernetesRequest(c).MaxObjects
 }
 
 // kubernetesAPIVersion is the group and version as an object's apiVersion
 // writes them: v1 for the core group, apps/v1 for apps.
 func kubernetesAPIVersion(c *model.Collector) string {
-	if c.Request.Group == "" {
+	if kubernetesRequest(c).Group == "" {
 		return kubernetesVersion(c)
 	}
-	return c.Request.Group + "/" + kubernetesVersion(c)
+	return kubernetesRequest(c).Group + "/" + kubernetesVersion(c)
 }
 
 // kubernetesPath is the path of the listing of c in namespace, or across
 // the cluster for "": /api/v1/... for the core group, /apis/group/version/...
 // for the others.
 func kubernetesPath(c *model.Collector, namespace string) string {
-	prefix := "/apis/" + c.Request.Group + "/" + kubernetesVersion(c)
-	if c.Request.Group == "" {
+	prefix := "/apis/" + kubernetesRequest(c).Group + "/" + kubernetesVersion(c)
+	if kubernetesRequest(c).Group == "" {
 		prefix = "/api/" + kubernetesVersion(c)
 	}
 	if namespace != "" {
 		prefix += "/namespaces/" + url.PathEscape(namespace)
 	}
-	return prefix + "/" + c.Request.Resource
+	return prefix + "/" + kubernetesRequest(c).Resource
 }
 
 // kubernetesLabel is the url label of a listing: the API server and the
@@ -235,10 +304,10 @@ func kubernetesPath(c *model.Collector, namespace string) string {
 // server of the exporter's own cluster. Which namespaces are listed is the
 // collector's, as its record type is a dns collector's.
 func kubernetesLabel(c *model.Collector) string {
-	if c.Request.APIServer == "" {
+	if kubernetesRequest(c).APIServer == "" {
 		return "kubernetes:" + kubernetesPath(c, "")
 	}
-	server, _ := parseKubernetesAPIServer(c.Request.APIServer)
+	server, _ := parseKubernetesAPIServer(kubernetesRequest(c).APIServer)
 	return server + kubernetesPath(c, "")
 }
 
@@ -251,8 +320,8 @@ type kubernetesConnection struct {
 }
 
 func kubernetesConnectionOf(c *model.Collector) (kubernetesConnection, error) {
-	if c.Request.APIServer != "" {
-		server, err := parseKubernetesAPIServer(c.Request.APIServer)
+	if kubernetesRequest(c).APIServer != "" {
+		server, err := parseKubernetesAPIServer(kubernetesRequest(c).APIServer)
 		return kubernetesConnection{server: server, tls: c.Request.TLS, tokenFile: c.Request.BearerTokenFile}, err
 	}
 	server, err := kubeapi.InClusterServer()
@@ -270,11 +339,11 @@ func kubernetesConnectionOf(c *model.Collector) (kubernetesConnection, error) {
 // namespace: those named, or the exporter's own.
 func kubernetesNamespaces(c *model.Collector) ([]string, error) {
 	switch {
-	case c.Request.AllNamespaces:
+	case kubernetesRequest(c).AllNamespaces:
 		return []string{""}, nil
-	case len(c.Request.Namespaces) > 0:
-		return c.Request.Namespaces, nil
-	case c.Request.APIServer != "":
+	case len(kubernetesRequest(c).Namespaces) > 0:
+		return kubernetesRequest(c).Namespaces, nil
+	case kubernetesRequest(c).APIServer != "":
 		return nil, fmt.Errorf("collector %q names request.api_server and no namespace; the exporter's own namespace is that of its pod, in its own cluster, so list request.namespaces, or set all_namespaces", c.Name)
 	}
 	namespace, err := kubeapi.OwnNamespace(kubernetesServiceAccountDir)
@@ -334,7 +403,7 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 	token := ""
 	if conn.tokenFile != "" {
 		if token, err = kubeapi.ReadToken(conn.tokenFile); err != nil {
-			return nil, fmt.Errorf("the token to list %s with: %w", c.Request.Resource, err)
+			return nil, fmt.Errorf("the token to list %s with: %w", kubernetesRequest(c).Resource, err)
 		}
 	}
 	// The deadline of the scrape bounds the listing, every page of it.
@@ -348,8 +417,8 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 	total := int64(0)
 	for _, namespace := range namespaces {
 		listing := kubeapi.Listing{
-			Client: client, Server: conn.server, Path: kubernetesPath(c, namespace), Token: token, What: c.Request.Resource,
-			LabelSelector: c.Request.LabelSelector, FieldSelector: c.Request.FieldSelector, MaxPageBytes: limit,
+			Client: client, Server: conn.server, Path: kubernetesPath(c, namespace), Token: token, What: kubernetesRequest(c).Resource,
+			LabelSelector: kubernetesRequest(c).LabelSelector, FieldSelector: kubernetesRequest(c).FieldSelector, MaxPageBytes: limit,
 			Sent: func(req *http.Request) {
 				traceRequest(ctx, req.Method, req.URL.String(), req.Header, "", false)
 			},
@@ -358,19 +427,19 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 		err := listing.List(ctx, func(raw []byte) (string, error) {
 			var page kubernetesList
 			if err := json.Unmarshal(raw, &page); err != nil {
-				return "", fmt.Errorf("listing %s at %s: the answer is not a list: %w", c.Request.Resource, conn.server+listing.Path, err)
+				return "", fmt.Errorf("listing %s at %s: the answer is not a list: %w", kubernetesRequest(c).Resource, conn.server+listing.Path, err)
 			}
 			doc.Kind, doc.APIVersion = strings.TrimSuffix(page.Kind, "List"), page.APIVersion
 			for _, item := range page.Items {
 				if doc.Count++; doc.Count > maxObjects {
-					return "", model.MarkError(fmt.Errorf("the listing of %s holds more than the %d objects request.max_objects allows; narrow it with namespaces, label_selector or field_selector, or raise max_objects", c.Request.Resource, maxObjects), model.ErrLimitExceeded)
+					return "", model.MarkError(fmt.Errorf("the listing of %s holds more than the %d objects request.max_objects allows; narrow it with namespaces, label_selector or field_selector, or raise max_objects", kubernetesRequest(c).Resource, maxObjects), model.ErrLimitExceeded)
 				}
 				item, err := withoutManagedFields(item)
 				if err != nil {
-					return "", fmt.Errorf("listing %s: an object is not a JSON object: %w", c.Request.Resource, err)
+					return "", fmt.Errorf("listing %s: an object is not a JSON object: %w", kubernetesRequest(c).Resource, err)
 				}
 				if total += int64(len(item)) + 1; total > limit {
-					return "", model.MarkError(fmt.Errorf("the objects of the listing of %s come to more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", c.Request.Resource, limit), model.ErrLimitExceeded)
+					return "", model.MarkError(fmt.Errorf("the objects of the listing of %s come to more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", kubernetesRequest(c).Resource, limit), model.ErrLimitExceeded)
 				}
 				doc.Items = append(doc.Items, item)
 			}
@@ -388,7 +457,7 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 		return nil, err
 	}
 	if int64(len(body)) > limit {
-		return nil, model.MarkError(fmt.Errorf("the document of the listing of %s is %d bytes, more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", c.Request.Resource, len(body), limit), model.ErrLimitExceeded)
+		return nil, model.MarkError(fmt.Errorf("the document of the listing of %s is %d bytes, more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", kubernetesRequest(c).Resource, len(body), limit), model.ErrLimitExceeded)
 	}
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
@@ -454,12 +523,12 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 	if json.Unmarshal([]byte(status.Body), &apiStatus) == nil && apiStatus.Message != "" {
 		message = apiStatus.Message
 	}
-	what := fmt.Sprintf("listing %s (%s) %s answered %s: %s", c.Request.Resource, kubernetesAPIVersion(c), where, status.Status, message)
+	what := fmt.Sprintf("listing %s (%s) %s answered %s: %s", kubernetesRequest(c).Resource, kubernetesAPIVersion(c), where, status.Status, message)
 	switch status.Code {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%s; the API server does not take the token: the service account's, or bearer_token_file's with api_server, is missing, expired or of another cluster", what)
 	case http.StatusForbidden:
-		return fmt.Errorf("%s; the exporter's service account may not list them: grant it list on %s in group %q, with the chart's kubernetesAccess.rules (docs/KUBERNETES.md#permissions)", what, c.Request.Resource, c.Request.Group)
+		return fmt.Errorf("%s; the exporter's service account may not list them: grant it list on %s in group %q, with the chart's kubernetesAccess.rules (docs/KUBERNETES.md#permissions)", what, kubernetesRequest(c).Resource, kubernetesRequest(c).Group)
 	case http.StatusNotFound:
 		return fmt.Errorf("%s; the API server has no such resource: check resource, its plural name, group and version against kubectl api-resources, and that a custom resource's definition is installed; a cluster-scoped resource, such as nodes, is listed with all_namespaces: true", what)
 	}
@@ -471,7 +540,7 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 // and the tls block's. Those of the exporter's own service account are its
 // pod's, which a check run elsewhere does not have, and are not read.
 func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil || c.Request.APIServer == "" {
+	if t != nil || kubernetesRequest(c).APIServer == "" {
 		return nil
 	}
 	var warnings []string
@@ -484,4 +553,46 @@ func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 		warnings = append(warnings, fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each scrape, so one put in place later is used then)", c.Name, err))
 	}
 	return warnings
+}
+
+// kubernetesSchemaRule is what a kubernetes collector's request is held to, as
+// the exporter holds it (validateKubernetesRequest): resource,
+// written with something other than "", and not the core group's secrets;
+// namespaces or all_namespaces, not both; bearer_token_file only beside
+// api_server, and beside api_server a credential, bearer_token_file or
+// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
+// to the exporter, so each is "written" when it is something else
+// (SchemaWrittenKey).
+func kubernetesSchemaRule() map[string]any {
+	rule := SchemaWrittenKey("resource")
+	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
+	rule["allOf"] = []any{
+		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
+		map[string]any{
+			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
+			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
+		},
+		map[string]any{"if": map[string]any{"not": SchemaWrittenKey("api_server")}, "then": map[string]any{"not": SchemaWrittenKey("bearer_token_file")}},
+		map[string]any{"if": SchemaWrittenKey("api_server"), "then": map[string]any{
+			"anyOf":      []any{SchemaWrittenKey("bearer_token_file"), map[string]any{"properties": map[string]any{"tls": SchemaWrittenKey("cert_file")}, "required": []string{"tls"}}},
+			"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}},
+		}},
+	}
+	return rule
+}
+
+// kubernetesKeyRules is what the configuration schema says of a kubernetes
+// collector's own keys.
+func kubernetesKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"resource":       {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
+		"group":          {"type": "string", "pattern": SchemaOptionalPattern(kubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
+		"version":        {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},
+		"namespaces":     {"items": map[string]any{"type": "string", "pattern": kubernetesNamePattern, "maxLength": 63}, "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account."},
+		"all_namespaces": {"description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false."},
+		"label_selector": {"not": SchemaOnlyBlanks(), "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out."},
+		"field_selector": {"not": SchemaOnlyBlanks(), "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out."},
+		"max_objects":    {"minimum": 0, "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000."},
+		"api_server":     {"type": "string", "pattern": SchemaOptionalPattern(`^https://[^/?#@]+(/[^?#]*)?$`), "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster."},
+	}
 }

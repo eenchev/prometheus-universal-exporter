@@ -31,8 +31,9 @@ import (
 //     export needs them from the start (fetch.CheckClientTLS);
 //   - web.basic_auth.username_file and password_file, when web.basic_auth is
 //     enabled (validateWebAuth);
-//   - a collector's request.protoset_file and request.proto_files, which a
-//     grpc collector's method and message are checked against.
+//   - the files a collector's request names that checking it reads
+//     (fetch.NamedFiles): a grpc collector's request.protoset_file and
+//     request.proto_files, which its method and message are checked against.
 //
 // A collector's own credential and TLS files are not among them: they are
 // read at a request, not at the load, so they refuse no configuration. The
@@ -60,9 +61,7 @@ func namedFiles(configs ...*model.Config) []string {
 			add(auth.UsernameFile, auth.PasswordFile)
 		}
 		for i := range c.Collectors {
-			request := &c.Collectors[i].Request
-			add(request.ProtosetFile)
-			add(request.ProtoFiles...)
+			add(fetch.NamedFiles(&c.Collectors[i])...)
 		}
 	}
 	return files

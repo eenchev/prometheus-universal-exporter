@@ -582,6 +582,124 @@ func TestCIAndMakeLintEveryRequestTypeOnItsOwn(t *testing.T) {
 	}
 }
 
+// goTestSkip is the -skip of a go test command, with the space before it.
+var goTestSkip = regexp.MustCompile(` -skip '[^']*'`)
+
+// scaffoldTest is the test that runs make new-request-type on a copy of the
+// tree and builds and tests the copy (newrequesttype_test.go).
+const scaffoldTest = "TestANewRequestTypeIsWiredByTheScaffold"
+
+// goTestSelection reads a go test command's -run or -skip pattern, quoted
+// as ci.yml and the Makefile write it, and the packages after it.
+var goTestSelection = regexp.MustCompile(`^go test (?:.* )?-(run|skip) '([^']+)' (.+)$`)
+
+// The scaffold test builds a copy of the tree with two new request types,
+// two minutes on a warm build cache and four on a cold one, and made the
+// job test, which ran it with the repository's checks, one of CI's longest.
+// So the job test's step skips it and a job of its own, scaffold, runs it
+// alone under the same go output, and `make ci` does the same through
+// `make test` and `make test-scaffold`. A test skipped where the suite runs
+// is a test nobody runs unless another step runs it: every test a go
+// command of ci.yml, or of a target make ci reaches, skips with -skip is run
+// by another command there with -run, by the same pattern over the same
+// packages (or over ./..., as make runs them), under the condition of the
+// skipping step, and each pattern names a test of the tree.
+func TestTheScaffoldTestRunsInAJobOfItsOwn(t *testing.T) {
+	all := workflowSteps(t, ".github/workflows/ci.yml")
+	type command struct{ where, kind, pattern, packages, condition string }
+	var commands []command
+	for job, steps := range all {
+		for _, step := range steps {
+			run, _ := step["run"].(string)
+			condition, _ := step["if"].(string)
+			for line := range strings.SplitSeq(run, "\n") {
+				if match := goTestSelection.FindStringSubmatch(strings.TrimSpace(line)); match != nil {
+					commands = append(commands, command{"ci.yml's job " + job, match[1], match[2], match[3], condition})
+				}
+			}
+		}
+	}
+	prerequisites, recipes := makefileRules(t)
+	reached, queue := map[string]bool{}, []string{"ci"}
+	for len(queue) > 0 {
+		target := queue[0]
+		queue = queue[1:]
+		if !reached[target] {
+			reached[target] = true
+			queue = append(queue, prerequisites[target]...)
+		}
+	}
+	for target := range reached {
+		for line := range strings.SplitSeq(recipes[target], "\n") {
+			if match := goTestSelection.FindStringSubmatch(strings.TrimSpace(line)); match != nil {
+				commands = append(commands, command{"make " + target, match[1], match[2], match[3], ""})
+			}
+		}
+	}
+	tests := testFunctionsOfTheTree(t)
+	skipped := 0
+	for _, skip := range commands {
+		if skip.kind != "skip" {
+			continue
+		}
+		skipped++
+		if !slices.ContainsFunc(commands, func(run command) bool {
+			return run.kind == "run" && run.pattern == skip.pattern && strings.HasPrefix(run.where, strings.Fields(skip.where)[0]) &&
+				run.condition == skip.condition && (run.packages == skip.packages || everyPackage("go test "+run.packages) == "go test "+skip.packages)
+		}) {
+			t.Errorf("%s skips %s over %s, which no other command of it runs with -run %s", skip.where, skip.pattern, skip.packages, skip.pattern)
+		}
+		if name := strings.TrimSuffix(strings.TrimPrefix(skip.pattern, "^"), "$"); !slices.Contains(tests, name) {
+			t.Errorf("%s skips %s, which names no test of the tree", skip.where, skip.pattern)
+		}
+	}
+	// The job test's step and make test skip the scaffold test.
+	if skipped < 2 {
+		t.Errorf("only %d go commands with -skip were read from ci.yml and the Makefile; the job test and make test were meant to skip the scaffold test", skipped)
+	}
+	want := "'^" + scaffoldTest + "$'"
+	for _, step := range all["test"] {
+		if run, _ := step["run"].(string); strings.Contains(run, "./test/repository/") && !strings.Contains(run, "-skip "+want) {
+			t.Errorf("ci.yml's job test runs %q, which runs the scaffold test; the job scaffold runs it", run)
+		}
+	}
+	scaffold := all["scaffold"]
+	if len(scaffold) == 0 || scaffold[len(scaffold)-1]["run"] != "go test -run "+want+" ./test/repository/" || scaffold[len(scaffold)-1]["if"] != sideCondition("go") {
+		t.Errorf("ci.yml's job scaffold does not end in a step running go test -run %s ./test/repository/ under the go output", want)
+	}
+	if !reached["test-scaffold"] || strings.TrimSpace(recipes["test-scaffold"]) != "go test -run "+want+" ./test/repository/" {
+		t.Errorf("make ci does not reach a target test-scaffold running go test -run %s ./test/repository/", want)
+	}
+}
+
+// testTopLevel reads the name of a top-level test function.
+var testTopLevel = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(t \*testing\.T\) \{$`)
+
+// testFunctionsOfTheTree lists the top-level test functions of the module's
+// _test.go files, vendored modules left out.
+func testFunctionsOfTheTree(t *testing.T) []string {
+	t.Helper()
+	var tests []string
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && path != "." && (path == "vendor" || strings.HasPrefix(entry.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, "_test.go") {
+			for _, match := range testTopLevel.FindAllStringSubmatch(read(t, path), -1) {
+				tests = append(tests, match[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tests
+}
+
 // makeRule is a rule of the Makefile: a target, its prerequisites after the
 // colon, and no assignment (:=).
 var makeRule = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+):([^=\n][^\n]*)?$`)
@@ -625,7 +743,10 @@ func makefileRules(t *testing.T) (prerequisites map[string][]string, recipes map
 // job of ci.yml is read, not only test: the race run, each request type's
 // tests and the allocator's are jobs of their own. CI tests each side's
 // packages, $packages, and test/repository apart; make runs the same command
-// over ./..., every package, which the sides and test/repository make up.
+// over ./..., every package, which the sides and test/repository make up, or
+// the very command, as test-scaffold runs the job scaffold's. The -skip of
+// make test's go test ./..., the scaffold test's, is read past: it leaves
+// out only a test test-scaffold runs (TestTheScaffoldTestRunsInAJobOfItsOwn).
 func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 	prerequisites, recipes := makefileRules(t)
 	reached, queue := map[string]bool{}, []string{"ci"}
@@ -646,6 +767,7 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 		run.WriteString(recipes[target])
 	}
 	makeCI := run.String()
+	makeCIUnskipped := goTestSkip.ReplaceAllString(makeCI, "")
 	commands := 0
 	var steps []map[string]any
 	for _, job := range workflowSteps(t, ".github/workflows/ci.yml") {
@@ -659,8 +781,8 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 			case line == "go mod download":
 			case strings.HasPrefix(line, "go "), strings.HasPrefix(line, "for type in "), strings.HasPrefix(line, `tags="$(sh tools/request-type-tags.sh`):
 				commands++
-				if !strings.Contains(makeCI, everyPackage(line)) {
-					t.Errorf("ci.yml runs %s, which no target make ci reaches runs (as %s)", line, everyPackage(line))
+				if !strings.Contains(makeCI, line) && !strings.Contains(makeCI, everyPackage(line)) && !strings.Contains(makeCIUnskipped, everyPackage(line)) {
+					t.Errorf("ci.yml runs %s, which no target make ci reaches runs (as it is or as %s)", line, everyPackage(line))
 				}
 			case strings.HasPrefix(line, "make "):
 				for _, target := range strings.Fields(line)[1:] {

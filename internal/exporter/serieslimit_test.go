@@ -40,7 +40,7 @@ func TestSeriesLimitFailsTheScrapeAsValidation(t *testing.T) {
 			t.Cleanup(target.Close)
 			c := tc.collector
 			c.Name = "limited"
-			c.Request = model.RequestConfig{Type: fetch.RequestTypeHTTP, Method: "GET"}
+			c.Request = model.RequestConfig{Type: fetch.RequestTypeHTTP, Own: fetch.HTTPConfig{Method: "GET"}}
 			c.ErrorHandling = model.ErrorHandling{OnDecodeError: "ignore", OnTransformError: "ignore"}
 			c.Limits = model.Limits{MaxMetrics: 10}
 			server := modeServer(t, c)

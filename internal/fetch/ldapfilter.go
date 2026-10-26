@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // A search's filter is written as RFC 4515 writes one, (&(objectClass=user)
@@ -38,8 +36,8 @@ const ldapPlaceholderMark = '\uE000'
 var ldapAttributeDescription = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9-]+)*$`)
 
 // ldapAttributeName is what a requested attribute is written with
-// (model.LDAPAttributePattern).
-var ldapAttributeName = regexp.MustCompile(model.LDAPAttributePattern)
+// (ldapAttributePattern).
+var ldapAttributeName = regexp.MustCompile(ldapAttributePattern)
 
 // errLDAPPlaceholderPlace is the refusal of a placeholder outside a value.
 var errLDAPPlaceholderPlace = errors.New("a placeholder may stand only in a value, where its value is escaped, never in an attribute's name or in the filter's structure")

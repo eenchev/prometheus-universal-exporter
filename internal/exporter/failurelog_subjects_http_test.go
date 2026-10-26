@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"bytes"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -87,7 +88,7 @@ func TestATargetWithNULsHasNoOtherSubjectsKey(t *testing.T) {
 	defer target.Close()
 	const expression = ".value #\x00"
 	c := model.Collector{
-		Name: "unkeyed", Request: model.RequestConfig{Type: "http", Method: "GET"}, Transform: model.TransformConfig{Type: "jq"},
+		Name: "unkeyed", Request: model.RequestConfig{Type: "http", Own: fetch.HTTPConfig{Method: "GET"}}, Transform: model.TransformConfig{Type: "jq"},
 		Metrics:       []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: expression, ErrorMode: model.ErrorModeLog}},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 	}

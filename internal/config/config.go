@@ -161,14 +161,14 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	// for each response. That works, but a response that changes its
 	// Content-Type, or a file its extension, silently changes how it is
 	// read, so the operator is told once on every start and reload.
-	if decoderUnset && x.Decoder.Type == "auto" && x.Request.Type != fetch.RequestTypeSQL {
+	if decoderUnset && x.Decoder.Type == "auto" && !requestTypeOf(x).Rows {
 		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
 	// Retries of a POST or PATCH need retry.non_idempotent, since sending one
 	// again may repeat what it did; without it they are not made, which the
 	// operator who set attempts is told.
-	if x.Request.Retry.Attempts > 0 && !x.Request.Retry.NonIdempotent && !fetch.IdempotentMethod(x.Request.Method) {
-		c.Warnings = append(c.Warnings, fmt.Sprintf("collector %q sets request.retry.attempts, but its method %s is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway", x.Name, strings.ToUpper(x.Request.Method)))
+	if method := fetch.ConfiguredMethod(x); x.Request.Retry.Attempts > 0 && !x.Request.Retry.NonIdempotent && !fetch.IdempotentMethod(method) {
+		c.Warnings = append(c.Warnings, fmt.Sprintf("collector %q sets request.retry.attempts, but its method %s is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway", x.Name, strings.ToUpper(method)))
 	}
 	for _, policy := range []struct {
 		key   string
@@ -271,18 +271,15 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
-// jsonAnswerTypes are the request types whose answer is a JSON document the
-// exporter makes, so their decoder is json and their transform one that
-// reads JSON.
-var jsonAnswerTypes = []string{fetch.RequestTypeGRPC, fetch.RequestTypeDNS, fetch.RequestTypeTLSCert, fetch.RequestTypeKubernetes, fetch.RequestTypeRedis, fetch.RequestTypeLDAP}
-
-// typeArticle is the article a request type's name is read with: an
-// before a vowel, and before ldap, said letter by letter.
-func typeArticle(name string) string {
-	if name == fetch.RequestTypeLDAP || strings.ContainsAny(name[:min(len(name), 1)], "aeiou") {
-		return "an"
+// requestTypeOf is the registration of a collector's request type, which
+// says what the configuration holds the collector to beyond its request
+// block: its decoder and transform. A collector whose type is not built,
+// which validating its request refuses first, has an empty one.
+func requestTypeOf(x *model.Collector) *fetch.RequestType {
+	if rt := fetch.RequestTypes[x.Request.Type]; rt != nil {
+		return rt
 	}
-	return "a"
+	return &fetch.RequestType{}
 }
 
 // normalizeFormats lower-cases the transform and decoder, refuses a missing or
@@ -306,13 +303,14 @@ func normalizeFormats(x *model.Collector) error {
 	if !slices.Contains(model.DecoderTypes, x.Decoder.Type) {
 		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
 	}
-	if x.Decoder.Type == "auto" && x.Request.Type == fetch.RequestTypeGraphite {
-		// The render API answers JSON a jq rule could read as it is, but
-		// the graphite decoder is what a graphite collector is for; decoder
-		// json reads the answer as it came.
-		x.Decoder.Type = "graphite"
+	rt := requestTypeOf(x)
+	if x.Decoder.Type == "auto" && rt.Decoder != "" {
+		// A graphite render API answers JSON a jq rule could read as it
+		// is, but the graphite decoder is what a graphite collector is
+		// for; decoder json reads the answer as it came.
+		x.Decoder.Type = rt.Decoder
 	}
-	if slices.Contains(jsonAnswerTypes, x.Request.Type) {
+	if rt.JSONAnswer {
 		// A grpc call, a dns lookup, a tlscert handshake, a kubernetes
 		// listing, a redis scrape and an ldap search are answered as JSON,
 		// whatever else their decoder could be.
@@ -320,15 +318,15 @@ func normalizeFormats(x *model.Collector) error {
 		case "auto", "json":
 			x.Decoder.Type = "json"
 		default:
-			return fmt.Errorf("collector %q decodes with %s, but %s %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, typeArticle(x.Request.Type), x.Request.Type)
+			return fmt.Errorf("collector %q decodes with %s, but %s %s collector's answer is JSON; leave decoder.type out, or set json", x.Name, x.Decoder.Type, fetch.TypeArticle(x.Request.Type), x.Request.Type)
 		}
 		switch x.Transform.Type {
 		case "jq", "yq", "python":
 		default:
-			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, typeArticle(x.Request.Type), x.Request.Type)
+			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, fetch.TypeArticle(x.Request.Type), x.Request.Type)
 		}
 	}
-	if x.Request.Pagination != nil {
+	if fetch.CollectorPolicy(x).Pagination != nil {
 		// The pages are read as JSON to find the next one and their items,
 		// and merged into one JSON document, whatever their Content-Type.
 		switch x.Decoder.Type {
@@ -338,12 +336,12 @@ func normalizeFormats(x *model.Collector) error {
 			return fmt.Errorf("collector %q decodes with %s, but request.pagination reads its pages as JSON and merges them into one JSON document; leave decoder.type out, or set json", x.Name, x.Decoder.Type)
 		}
 	}
-	if x.Request.Type == fetch.RequestTypeSQL {
+	if rt.Rows {
 		if err := checkSQLFormats(x); err != nil {
 			return err
 		}
 	}
-	if x.Decoder.Type == "auto" && x.Request.Type != fetch.RequestTypeSQL {
+	if x.Decoder.Type == "auto" && !rt.Rows {
 		switch x.Transform.Type {
 		case "regex":
 			x.Decoder.Type = "text"
@@ -2168,7 +2166,7 @@ func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 // transform implies none, decodes what it reads.
 func undecidedDecoderWarning(x *model.Collector) string {
 	how := "by the Content-Type header of each response"
-	if x.Request.Type == fetch.RequestTypeLocalFile || x.Request.Type == fetch.RequestTypeSSHFile || x.Request.Type == fetch.RequestTypeS3File {
+	if requestTypeOf(x).FileExtensions {
 		how = "by the extension of each file"
 	}
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)

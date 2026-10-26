@@ -13,9 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -60,27 +63,78 @@ import (
 // The type is opt-in, built under its tag alone, and imports nothing
 // outside the standard library.
 
+// TCPConfig is a tcp collector's own request keys: the text written once
+// the connection is made, nothing when empty, and what the answer ends
+// with, the answer ending when the server closes the connection when it
+// is empty.
+type TCPConfig struct {
+	Send       string `yaml:"send,omitempty"`
+	Terminator string `yaml:"terminator,omitempty"`
+}
+
+// tcpRequest is a tcp collector's own request keys: the zero TCPConfig of
+// a collector built in code whose request has not been validated, which
+// sets them (ValidateRequest).
+func tcpRequest(c *model.Collector) TCPConfig {
+	own, _ := c.Request.Own.(TCPConfig)
+	return own
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeTCP,
-		Fields:       []string{"send", "terminator", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Config:       TCPConfig{},
+		KeyRules:     tcpKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "tls"},
-		Validate:     validateTCPRequest,
-		Fetch:        fetchTCP,
-		CheckTarget: func(_ *model.Collector, target string, _ bool) error {
-			_, err := parseTCPTarget(target)
-			return err
+		Requester:    tcpRequester{},
+		TargetHint:   func(*model.Collector) string { return "host:port" },
+		Templates:    tcpTemplates,
+		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			return unusedParamsIn(c, unused, "its request.send or its label values")
 		},
 		// A target's own tls block, which replaces the collector's whole
 		// (withTargetAccount), is checked as the collector's is.
 		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkTargetTLS(t) },
-		Label:              tcpLabel,
-		Method:             tcpMethod,
-		Display:            tcpDisplay,
 		Stage:              "tcp",
 		CheckFiles:         checkTCPFiles,
 	})
+	templateEscapers["line"] = escapeLineValue
+}
+
+// tcpRequester is the tcp request type's Requester.
+type tcpRequester struct{}
+
+// Validate checks a tcp collector's request and fills in its defaults.
+func (tcpRequester) Validate(c *model.Collector) error {
+	return validateTCPRequest(c)
+}
+
+// Fetch performs one request of a tcp collector.
+func (tcpRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	return fetchTCP(ctx, target, c, overrides, forwarded)
+}
+
+// CheckTarget checks a tcp collector's target.
+func (tcpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
+	_, err := parseTCPTarget(target)
+	return err
+}
+
+// Label is the url label of a tcp request.
+func (tcpRequester) Label(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
+	return tcpLabel(target, c, overrides)
+}
+
+// Method is the http_method label of a tcp request.
+func (tcpRequester) Method(c *model.Collector, overrides RequestOverrides) string {
+	return tcpMethod(c, overrides)
+}
+
+// Display renders a tcp target for logs and labels.
+func (tcpRequester) Display(target string) string {
+	return tcpDisplay(target)
 }
 
 // tcpTimeout bounds a scrape with no deadline of its own.
@@ -98,8 +152,8 @@ const (
 )
 
 func validateTCPRequest(x *model.Collector) error {
-	r := &x.Request
-	t := r.TLS
+	t := x.Request.TLS
+	r := tcpRequest(x)
 	if (t.CertFile == "") != (t.KeyFile == "") {
 		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
 	}
@@ -191,7 +245,7 @@ func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (st
 }
 
 func tcpMethod(c *model.Collector, _ RequestOverrides) string {
-	if c.Request.Send == "" {
+	if tcpRequest(c).Send == "" {
 		return tcpMethodRead
 	}
 	return tcpMethodSend
@@ -216,7 +270,7 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	if err != nil {
 		return nil, err
 	}
-	send, err := templateField{"request.send", c.Request.Send, "line"}.render(overrides.Params)
+	send, err := templateField{"request.send", tcpRequest(c).Send, "line"}.render(overrides.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +354,7 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 			return nil, "", tcpFailure(ctx, fmt.Errorf("sending request.send to %s: %w", address.hostPort, err))
 		}
 	}
-	return tcpRead(ctx, conn, address, []byte(c.Request.Terminator), responseLimit(c))
+	return tcpRead(ctx, conn, address, []byte(tcpRequest(c).Terminator), responseLimit(c))
 }
 
 // tcpRead reads the answer from conn until it ends with terminator, or,
@@ -362,4 +416,70 @@ func tcpFailure(ctx context.Context, err error) error {
 // after the exporter starts.
 func checkTCPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
+}
+
+// lineValueRule is why a placeholder's value in a tcp collector's send is
+// held to lineValue (lineValueRefused).
+const lineValueRule = "a value written into request.send may hold only letters, digits and . _ - : / @ + = , %, since the server reads send as commands, and a blank, a ';', a quote or a line break could make the value an argument or a command of its own"
+
+// lineValue is the characters a placeholder's value in a tcp collector's
+// send may hold. The value lands in a line of a text protocol, and those
+// protocols split it on more than the line break: HAProxy's runtime API
+// runs each ';'-separated command of a line, and memcached, ZooKeeper and
+// NUT split a command's arguments on blanks. So a value is held to what
+// names a thing, a proxy, a server, a UPS or a key, and nothing that
+// separates or quotes: a probe's value stays one argument and adds none.
+var lineValue = regexp.MustCompile(`^[A-Za-z0-9._\-:/@+=,%]*$`)
+
+// lineValueRefused names the first character of value lineValue does not
+// take, and says whether there is one. A blank, a line break and a control
+// character are named, as a quoted glyph would not show them; any other
+// is shown with its code point.
+func lineValueRefused(value string) (string, bool) {
+	if lineValue.MatchString(value) {
+		return "", false
+	}
+	for rest := value; rest != ""; {
+		r, size := utf8.DecodeRuneInString(rest)
+		rest = rest[size:]
+		switch {
+		case r == utf8.RuneError && size == 1:
+			return "a byte that is not UTF-8", true
+		case lineValue.MatchString(string(r)):
+			continue
+		case r == ' ':
+			return "a blank (U+0020)", true
+		case r == '\r' || r == '\n':
+			return fmt.Sprintf("a line break (%U)", r), true
+		case unicode.IsControl(r):
+			return fmt.Sprintf("a control character (%U)", r), true
+		}
+		return fmt.Sprintf("%q (%U)", r, r), true
+	}
+	return "", false
+}
+
+// tcpTemplates is a tcp collector's send, the line written to its server.
+func tcpTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	if send := tcpRequest(c).Send; HasPathParams(send) {
+		return []templateField{{"request.send", send, "line"}}
+	}
+	return nil
+}
+
+// escapeLineValue refuses a value lineValue does not take.
+func escapeLineValue(where, name, value string) (string, error) {
+	if character, refused := lineValueRefused(value); refused {
+		return "", fmt.Errorf("%s: the value of %s holds %s; %s", where, name, character, lineValueRule)
+	}
+	return value, nil
+}
+
+// tcpKeyRules is what the configuration schema says of a tcp collector's
+// own keys.
+func tcpKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"send":       {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
+		"terminator": {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
+	}
 }

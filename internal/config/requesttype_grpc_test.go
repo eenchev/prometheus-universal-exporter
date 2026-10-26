@@ -101,7 +101,7 @@ func TestGRPCDecoderAndTransform(t *testing.T) {
 	base := func() model.Collector {
 		return model.Collector{
 			Name:      "health",
-			Request:   model.RequestConfig{Type: fetch.RequestTypeGRPC, RPC: "grpc.health.v1.Health/Check"},
+			Request:   model.RequestConfig{Type: fetch.RequestTypeGRPC, Own: fetch.GRPCConfig{RPC: "grpc.health.v1.Health/Check"}},
 			Transform: model.TransformConfig{Type: "jq"},
 			Metrics:   []model.MetricRule{{Name: "v", Expression: ".status"}},
 		}

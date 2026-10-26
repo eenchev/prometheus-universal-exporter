@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -69,7 +70,7 @@ latency_seconds_count{handler="/a"} 2
 	}))
 	defer target.Close()
 	collector := func(name string, rules ...model.MetricRule) model.Collector {
-		return model.Collector{Name: name, Request: model.RequestConfig{Type: "http", Method: http.MethodGet}, Transform: model.TransformConfig{Type: "prometheus"}, Metrics: rules,
+		return model.Collector{Name: name, Request: model.RequestConfig{Type: "http", Own: fetch.HTTPConfig{Method: http.MethodGet}}, Transform: model.TransformConfig{Type: "prometheus"}, Metrics: rules,
 			Cache:         model.CacheConfig{TTL: model.Duration(time.Minute), StaleIfError: model.Duration(time.Minute)},
 			ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}}
 	}

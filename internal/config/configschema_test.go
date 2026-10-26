@@ -38,18 +38,32 @@ func TestConfigSchemaCoversEveryKey(t *testing.T) {
 		}
 		properties := schema["properties"].(map[string]any)
 		seen := map[string]bool{}
-		for i := 0; i < typ.NumField(); i++ {
-			key, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
-			if key == "" || key == "-" {
-				continue
+		// A request block reads, beside its common part, the own keys of
+		// every built request type, and of every other type of the tree
+		// those the catalogue holds.
+		structs := []reflect.Type{typ}
+		if typ == requestConfigType {
+			for _, rt := range fetch.OwnKeyTypes() {
+				structs = append(structs, reflect.TypeOf(rt.Config))
 			}
-			seen[key] = true
-			sub, ok := properties[key].(map[string]any)
-			if !ok {
-				t.Errorf("%s.%s is read from the configuration but missing from the schema", path, key)
-				continue
+			for _, entry := range fetch.UnbuiltRequestKeys() {
+				seen[entry.Key] = true
 			}
-			walk(typ.Field(i).Type, sub, path+"."+key)
+		}
+		for _, typ := range structs {
+			for i := 0; i < typ.NumField(); i++ {
+				key, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+				if key == "" || key == "-" {
+					continue
+				}
+				seen[key] = true
+				sub, ok := properties[key].(map[string]any)
+				if !ok {
+					t.Errorf("%s.%s is read from the configuration but missing from the schema", path, key)
+					continue
+				}
+				walk(typ.Field(i).Type, sub, path+"."+key)
+			}
 		}
 		for key := range properties {
 			if !seen[key] {

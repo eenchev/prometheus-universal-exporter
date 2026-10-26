@@ -240,6 +240,13 @@ func (f *fakeS3) list(w http.ResponseWriter, r *http.Request, bucket string, obj
 	}
 }
 
+// s3Own edits an s3file request's own keys.
+func s3Own(r *model.RequestConfig, edit func(*S3FileConfig)) {
+	own, _ := r.Own.(S3FileConfig)
+	edit(&own)
+	r.Own = own
+}
+
 // s3Credentials writes static credential files and returns the request
 // keys that name them.
 func s3Credentials(t *testing.T, id string) func(*model.RequestConfig) {
@@ -248,7 +255,7 @@ func s3Credentials(t *testing.T, id string) func(*model.RequestConfig) {
 	idFile := testutil.WriteIn(t, dir, "id", id+"\n")
 	secretFile := testutil.WriteIn(t, dir, "secret", "s3cret\n")
 	return func(r *model.RequestConfig) {
-		r.AccessKeyIDFile, r.SecretAccessKeyFile = idFile, secretFile
+		s3Own(r, func(o *S3FileConfig) { o.AccessKeyIDFile, o.SecretAccessKeyFile = idFile, secretFile })
 	}
 }
 
@@ -259,7 +266,7 @@ func (f *fakeS3) collector(t *testing.T, name, path string, change ...func(*mode
 	t.Helper()
 	c := model.Collector{
 		Name:          name,
-		Request:       model.RequestConfig{Type: RequestTypeS3File, Root: "/exports/app", Path: path, Endpoint: f.server.URL, PathStyle: true, Region: "eu-west-1"},
+		Request:       model.RequestConfig{Type: RequestTypeS3File, Root: "/exports/app", Path: path, Own: S3FileConfig{Endpoint: f.server.URL, PathStyle: true, Region: "eu-west-1"}},
 		Transform:     model.TransformConfig{Type: "prometheus"},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 	}
@@ -324,7 +331,7 @@ func TestS3FileReadsItsCredentialFilesAtEveryRequest(t *testing.T) {
 	if _, err := FetchCollector(context.Background(), "metrics", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(c.Request.AccessKeyIDFile, []byte("AKIDSECOND\n"), 0o600); err != nil {
+	if err := os.WriteFile(s3FileRequest(c).AccessKeyIDFile, []byte("AKIDSECOND\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := FetchCollector(context.Background(), "metrics", c, RequestOverrides{}, nil); err != nil {
@@ -336,11 +343,11 @@ func TestS3FileReadsItsCredentialFilesAtEveryRequest(t *testing.T) {
 	if len(auth) != 4 || !strings.Contains(auth[1], "Credential=AKIDFIRST/") || !strings.Contains(auth[3], "Credential=AKIDSECOND/") {
 		t.Fatalf("Authorization headers %q, want the first key and then the rotated one", auth)
 	}
-	if err := os.WriteFile(c.Request.AccessKeyIDFile, nil, 0o600); err != nil {
+	if err := os.WriteFile(s3FileRequest(c).AccessKeyIDFile, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := FetchCollector(context.Background(), "metrics", c, RequestOverrides{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "request.access_key_id_file "+c.Request.AccessKeyIDFile+" is empty") {
+	if err == nil || !strings.Contains(err.Error(), "request.access_key_id_file "+s3FileRequest(c).AccessKeyIDFile+" is empty") {
 		t.Fatalf("err=%v, want the empty key file named", err)
 	}
 	if warnings := FileWarnings(c, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "is empty") {
@@ -358,7 +365,7 @@ func TestS3FileTakesTheSDKsDefaultCredentialsAndRegion(t *testing.T) {
 	t.Setenv("AWS_REGION", "ap-south-2")
 	f.put("metrics", "exports/app/a.prom", "a 1\n", time.Now())
 	c := f.collector(t, "chain", "a.prom", func(r *model.RequestConfig) {
-		r.Region, r.AccessKeyIDFile, r.SecretAccessKeyFile = "", "", ""
+		s3Own(r, func(o *S3FileConfig) { o.Region, o.AccessKeyIDFile, o.SecretAccessKeyFile = "", "", "" })
 	})
 	if _, err := FetchCollector(context.Background(), "metrics", c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
@@ -608,13 +615,19 @@ func TestS3FileValidation(t *testing.T) {
 		{"no root", func(r *model.RequestConfig) { r.Root = "" }, "request.root is required"},
 		{"relative root", func(r *model.RequestConfig) { r.Root = "exports" }, "must be an absolute path"},
 		{"path above root", func(r *model.RequestConfig) { r.Path = "../a.prom" }, "leads outside request.root"},
-		{"region", func(r *model.RequestConfig) { r.Region = "eu west" }, "is not a region"},
-		{"endpoint scheme", func(r *model.RequestConfig) { r.Endpoint = "minio:9000" }, "is not an http:// or https:// URL"},
-		{"endpoint path", func(r *model.RequestConfig) { r.Endpoint = "https://minio.example/bucket" }, "has a user, a path, a query or a fragment"},
-		{"half a key", func(r *model.RequestConfig) { r.AccessKeyIDFile = "/id" }, "without the other"},
-		{"token alone", func(r *model.RequestConfig) { r.SessionTokenFile = "/token" }, "the token is the temporary access key's"},
-		{"blank file", func(r *model.RequestConfig) { r.AccessKeyIDFile, r.SecretAccessKeyFile = " ", "/s" }, "written with blanks alone"},
-		{"placeholder", func(r *model.RequestConfig) { r.AccessKeyIDFile, r.SecretAccessKeyFile = "/{{param_x}}", "/s" }, "has a placeholder"},
+		{"region", func(r *model.RequestConfig) { s3Own(r, func(o *S3FileConfig) { o.Region = "eu west" }) }, "is not a region"},
+		{"endpoint scheme", func(r *model.RequestConfig) { s3Own(r, func(o *S3FileConfig) { o.Endpoint = "minio:9000" }) }, "is not an http:// or https:// URL"},
+		{"endpoint path", func(r *model.RequestConfig) {
+			s3Own(r, func(o *S3FileConfig) { o.Endpoint = "https://minio.example/bucket" })
+		}, "has a user, a path, a query or a fragment"},
+		{"half a key", func(r *model.RequestConfig) { s3Own(r, func(o *S3FileConfig) { o.AccessKeyIDFile = "/id" }) }, "without the other"},
+		{"token alone", func(r *model.RequestConfig) { s3Own(r, func(o *S3FileConfig) { o.SessionTokenFile = "/token" }) }, "the token is the temporary access key's"},
+		{"blank file", func(r *model.RequestConfig) {
+			s3Own(r, func(o *S3FileConfig) { o.AccessKeyIDFile, o.SecretAccessKeyFile = " ", "/s" })
+		}, "written with blanks alone"},
+		{"placeholder", func(r *model.RequestConfig) {
+			s3Own(r, func(o *S3FileConfig) { o.AccessKeyIDFile, o.SecretAccessKeyFile = "/{{param_x}}", "/s" })
+		}, "has a placeholder"},
 		{"another type's key", func(r *model.RequestConfig) { r.Username = "metrics" }, "request.username, which does not apply"},
 		{"path and files", func(r *model.RequestConfig) { r.Files = []string{"*.prom"} }, "sets both request.path and request.files"},
 	} {
@@ -627,10 +640,12 @@ func TestS3FileValidation(t *testing.T) {
 	for _, change := range []func(*model.RequestConfig){
 		func(r *model.RequestConfig) { r.Root = "/" },
 		func(r *model.RequestConfig) {
-			r.Endpoint, r.PathStyle, r.Region = "http://127.0.0.1:9000/", true, "auto"
+			s3Own(r, func(o *S3FileConfig) { o.Endpoint, o.PathStyle, o.Region = "http://127.0.0.1:9000/", true, "auto" })
 		},
 		func(r *model.RequestConfig) {
-			r.AccessKeyIDFile, r.SecretAccessKeyFile, r.SessionTokenFile = "/id", "/s", "/t"
+			s3Own(r, func(o *S3FileConfig) {
+				o.AccessKeyIDFile, o.SecretAccessKeyFile, o.SessionTokenFile = "/id", "/s", "/t"
+			})
 		},
 	} {
 		c := model.Collector{Name: "v", Request: valid}
@@ -677,7 +692,7 @@ func TestS3FileClientsFollowTheConfiguration(t *testing.T) {
 		t.Fatalf("%d clients kept for the collector in force, want 1", count())
 	}
 	other := *c
-	other.Request.Region = "us-west-2"
+	s3Own(&other.Request, func(o *S3FileConfig) { o.Region = "us-west-2" })
 	FollowConfiguration([]model.Collector{other}, nil)
 	if count() != 0 {
 		t.Fatalf("%d clients kept after the reload, want none", count())

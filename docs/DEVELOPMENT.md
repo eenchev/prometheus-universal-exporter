@@ -7,7 +7,8 @@ make lint       # golangci-lint, same configuration and version as CI
 make gopls-check  # gopls check, what VS Code shows, at CI's version
 make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
-make test       # go test ./..., then with -race, twice, in a random order
+make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
+make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
 make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
 make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
@@ -19,8 +20,9 @@ make lint-request-types  # golangci-lint for each request type built on its own
 make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
+make new-request-type NAME=<name> [OPT_IN=1]  # a new request type's files and wiring; not part of make ci
 make ci         # what CI runs, one after another: fmt-check, lint, lint-request-types,
-                #   gopls-check, test, vet, build-request-types, test-request-types,
+                #   gopls-check, test, test-scaffold, vet, build-request-types, test-request-types,
                 #   the sql drivers' and the opt-in request types' builds, and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
@@ -92,6 +94,103 @@ A package's tests live beside it, unless they need more than it can import: a
 test that validates a whole configuration lives in `internal/config`, and one
 that probes through a running `Server` lives in `internal/exporter`, even when
 what it checks is a transform or a request type.
+
+### How a request type is registered
+
+A request type registers a `fetch.RequestType` from the `init` function of
+its `internal/fetch/requesttype_<name>.go`, under the build constraint that
+decides whether a build carries it. The registration holds everything the
+exporter knows of the type, and the rest of the exporter reads it from the
+registry, `fetch.RequestTypes`, rather than naming the type: nothing in
+package `main`, `internal/config`, `internal/decode`, `internal/exporter` or
+`internal/transform` names a request type, which
+`TestCorePackagesNameNoRequestType` keeps so, with an allowlist of the same
+words meaning something else, such as the graphite decoder or `tcp` as a
+network.
+
+- `Name`, `Fields`, `Config`, `Overrides` and `TargetFields`: the type's
+  name, the keys of the request block's common part it accepts, the struct
+  of the keys only it accepts (below), the probe parameters that may change
+  them and the keys a static target may set.
+- `Requester`: what every type does, an interface each registration gives a
+  small value of (`httpRequester{}`, `tcpRequester{}`): `Validate` checks a
+  collector's request and fills in its defaults, `Fetch` performs one,
+  `CheckTarget` checks a target, `Label` and `Method` give the `url` and
+  `http_method` labels of the verbose self-metrics, and `Display` renders a
+  target for logs. A type whose target is a URL embeds `fetch.URLTarget`,
+  http's label, method and display, and overrides what differs, as graphite
+  does `Method`.
+- The optional hooks, function fields left nil by a type without the
+  capability: a target a probe may leave out (`OptionalTarget`), the checks
+  of a static target's request (`CheckOverride`, `CheckTargetRequest`), the
+  files read at a request or at the load (`CheckFiles`, `ReadFiles`,
+  `NamedFiles`), what `--dry-run` shows of its request's policy (`Policy`),
+  the method and body of a request made over HTTP (`MethodBody`),
+  connections kept across scrapes (`Follow`, `CloseConnections`, `Connections`,
+  `ConnectionLimit`, `ConnectionPools`) and logins (`Logins`). They stay
+  fields rather than methods of `Requester` so that a type without the
+  capability says nothing, instead of implementing a method to say it has
+  none.
+- What the rest of the exporter knows of the type: its own self-metric
+  families (`Families`; the shared ones follow from its keys and hooks, the
+  target lists giving `http_exporter_targets_refused_total`), whether its
+  cached responses are revalidated (`Revalidates`), its target hint on the
+  collectors page (`TargetHint`, `NoTarget`), whether the debug page writes
+  it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
+  `FileExtensions`), the article its name is read with (`Article`), its rule
+  in the configuration schema (`SchemaRule`) and what the schema says of its
+  own keys (`KeyRules`), the templated parts of its request and the
+  encoding of their values (`Templates`, `templateEscapers`), the filters a
+  field of its own kind takes (`templateFilterRules`, as grpc's message
+  takes only those that write JSON) and whether a probe's overrides replace
+  it (`templateReplacers`), and the places a refusal of unused probe
+  parameters names (`UnusedParams`). The shared template code,
+  `requesttemplate.go`, keys no rule by a field's place:
+  `TestTheSharedTemplateCodeKnowsNoFieldOfOneType` fails for a file of
+  `internal/fetch` every build compiles that compares a templated field's
+  `where` with a literal.
+
+A collector's `request` block is written flat, its type's keys beside
+`type`, but only the keys several types take are fields of
+`model.RequestConfig`, its common part; `TestTheCommonPartHoldsNoKeyOfOneType`
+fails for a field there that one type alone takes. The keys only one type
+takes are fields of the type's own struct, declared in its file beside the
+registration and given as its `Config`, such as `fetch.TCPConfig{}` with
+`send` and `terminator`. The loader reads `request.type` and puts the keys
+of that type's own into a value of its struct, which the collector holds in
+`Request.Own`, written back flat when the collector is written as YAML (its
+cache key, a reload's comparison); a key of another type's own goes into
+`Request.Foreign`, which the validation refuses as it refuses a key of the
+common part the type does not take. The type reads its keys with a typed
+accessor (`tcpRequest(c).Send`), and writes a changed value back into `Own`,
+which is a value, so that a copy of a collector is a copy of its keys. A
+key's schema is made from its field's Go type, as every other key's is,
+with what the type's `KeyRules` say of it by its path under the request
+block: its description, and any pattern or bound.
+
+A build without the type carries neither the struct nor the rules. It still
+knows the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue
+of the own keys of every type of the tree with the Go types of their fields
+and their schemas: a type of `internal/model` by its name, and a type of the
+request type's own, such as redis's `RedisCommand`, by its structure, which
+a build without the type makes again to read the key into, so that what it
+refuses of the value it refuses as a build with the type does. So a build
+that left `tcp` out refuses `send` under another type as a key of another
+type, in the words a build with every type has, and its schema describes
+`send` as theirs does. `make schemas` writes the catalogue from a build with
+every type, by running `TestTheRequestKeyCatalogueIsCurrent`
+(`internal/config`) with `-update-request-keys`; that test otherwise holds
+it to the structs. What a rule makes of the build, such as the drivers
+`request.driver` names, is the generating build's, which has the default
+drivers: a build without `sql` describes `driver` with them.
+
+So a new type is its own files and the build wiring (the guard file, the tag
+script, the Makefile's and CI's loops and the documentation's marked lists,
+each checked by a test), the catalogue `make schemas` writes, and nothing in
+the core; `make new-request-type` writes the files and the wiring
+([Adding a request type](#adding-a-request-type)). Only `internal/fetch`'s `requesttype.go` names every type of the
+tree, built or not, in `knownRequestTypes` and `optInRequestTypes`, so that
+a configuration naming a type the build left out is told so.
 
 An error whose text names where in the response it happened — a row, a node,
 an item, a line — or a size or a duration it measured is made with
@@ -257,6 +356,96 @@ failure reported with its key made beforehand is kept beside the tests
 (`failedUnderKey`), and
 `TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey` holds the
 two to the same lines and the same entries, a full log among them.
+
+### Adding a request type
+
+```sh
+make new-request-type NAME=memcache          # a type of every build
+make new-request-type NAME=memcache OPT_IN=1 # an opt-in type
+```
+
+runs `tools/new-request-type.sh`, POSIX `sh`, `sed` and `awk` as macOS has
+them, which refuses a name that is not lowercase letters and digits starting
+with a letter, or that is a type of the tree already, before it writes
+anything. For a new name it writes
+
+- `internal/fetch/requesttype_<name>.go`, under the type's build constraint
+  (an opt-in type's tag alone), with the registration: a
+  `<name>Requester` whose `Validate` and `CheckTarget` take anything and
+  whose `Fetch` answers `the <name> request type is not implemented yet`,
+  an empty `<Name>Config` given as `Config` with its `KeyRules`, an empty
+  `Fields`, the `timeout` and `param_<name>` every type takes as
+  `Overrides` and `timeout` as `TargetFields`, an `UnusedParams` naming
+  the label values alone, and every other hook and setting left at its zero
+  value, a comment saying what each is;
+- the tests, under the same constraint: `internal/fetch/requesttype_<name>_test.go`,
+  whose test holds a collector of the type to validating and its scrape to
+  failing as not implemented, and, of an opt-in type, checks its
+  `optInRequestKeys`; `internal/exporter/requesttype_<name>_test.go`, a
+  probe of a collector with a python transform failing so; and the type's
+  table of schema rows, empty, with its check
+  (`test/repository/schemakeys_<name>_test.go`, and an opt-in type's rows in
+  `schemakeys_<name>rows_test.go`, which the default build compiles), added
+  to the tables `TestEveryConstrainedKeyOfTheSchemasIsInATable` reads. They
+  use the helpers every type's tests share, which a lint of the type built
+  alone would otherwise report unused;
+- `docs/<NAME>.md`, with the sections of the other types' pages: Building
+  with `<name>` for an opt-in type, A collector with its keys' table, The
+  target, Static targets, Limits, Errors and self-metrics, Limitations and
+  Troubleshooting;
+
+and adds the type to every list that names each type: its
+`RequestType<Name>` constant, `knownRequestTypes` and, opt-in,
+`optInRequestTypes` in `internal/fetch/requesttype.go`; the guard of
+`requesttype_none.go`; the Makefile's loops over the types and its builds of
+every opt-in type, and ci.yml's `request-types` matrix, its build and test of
+every opt-in type and their lint's tags; for an opt-in type, the
+constraints that name every opt-in type (`optinkeys_test.go`,
+`optinkeys_check_test.go`, `schema_fullbuild_test.go`); the lists the
+documentation marks `<!-- request-types -->`, a row in a table of the types
+and a sentence in the others, and the build information's list of a default
+build; the README's index, the related pages of `docs/CONFIGURATION.md` and
+spec § 35's list of pages; and the tables of the repository's and the fetch
+tests that hold a value of each type, the words the READMEs name it with
+(`readmeSourceNames`, `chartSourceNames`) and its refusal of an unused probe
+parameter (`unusedRefusals`). Then it runs `make schemas`, since the
+committed schemas list the types of a default build. The lists the tests
+read from the tree, the types of `internal/fetch/requesttype_*.go`, need
+no edit: `tools/request-type-tags.sh` finds a type by its file and its
+constraint, and so do the tests of the opt-in builds and of the modules
+each type links.
+
+The tree then builds, vets, lints and passes its tests, in the default
+build, with every opt-in type and with the new type alone, but those of
+the README's and the chart's words for the type, which fail until they are
+written (4 below).
+`TestANewRequestTypeIsWiredByTheScaffold` (`test/repository`) runs the
+script on a copy of the tree, for an opt-in type and a type of every build,
+and holds the copy to building and vetting in those builds, to the
+generated tests and to the tests that compare the lists of the types. It
+needs a few minutes of a
+cold build cache, so it runs in the default build only, and not under
+`-short` or the race detector; CI runs it in a job of its own, `scaffold`,
+and `make test-scaffold` runs it alone. Every place left to a person says
+`TODO(<name>)`, and the script ends by printing what that is:
+
+1. the logic, in the type's file: its keys and their `KeyRules`, `Fields`,
+   `Overrides`, `TargetFields`, the `Requester`'s methods and the hooks the
+   type has, then `make schemas` again;
+2. its tests, in place of the not-implemented ones, and a schema row of
+   each key the schema holds to allowed values, a pattern or a length;
+3. its page and the TODOs of the marked lists, the indexes and spec § 35;
+4. the README's tagline and sources paragraph, the chart README's opening
+   and, for a type of the default build, `Chart.yaml`'s description, in the
+   words it gave `readmeSourceNames` and `chartSourceNames`;
+5. the prose that lists every type, such as the comment on the request
+   types in `requesttype.go` and the code layout above, and the sentences
+   of which types take a key, which `go test ./test/repository/` finds;
+6. spec § 5.1's rules of the type and § 34's bullets of its tests;
+7. examples, and a section of the chart README if the type is deployed
+   with anything of its own.
+
+`make ci` does not run `make new-request-type`, which changes the tree.
 
 ## Repeatable tests
 
@@ -883,7 +1072,8 @@ opt-in type, too.
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
 in `staticTargetsSchemaRules` for the target file, both in
-`internal/config/configschema.go`.
+`internal/config/configschema.go`, and, for a key only one request type takes,
+in that type's `KeyRules`, by the key's path under the request block.
 
 When the exporter comes to refuse a value, give the schema the rule too where
 a schema can tell, and add the value to
@@ -2353,7 +2543,11 @@ exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
 which together list the side once each, as a test checks);
 `request-types`, a matrix over the request types (its checks are named
 `test (<type>)`), vets, builds and lints each type on its own under the `go`
-output and runs the exporter's tests with it under `exporter`; `allocator` runs the
+output and runs the exporter's tests with it under `exporter`; `scaffold`
+runs `TestANewRequestTypeIsWiredByTheScaffold` alone under `go`, the
+minutes it takes to build a copy of the tree with two new request types,
+which the step of `test` that runs the repository tests skips with `-skip`;
+`allocator` runs the
 allocator's tests, once and then under the race detector, when the
 `allocator` output names a change. The allocator's tests are not run with
 each type on its own: those that need a type are built with it, so such a
@@ -2371,7 +2565,11 @@ with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over
 every package (`./...`) where CI names a side's packages, so it runs
-everything whatever changed.
+everything whatever changed: `make test` skips the scaffold test as `test`
+does and `make test-scaffold` runs it as `scaffold` does.
+`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test a go command of
+CI or of `make ci` skips that no other command there runs with `-run`, so a
+test moved out of a suite to a job of its own still runs.
 
 Every workflow sets `permissions` at its top, read-only, so no job runs with
 the repository's default token, which may write to everything; a job that has

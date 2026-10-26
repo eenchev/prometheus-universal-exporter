@@ -695,7 +695,12 @@ and the source MUST list the opt-in types.
   wiring alone. A test MUST find no `RequestType<Name>` constant and no
   string literal that is a request type's name in the core's non-test
   files, but for an exact allowlist of the same words meaning something
-  else, each with its reason.
+  else, each with its reason. The encoding of a templated field of one
+  type, which filters it takes and whether a probe's overrides replace it
+  MUST be registered by that type for the field's kind, not keyed by the
+  field's place in the shared template code, and a test MUST find no
+  comparison of a templated field's place with a literal in a file of
+  `internal/fetch` every build compiles.
 - A request key that only one type accepts MUST be that type's own: read
   into a struct its registration declares, behind the type's constraint,
   so that a build without the type does not carry it. The request block's

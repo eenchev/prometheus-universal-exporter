@@ -126,6 +126,8 @@ func init() {
 		Logins:           logins.counts,
 	})
 	templateEscapers["graphite"] = escapeGraphiteValue
+	// A probe's targets replace request.targets whole.
+	templateReplacers["graphite"] = func(overrides RequestOverrides) bool { return overrides.Targets != nil }
 }
 
 // graphiteRequester is the graphite request type's Requester. Its target is a URL

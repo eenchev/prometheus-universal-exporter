@@ -146,6 +146,29 @@ func init() {
 		},
 		CheckFiles: checkGRPCFiles,
 	})
+	templateFilterRules[grpcMessageKind] = grpcMessageFilter
+	// The message probe parameter replaces request.message whole.
+	templateReplacers[grpcMessageKind] = func(overrides RequestOverrides) bool { return overrides.Message != nil }
+}
+
+// grpcMessageKind is the kind of templated field of a grpc collector's
+// request.message (templateFilterRules): it takes the body's filters and is
+// written as the body is, but only by the filters that write JSON.
+const grpcMessageKind = "message"
+
+// grpcMessageField is a grpc collector's message as a templated field.
+func grpcMessageField(text string) templateField {
+	return templateField{"request.message", text, grpcMessageKind}
+}
+
+// grpcMessageFilter says why a placeholder of a message may not have its
+// filter: a message is JSON, so only the filters that write JSON apply.
+func grpcMessageFilter(where string, p pathPlaceholder) error {
+	switch p.Filter {
+	case "", "json", "number", "raw":
+		return nil
+	}
+	return fmt.Errorf("%s placeholder {{%s}} has the filter |%s, which does not write JSON; a message takes |json for a string, |number for a number, or |raw", where, p.Name, p.Filter)
 }
 
 // grpcRequester is the grpc request type's Requester.
@@ -322,7 +345,7 @@ func messageForCheck(text string) (message string, typed bool, err error) {
 	if strings.TrimSpace(text) == "" {
 		return "{}", true, nil
 	}
-	f := templateField{"request.message", text, "body"}
+	f := grpcMessageField(text)
 	placeholders, err := f.parse()
 	if err != nil {
 		return "", false, err
@@ -587,12 +610,12 @@ func grpcSchemaRule() map[string]any {
 }
 
 // grpcTemplates are a grpc collector's message, which takes the body's
-// filters, unless the probe replaced it, and its metadata values, which
-// take the header rule.
+// filters that write JSON (grpcMessageKind), unless the probe replaced it,
+// and its metadata values, which take the header rule.
 func grpcTemplates(c *model.Collector, overrides RequestOverrides) []templateField {
 	var out []templateField
 	if overrides.Message == nil && HasPathParams(grpcRequest(c).Message) {
-		out = append(out, templateField{"request.message", grpcRequest(c).Message, "body"})
+		out = append(out, grpcMessageField(grpcRequest(c).Message))
 	}
 	for _, name := range model.SortedKeys(grpcRequest(c).Metadata) {
 		if value := grpcRequest(c).Metadata[name]; HasPathParams(value) {

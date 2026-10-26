@@ -154,10 +154,10 @@ type templateField struct {
 	text  string
 	// kind is "body", "header", "query", "arg" (a value sent as a value,
 	// such as a sql collector's args and a redis collector's command
-	// arguments), or a kind of templateEscapers, which a request type
-	// registers, such as graphite's "graphite", sql's "database", tcp's
-	// "line" and ldap's "ldap_dn" and "ldap_filter", which decides the
-	// encoding.
+	// arguments), or a kind of templateEscapers or templateFilterRules,
+	// which a request type registers, such as graphite's "graphite", sql's
+	// "database", tcp's "line", ldap's "ldap_dn" and "ldap_filter" and
+	// grpc's "message", which decides the encoding.
 	kind string
 }
 
@@ -186,18 +186,29 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	return out
 }
 
+// templateFilterRules are the kinds of templated field a request type
+// registers that take the body's filters and are written as the body is,
+// each with the rule of which filters it takes: it says why a placeholder of
+// the field where may not have its filter, or returns nil. Registered by the
+// type, as templateEscapers are, so the shared code knows no field of one
+// type.
+var templateFilterRules = map[string]func(where string, p pathPlaceholder) error{}
+
+// templateReplacers are the kinds of templated field a request type
+// registers that a probe's overrides can replace, each saying whether these
+// do (replacedBy).
+var templateReplacers = map[string]func(overrides RequestOverrides) bool{}
+
 // parseField finds the placeholders of a field.
 func (f templateField) parse() ([]pathPlaceholder, error) {
-	placeholders, err := parsePlaceholders(f.where, f.text, false, f.kind == "body")
-	if err != nil || f.where != "request.message" {
+	rule := templateFilterRules[f.kind]
+	placeholders, err := parsePlaceholders(f.where, f.text, false, f.kind == "body" || rule != nil)
+	if err != nil || rule == nil {
 		return placeholders, err
 	}
-	// A message is JSON, so only the filters that write JSON apply.
 	for _, p := range placeholders {
-		switch p.Filter {
-		case "", "json", "number", "raw":
-		default:
-			return nil, fmt.Errorf("%s placeholder {{%s}} has the filter |%s, which does not write JSON; a message takes |json for a string, |number for a number, or |raw", f.where, p.Name, p.Filter)
+		if err := rule(f.where, p); err != nil {
+			return nil, err
 		}
 	}
 	return placeholders, nil
@@ -339,16 +350,15 @@ func parseRequestPlaceholders(c *model.Collector, overrides RequestOverrides) re
 }
 
 // replacedBy tells whether the overrides replace the field, which
-// requestTemplates then leaves out: the body, the message, and a graphite
-// collector's targets.
+// requestTemplates then leaves out: the body, and the fields of the kinds a
+// request type registers as replaceable (templateReplacers), such as a grpc
+// collector's message and a graphite collector's targets.
 func (f templateField) replacedBy(overrides RequestOverrides) bool {
-	switch {
-	case f.where == "request.body":
+	if f.kind == "body" {
 		return overrides.Body != nil
-	case f.where == "request.message":
-		return overrides.Message != nil
-	case strings.HasPrefix(f.where, "request.targets["):
-		return overrides.Targets != nil
+	}
+	if replaced, ok := templateReplacers[f.kind]; ok {
+		return replaced(overrides)
 	}
 	return false
 }

@@ -140,8 +140,15 @@ network.
   `FileExtensions`), the article its name is read with (`Article`), its rule
   in the configuration schema (`SchemaRule`) and what the schema says of its
   own keys (`KeyRules`), the templated parts of its request and the
-  encoding of their values (`Templates`, `templateEscapers`) and the places
-  a refusal of unused probe parameters names (`UnusedParams`).
+  encoding of their values (`Templates`, `templateEscapers`), the filters a
+  field of its own kind takes (`templateFilterRules`, as grpc's message
+  takes only those that write JSON) and whether a probe's overrides replace
+  it (`templateReplacers`), and the places a refusal of unused probe
+  parameters names (`UnusedParams`). The shared template code,
+  `requesttemplate.go`, keys no rule by a field's place:
+  `TestTheSharedTemplateCodeKnowsNoFieldOfOneType` fails for a file of
+  `internal/fetch` every build compiles that compares a templated field's
+  `where` with a literal.
 
 A collector's `request` block is written flat, its type's keys beside
 `type`, but only the keys several types take are fields of

@@ -339,7 +339,7 @@ func grpcMessage(c *model.Collector, overrides RequestOverrides) (string, error)
 	if overrides.Message != nil {
 		message = *overrides.Message
 	} else if HasPathParams(message) {
-		rendered, err := templateField{"request.message", message, "body"}.render(overrides.Params)
+		rendered, err := grpcMessageField(message).render(overrides.Params)
 		if err != nil {
 			return "", err
 		}

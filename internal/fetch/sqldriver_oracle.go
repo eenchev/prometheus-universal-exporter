@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	goora "github.com/sijms/go-ora/v2"
+	oranetwork "github.com/sijms/go-ora/v2/network"
 )
 
 // The oracle driver is sijms/go-ora, pure Go: built in only with the
@@ -37,7 +39,18 @@ func init() {
 		connect:     connectOracle,
 		run:         sqlTx(sql.TxOptions{}, func(time.Duration) []string { return []string{"SET TRANSACTION READ ONLY"} }),
 		readOnly:    "transaction",
+		serverError: oracleServerError,
 	})
+}
+
+// oracleServerError recognises the server's error, which go-ora gives as a
+// network.OracleError, by its ORA- number.
+func oracleServerError(err error) (string, bool) {
+	var oraErr *oranetwork.OracleError
+	if !errors.As(err, &oraErr) {
+		return "", false
+	}
+	return fmt.Sprintf("ORA-%05d", oraErr.ErrCode), true
 }
 
 // oracleURL is the go-ora URL of a connection made with spec. It is built

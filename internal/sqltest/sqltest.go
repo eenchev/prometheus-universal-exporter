@@ -20,11 +20,14 @@ import (
 
 // Result is what a statement returns: its columns, with their types as a
 // driver names them, and its rows; or Err, which the query fails with.
+// RowsErr, when set, is what reading the rows fails with after the last
+// of them, as a server's error in the middle of a result is.
 type Result struct {
 	Columns []string
 	Types   []string
 	Rows    [][]driver.Value
 	Err     error
+	RowsErr error
 }
 
 // Query is a statement as it was run, with the values bound to it.
@@ -43,8 +46,10 @@ type DB struct {
 	// Block is closed; Started is told each query that is held.
 	Block   chan struct{}
 	Started chan string
-	// ConnectErr fails every connection.
+	// ConnectErr fails every connection, and BeginErr every transaction's
+	// beginning.
 	ConnectErr error
+	BeginErr   error
 	// DrainOnClose makes closing a result read the rows left in it, as
 	// mysql's and pgx's do, until the query's context ends.
 	DrainOnClose bool
@@ -203,6 +208,9 @@ func (c *conn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, err
 	c.db.mu.Lock()
 	defer c.db.mu.Unlock()
 	c.db.txOptions = append(c.db.txOptions, opts)
+	if c.db.BeginErr != nil {
+		return nil, c.db.BeginErr
+	}
 	return tx{db: c.db, c: c}, nil
 }
 
@@ -313,6 +321,9 @@ func (r *rows) Close() error {
 
 func (r *rows) Next(dest []driver.Value) error {
 	if r.next >= len(r.result.Rows) {
+		if r.result.RowsErr != nil {
+			return r.result.RowsErr
+		}
 		return io.EOF
 	}
 	copy(dest, r.result.Rows[r.next])

@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // The database drivers of the sql request type. Three are built in with the
@@ -93,6 +95,13 @@ type sqlDriver struct {
 	// statement_timeout, set to the scrape's time left), which may come a
 	// moment before the scrape's context ends.
 	timedOut func(err error) bool
+	// serverError recognises in err's chain the server's own report of an
+	// error, and gives its code as the database's documentation names it
+	// (SQLSTATE 28P01, error 1045, ORA-01017). The server's message is the
+	// operator's: it may quote a value of a row, the statement, the account
+	// and the address it connected from, or a schema's names, so a probe's
+	// caller is told the code alone (sqlServerAnswer).
+	serverError func(err error) (code string, ok bool)
 	// readOnly says how run makes a statement read-only, for the docs and
 	// the debug report: "transaction", "setting", or "" for not at all.
 	readOnly string
@@ -307,7 +316,7 @@ func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(
 		tx, err := conn.BeginTx(txCtx, &opts)
 		if err != nil {
 			cancel()
-			return nil, nil, fmt.Errorf("beginning the read-only transaction: %w", err)
+			return nil, nil, &sqlStepError{step: "beginning the read-only transaction", err: err}
 		}
 		rollback := func() {
 			ended := ctx.Err() != nil
@@ -321,7 +330,7 @@ func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(
 			for _, s := range setup(timeout) {
 				if _, err := tx.ExecContext(ctx, s); err != nil {
 					rollback()
-					return nil, nil, fmt.Errorf("running %s: %w", s, err)
+					return nil, nil, &sqlStepError{step: "running " + s, err: err}
 				}
 			}
 		}
@@ -332,6 +341,39 @@ func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(
 		}
 		return rows, func() { _ = rows.Close(); rollback() }, nil
 	}
+}
+
+// sqlStepError is the failure of a step of sqlTx before the statement: the
+// step, which the exporter wrote, and the driver's error, which the pool
+// marks as the server's answer inside it (sqlServerAnswer), so that what a
+// probe's caller is told still names the step.
+type sqlStepError struct {
+	step string
+	err  error
+}
+
+func (e *sqlStepError) Error() string { return e.step + ": " + e.err.Error() }
+
+func (e *sqlStepError) Unwrap() error { return e.err }
+
+// sqlServerAnswer is err, an error the driver gave, marked as holding the
+// operator's detail when it is the server's own report of an error
+// (sqlDriver.serverError): the log and the debug report show the server's
+// message, and a probe's caller is told the code alone. An error that is not
+// the server's, such as a connection refused or a TLS handshake that failed,
+// is the exporter's side of the story and is returned as it is.
+func (d *sqlDriver) sqlServerAnswer(err error) error {
+	if err == nil || d.serverError == nil {
+		return err
+	}
+	if step, ok := err.(*sqlStepError); ok { //nolint:errorlint // only the step sqlTx returned, around the driver's error
+		return &sqlStepError{step: step.step, err: d.sqlServerAnswer(step.err)}
+	}
+	code, ok := d.serverError(err)
+	if !ok {
+		return err
+	}
+	return model.WithOperatorDetail(err, "the database answered "+code+"; its message is in the exporter's log")
 }
 
 // sqlBeginContext is the context key of the context a transaction's BEGIN

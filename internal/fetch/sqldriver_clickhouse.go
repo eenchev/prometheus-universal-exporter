@@ -6,11 +6,14 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql/driver"
+	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 )
 
 // The clickhouse driver is ClickHouse/clickhouse-go: built in only with the
@@ -34,7 +37,20 @@ func init() {
 		connect:   connectClickHouse,
 		run:       sqlPlain,
 		readOnly:  "setting",
+
+		serverError: clickHouseServerError,
 	})
+}
+
+// clickHouseServerError recognises the server's exception, which the driver
+// gives as a proto.Exception on either protocol, by its code. Its message
+// quotes the statement it failed on.
+func clickHouseServerError(err error) (string, bool) {
+	var exception *chproto.Exception
+	if !errors.As(err, &exception) {
+		return "", false
+	}
+	return "code " + strconv.Itoa(int(exception.Code)), true
 }
 
 // clickHousePort is the port of a target that names none: the protocol's,

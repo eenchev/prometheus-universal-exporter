@@ -2079,6 +2079,28 @@ of objects, one a row, of its columns by name. Its keys:
   its other errors MUST stay errors. A server's answer
   routing a `sqlserver` connection to another host MUST be refused by the
   exporter's dialer, and the documentation MUST say so.
+- An error the database answered — the server's own error, wherever the
+  exporter met it: connecting and authenticating, beginning the read-only
+  transaction and its setup statements, the statement, and reading the rows
+  — MUST be the operator's alone: the log, and with `--web.debug=full` a
+  debug probe's report and the status page, MUST show its whole text, and a
+  probe's caller MUST be answered, in its place, `the database answered
+  <code>; its message is in the exporter's log`, the rest of the failure's
+  text (the step, the server) as it is. The code MUST be the one the
+  database documents: `SQLSTATE <state>` for `postgres` (pgconn's
+  `PgError`) and `vertica` (`VError`), `error <number>` for `mysql`
+  (`MySQLError`, followed by ` (SQLSTATE <state>)` when the server sent
+  one) and `sqlserver` (`mssql.Error`), `code <number>` for `clickhouse`
+  (`proto.Exception`), `ORA-<5 digits>` for `oracle` (go-ora's
+  `network.OracleError`), and `error <6 digits>` followed by ` (SQLSTATE
+  <state>)` when there is one for `snowflake` (`SnowflakeError`, but for
+  the driver's own, numbered from 260000 to 279999). A failure that is not
+  the server's answer — a dial, TLS, policy or protocol failure, the
+  scrape's deadline, the response limit — MUST be answered as before. The
+  marked error MUST still be what it was to `errors.Is` and `errors.As`, so
+  that the server's statement timeout is still the scrape's deadline and a
+  message over the limit still the limit's failure, and the server MUST be
+  named after the failure unless the caller's text names it.
 - A failed statement MUST be reported in the `sql` stage, naming the server.
   A debug probe's request section MUST show `QUERY`,
   `driver://host:port/database` (the service for `oracle`), the account,

@@ -3,8 +3,10 @@
 package exporter
 
 import (
+	"bytes"
 	"context"
 	"database/sql/driver"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,6 +17,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/sqltest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // sqlCollectors are two sql collectors of one statement, one reading its
@@ -74,6 +78,13 @@ type sqlExporter struct {
 
 func newSQLExporter(t *testing.T) *sqlExporter {
 	t.Helper()
+	return newSQLExporterLogging(t, testutil.QuietLogger(t))
+}
+
+// newSQLExporterLogging is newSQLExporter with the exporter's log written
+// by logger.
+func newSQLExporterLogging(t *testing.T, logger *slog.Logger) *sqlExporter {
+	t.Helper()
 	e := &sqlExporter{db: &sqltest.DB{Results: map[string]sqltest.Result{
 		"SELECT state, n FROM jobs WHERE queue = $1": {Columns: []string{"state", "n", "note"}, Types: []string{"TEXT", "INT8", "TEXT"}, Rows: [][]driver.Value{{"open", int64(3), nil}, {"done", int64(40), "x"}}},
 	}}}
@@ -92,8 +103,8 @@ func newSQLExporter(t *testing.T) *sqlExporter {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.manager = config.NewManager(cfg, path, testutil.QuietLogger(t))
-	e.server = NewServer(e.manager, "python3", testutil.QuietLogger(t))
+	e.manager = config.NewManager(cfg, path, logger)
+	e.server = NewServer(e.manager, "python3", logger)
 	return e
 }
 
@@ -290,4 +301,69 @@ func TestAPythonTransformReadsASQLCollectorsRows(t *testing.T) {
 	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || !slices.Equal(got, []string{`jobs{noted="False",state="open"} 3`, `jobs{noted="True",state="done"} 40`}) {
 		t.Errorf("%d %q\n%s", recorder.Code, got, recorder.Body)
 	}
+}
+
+// A database's own message is the operator's: a probe's caller is answered
+// what failed and the server's error code, and the log and a debug report
+// have the whole message — here a row's value in a postgres conversion
+// error, and the account and the exporter's address in a mysql refusal of
+// the login.
+func TestASQLProbeIsAnsweredTheDatabasesErrorCodeAndNotItsMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, collector, message, answer string
+		fail                             func(db *sqltest.DB)
+	}{
+		{
+			name: "statement", collector: "jobs", message: `invalid input syntax for type integer: "row-secret-4711"`,
+			answer: "collector jobs sql failed: running the statement: the database answered SQLSTATE 22P02; its message is in the exporter's log (on db.example:5432)",
+			fail: func(db *sqltest.DB) {
+				db.Results["SELECT state, n FROM jobs WHERE queue = $1"] = sqltest.Result{Err: &pgconn.PgError{Severity: "ERROR", Code: "22P02", Message: `invalid input syntax for type integer: "row-secret-4711"`}}
+			},
+		},
+		{
+			name: "login", collector: "jobs_jq", message: "Access denied for user 'metrics'@'10.1.2.3' (using password: YES)",
+			answer: "collector jobs_jq sql failed: connecting: connecting to mysql at db.example:3306: the database answered error 1045 (SQLSTATE 28000); its message is in the exporter's log",
+			fail: func(db *sqltest.DB) {
+				db.ConnectErr = &mysql.MySQLError{Number: 1045, SQLState: [5]byte{'2', '8', '0', '0', '0'}, Message: "Access denied for user 'metrics'@'10.1.2.3' (using password: YES)"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &sqlLogBuffer{}
+			e := newSQLExporterLogging(t, slog.New(slog.NewTextHandler(logs, nil)))
+			tc.fail(e.db)
+			recorder := probeOnce(t, e.server, "/probe?collector="+tc.collector+"&target=db.example", nil)
+			body := strings.TrimSpace(recorder.Body.String())
+			if recorder.Code != http.StatusBadGateway || body != tc.answer {
+				t.Errorf("answered %d %q, want %q", recorder.Code, body, tc.answer)
+			}
+			logged := logs.String()
+			if !strings.Contains(logged, strings.ReplaceAll(tc.message, `"`, `\"`)) && !strings.Contains(logged, tc.message) {
+				t.Errorf("the log has not the database's message %q:\n%s", tc.message, logged)
+			}
+			e.server.SetDebug(DebugFull)
+			report := probeOnce(t, e.server, "/probe?debug=true&collector="+tc.collector+"&target=db.example", nil).Body.String()
+			if !strings.Contains(report, tc.message) {
+				t.Errorf("the debug report has not the database's message %q:\n%s", tc.message, report)
+			}
+		})
+	}
+}
+
+// sqlLogBuffer is a log the exporter's goroutines write and a test reads.
+type sqlLogBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *sqlLogBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *sqlLogBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

@@ -37,7 +37,23 @@ func init() {
 		tlsModes:  map[string]sqlTLSMode{"disable": sqlTLSOff, "false": sqlTLSVerifyByKeys, "true": sqlTLSVerify, "strict": sqlTLSVerify},
 		connect:   connectSQLServer,
 		run:       sqlPlain,
+
+		serverError: sqlServerServerError,
 	})
+}
+
+// sqlServerServerError recognises the server's ERROR token, which the
+// driver gives as an mssql.Error, by its error number.
+func sqlServerServerError(err error) (string, bool) {
+	var msErr mssql.Error
+	if errors.As(err, &msErr) {
+		return "error " + strconv.Itoa(int(msErr.Number)), true
+	}
+	var msErrPtr *mssql.Error
+	if errors.As(err, &msErrPtr) && msErrPtr != nil {
+		return "error " + strconv.Itoa(int(msErrPtr.Number)), true
+	}
+	return "", false
 }
 
 // sqlServerEncrypt is the encrypt setting of a connection: the option, or,

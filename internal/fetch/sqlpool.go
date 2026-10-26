@@ -824,6 +824,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	stmtCtx, stop := context.WithCancel(ctx)
 	rows, done, err := p.driver.run(stmtCtx, conn, sqlRequest(col).Statement, args, timeout)
 	if err != nil {
+		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "running the statement", err)
 		traceOutcome(ctx, "error: "+err.Error())
@@ -834,6 +835,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	if err != nil {
 		// Ended before done closes the rows.
 		stop()
+		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "reading the rows", err)
 		traceOutcome(ctx, "error: "+err.Error())
@@ -1237,7 +1239,9 @@ func (s *sqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 	conn, err := sqlConnectRecovering(ctx, p.driver.name, connect, spec)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to %s at %s: %w", p.driver.name, p.key.address.hostPort, err)
+		// A login the server refused is told by its code: the message
+		// may name the account and the address the exporter came from.
+		return nil, fmt.Errorf("connecting to %s at %s: %w", p.driver.name, p.key.address.hostPort, p.driver.sqlServerAnswer(err))
 	}
 	p.keepSockets(conn, sockets)
 	p.made.Add(1)

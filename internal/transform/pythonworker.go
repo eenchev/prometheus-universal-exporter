@@ -131,9 +131,11 @@ func (e pythonDeadlineError) Unwrap() error { return context.DeadlineExceeded }
 
 // pythonWorkerGone is a worker found dead before it took a request, so that
 // nothing of the script has run and another worker can run it.
-type pythonWorkerGone struct{ why string }
+type pythonWorkerGone struct{ err error }
 
-func (e pythonWorkerGone) Error() string { return e.why }
+func (e pythonWorkerGone) Error() string { return e.err.Error() }
+
+func (e pythonWorkerGone) Unwrap() error { return e.err }
 
 // pythonRequestTaken is the line a worker writes when it has read and parsed
 // a request, before it runs the script.
@@ -1066,7 +1068,7 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 			return nil, worker.startEnded(ctx, timer.C)
 		case line.err != nil:
 			worker.stop()
-			return nil, fmt.Errorf("the interpreter did not start: %s", worker.describe(line.err))
+			return nil, fmt.Errorf("the interpreter did not start: %w", worker.describe(line.err, ""))
 		case !strings.Contains(string(line.data), `"ready": true`):
 			// It answered, and is running: what it is stopped for is the
 			// answer, which the exporter's worker never gives.
@@ -1093,7 +1095,7 @@ func (w *pythonWorker) startEnded(ctx context.Context, overrun <-chan time.Time)
 	case <-overrun:
 	case <-ctx.Done():
 	}
-	return fmt.Errorf("the interpreter did not start: %s", w.describe(nil))
+	return fmt.Errorf("the interpreter did not start: %w", w.describe(nil, ""))
 }
 
 // startOverran stops a worker that has not said it is ready within limit,
@@ -1105,7 +1107,7 @@ func (w *pythonWorker) startOverran(limit time.Duration) error {
 	defer w.stop()
 	select {
 	case <-w.exited:
-		return fmt.Errorf("the interpreter did not start within %s: %s", limit, w.describe(nil))
+		return fmt.Errorf("the interpreter did not start within %s: %w", limit, w.describe(nil, ""))
 	default:
 	}
 	return w.startFailure(fmt.Errorf("the interpreter did not start within %s: it was still running and had not said it was ready, so it was stopped; it did not crash: look at how busy the machine is and at how long the libraries the collector declares take to import", limit))
@@ -1122,7 +1124,10 @@ func (w *pythonWorker) startFailure(err error) error {
 		return err
 	}
 	const written = "; it had written to stderr: "
-	return model.SameFailureAs(fmt.Errorf("%w%s%s", err, written, shownStderr(tail)), model.SameFailureText(err)+written+model.MovingMark)
+	// What it wrote is the operator's, as describe says.
+	return model.WithOperatorDetail(
+		model.SameFailureAs(fmt.Errorf("%w%s%s", err, written, shownStderr(tail)), model.SameFailureText(err)+written+model.MovingMark),
+		model.CallerText(err)+"; what it had written to stderr is in the exporter's log")
 }
 
 // pythonWorkerEnvironment is the environment a worker starts in: the
@@ -1212,7 +1217,7 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				return nil, 0, notTaken()
 			}
-			return nil, 0, pythonWorkerGone{why: w.describe(err)}
+			return nil, 0, pythonWorkerGone{err: w.describe(err, "")}
 		}
 	}
 	taken := time.NewTimer(time.Until(handover))
@@ -1221,7 +1226,7 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 	case line, ok := <-w.lines:
 		switch {
 		case !ok:
-			return nil, 0, pythonWorkerGone{why: w.describe(nil) + w.memoryHint()}
+			return nil, 0, pythonWorkerGone{err: w.describe(nil, w.memoryHint())}
 		case line.err != nil:
 			return nil, 0, line.err
 		case string(line.data) != pythonRequestTaken:
@@ -1250,7 +1255,7 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 	case line, ok := <-w.lines:
 		ran := time.Since(started)
 		if !ok {
-			return nil, ran, errors.New(w.describe(nil) + w.memoryHint())
+			return nil, ran, w.describe(nil, w.memoryHint())
 		}
 		if line.err != nil {
 			return nil, ran, line.err
@@ -1267,17 +1272,21 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 	}
 }
 
-// describe explains why a worker failed, with the end of what it wrote to
-// stderr, which is where CPython reports a crash or a failed start.
-func (w *pythonWorker) describe(err error) string {
+// describe explains why a worker failed, with hint after it, and the end
+// of what it wrote to stderr, which is where CPython reports a crash or a
+// failed start. What it wrote is the operator's: a script may print the
+// data there, and a library may quote it in a warning, so a probe's caller
+// is told only that it is in the exporter's log.
+func (w *pythonWorker) describe(err error, hint string) error {
 	message := "the interpreter exited"
 	if err != nil {
 		message = err.Error()
 	}
-	if tail := strings.TrimSpace(w.stderr.String()); tail != "" {
-		message += ": " + shownStderr(tail)
+	tail := strings.TrimSpace(w.stderr.String())
+	if tail == "" {
+		return errors.New(message + hint)
 	}
-	return message
+	return model.WithOperatorDetail(errors.New(message+": "+shownStderr(tail)+hint), message+hint+"; what it wrote to stderr is in the exporter's log")
 }
 
 // memoryHint says, of a worker that died mid-run under a memory limit, that

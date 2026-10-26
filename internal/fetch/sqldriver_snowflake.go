@@ -60,7 +60,27 @@ func init() {
 		host:    func(account string) string { return account + ".snowflakecomputing.com" },
 		connect: connectSnowflake,
 		run:     snowflakeRun,
+
+		serverError: snowflakeServerError,
 	})
+}
+
+// snowflakeServerError recognises Snowflake's answer of an error, which the
+// driver gives as a SnowflakeError, by its error number and SQLSTATE. The
+// driver gives its own failures, such as a connection that could not be
+// made, as a SnowflakeError too, numbered from 260000 to 279999
+// (gosnowflake's ErrCode constants); those are the driver's words, not the
+// account's, and are told as they are.
+func snowflakeServerError(err error) (string, bool) {
+	var sfErr *gosnowflake.SnowflakeError
+	if !errors.As(err, &sfErr) || sfErr.Number >= 260000 && sfErr.Number < 280000 {
+		return "", false
+	}
+	code := fmt.Sprintf("error %06d", sfErr.Number)
+	if sfErr.SQLState != "" {
+		code += " (SQLSTATE " + sfErr.SQLState + ")"
+	}
+	return code, true
 }
 
 // snowflakeConfig is the configuration of a connection made with spec.

@@ -37,7 +37,8 @@ func TestIncompleteHistogramsAndSummariesPassThroughAProbe(t *testing.T) {
 	if code, body := probe("/alone", "application/openmetrics-text"); code != http.StatusOK || body != wantOM {
 		t.Fatalf("OpenMetrics: %d\n%s", code, body)
 	}
-	want := "the histogram h, which starts in line 2, has two buckets with the upper bound 1"
+	// The family's name is a value of the answer, withheld from the caller.
+	want := answeredAs("the histogram h, which starts in line 2, has two buckets with the upper bound 1", "histogram h")
 	if code, body := probe("/duplicate", "text/plain"); code != http.StatusBadGateway || !strings.Contains(body, want) {
 		t.Errorf("/duplicate: %d %s, want 502 with %q", code, body, want)
 	}

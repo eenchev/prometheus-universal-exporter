@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"golang.org/x/text/encoding/charmap"
 )
@@ -389,7 +390,9 @@ func TestACharsetIsReadFromAContentTypeThatIsNotWellFormed(t *testing.T) {
 	const why = `unsupported charset "klingon"; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk`
 	for _, collector := range []string{"depots_css", "depots_xpath"} {
 		status, _, failure := probeHTML(t, server, site, collector, "/unknown")
-		if want := "collector " + collector + " decode failed: " + why; status != http.StatusBadGateway || failure != want {
+		// The name is a value of the answer: withheld from the caller, and
+		// in the log.
+		if want := "collector " + collector + " decode failed: " + strings.Replace(why, `"klingon"`, model.WithheldMark, 1); status != http.StatusBadGateway || failure != want {
 			t.Errorf("%s: status=%d body=%s, want 502 %s", collector, status, failure, want)
 		}
 		sameLogLines(t, logs, []string{"ERROR probe failed stage=decode error=" + why})
@@ -520,7 +523,9 @@ func TestAnUnknownCharsetFailsTheDecode(t *testing.T) {
 	const why = `unsupported charset "klingon"; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk`
 	for _, collector := range []string{"depots_css", "depots_xpath"} {
 		status, _, failure := probeHTML(t, server, site, collector, "/depots")
-		if want := "collector " + collector + " decode failed: " + why; status != http.StatusBadGateway || failure != want {
+		// The name is a value of the answer: withheld from the caller, and
+		// in the log.
+		if want := "collector " + collector + " decode failed: " + strings.Replace(why, `"klingon"`, model.WithheldMark, 1); status != http.StatusBadGateway || failure != want {
 			t.Errorf("%s: status=%d body=%s, want 502 %s", collector, status, failure, want)
 		}
 		sameLogLines(t, logs, []string{"ERROR probe failed stage=decode error=" + why})

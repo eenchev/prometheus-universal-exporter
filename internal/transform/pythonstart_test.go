@@ -358,12 +358,12 @@ func oracleStartPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorke
 	case line, ok := <-worker.lines:
 		if !ok || line.err != nil || !strings.Contains(string(line.data), `"ready": true`) {
 			worker.stop()
-			return nil, fmt.Errorf("the interpreter did not start: %s", worker.describe(line.err))
+			return nil, fmt.Errorf("the interpreter did not start: %w", worker.describe(line.err, ""))
 		}
 		return worker, nil
 	case <-timer.C:
 		worker.stop()
-		return nil, fmt.Errorf("the interpreter did not start within %s: %s", limit, worker.describe(nil))
+		return nil, fmt.Errorf("the interpreter did not start within %s: %w", limit, worker.describe(nil, ""))
 	case <-ctx.Done():
 		worker.stop()
 		return nil, ctx.Err()

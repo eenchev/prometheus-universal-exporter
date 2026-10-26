@@ -110,7 +110,14 @@ func decodeGraphite(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error)
 	case len(body) > 0 && body[0] == '[':
 		series, err = parseGraphiteRender(body, report)
 	case impliesGraphite(c):
-		err = fmt.Errorf("the Graphite server did not answer with render JSON, a list of series; %s", answerStart(body))
+		// The start of the answer is a value of it, which a probe's caller
+		// is not told; that it is empty is no value.
+		start := answerStart(body)
+		shown := model.ShownAs(start, start)
+		if len(body) == 0 {
+			shown = shown.ForCaller(start)
+		}
+		err = model.Errorf("the Graphite server did not answer with render JSON, a list of series; %s", shown)
 	default:
 		series, err = parseCarbonLines(r.Body, now, settings.InvalidLines == "skip", report)
 	}
@@ -134,6 +141,8 @@ func decodeGraphite(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error)
 
 // answerStart describes the start of an answer that is not what was asked
 // for, as much as a log line needs to tell a login page from an error.
+// It is a value of the answer, so the error that shows it shows it as one
+// (model.ShownAs), withheld from a probe's caller.
 func answerStart(body []byte) string {
 	if len(body) == 0 {
 		return "the answer is empty"

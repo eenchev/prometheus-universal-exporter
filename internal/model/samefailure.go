@@ -62,8 +62,9 @@ const MovingMark = "#"
 // shows: an error keeps its arguments for as long as it is kept.
 type QuotedValue struct {
 	// text is what the failure's text shows of the value, and same what the
-	// failure is recognised by.
-	text, same string
+	// failure is recognised by. caller, when set, is what a probe's caller
+	// is shown in its place, which is otherwise WithheldMark (CallerText).
+	text, same, caller string
 }
 
 // Quoted is text as QuoteValue quotes it: quoted, and past 64 bytes cut to
@@ -119,6 +120,22 @@ func (q QuotedValue) String() string { return q.text }
 // mark in place of the length of a value that was cut.
 func (q QuotedValue) Same() string { return q.same }
 
+// ForCaller is q shown to a probe's caller as caller rather than as
+// WithheldMark: what the caller may be told of the value, such as the type
+// of a script's exception without its message.
+func (q QuotedValue) ForCaller(caller string) QuotedValue {
+	q.caller = caller
+	return q
+}
+
+// callerShown is what a probe's caller is shown of q.
+func (q QuotedValue) callerShown() string {
+	if q.caller != "" {
+		return q.caller
+	}
+	return WithheldMark
+}
+
 // Format writes the value as String gives it whatever verb formats it: a %q
 // would quote the quotes.
 func (q QuotedValue) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, q.text) }
@@ -165,6 +182,33 @@ func (e *movingError) same() string {
 	}
 	return fmt.Errorf(e.format, args...).Error()
 }
+
+// callerText is the error's text as a probe's caller is answered it: each
+// QuotedValue among the arguments withheld, and each error among them as the
+// caller is answered it (CallerText); false when one of those could not be.
+func (e *movingError) callerText() (string, bool) {
+	args := make([]any, len(e.args))
+	for i, arg := range e.args {
+		switch arg := arg.(type) {
+		case QuotedValue:
+			args[i] = shownText(arg.callerShown())
+		case error:
+			shown, ok := callerText(arg)
+			if !ok {
+				return "", false
+			}
+			args[i] = sameText(shown)
+		default:
+			args[i] = arg
+		}
+	}
+	return fmt.Errorf(e.format, args...).Error(), true
+}
+
+// shownText is written as it is whatever verb formats it.
+type shownText string
+
+func (s shownText) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, string(s)) }
 
 // sameText is an error argument's recognised text, as the error it stands
 // for in the format.

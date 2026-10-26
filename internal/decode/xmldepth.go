@@ -19,6 +19,17 @@ import (
 // megabyte, costs a rule that selects them all the square of that.
 const MaxXMLDepth = 512
 
+// xmlNamesWithheld is failure, an error of the text text whose part library
+// is of a form that holds names of the document, marked as the operator's
+// when names is set: a probe's caller is told text with that part as
+// caller, the form's words without the names (xmlNamesCut).
+func xmlNamesWithheld(failure error, text, library, caller string, names bool) error {
+	if !names {
+		return failure
+	}
+	return model.WithOperatorDetail(failure, strings.Replace(text, library, caller, 1))
+}
+
 // ParseXML parses an XML document, and refuses one whose elements nest deeper
 // than MaxXMLDepth.
 func ParseXML(body []byte) (*xmlquery.Node, error) {
@@ -29,18 +40,23 @@ func ParseXML(body []byte) (*xmlquery.Node, error) {
 		var syntax *xml.SyntaxError
 		if errors.As(err, &syntax) {
 			text, library := err.Error(), syntax.Error()
-			short, same, cut := xmlNamesCut(xmlSyntaxErrors, syntax.Msg)
-			if !cut {
-				return nil, model.SameFailureAs(err, strings.Replace(text, library, "XML syntax error: "+syntax.Msg, 1))
-			}
-			// A name of the document cut to its start (xmlcut.go), in a new
-			// error of the short text alone: the library's holds the name
-			// whole.
 			line := strings.TrimSuffix(library, syntax.Msg)
-			return nil, model.SameFailureAs(errors.New(strings.Replace(text, library, line+short, 1)), strings.Replace(text, library, "XML syntax error: "+same, 1))
+			short, same, caller, cut := xmlNamesCut(xmlSyntaxErrors, syntax.Msg)
+			failure := model.SameFailureAs(err, strings.Replace(text, library, "XML syntax error: "+syntax.Msg, 1))
+			if cut {
+				// A name of the document cut to its start (xmlcut.go), in a
+				// new error of the short text alone: the library's holds the
+				// name whole.
+				failure = model.SameFailureAs(errors.New(strings.Replace(text, library, line+short, 1)), strings.Replace(text, library, "XML syntax error: "+same, 1))
+			}
+			return nil, xmlNamesWithheld(failure, text, library, line+caller, caller != "")
 		}
-		if short, same, cut := xmlNamesCut(xmlOtherErrors, err.Error()); cut {
-			return nil, model.SameFailureAs(errors.New(short), same)
+		if short, same, caller, cut := xmlNamesCut(xmlOtherErrors, err.Error()); caller != "" {
+			failure := err
+			if cut {
+				failure = model.SameFailureAs(errors.New(short), same)
+			}
+			return nil, xmlNamesWithheld(failure, err.Error(), err.Error(), caller, true)
 		}
 		return nil, err
 	}

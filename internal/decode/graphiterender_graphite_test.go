@@ -24,8 +24,18 @@ func TestAGraphiteAnswerMustBeRenderJSON(t *testing.T) {
 		"  \n":                          "the answer is empty",
 		"a.b 1 1727000000\n":            `the answer is "a.b 1 1727000000"`,
 	} {
-		if _, err := Decode(&fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}, c); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%q: err=%v, want %q", body, err, want)
+		_, err := Decode(&fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}, c)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%q: err=%v, want %q", body, err, want)
+		}
+		// The answer's start is a value of it, withheld from a probe's
+		// caller; that it is empty is told.
+		told := "the Graphite server did not answer with render JSON, a list of series; " + model.WithheldMark
+		if strings.TrimSpace(body) == "" {
+			told = "the Graphite server did not answer with render JSON, a list of series; the answer is empty"
+		}
+		if got := model.CallerText(err); got != told {
+			t.Errorf("%q: the caller is told %q, want %q", body, got, told)
 		}
 	}
 }

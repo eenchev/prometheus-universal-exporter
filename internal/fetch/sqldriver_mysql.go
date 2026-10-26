@@ -5,7 +5,9 @@ package fetch
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"net"
+	"strconv"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -27,7 +29,24 @@ func init() {
 		connect:   connectMySQL,
 		run:       sqlReadOnlyTx(nil),
 		readOnly:  "transaction",
+
+		serverError: mysqlServerError,
 	})
+}
+
+// mysqlServerError recognises the server's ERR packet, which the driver
+// gives as a MySQLError, by its error number and, when the server sent
+// one, its SQLSTATE.
+func mysqlServerError(err error) (string, bool) {
+	var myErr *mysql.MySQLError
+	if !errors.As(err, &myErr) {
+		return "", false
+	}
+	code := "error " + strconv.Itoa(int(myErr.Number))
+	if myErr.SQLState != [5]byte{} {
+		code += " (SQLSTATE " + string(myErr.SQLState[:]) + ")"
+	}
+	return code, true
 }
 
 // mysqlConfig is the configuration of a connection made with spec.

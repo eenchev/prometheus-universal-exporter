@@ -2940,6 +2940,49 @@ collector's to export, only its health series, and the scrape counts as a
 success. A metric rule with `error_mode: fail` fails the scrape whatever
 `on_transform_error` says, on a probe and a static target alike.
 
+### What a failed probe's caller is told
+
+A failed probe is answered with its stage and its error, which is all
+Prometheus needs to mark the scrape down and what someone running the probe
+by hand reads first. But whoever may call `/probe` may name the target, and
+the collector's request parameters, so what the target answered is not
+theirs to read: the answer tells them what failed, and the exporter's log
+has the whole of it. What is withheld from the answer:
+
+- **Every value of the answer an error quotes**: the token a decoder could
+  not read (`expected float as value, got "..."`), a label value or a name of
+  the document, a CSV header, a charset the answer names, the start of a
+  Graphite server's answer that is not render JSON. Each stands as
+  `[withheld; in the exporter's log]`, and the rest of the error reads as it
+  does in the log. The names of series that are valid are not withheld: they
+  are what a successful probe answers.
+- **What a library quotes of it**: an XML syntax error's names and entities,
+  a TOML token, and a jq program's error on the answer (`cannot iterate
+  over: string ("...")`, or a rule's own `error(...)`), which is answered as
+  `the jq program failed on the answer: [withheld; in the exporter's log]`.
+  Go's HTTP client quotes the first line of an answer that is no HTTP, such
+  as an SSH or SMTP banner; that is withheld after `malformed HTTP response`,
+  for a target and for a [login](AUTHENTICATION.md#when-a-login-fails) alike.
+- **A script's traceback**: a [Python](PYTHON.md) transform that raised is
+  answered the exception's type and the line of the script it came from,
+  `python transform failed: KeyError at line 3 of the script; the rest is in
+  the exporter's log`, since its message and the source lines are what the
+  script made of the data; what the interpreter wrote to stderr is answered
+  as being in the log.
+- **What a server said of a refusal**: a login provider's answer
+  ([When a login fails](AUTHENTICATION.md#when-a-login-fails)), a
+  database's message, which is answered by its code
+  ([SQL](SQL.md#errors-and-self-metrics)), and an
+  [`sshexec`](SSHEXEC.md) command's stderr.
+
+An error over the 2,000 bytes every failure is cut to is cut after what the
+caller may be told is taken from it, so nothing withheld reaches the answer
+through the cut. A rule under `error_mode: fail` is answered its JSON object
+with the same text in `error`. The log, a [debug probe](#debug-probes)'s
+report and, with `--web.debug=full`, the
+[status page](ENDPOINTS.md#status-page) show each error whole; the
+self-metrics count failures by stage, as before.
+
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at
@@ -5093,7 +5136,7 @@ logged and the series a probe would have answered. One flag, `--web.debug`
 |---------------|----------------|
 | `off`, the default | Nothing: `/debug` is not there (`404`), and `debug=true` on `/probe` and `debug=<name>` on `/static-targets` are answered `403`. |
 | `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
-| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). The [status page](ENDPOINTS.md#status-page) shows what an error holds for the operator alone, such as an [`sshexec`](SSHEXEC.md) command's stderr, which below `full` it leaves out as a probe's caller is answered. |
+| `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). The [status page](ENDPOINTS.md#status-page) shows each error whole, with the values of the answer it quotes and what it holds for the operator alone, such as an [`sshexec`](SSHEXEC.md) command's stderr, which below `full` it leaves out as a probe's caller is answered ([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)). |
 
 Any other value stops the exporter at startup, as any wrong flag does
 (exit status 2). Every run, whichever asked for it, is made by the same

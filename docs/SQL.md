@@ -455,6 +455,28 @@ response limit, count in `http_exporter_series_limit_exceeded_total`; a server
 the target lists refuse counts in `http_exporter_targets_refused_total`,
 answered `403`.
 
+An error the database itself answered — a login it refused, a transaction it
+would not begin, a statement it failed, an error in the middle of the rows —
+is the operator's: its message may quote a value of a row, the statement,
+the account and the address the exporter connected from, or the names of a
+schema. The exporter's log shows the whole message, and with
+`--web.debug=full` so do a debug probe's report and the
+[status page](ENDPOINTS.md#status-page). The caller of `/probe` is answered
+what the exporter was doing and the server's error code, as the database
+documents it — `SQLSTATE` for `postgres` and `vertica`, the error number for
+`mysql` (with its `SQLSTATE`), `sqlserver` and `snowflake` (with its
+`SQLSTATE`), the code for `clickhouse`, the `ORA-` number for `oracle`:
+
+```text
+collector jobs sql failed: running the statement: the database answered SQLSTATE 42P01; its message is in the exporter's log (on db1.example.com:5432)
+collector jobs sql failed: connecting: connecting to mysql at db1.example.com:3306: the database answered error 1045 (SQLSTATE 28000); its message is in the exporter's log
+```
+
+A failure that is not the database's answer, such as a connection refused, a
+TLS handshake that failed or the scrape's deadline, is answered as it is;
+so is a failure of `snowflake`'s driver itself, whose errors are numbered
+from 260000.
+
 Each `sql` collector has, with no per-request series (see
 [Self-metrics](SELF-METRICS.md)):
 
@@ -665,6 +687,7 @@ label name the drivers a build has; of a build without the `sql` type,
 | --- | --- |
 | `... uses sql driver "...", which this build does not include` | Build with `SQL_DRIVERS` naming it (see [Building with more drivers](#building-with-more-drivers)). |
 | `connecting to postgres at ...: ... password authentication failed` | The account or its password; check `password_file`. |
+| `... the database answered SQLSTATE 28P01; its message is in the exporter's log`, `... error 1045 ...`, `... error 18456 ...`, `... ORA-01017 ...` | The database refused the login: the account or its password; check `password_file`. Any other code: the message is in the exporter's log. |
 | `request.password_file ... is empty` | The file is there and empty: the Secret's key, or its mount. |
 | `running the statement: the statement's result came from Snowflake in more than one chunk, ...` | Return fewer rows or columns (see [Limitations](#limitations)). |
 | `running the statement: the statement's answer from Snowflake was larger than the response limit ...` | Return fewer rows or columns, or raise `max_response_bytes` (see [Limitations](#limitations)). |

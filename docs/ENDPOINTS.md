@@ -10,7 +10,7 @@ the [command-line flags](FLAGS.md).
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.debug`, a link into the debug page. See [Probing from the browser](AUTHENTICATION.md#probing-from-the-browser). |
 | `/debug` | With `--web.debug`: run a collector, written there or configured, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
-| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). |
+| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
 | `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — the recent probes of each collector and target, and how the OTLP export is going, as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
@@ -79,10 +79,12 @@ collector, target and parameters:
   shown as the static targets' errors are: the log's text, with every URL's
   credentials withheld, its userinfo too where the text only quotes the URL,
   anything else that reads as a credential masked, and cut to 2000 bytes. A
-  failure whose text holds what is for the operator alone, such as what an
-  [`sshexec`](SSHEXEC.md) command wrote to stderr, is shown as the probe's
-  caller was answered it, without that part, unless `--web.debug` is `full`:
-  the page is read by whoever may call `/probe`. A
+  failure is shown as the probe's caller was answered it, without the values
+  of the target's answer it quotes or what is for the operator alone, such as
+  what an [`sshexec`](SSHEXEC.md) command wrote to stderr
+  ([What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told)),
+  unless `--web.debug` is `full`: the page is read by whoever may call
+  `/probe`. A
   probe that panicked shows `the scrape panicked; the exporter's log has the
   panic`, the text it was answered: the panic's own text is only in the log.
 

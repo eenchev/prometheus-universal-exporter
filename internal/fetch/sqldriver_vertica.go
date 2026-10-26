@@ -45,7 +45,19 @@ func init() {
 		run:       sqlReadOnlyTx(nil),
 		readOnly:  "transaction",
 		statement: verticaStatement,
+
+		serverError: verticaServerError,
 	})
+}
+
+// verticaServerError recognises the server's ErrorResponse, which the
+// driver gives as a VError, by its SQLSTATE.
+func verticaServerError(err error) (string, bool) {
+	var vErr *vertigo.VError
+	if !errors.As(err, &vErr) {
+		return "", false
+	}
+	return "SQLSTATE " + vErr.SQLState, true
 }
 
 // verticaLog hands the driver's log to the exporter's logger, slog's

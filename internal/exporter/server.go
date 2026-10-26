@@ -740,7 +740,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Collector: name,
 			Metric:    result.metric,
 			Target:    logTarget,
-			Error:     result.err.Error(),
+			// The caller's text, as a failed stage's: a metric's error
+			// quotes the value of the answer it could not read.
+			Error: model.CallerText(result.err),
 		})
 		failure := out.result(false)
 		failure.failure = s.shownStatusError(result.err)

@@ -734,9 +734,10 @@ func fetchSQL(ctx context.Context, target string, c *model.Collector, overrides 
 }
 
 // onSQLHost names the server in a failed statement's error, unless the
-// error names it already.
+// error names it already where a probe's caller reads it too: a server's
+// message that names it is withheld from the caller (sqlServerAnswer).
 func onSQLHost(err error, hostPort string) error {
-	if strings.Contains(err.Error(), hostPort) {
+	if strings.Contains(model.CallerText(err), hostPort) {
 		return err
 	}
 	return fmt.Errorf("%w (on %s)", err, hostPort)

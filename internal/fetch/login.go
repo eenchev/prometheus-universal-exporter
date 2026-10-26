@@ -465,12 +465,7 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 	shown := RedactURL(u, MaskQueryValues)
 	get := func(ctx context.Context) (string, error) {
 		value, err := logins.get(ctx, key, c.Name, fingerprint, login)
-		if errors.Is(err, ErrTargetRefused) {
-			// The login's URL refused by the collector's policy is the
-			// login's failure, not the target's: the target was let
-			// through, and is not counted or answered as refused.
-			err = errors.New(err.Error())
-		}
+		err = notTargetRefused(err)
 		if err != nil {
 			return "", &StageError{Stage: loginStage, Err: fmt.Errorf("login at %s failed: %w", shown, err)}
 		}
@@ -484,6 +479,24 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 		logins.invalidate(key, used)
 		return get(ctx)
 	}}, nil
+}
+
+// notTargetRefused is err with ErrTargetRefused no longer in its chain: the
+// login's URL refused by the collector's policy is the login's failure, not
+// the target's, as the target was let through, and is not counted or
+// answered as refused. The text is kept, and so is what a probe's caller is
+// answered of it (model.CallerText), which a copy of the text alone would
+// lose: what the error held for the operator alone would be answered.
+func notTargetRefused(err error) error {
+	if !errors.Is(err, ErrTargetRefused) {
+		return err
+	}
+	text, shown := err.Error(), model.CallerText(err)
+	copied := errors.New(text)
+	if shown != text {
+		return model.WithOperatorDetail(copied, shown)
+	}
+	return copied
 }
 
 // again drops the token the target refused and fetches another, once for
@@ -672,7 +685,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
-		return loginToken{}, RedactURLErrors(err)
+		return loginToken{}, withAnswerWithheld(RedactURLErrors(err))
 	}
 	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, loginAnswerLimit+1))
 	_ = resp.Body.Close()
@@ -761,14 +774,53 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 // answeredError is the error of a login answered with a status that is not
 // 2xx: the status, and the start of what the server said, with what reads as
 // a credential masked. A redirect is named as one, since it is not followed.
+//
+// What the server said is the operator's: an identity provider's refusal
+// may name the user, the client or the directory it asked, and a probe's
+// caller is answered the status alone, and where the rest is
+// (model.WithOperatorDetail).
 func answeredError(status int, redirect bool, body []byte) error {
 	if redirect || status >= 300 && status < 400 {
 		return fmt.Errorf("the login was answered with the redirect %d, which a login does not follow; login.url must be the URL that answers the login itself", status)
 	}
+	answered := fmt.Sprintf("the login was answered with HTTP status %d", status)
 	if excerpt := loginExcerpt(body); excerpt != "" {
-		return fmt.Errorf("the login was answered with HTTP status %d: %s", status, excerpt)
+		return model.WithOperatorDetail(fmt.Errorf("%s: %s", answered, excerpt), answered+loginAnswerLogged)
 	}
-	return fmt.Errorf("the login was answered with HTTP status %d", status)
+	return errors.New(answered)
+}
+
+// loginAnswerLogged is what a probe's caller is told of the answer a
+// refused login had: where it is.
+const loginAnswerLogged = "; what it said is in the exporter's log"
+
+// oauth2ErrorCodes are the error codes RFC 6749 § 5.2 registers for a token
+// endpoint's refusal. A probe's caller is answered one of these; any other
+// code is the provider's own text, and is the operator's, as its
+// error_description is.
+var oauth2ErrorCodes = map[string]bool{
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true,
+	"unauthorized_client": true, "unsupported_grant_type": true, "invalid_scope": true,
+}
+
+// oauth2RefusedError is the error of a token endpoint that answered with an
+// RFC 6749 error: the status, the code and the start of its
+// error_description. A probe's caller is answered the status, the code when
+// RFC 6749 registers it, and where the rest is.
+func oauth2RefusedError(status int, code, description string) error {
+	answered := fmt.Sprintf("the token endpoint answered HTTP status %d", status)
+	text := answered + ", " + loginExcerpt([]byte(code))
+	if description != "" {
+		text += ": " + loginExcerpt([]byte(description))
+	}
+	shown := answered + " with an error code RFC 6749 does not register"
+	if oauth2ErrorCodes[code] {
+		shown = answered + ", " + code
+		if description == "" {
+			return errors.New(text)
+		}
+	}
+	return model.WithOperatorDetail(errors.New(text), shown+loginAnswerLogged)
 }
 
 // loginExcerptBytes is how much of a refused login's answer its error shows.
@@ -891,20 +943,28 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 		if errors.As(err, &refused) && refused.Response != nil {
 			status := refused.Response.StatusCode
 			if refused.ErrorCode != "" {
-				// The error's code is one of RFC 6749's, such as
-				// invalid_client; its description is the server's text.
-				described := ""
-				if refused.ErrorDescription != "" {
-					described = ": " + loginExcerpt([]byte(refused.ErrorDescription))
-				}
-				return loginToken{}, fmt.Errorf("the token endpoint answered HTTP status %d, %s%s", status, loginExcerpt([]byte(refused.ErrorCode)), described)
+				return loginToken{}, oauth2RefusedError(status, refused.ErrorCode, refused.ErrorDescription)
 			}
 			return loginToken{}, answeredError(status, refused.Response.Header.Get("Location") != "", refused.Body)
 		}
 		// The library's own words: a connection that failed quotes the
 		// URL, whose query values are masked; a token missing from the
 		// answer says so.
-		return loginToken{}, errors.New(RedactText(RedactURLErrors(err).Error()))
+		said := errors.New(RedactText(RedactURLErrors(err).Error()))
+		var failed *url.Error
+		if errors.As(err, &failed) || err.Error() == oauth2EmptyAnswer {
+			// A failed connection's words quote the first line of an
+			// answer that is no HTTP, as the target's do (answerquoted.go):
+			// read before RedactText, which may mask Go's words.
+			if told, quoted := toldOfGoQuoting(RedactURLErrors(err).Error()); quoted {
+				return loginToken{}, model.WithOperatorDetail(said, told)
+			}
+			return loginToken{}, said
+		}
+		// Any other is an answer the library could not read, and its
+		// words quote what in it could not be: the endpoint's text, which
+		// is the operator's.
+		return loginToken{}, model.WithOperatorDetail(said, "the token endpoint's answer could not be read as a token"+loginAnswerLogged)
 	}
 	out := loginToken{value: token.AccessToken}
 	if !token.Expiry.IsZero() {
@@ -915,6 +975,10 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 	}
 	return out, nil
 }
+
+// oauth2EmptyAnswer is the library's error for an answer without a token,
+// which quotes nothing of it.
+const oauth2EmptyAnswer = "oauth2: server response missing access_token"
 
 // debugRun reports whether ctx is a debug run's — a debug probe, a debug
 // scrape of a static target or a debug page's fetch — whose trips record

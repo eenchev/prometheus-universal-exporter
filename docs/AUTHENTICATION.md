@@ -344,6 +344,29 @@ server send. What the login sent — its body, its secrets — is never shown:
 login at https://appliance.example/api/v2/login failed: the login was answered with HTTP status 403: {"error": "account locked", "password": "<redacted>"}
 ```
 
+What the server answered is the operator's: an identity provider's refusal
+may name the user, the client or the directory it asked. It is in the
+exporter's log, and with
+[`--web.debug=full`](CONFIGURATION.md#debugging-collectors) in a debug
+probe's report and on the [status page](ENDPOINTS.md#status-page); the
+probe's caller is answered the status alone, and where the rest is:
+
+```text
+login at https://appliance.example/api/v2/login failed: the login was answered with HTTP status 403; what it said is in the exporter's log
+```
+
+An `oauth2` login's caller is answered the error code too when it is one
+RFC 6749 § 5.2 registers — `invalid_request`, `invalid_client`,
+`invalid_grant`, `unauthorized_client`, `unsupported_grant_type` or
+`invalid_scope` — as in `the token endpoint answered HTTP status 401,
+invalid_client; what it said is in the exporter's log`; any other code is
+the server's own text, and the caller is answered `the token endpoint
+answered HTTP status 401 with an error code RFC 6749 does not register`
+instead. An answer the OAuth library could not read as a token, whose
+complaint quotes it, is answered `the token endpoint's answer could not be
+read as a token`; a connection that failed, or an answer without
+`access_token`, is answered as it is logged.
+
 An error of a `token` or `expires_in` expression says what it gave, such as
 "an object", never the value, which may be the token itself.
 

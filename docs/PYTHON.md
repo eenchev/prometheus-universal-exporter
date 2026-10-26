@@ -362,7 +362,10 @@ start once and then serves scrape after scrape.
   it stopped, and the error of a worker that died in a run goes on after it
   to the hint about `limits.max_script_memory`. Either start is counted in
   `http_exporter_python_worker_start_failures_total`, and the next scrape
-  starts another interpreter.
+  starts another interpreter. What the interpreter wrote to stderr is the
+  operator's — a script may print the data there — so a probe's caller is
+  answered the error without it, ending `what it wrote to stderr is in the
+  exporter's log`.
 - **Declared libraries are preloaded.** The libraries in `libraries` are
   imported when the worker starts, so their import time is not counted against
   the script, and a library that itself needs a module the sandbox blocks, such
@@ -393,6 +396,17 @@ start once and then serves scrape after scrape.
              ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
   ZeroDivisionError: division by zero
   ```
+
+  That is the error the exporter's log, a debug probe's report and, with
+  `--web.debug=full`, the status page show. A probe's caller is answered the
+  exception's type and the line of the innermost frame of the script, without
+  the message or the source lines, which are what the script made of the
+  data: `python transform failed: ZeroDivisionError at line 2 of the script;
+  the rest is in the exporter's log`. An error the worker raises after the
+  script, which has no frame, is answered by its type alone; `fail(...)`'s
+  message, which names no exception, is answered as
+  `[withheld; in the exporter's log]`. See
+  [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told).
 
   A traceback of more than 1,500 bytes is shown by what says most, so that
   the error, held to 2,000 bytes like any other

@@ -41,28 +41,31 @@ func labelNameTarget(t *testing.T) (string, *atomic.Pointer[string]) {
 func TestALabelNameOverItsLimitFailsTheScrape(t *testing.T) {
 	address, body := labelNameTarget(t)
 	over := "l" + strings.Repeat("a", alloctest.UnlessRaced(1<<20, 1<<16))
-	failure := fmt.Sprintf(`metric "m" label name "%s"... (%d bytes) is longer than limits.max_label_name_length 200; rename the label with transform.rename_labels, or raise limits.max_label_name_length`, over[:200], len(over))
+	// The name as the failure quotes it, a value of the answer, which a
+	// probe's caller is not told (answeredAs).
+	quoted := fmt.Sprintf(`"%s"... (%d bytes)`, over[:200], len(over))
+	failure := `metric "m" label name ` + quoted + ` is longer than limits.max_label_name_length 200; rename the label with transform.rename_labels, or raise limits.max_label_name_length`
 	const passthrough = `{name: c, request: {type: http}, decoder: {type: prometheus}, transform: {type: prometheus}`
 	for name, test := range map[string]struct {
-		collector, body, want string
+		collector, body, want, quoted string
 	}{
-		"a pass-through": {passthrough + `}`, "m{" + over + `="v"} 1` + "\n", failure},
-		"a pass-through carrying on after a failed transform": {passthrough + `, error_handling: {on_transform_error: log}}`, "m{" + over + `="v"} 1` + "\n", failure},
+		"a pass-through": {passthrough + `}`, "m{" + over + `="v"} 1` + "\n", failure, quoted},
+		"a pass-through carrying on after a failed transform": {passthrough + `, error_handling: {on_transform_error: log}}`, "m{" + over + `="v"} 1` + "\n", failure, quoted},
 		"an over-long metric name, alike": {passthrough + `, error_handling: {on_transform_error: log}}`, "m" + over + " 1\n",
-			fmt.Sprintf(`invalid metric name "m%s"... (%d bytes): longer than limits.max_metric_name_length 200`, over[:199], len(over)+1)},
+			fmt.Sprintf(`invalid metric name "m%s"... (%d bytes): longer than limits.max_metric_name_length 200`, over[:199], len(over)+1), fmt.Sprintf(`"m%s"... (%d bytes)`, over[:199], len(over)+1)},
 		// A script's answer is bounded by limits.max_output_bytes, 1MiB
 		// by default, so its label is of 300 bytes.
 		"a Python script's label": {`{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "metric('m', value=1, labels={'l' + 'a' * (data['n'] - 1): 'v'})"}}`, `{"n": 300}`,
-			fmt.Sprintf(`metric "m" label name "%s"... (300 bytes) is longer than limits.max_label_name_length 200`, over[:200])},
+			fmt.Sprintf(`metric "m" label name "%s"... (300 bytes) is longer than limits.max_label_name_length 200`, over[:200]), fmt.Sprintf(`"%s"... (300 bytes)`, over[:200])},
 		"a histogram's own label": {passthrough + `, limits: {max_label_name_length: 1}}`, "# TYPE m histogram\nm_bucket{le=\"+Inf\"} 1\nm_sum 1\nm_count 1\n",
-			`metric "m" is a histogram, whose buckets carry the label le, which is longer than limits.max_label_name_length 1; raise limits.max_label_name_length`},
+			`metric "m" is a histogram, whose buckets carry the label le, which is longer than limits.max_label_name_length 1; raise limits.max_label_name_length`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			server, logs := errorLengthServer(t, test.collector)
 			body.Store(&test.body)
 			got := probeOnce(t, server, probePath("c", address, ""), nil)
-			if got.Code != http.StatusBadGateway || !strings.Contains(got.Body.String(), test.want) {
-				t.Fatalf("answered %d %.600q, want 502 with %.600q", got.Code, got.Body, test.want)
+			if answered := answeredAs(test.want, test.quoted); got.Code != http.StatusBadGateway || !strings.Contains(got.Body.String(), answered) {
+				t.Fatalf("answered %d %.600q, want 502 with %.600q", got.Code, got.Body, answered)
 			}
 			if lines := linesOf(t, logs, "probe failed"); len(lines) != 1 || lines[0]["stage"] != "validation" || !strings.Contains(fmt.Sprint(lines[0]["error"]), test.want) {
 				t.Errorf("logged %.600v", lines)

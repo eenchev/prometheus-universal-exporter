@@ -172,7 +172,7 @@ func TestATargetsSeriesToldApartByAnEmptyLabelAreRefused(t *testing.T) {
 		"# TYPE m gauge\nm{l=\"\"} 1\nm 2\n":                                           `collector pass validation failed: duplicate metric series "m"` + "\n",
 		"# TYPE m gauge\nm 1\nm 2\n":                                                   `collector pass validation failed: duplicate metric series "m"` + "\n",
 		"# TYPE m gauge\nm{l=\"\",k=\"v\"} 1\nm{k=\"v\",j=\"\"} 2\n":                   `collector pass validation failed: duplicate metric series "m"` + "\n",
-		"# TYPE h histogram\nh_sum{l=\"\"} 1\nh_count{l=\"\"} 1\nh_sum 1\nh_count 1\n": "collector pass decode failed: decoding Prometheus exposition: text format parsing error in line 4: second h_sum sample for the histogram h\n",
+		"# TYPE h histogram\nh_sum{l=\"\"} 1\nh_count{l=\"\"} 1\nh_sum 1\nh_count 1\n": "collector pass decode failed: decoding Prometheus exposition: text format parsing error in line 4: second " + model.WithheldMark + "_sum sample for the " + model.WithheldMark + "\n",
 	} {
 		target := utf8Target(t, body)
 		server := newStaticServer(t, &model.Config{Collectors: []model.Collector{passthrough("pass", "", "")}}, nil)

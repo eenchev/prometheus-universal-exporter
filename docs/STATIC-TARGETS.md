@@ -663,10 +663,12 @@ target:
   made the exporter back off is the one shown. It is the error the log has,
   with every URL's credentials withheld, its userinfo too where the text
   only quotes the URL, anything else that reads as a credential masked, and
-  cut to 2000 bytes. What is for the operator alone, such as what an
-  [`sshexec`](SSHEXEC.md) command wrote to stderr, is left out as a probe's
-  caller is answered it, unless `--web.debug` is `full`: the page is read by
-  whoever may call `/probe`. A scrape that panicked shows `the scrape panicked; the
+  cut to 2000 bytes. The values of the target's answer it quotes and what is
+  for the operator alone, such as what an [`sshexec`](SSHEXEC.md) command
+  wrote to stderr, are left out as a probe's caller is answered them
+  ([What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told)),
+  unless `--web.debug` is `full`: the page is read by whoever may call
+  `/probe`. A scrape that panicked shows `the scrape panicked; the
   exporter's log has the panic`: the panic's own text is only in the log.
 
 A summary line above says how many targets there are, how many are failing

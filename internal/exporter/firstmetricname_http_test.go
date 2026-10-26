@@ -52,7 +52,7 @@ func TestAMegabyteMetricNameIsLoggedByItsStartByEveryTrip(t *testing.T) {
 			t.Errorf("%s: the trip logged %d bytes, want under 2,000 for the warning and the name's refusal", trip, size)
 		}
 	}
-	if answer := probeOnce(t, server, "/probe?collector=depot&target="+target.URL, nil); answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), `"... (1048576 bytes): longer than limits.max_metric_name_length 200`) {
+	if answer := probeOnce(t, server, "/probe?collector=depot&target="+target.URL, nil); answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), "invalid metric name "+model.WithheldMark+": longer than limits.max_metric_name_length 200") {
 		t.Fatalf("the probe is answered %d %.600q, want the name's refusal", answer.Code, answer.Body.String())
 	}
 	warned("a probe")

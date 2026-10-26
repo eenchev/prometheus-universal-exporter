@@ -31,15 +31,16 @@ import (
 // PGSERVICE, which no connection string unsets and which is refused.
 func init() {
 	registerSQLDriver(&sqlDriver{
-		name:      SQLDriverPostgres,
-		port:      func(map[string]string) string { return "5432" },
-		options:   map[string][]string{"sslmode": {"disable", "require", "verify-full"}, "application_name": nil},
-		tlsOption: "sslmode",
-		tlsModes:  map[string]sqlTLSMode{"disable": sqlTLSOff, "require": sqlTLSInsecure, "verify-full": sqlTLSVerify},
-		connect:   connectPostgres,
-		run:       sqlReadOnlyTx(postgresStatementTimeout),
-		timedOut:  postgresTimedOut,
-		readOnly:  "transaction",
+		name:        SQLDriverPostgres,
+		port:        func(map[string]string) string { return "5432" },
+		options:     map[string][]string{"sslmode": {"disable", "require", "verify-full"}, "application_name": nil},
+		tlsOption:   "sslmode",
+		tlsModes:    map[string]sqlTLSMode{"disable": sqlTLSOff, "require": sqlTLSInsecure, "verify-full": sqlTLSVerify},
+		connect:     connectPostgres,
+		run:         sqlReadOnlyTx(postgresStatementTimeout),
+		timedOut:    postgresTimedOut,
+		serverError: postgresServerError,
+		readOnly:    "transaction",
 
 		messageTooLarge: postgresMessageTooLarge,
 	})
@@ -87,6 +88,16 @@ func postgresStatementTimeout(timeout time.Duration) []string {
 func postgresTimedOut(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "57014" && strings.Contains(pgErr.Message, "statement timeout")
+}
+
+// postgresServerError recognises the server's ErrorResponse, which pgx
+// gives as a PgError, by its SQLSTATE.
+func postgresServerError(err error) (string, bool) {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return "", false
+	}
+	return "SQLSTATE " + pgErr.Code, true
 }
 
 // postgresPinned is the connection string postgresConfig parses: every

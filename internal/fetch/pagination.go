@@ -175,7 +175,7 @@ func itemsPath(items string, page any) ([]any, error) {
 			break
 		}
 		if err, ok := value.(error); ok {
-			return nil, fmt.Errorf("%q is not a path to the array of a page's items, such as .items, .data.results, or . for a page that is an array: %w", items, err)
+			return nil, fmt.Errorf("%q is not a path to the array of a page's items, such as .items, .data.results, or . for a page that is an array: %w", items, expr.JQRunError(err))
 		}
 		count++
 		found, _ = value.([]any)
@@ -475,7 +475,7 @@ func nextValue(next string, response *HTTPResponse, page any) (string, error) {
 			break
 		}
 		if err, ok := value.(error); ok {
-			return "", fmt.Errorf("request.pagination.next %q failed: %w", next, err)
+			return "", fmt.Errorf("request.pagination.next %q failed: %w", next, expr.JQRunError(err))
 		}
 		if count == 0 {
 			first = value

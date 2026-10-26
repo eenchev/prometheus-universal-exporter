@@ -10790,7 +10790,13 @@ linters' job lints builds that carry every type, in which a helper only
 another type's code or tests call is used, so a helper a single-type build
 leaves unused is reported nowhere else. `make lint-request-types`, which
 `make ci` includes, MUST lint the same builds, and a test MUST keep its loop
-naming every request type of the tree. Every job that runs Go checks MUST start with the same setup
+naming every request type of the tree. The scaffold test, which builds a
+copy of the tree with new request types (§ 5.1), MUST run in a job of its own
+under the `go` output, and the step that runs the repository's checks MUST
+skip it; `make ci` MUST skip it and run it the same way. A test that a go
+command of CI or of `make ci` skips MUST be run by another command there, by
+the same pattern over the same packages, under the same condition, and a test
+MUST fail for one that is not. Every job that runs Go checks MUST start with the same setup
 steps (checkout, the changed-path filter, Go, the image's Python with its
 libraries and the test-only modules, the module download) and the same
 environment; a job that sets up and runs neither Go nor Python, as the
@@ -26031,7 +26037,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   that did not succeed.
 - `tools/ci-passed.py` looks for the step `Run the repository's checks`, and
   `ci.yml`'s job `test` has a step of that name that runs
-  `go test ./test/repository/` under the go output.
+  `go test -skip '^TestANewRequestTypeIsWiredByTheScaffold$' ./test/repository/`
+  under the go output.
 - With `allocator.enabled` and no `allocator.tokenSecret.name`, the chart
   renders a Secret `<fullname>-allocator-token` with the allocator's labels
   holding a random token of 32 characters or more under

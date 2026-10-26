@@ -7,7 +7,8 @@ make lint       # golangci-lint, same configuration and version as CI
 make gopls-check  # gopls check, what VS Code shows, at CI's version
 make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
-make test       # go test ./..., then with -race, twice, in a random order
+make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
+make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
 make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap adds s3file, redis, tcp and ldap
 make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
@@ -21,7 +22,7 @@ make helm-test  # helm lint and the template scenarios CI renders, with the pinn
 make vulncheck  # govulncheck, for reference; not part of make ci
 make new-request-type NAME=<name> [OPT_IN=1]  # a new request type's files and wiring; not part of make ci
 make ci         # what CI runs, one after another: fmt-check, lint, lint-request-types,
-                #   gopls-check, test, vet, build-request-types, test-request-types,
+                #   gopls-check, test, test-scaffold, vet, build-request-types, test-request-types,
                 #   the sql drivers' and the opt-in request types' builds, and helm-test
 
 make test-external  # opt-in; probes real third-party endpoints
@@ -417,7 +418,8 @@ and holds the copy to building and vetting in those builds, to the
 generated tests and to the tests that compare the lists of the types. It
 needs a few minutes of a
 cold build cache, so it runs in the default build only, and not under
-`-short` or the race detector. Every place left to a person says
+`-short` or the race detector; CI runs it in a job of its own, `scaffold`,
+and `make test-scaffold` runs it alone. Every place left to a person says
 `TODO(<name>)`, and the script ends by printing what that is:
 
 1. the logic, in the type's file: its keys and their `KeyRules`, `Fields`,
@@ -2534,7 +2536,11 @@ exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
 which together list the side once each, as a test checks);
 `request-types`, a matrix over the request types (its checks are named
 `test (<type>)`), vets, builds and lints each type on its own under the `go`
-output and runs the exporter's tests with it under `exporter`; `allocator` runs the
+output and runs the exporter's tests with it under `exporter`; `scaffold`
+runs `TestANewRequestTypeIsWiredByTheScaffold` alone under `go`, the
+minutes it takes to build a copy of the tree with two new request types,
+which the step of `test` that runs the repository tests skips with `-skip`;
+`allocator` runs the
 allocator's tests, once and then under the race detector, when the
 `allocator` output names a change. The allocator's tests are not run with
 each type on its own: those that need a type are built with it, so such a
@@ -2552,7 +2558,11 @@ with a job-level `if`: a job whose steps are skipped still passes under its
 own name, while a matrix job skipped as a whole is reported under a name no
 check expects. `make ci` runs the same commands one after another, each over
 every package (`./...`) where CI names a side's packages, so it runs
-everything whatever changed.
+everything whatever changed: `make test` skips the scaffold test as `test`
+does and `make test-scaffold` runs it as `scaffold` does.
+`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test a go command of
+CI or of `make ci` skips that no other command there runs with `-run`, so a
+test moved out of a suite to a job of its own still runs.
 
 Every workflow sets `permissions` at its top, read-only, so no job runs with
 the repository's default token, which may write to everything; a job that has

@@ -45,9 +45,13 @@ type Config struct {
 	Collectors []Collector `yaml:"collectors"`
 	// CollectorFiles lists further files of collectors, as paths or glob
 	// patterns relative to the configuration file (config/collectorfiles.go).
-	CollectorFiles []string   `yaml:"collector_files"`
-	OTLP           OTLPConfig `yaml:"otlp"`
-	Web            WebConfig  `yaml:"web"`
+	CollectorFiles []string `yaml:"collector_files"`
+	// Defaults are what the collectors of the configuration file take for
+	// the keys they do not write (defaults.go); nil when it has no defaults
+	// block. Each collector file has its own.
+	Defaults *CollectorDefaults `yaml:"defaults"`
+	OTLP     OTLPConfig         `yaml:"otlp"`
+	Web      WebConfig          `yaml:"web"`
 	// RateLimits bounds how fast the http and graphite requests of every
 	// collector together ask a host, for an API whose quota is the host's
 	// rather than one collector's (fetch/hostratelimit.go).
@@ -165,6 +169,13 @@ type Collector struct {
 	// static targets that use it, are not checked against them. It is no
 	// key of the configuration.
 	DescriptorFilesUnread bool `yaml:"-"`
+	// FromDefaults are the keys the collector took from the defaults block
+	// of its file (CollectorDefaults.ApplyTo), by their paths, for the
+	// errors about them and the dry run to say so. It is no key of the
+	// configuration, and no part of what the collector is: one that writes
+	// a value itself is the same collector as one that takes it from
+	// defaults.
+	FromDefaults []string `yaml:"-"`
 }
 
 // RequestConfig is a collector's request block: how the target is reached.

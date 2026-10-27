@@ -228,6 +228,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"tcp":        {"a service that answers a line sent over TCP", ""},
 	"ldap":       {"an LDAP directory", ""},
 	"sshexec":    {"a command run on another host over SSH", ""},
+	"ntp":        {"the clock of an NTP server", "NTP servers"},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

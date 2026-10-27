@@ -49,7 +49,7 @@ func ParseCollector(document []byte, refuse func(*model.Collector) error) (*mode
 		return nil, fmt.Errorf("line %d: write one collector as a mapping, without the dash that starts an entry of the collectors list", root.Line)
 	case yaml.MappingNode:
 		for _, entry := range model.MappingEntries(root) {
-			if key := model.KeyName(entry.Key); key == collectorFileKey || key == "collector_files" {
+			if key := model.KeyName(entry.Key); key == collectorFileKey || key == defaultsKey || key == "collector_files" {
 				return nil, fmt.Errorf("line %d: %q is a key of the configuration, not of a collector; write one collector as it is written under collectors:, a mapping that starts with its name", entry.Key.Line, key)
 			}
 		}

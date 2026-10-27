@@ -75,12 +75,15 @@ func TestTargetOwnSectionsAreCounted(t *testing.T) {
 // such as one kept out of the encoding. Each settable leaf of the collector,
 // set on its own, changes the key; lists and mappings are set as a whole.
 //
-// LabelParams and DescriptorFilesUnread are the things a collector holds
-// that are kept out of its encoding, and neither is a setting: LabelParams is
-// what the load read of the placeholders in transform.labels and in the
-// rules' labels (fetch.ParseLabelParams), which are settings, and in the key;
+// LabelParams, DescriptorFilesUnread and FromDefaults are the things a
+// collector holds that are kept out of its encoding, and none is a
+// setting: LabelParams is what the load read of the placeholders in
+// transform.labels and in the rules' labels (fetch.ParseLabelParams), which are settings, and in the key;
 // DescriptorFilesUnread is set only by the target allocator's load
-// (config.WithoutNamedFiles), whose configuration is never probed.
+// (config.WithoutNamedFiles), whose configuration is never probed;
+// FromDefaults says which of the collector's values its file's defaults
+// gave it, values that are in the key as the collector's own, so that one
+// written in the collector or in defaults is the same collector.
 func TestEverySettingChangesTheCacheKey(t *testing.T) {
 	type leaf struct {
 		name  string
@@ -111,7 +114,7 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				continue
 			}
 			if key == "-" {
-				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" {
+				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" && name != "FromDefaults" {
 					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
 				}
 				continue

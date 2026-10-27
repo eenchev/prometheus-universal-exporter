@@ -8,7 +8,8 @@ and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
 
-The top-level keys are `collectors`, `collector_files`, `rate_limits`, `otlp`
+The top-level keys are `collectors`, `collector_files`,
+[`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
 and `web`. `rate_limits` is a key of its own rather than part of a
 collector's `limits`, which bound one collector's scrape: its entries belong
 to no collector, and bound the requests of all of them together.
@@ -2501,7 +2502,8 @@ asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
 `sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
-certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) — and
+certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
+`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
 `kubernetes` lists Kubernetes objects — see [Kubernetes
 objects](KUBERNETES.md).
 A collector
@@ -2583,6 +2585,11 @@ certificate and the name verified, and `allowed_targets` and
 `denied_targets` apply as for `http`. The decoder is `json`; its table is in
 [TLS certificates](TLSCERT.md#a-collector).
 
+For `ntp`, no key is required, and the type has none of its own:
+`allowed_targets` and `denied_targets` apply as for `http`, checked on the
+address the request is sent to. The decoder is `json`; its table is in
+[NTP](NTP.md#a-collector).
+
 For `kubernetes`, `resource` is required; `group` and `version`,
 `namespaces` or `all_namespaces`, `label_selector`, `field_selector`,
 `max_objects`, `max_response_bytes`, and `api_server` with `tls` and
@@ -2654,7 +2661,8 @@ and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
 `param_<name>` too, and requires a `target`, the bucket. `sql` accepts `timeout` and
 `param_<name>`, and requires a `target`, the database server. `dns` and
 `tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
-name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
+name to resolve and the server, `host:port`, and so does `ntp`, its server
+`host:port`, port 123 when left out. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
 since the collector lists what its configuration names. `redis` accepts
 `timeout` and `param_<name>`, and requires a `target`, the server,
@@ -2715,12 +2723,12 @@ than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
 An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile`,
-`sql`, `dns`, `tlscert` and `kubernetes` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+`sql`, `dns`, `tlscert`, `ntp` and `kubernetes` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
 HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
-`tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
+`tlscert`, `ntp` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
 links the AWS SDK, below, the opt-in `redis`, `tcp` and `ldap` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
@@ -2957,7 +2965,8 @@ has the whole of it. What is withheld from the answer:
 - **Every value of the answer an error quotes**: the token a decoder could
   not read (`expected float as value, got "..."`), a label value or a name of
   the document, a CSV header, a charset the answer names, the start of a
-  Graphite server's answer that is not render JSON. Each stands as
+  Graphite server's answer that is not render JSON, a `tcp` server's
+  [greeting](TCP.md#services-that-speak-first) that did not match. Each stands as
   `[withheld; in the exporter's log]`, and the rest of the error reads as it
   does in the log. The names of series that are valid are not withheld: they
   are what a successful probe answers.
@@ -3213,7 +3222,7 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, kubernetes, localfile, sql, sshfile, tlscert`. And a boolean is `true` or
+  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. And a boolean is `true` or
   `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label
@@ -3749,7 +3758,9 @@ An anchor can also sit where it is first used, as the Open-Meteo example's
 `labels: &location` does on its first metric; an `x-` key is for what no
 collector uses as it is. A key written beside `<<:` replaces that key of the
 merged mapping whole — `query` above, or a `request` set beside a merged
-collector — rather than being merged into it. Anchors work in collector
+collector — rather than being merged into it; for the limits, retries and
+target policies most collectors of a file share,
+[defaults](#defaults-for-the-collectors-of-a-file) are given key by key. Anchors work in collector
 files and the [static target file](STATIC-TARGETS.md#the-target-file) too,
 each file on its own: an anchor in one file cannot be used in another.
 Aliases and merge keys work in every mapping of the three files, a
@@ -3787,7 +3798,9 @@ collectors:                 # optional when collector_files supplies them
     ...
 ```
 
-Each collector file holds a `collectors` list and nothing else:
+Each collector file holds a `collectors` list, and, if it likes,
+[`defaults`](#defaults-for-the-collectors-of-a-file) for them, and nothing
+else:
 
 ```yaml
 # collectors.d/payments.yaml
@@ -3815,9 +3828,9 @@ collectors:
   habit. The Helm chart mounts its static target file in a directory of its
   own, so in the chart's configuration directory `*.yaml` matches only the
   collector files of `config.data`.
-- **Only collectors.** Any other key in a collector file — `web`, `otlp`, a
-  misspelt `colectors`, or a nested `collector_files` — is an error naming the
-  file, the key and its line. The exporter-wide settings belong to the
+- **Only collectors.** Any other key in a collector file than `collectors`
+  and `defaults` — `web`, `otlp`, a misspelt `colectors`, or a nested
+  `collector_files` — is an error naming the file, the key and its line. The exporter-wide settings belong to the
   configuration alone, so a file of collectors can never change them. A file
   that is empty or has an empty `collectors` list is an error too.
 - **Order.** The configuration's own collectors come first, then each entry's
@@ -3847,6 +3860,10 @@ collectors:
 - **Checking.** `--dry-run` reads the collector files too and lists them under
   `details.collector_files` of its `config` entry.
 
+- **Defaults.** A collector file's `defaults` apply to its own collectors,
+  and the configuration's to the configuration's: see
+  [Defaults for the collectors of a file](#defaults-for-the-collectors-of-a-file).
+
 `prometheus-universal-exporter --config.collector-file-schema` prints the JSON
 Schema of a collector file, published as
 [`configs/collector-file.schema.json`](../configs/collector-file.schema.json). Start a collector
@@ -3857,7 +3874,103 @@ file with
 ```
 
 and the editor checks it the way it checks the configuration, including that it
-has no key but `collectors`.
+has no key but `collectors` and `defaults`.
+
+## Defaults for the collectors of a file
+
+A file of many similar collectors repeats the same limits, retries and
+target policies in each. A top-level `defaults` block writes them once: every
+collector of the same file takes each key of it that it does not set itself.
+The configuration file and each [collector file](#collector-files) have a
+block of their own, which applies to the collectors of that file alone —
+the configuration's does not reach the collectors of a collector file, nor
+the other way round.
+
+```yaml
+# collectors.d/payments.yaml
+defaults:
+  request:
+    allowed_targets: ["*.payments.example"]
+    retry: {attempts: 2, backoff: 1s}
+  limits: {max_metrics: 2000, max_label_value_length: 200}
+  error_handling: {on_fetch_error: log}
+  failure_backoff: {initial: 1m}
+collectors:
+  - name: payments_api
+    request: {type: http, path: /status}
+    transform: {type: jq}
+    metrics:
+      - name: payments_queue_depth
+        expression: .queue.depth
+  - name: payments_ledger
+    request:
+      type: http
+      path: /ledger/status
+      retry: {attempts: 5}          # backoff 1s still comes from defaults
+    limits: {max_metrics: 10000}    # max_label_value_length 200 still applies
+    transform: {type: jq}
+    metrics:
+      - name: payments_ledger_lag_seconds
+        expression: .lag
+```
+
+- **The keys.** `defaults` sets the keys of `request.tls`, `request.retry`,
+  `request.max_response_bytes`, `request.allowed_targets`,
+  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff`
+  and `cache`, each as a collector writes it: settings that are alike for
+  collectors of different request types and decoders. Any other key, of a
+  collector (`metrics`, `request.path`, `request.type`, a key of one request
+  type's own) or of nothing, is refused when the configuration loads, naming
+  the key and its line, and so is a value of the wrong kind.
+- **Key by key.** A collector takes every key of the block it does not write
+  itself, at every depth: one that writes `limits.max_metrics` keeps the
+  block's other limits, and one that writes `retry.attempts` keeps its
+  `retry.backoff`. A key the collector writes is its own whatever its value,
+  so `cache: {ttl: 0s}` answers every probe of that collector from the
+  target, while a key written `""` is left out, as everywhere, and taken
+  from the block. A list is one key and replaced whole: a collector's own
+  `allowed_targets` is the list it is held to, never joined with the block's.
+  A `request.tls` or `failure_backoff` written in `defaults`, even empty,
+  turns TLS, or the backoff with its own defaults, on for every collector
+  that does not write it; a collector cannot turn off a `failure_backoff` its
+  file's defaults give it, so one that must never back off belongs in
+  another file. A key merged in with `<<:` is written where the merge puts
+  it, in a collector and in `defaults` alike.
+- **Request types.** A key of `request` applies only to the collectors whose
+  request type takes it, so collectors of several types share one file:
+  `retry` does not reach a `dns` collector, nor `retry.statuses` a `grpc` one.
+  A key that applies to no collector of the file — none of their types takes
+  it, or each that does sets it itself — would be a setting nothing uses, and
+  is refused, as `defaults.request.retry.attempts applies to no collector of
+  the file: request.retry.attempts does not apply to request.type "dns" of
+  its collectors; remove it from defaults`. So is a `defaults` block in a
+  configuration file that defines no collectors of its own.
+- **Checked once, and with each collector.** A value that is wrong whatever
+  collector takes it — a negative limit, an unknown error policy, more than
+  10 retry attempts — is refused once, naming the block, as
+  `defaults.limits.max_metrics is -1, and a limit must not be negative; leave
+  it out, or 0, for the default`, with the collector file in front when it is
+  in one. A value that is wrong for one collector, such as an allowed target
+  that is no bucket name for an `s3file` collector, or a `failure_backoff.max`
+  shorter than the `initial` the block gives, is refused with that
+  collector, and the error ends by saying where the value is written:
+  `(failure_backoff.initial comes from the defaults of the file)`.
+- **The collectors are what count.** A collector is validated, compared on a
+  reload and keyed in the [response cache](#response-caching) with the
+  values it took, as if it wrote them: moving a value from every collector
+  into `defaults` changes no collector, and changing a default changes each
+  collector that takes it, which is what
+  [What a reload changed](#what-a-reload-changed) lists and what drops their
+  cached results.
+- **Everything else as before.** [Environment
+  variables](#environment-variables) are expanded in `defaults` as anywhere
+  in the file, the [target allocator](ALLOCATOR.md) carries the files as
+  written, `defaults` and all, a [static target](STATIC-TARGETS.md) scrapes
+  through the collector as it took its defaults, and the
+  [debug page](#the-debug-page), which reads one collector, takes no
+  `defaults` key. The [dry run](#dry-run) lists under
+  `details.collector_defaults`, for each collector that took any, the keys it
+  took. Both [schemas](#editor-support) take `defaults` with these keys alone.
 
 ## Environment variables
 
@@ -4920,7 +5033,8 @@ targets, each list sorted, or says `no changes`:
 ```
 
 A collector is changed when anything in its definition differs, in the
-configuration file or in a collector file, which is also what drops its
+configuration file or in a collector file, a key it takes from its file's
+[defaults](#defaults-for-the-collectors-of-a-file) included, which is also what drops its
 cached results (see [Response caching](#response-caching)); a static target
 when anything in its entry differs, the file's defaults it takes included.
 Each list names ten and counts the rest — `collectors added: a01, …, a10
@@ -5189,7 +5303,10 @@ The collector run is one of two:
   and a mistake is reported in the words a load would use, with line numbers
   counted from the collector's first line. `${NAME}` references are left as
   they are written, whatever `--config.expand-env` says. It is never put in
-  force, and its own request block never makes a request.
+  force, and its own request block never makes a request. It takes no
+  [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
+  a file, and refused here as `collectors` is, while a configured collector
+  runs with the keys it took from its file's.
 - **Configured**: one of the configuration in force, chosen by name, run as
   it is configured, its Python included: its script is the operator's, and
   reads whatever a target sends on every probe, which is what a pasted body
@@ -5640,6 +5757,12 @@ A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
+Each collector that took keys from its file's
+[defaults](#defaults-for-the-collectors-of-a-file) is listed under
+`details.collector_defaults`, by name, with the keys it took, in the order
+the block has them, such as `{"payments_api": ["request.allowed_targets",
+"limits.max_metrics"]}`; its values are the collector's, wherever they are
+written, and `request_policies` shows them as they will be applied.
 Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
 `accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination`,
 `login` or `rate_limit` is listed under `details.request_policies`, by name, with those
@@ -5850,6 +5973,7 @@ nothing there.
 - [SQL.md](SQL.md) — the `sql` request type.
 - [DNS.md](DNS.md) — the `dns` request type.
 - [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
+- [NTP.md](NTP.md) — the `ntp` request type.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
 - [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
 - [REDIS.md](REDIS.md) — the opt-in `redis` request type.

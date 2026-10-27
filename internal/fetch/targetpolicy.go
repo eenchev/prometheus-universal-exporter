@@ -556,11 +556,18 @@ func checkConnection(ctx context.Context, dialed string, conn net.Conn) error {
 		}
 		return &TargetRefusedError{Host: host, Reason: "the connection is to a host the request did not check"}
 	}
-	remote, ok := conn.RemoteAddr().(*net.TCPAddr)
-	if !ok {
+	// A UDP socket, as an ntp request's, is connected to one address too,
+	// and only that address's datagrams are read from it.
+	var remote net.IP
+	switch a := conn.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		remote = a.IP
+	case *net.UDPAddr:
+		remote = a.IP
+	default:
 		return nil
 	}
-	addr, ok := netip.AddrFromSlice(remote.IP)
+	addr, ok := netip.AddrFromSlice(remote)
 	if !ok {
 		return nil
 	}

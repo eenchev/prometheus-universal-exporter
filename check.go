@@ -256,6 +256,18 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	return out
 }
 
+// defaultsTaken are the keys each collector that took any from its file's
+// defaults block took, by collector name.
+func defaultsTaken(conf *model.Config) map[string][]string {
+	out := map[string][]string{}
+	for i := range conf.Collectors {
+		if c := &conf.Collectors[i]; len(c.FromDefaults) > 0 {
+			out[c.Name] = c.FromDefaults
+		}
+	}
+	return out
+}
+
 // configDetails summarises a configuration that loaded. A deprecated spelling,
 // a warning or the metric lint's advice still passes, so the check stays ok; the report lists them so
 // the operator knows what to change before a deprecated spelling is removed.
@@ -277,6 +289,11 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	}
 	if policies := requestPolicies(conf); len(policies) > 0 {
 		details["request_policies"] = policies
+	}
+	// The values themselves are the collector's, wherever they are written;
+	// which keys it took from its file's defaults says where to change one.
+	if taken := defaultsTaken(conf); len(taken) > 0 {
+		details["collector_defaults"] = taken
 	}
 	if len(conf.Deprecations) > 0 {
 		details["deprecations"] = conf.Deprecations

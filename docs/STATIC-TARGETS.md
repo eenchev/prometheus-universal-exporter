@@ -55,7 +55,7 @@ targets:
 know. A target's `target` is checked when the file loads as its collector's
 type reads it: an `http` or `graphite` target is an absolute URL, and one
 whose port is 0 or past 65535, which no connection can use, is refused
-naming the port, as a `grpc`, `sshfile`, `sql` or `tlscert` target's is. Each target names a collector from the exporter configuration and takes
+naming the port, as a `grpc`, `sshfile`, `sql`, `tlscert` or `ntp` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the
 `retry` settings — overriding the collector's own request for that target only.
@@ -76,6 +76,7 @@ collector is looked at):
 | [`sql`](SQL.md#static-targets) | the database server, or a `snowflake` account | `timeout`, its own `username` and `password_file` or `private_key_file`, its own `tls`, and `connections` but `max_targets`, a target whose `connections` change a setting being a target of its own for the collector's limits |
 | [`dns`](DNS.md#static-targets) | the name to resolve | `timeout` |
 | [`tlscert`](TLSCERT.md#static-targets) | the server | `timeout` |
+| [`ntp`](NTP.md#static-targets) | the server | `timeout` |
 | [`kubernetes`](KUBERNETES.md#static-targets) | none at all | `timeout` |
 | [`s3file`](S3FILE.md#static-targets), opt-in | the bucket, required | `path` and `timeout` |
 | [`redis`](REDIS.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
@@ -279,7 +280,7 @@ block, in place of the collector's. This is what each type takes:
 | `redis` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file` | yes |
 | `ldap` | `password_file`, replacing the collector's, and `bind_dn`, which needs the target's own `password_file` | yes |
 | `tcp` | none: a tcp service is asked no password | yes |
-| `localfile`, `s3file`, `dns`, `tlscert`, `kubernetes` | none | no |
+| `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `kubernetes` | none | no |
 
 A target's `tls` replaces the collector's whole block, a key it leaves out
 not being taken from the collector's, so a target with a client certificate

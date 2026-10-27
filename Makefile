@@ -78,7 +78,7 @@ run:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http kubernetes ldap localfile redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -124,7 +124,7 @@ lint-opt-in-types: lint-version
 # tests call, is reported by no lint of a build with every type. A test
 # keeps the loop naming every type in the tree.
 lint-request-types: lint-version
-	@set -e; for type in dns graphite grpc http kubernetes ldap localfile redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "golangci-lint run --build-tags $$tags"; \
 		golangci-lint run --build-tags "$$tags"; \
@@ -169,7 +169,7 @@ test-scaffold:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http kubernetes ldap localfile redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \

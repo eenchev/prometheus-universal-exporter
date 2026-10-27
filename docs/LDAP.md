@@ -45,7 +45,7 @@ type, at startup, on a reload and by `--dry-run`, saying how to build one
 that has it:
 
 ```text
-collector "openldap" uses request.type "ldap", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, sql, sshfile, tlscert. ldap is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=ldap (make build, or the Dockerfile's build argument), which adds the tag request_type_ldap
+collector "openldap" uses request.type "ldap", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. ldap is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=ldap (make build, or the Dockerfile's build argument), which adds the tag request_type_ldap
 ```
 
 ## A collector

@@ -42,7 +42,7 @@ configured:
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
 | `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
-| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused, an `s3file` collector's being buckets; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
+| `http_exporter_targets_refused_total` | counter | `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused, an `s3file` collector's being buckets; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
 | `http_exporter_sshfile_connections` | gauge | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes use that are open now. A connection collectors with the same host and settings share counts for each of them. |
 | `http_exporter_sshfile_connects_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only: the SSH connections the collector's scrapes made — the first to each host, and each made again after one broke, was closed idle, by keepalives or at the collector's `max_open_connections`, or had a credential or known_hosts file change. A counter that keeps rising while scrapes succeed is a connection that does not last. |
 | `http_exporter_sshfile_limit_waits_total`, `http_exporter_sshfile_limit_failures_total` | counter | [`sshfile`](SSHFILE.md#persistent-connections) collectors only, `0` for one without `max_open_connections`: the scrapes that waited for room at the collector's `max_open_connections`, and those that failed there, every connection it may open held by a read or being made for a scrape waiting for it when their deadline came. Failures rising mean a limit too low for the hosts read, or reads too slow for the scrape's timeout. |
@@ -87,7 +87,7 @@ help and value in both.
 
 <!-- request-types: default -->
 ```text
-http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,http,kubernetes,localfile,sql,sshfile,tlscert",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,http,kubernetes,localfile,ntp,sql,sshfile,tlscert",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
 ```
 <!-- /request-types -->
 

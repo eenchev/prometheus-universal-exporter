@@ -483,6 +483,34 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	}
 }
 
+// --dry-run lists, for each collector that took any, the keys it took from
+// the defaults block of its file, in the order the block has them; the
+// values themselves are the collector's, as request_policies shows them.
+func TestDryRunReportsTheKeysTakenFromDefaults(t *testing.T) {
+	config := testutil.WriteIn(t, t.TempDir(), "config.yaml", `defaults:
+  request: {allowed_targets: ["*.example.com"]}
+  limits: {max_metrics: 50}
+collectors:
+  - name: plain
+    request: {type: http}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: own
+    request: {type: http, allowed_targets: [example.org]}
+    limits: {max_metrics: 60}
+    transform: {type: regex}
+    metrics: [{name: w, expression: 'w=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	details := check.result(t, "config").Details
+	taken, _ := details["collector_defaults"].(map[string]any)
+	policies, _ := details["request_policies"].(map[string]any)
+	plain, _ := policies["plain"].(map[string]any)
+	if check.code != 0 || !reflect.DeepEqual(taken, map[string]any{"plain": []any{"request.allowed_targets", "limits.max_metrics"}}) || !reflect.DeepEqual(plain["allowed_targets"], []any{"*.example.com"}) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+}
+
 // --dry-run lists a collector's request.retry.statuses as retry_statuses,
 // normalized, an empty list as [], and none for a collector that leaves it
 // out, whose default set is no policy of its own; and it refuses an entry

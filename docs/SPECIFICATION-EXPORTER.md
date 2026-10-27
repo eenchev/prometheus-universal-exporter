@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -458,6 +458,7 @@ Recommended top-level structure:
 
 ```yaml
 rate_limits: []   # optional; rate limits per host for every collector (§ 5.1, http)
+defaults: {}      # optional; what this file's collectors take for keys they do not set (§ 5.0b)
 collectors:
   - name: example
     metrics_prefix: example   # optional
@@ -504,8 +505,8 @@ collector_files:
   nothing, so an empty directory of collector files is valid.
 - A file matched by more than one entry MUST be read once, and the
   configuration file itself MUST NOT be read as a collector file.
-- A collector file MUST be a mapping whose only key is `collectors`, holding a
-  non-empty list. Any other key — the exporter-wide `web` and `otlp` settings,
+- A collector file MUST be a mapping whose only keys are `collectors`, holding a
+  non-empty list, and `defaults` (§ 5.0b). Any other key — the exporter-wide `web` and `otlp` settings,
   a nested `collector_files`, a misspelling — MUST be an error naming the file,
   the key and its line, so a file of collectors can never change exporter-wide
   behaviour. An empty file and an empty list MUST be errors. Unknown keys inside
@@ -530,6 +531,60 @@ collector_files:
   the merged list MUST NOT be empty.
 - `${NAME}` expansion (§ 42.15a) MUST apply to collector files whenever it
   applies to the configuration.
+
+### 5.0b Defaults for the collectors of a file
+
+The configuration file and each collector file MAY have a top-level
+`defaults` block, which gives the collectors of that file, and of no other,
+the keys of it they do not set themselves:
+
+- `defaults` MUST take exactly the keys of `request.tls`, `request.retry`,
+  `request.max_response_bytes`, `request.allowed_targets`,
+  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff` and
+  `cache`, each of the kind a collector's takes. Any other key — of a
+  collector, of a request type's own, `request.type`, or of nothing — and a
+  value of the wrong kind MUST be refused when the configuration loads, at
+  startup, by `--dry-run` and on reload, naming the key and its line, and the
+  collector file when it is in one.
+- A collector MUST take a key of the block exactly when it does not write
+  the key itself, at every depth, whatever value it writes but `""`, which
+  is the key left out, in the collector and in the block alike: one that writes
+  `limits.max_metrics` keeps the block's other limits. A list MUST be one key,
+  replaced whole and never joined. A `request.tls` or `failure_backoff`
+  written in the block, even empty, MUST be taken as written by a collector
+  that does not write it. What a merge key (`<<`) brings in MUST count as
+  written where it is merged, as the decoder reads it.
+- A key of `request` MUST be given only to the collectors whose request type
+  takes it (§ 5.1), and a key of `retry` only where it applies to the type, so
+  collectors of several types can share a file. A key of the block that no
+  collector of the file takes — because no type of theirs takes it, or each
+  collector that would take it writes it — MUST be refused naming the key and
+  why, since a setting nothing uses would be silently ignored; so MUST a
+  `defaults` block in a configuration file that defines no collectors of its
+  own. The defaults of one file MUST NOT reach the collectors of another.
+- The block MUST be given before the collectors are validated, and a
+  collector MUST be validated, fingerprinted (§ 42.13) and compared on a
+  reload (§ 24.1a) with the values it took as if it had written them: moving
+  a value from every collector into `defaults` MUST change no collector, and
+  changing a default MUST change each collector that takes it. A value of
+  the block that is wrong whatever collector takes it — a limit out of its
+  range, an unknown error policy, retry attempts or backoff out of range, a
+  `failure_backoff` or `cache` value the collector checks refuse — MUST be
+  refused once, as `defaults.<key> ...`, and not once for each collector,
+  and the block then given to none. A problem validation finds with one
+  collector in a value it took MUST end by saying so, as `(<key> comes from
+  the defaults of the file)`.
+- The request keys a collector takes MUST follow its own in the order its
+  request block's keys are checked in (§ 5.1), in the order the block has
+  them, so that of several keys refused the error names one the collector
+  writes first, the same at every load.
+- `--dry-run` MUST list under `details.collector_defaults`, for each
+  collector that took any, the keys it took (§ 30.1). `${NAME}` expansion
+  (§ 42.15a) MUST apply to the block as to the rest of its file, and the
+  target allocator's bundle (§ 42.14d) MUST carry the files as written,
+  `defaults` and all. A collector
+  written on the debug page MUST refuse a `defaults` key, which is a key of
+  a file.
 
 ### 5.0a Metrics prefix
 
@@ -620,7 +675,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
+`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
 implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
@@ -750,7 +805,7 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -2242,6 +2297,65 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   or the error, as its outcome. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
 
+#### `ntp`
+
+An `ntp` collector sends one SNTP client request (RFC 4330, the packet of
+NTPv4, RFC 5905) to the probe's `target` and hands the server's reply to
+the transforms as a JSON document. It MUST need nothing outside Go's
+standard library, and MUST be in the default build. It has no keys of its
+own; of the common part it takes `allowed_targets` and `denied_targets`,
+as for `http`, the host's name before the request and the address the UDP
+socket is connected to before anything is sent (§ 26.1).
+
+- A target MUST be `host`, `host:port` or `[v6]:port`, port 123 when left
+  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  refused, a probe's with `400` before anything is sent and a static
+  target's at load. A probe MUST take `timeout` and `param_<name>`
+  parameters, and a static target's request block `timeout`.
+- A scrape MUST send one request, of 48 bytes, version 4, mode 3, whose
+  only field set besides is the transmit timestamp, which MUST be a random
+  number and not the exporter's clock. Nothing MUST be sent again within
+  the scrape. The scrape's deadline — the probe's `timeout`, the scrape's
+  own, 30 seconds when neither is set — MUST bound the whole of it.
+- A datagram MUST be taken as the reply only when it comes from the address
+  the request was sent to, is at least 48 bytes, carries the request's
+  transmit timestamp as its origin timestamp, is of mode 4 or 5 and of
+  version 3 or 4, and has a transmit timestamp. Any other datagram MUST be
+  ignored and the reply waited for; when the deadline comes first, the
+  scrape MUST fail wrapping `context.DeadlineExceeded`, saying how many
+  datagrams were ignored and why the last one was. An error of the socket,
+  such as the refusal of an ICMP port unreachable, MUST fail it at once.
+- The reply MUST fail the scrape in the `ntp` stage, naming `host:port`,
+  when it is a Kiss-o'-Death (stratum 0), naming its code; when its leap
+  indicator is 3 or its stratum 16, saying the server is not synchronised;
+  and when its stratum is past 16. A Kiss-o'-Death code RFC 5905 lists
+  MUST be told to a probe's caller; any other, and a stratum past 16, are
+  values of the answer and MUST be withheld from the caller (§ 19.4).
+- The offset MUST be `((t2 - t1) + (t3 - t4)) / 2` and the delay
+  `(t4 - t1) - (t3 - t2)`, `t1` the exporter's wall clock when the request
+  was sent and `t4` `t1` with the round trip timed by the monotonic clock
+  added, each difference taken of the 64-bit NTP timestamps as a signed
+  number, so that timestamps on either side of the end of an NTP era (2036)
+  give the difference they are. The server's timestamps MUST be read as
+  times in the era that puts them within 68 years of the exporter's clock.
+- The answer MUST be a JSON document of `host`, `port`, `address` (the
+  address the request was sent to), `offset_seconds`, `delay_seconds`,
+  `version`, `leap_indicator`, `stratum`, `precision` and `poll` (log2
+  seconds, as sent) with `precision_seconds` and `poll_seconds`,
+  `root_delay_seconds`, `root_dispersion_seconds`, `reference_id`,
+  `reference_time` and `transmit_time` in Unix seconds with their fraction
+  and as RFC 3339 in UTC (`_rfc3339`), and `duration_seconds`. The reference
+  id MUST be, of stratum 1, its printable ASCII without trailing NULs, or
+  `0x` and its bytes in hexadecimal when they are not printable; of a higher
+  stratum, a dotted IPv4 address. A reference timestamp of 0 MUST be given
+  as `reference_time` 0 and `reference_time_rfc3339` `""`.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `QUERY`, `ntp://host:port` and
+  the version sent, with the stratum, offset and delay, or the error, as
+  its outcome. The verbose `url` label MUST be `ntp://host:port` and
+  `http_method` MUST be `QUERY`.
+
 #### `s3file`
 
 An `s3file` collector reads an object, or every matching object under a
@@ -2547,15 +2661,56 @@ types at build time): only a build asked for it carries it. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `send` | none | The text written once the connection is made; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
+| `greeting` | none | A regular expression (Go's `regexp`, RE2) the server's greeting must match before `send` is written. At most 64 KiB; no placeholder. |
+| `send` | none | The text written once the connection is made, or once the greeting has come; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
 | `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
+| `document` | `false` | `true`: the answer is a JSON document of the exchange in place of the server's text. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
-- `send` and `terminator` written `""` MUST be the keys left out. Either
-  longer than 64 KiB, a placeholder in `terminator`, and a placeholder of
-  `send` that does not parse or names a filter MUST be refused at load, as
-  MUST a `tls` block with one of `cert_file` and `key_file` alone.
+- `greeting`, `send` and `terminator` written `""` MUST be the keys left
+  out. Any of them longer than 64 KiB, a placeholder in `terminator` or
+  `greeting`, a `greeting` Go's `regexp` does not compile, `terminator` with
+  `greeting` and without `send`, and a placeholder of `send` that does not
+  parse or names a filter MUST be refused at load, as MUST a `tls` block
+  with one of `cert_file` and `key_file` alone. No probe parameter MAY set
+  `greeting`.
+- With `greeting`, a scrape MUST read the greeting after the connection and
+  the TLS handshake and before it writes anything: the server's first line,
+  through its line feed, or, when that line begins with three ASCII digits
+  and `-`, every line up to and including the first that begins with the
+  same three digits and is not followed by `-`. The greeting MUST be held
+  to the response limit as it arrives, and its read MUST end at the
+  scrape's deadline. The pattern MUST be matched against the whole greeting
+  as read, line ends included; a greeting that does not match MUST fail
+  the scrape without writing `send`, the error naming the target, quoting
+  the greeting with `model.Quoted`, so that a probe's caller is told it
+  withheld (§ 19.4), and the pattern. A server that closes the connection
+  before its greeting ended MUST fail the scrape, saying it sent no
+  greeting or quoting the part it sent alike, and one that has not greeted
+  by the deadline MUST fail it with the deadline's error. Bytes the server
+  wrote after the greeting MUST be the start of the answer. Without `send`
+  the greeting MUST be the answer, nothing being read after it.
+- Every answer MUST carry the scrape's timings as headers, in seconds,
+  written as decimal numbers: `X-Tcp-Connect-Seconds` always,
+  `X-Tcp-Tls-Seconds` with TLS, `X-Tcp-Greeting-Seconds` and
+  `X-Tcp-Greeting`, a value for each line of the greeting without its line
+  end, with `greeting`, and `X-Tcp-Answer-Seconds` when an answer was read
+  after the greeting or without one; without `document` the body MUST stay
+  the answer alone.
+- With `document: true` the body MUST be a JSON object, with the
+  `Content-Type` `application/json`: `greeting`, the greeting as read, with
+  `greeting`; `answer`, what was read after it or the whole answer without
+  it, `""` when nothing was, whenever an answer was read; and, as numbers of
+  seconds, `connect_seconds` always, `tls_seconds` with TLS,
+  `greeting_seconds` with `greeting`, `answer_seconds` when an answer was
+  read, and `duration_seconds`, the exchange from the dial to the end of the
+  read. A key of a step not taken MUST be left out, not written `null` or
+  `0`. A greeting or an answer that is not UTF-8 MUST fail the scrape,
+  naming which and the target. The decoder MUST be `json`, left out or
+  written, with no warning of a decoder left to each response; any other
+  decoder, and a transform other than `jq`, `yq` and `python`, MUST be
+  refused at load, naming the document.
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,
@@ -2586,7 +2741,7 @@ types at build time): only a build asked for it carries it. Its keys:
   was what the deadline ended, the terminator waited for, or, without one,
   that the server kept the connection open.
 - The answer MUST be the body, with no status, as a local file's has none,
-  and no `Content-Type`; the decoder MUST be `decoder.type`, or the one the
+  and, without `document`, no `Content-Type`; the decoder MUST be `decoder.type`, or the one the
   transform implies, or what the body reads as. A failed scrape MUST be
   reported in the `tcp` stage.
 - The target MUST be `host:port` or `[v6]:port`, the port required, with no
@@ -2598,8 +2753,9 @@ types at build time): only a build asked for it carries it. Its keys:
 - A debug probe's request section MUST show the scrape by its method and
   `tcp://host:port` (`tls://` over TLS), the bytes sent quoted, with a
   carriage return and a line feed written `\r` and `\n`, in a `Tcp-Send`
-  header, and as its outcome the bytes read and how reading stopped, or the
-  error. The verbose `url` label MUST be `tcp://host:port` or
+  header, with `greeting` the pattern quoted in a `Tcp-Greeting` header,
+  and as its outcome the greeting read, quoted, when there is one, the
+  bytes read and how reading stopped, or the error. The verbose `url` label MUST be `tcp://host:port` or
   `tls://host:port`, and `http_method` MUST be `SEND` for a collector with
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and
@@ -6596,7 +6752,9 @@ These MUST be withheld so: an XML syntax error's names and entities (each
 form `xmlcut.go` reads, its words kept), a TOML parser message that quotes a
 token, a jq program's error on the answer (`the jq program failed on the
 answer: [withheld; in the exporter's log]`), the start of a Graphite
-server's answer that is not render JSON (not that it is empty), and what Go's
+server's answer that is not render JSON (not that it is empty), a `tcp`
+server's greeting that its collector's `greeting` does not match, or that
+the server cut short, and what Go's
 HTTP client quotes of an answer that is no HTTP (`malformed HTTP response`,
 `malformed HTTP status code`, `malformed HTTP version` and the `malformed
 MIME header` forms, the text after Go's words withheld), for a target's
@@ -8028,7 +8186,8 @@ force on its `static targets reloaded` line the static targets: as
 lists that are not empty in that order, each sorted, or `no changes` when
 none is. A collector MUST be changed when its fingerprint (§ 42.13)
 differs, which the reload MUST read from those it works out to follow the
-configuration, encoding no definition for it, and a static target when
+configuration, encoding no definition for it, a key it takes from its
+file's `defaults` (§ 5.0b) as much as one it writes, and a static target when
 anything in its entry differs. Each list MUST name at most 10 and count the
 rest (`and 3 more`). A refused reload MUST NOT change what the last said.
 The landing page (§ 23) MUST show the time of the last reload that put
@@ -8455,7 +8614,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. A
+  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
@@ -8579,8 +8738,10 @@ The example configurations in `configs/` MUST begin with the
 The configuration schema MUST require `collectors` or `collector_files`, each
 non-empty when it is the one present. The repository MUST also publish
 `configs/collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
-non-empty `collectors` list and no other key, its collectors described by the
-same rules as the configuration's, which a test MUST check.
+non-empty `collectors` list, `defaults` and no other key, its collectors described by the
+same rules as the configuration's, which a test MUST check. Both schemas MUST
+describe `defaults` (§ 5.0b) with exactly the keys it takes, each by the rules
+of the collector's key it sets, which a test MUST check.
 `--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
 the committed file differs from what the code generates.
 
@@ -9089,7 +9250,7 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
 `s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
@@ -9192,7 +9353,9 @@ whether or not a proxy is in between.
   `UNAVAILABLE` grpc-go makes of a dialer's error, whether the call or the
   reflection question before it made it. A refused request MUST NOT be
   retried. A connection to a host the request did not check, when nothing it
-  checked goes through a proxy, MUST be refused.
+  checked goes through a proxy, MUST be refused. A UDP socket, an `ntp`
+  request's, MUST be checked as a connection is, against the address it is
+  connected to, before anything is sent.
 - An idle connection MUST NOT carry a request of a collector whose lists
   differ from those of the collector that opened it: connections are checked
   once, when made, so collectors with different lists MUST NOT share a
@@ -9639,6 +9802,9 @@ The steps MUST be:
 - `config` — the configuration file and its collector files (§ 5.0) load and
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
+  each collector that took keys from its file's `defaults` (§ 5.0b) is listed
+  under `details.collector_defaults` with the keys it took, in the block's
+  order;
   each collector that sets `allowed_targets`, `denied_targets`,
   `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
   `pagination`, `login` or `rate_limit` is listed under `details.request_policies` with
@@ -26937,7 +27103,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   verdict from the schema and the exporter
   (TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty).
 - A build of tcp alone links no package a build of no request type lacks
-  but the standard library's (TestTheTCPTypeLinksNothingOutsideTheStandardLibrary),
+  but the standard library's (TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary),
   and none of the gRPC, SSH or AWS modules, nor does OPT_IN_REQUEST_TYPES=tcp
   link the AWS SDK (TestOnlyTheTypesThatNeedThemLinkTheirModules).
 - tools/request-type-tags.sh takes tcp as an opt-in type, alone, with the
@@ -28338,6 +28504,105 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   metadata, `operation error S3: HeadObject, the AWS SDK found no
   credentials it could use; which it tried is in the exporter's log`.
 
+## 34.226 The ntp request type, defaults for the collectors of a file, and tcp greetings
+
+### The ntp request type
+
+- `TestAnNTPCollectorAnswersTheServersReplyAsADocument`: against a stand-in UDP server on 127.0.0.1 five seconds ahead, the document has an offset of about 5, a delay from 0 to 1 second, and the server's version, leap indicator, stratum, precision and poll (exponents and seconds), root delay and dispersion in seconds, the reference id as an IPv4 address, and reference and transmit times 64 seconds apart; each scrape sends one request of 48 bytes, first byte 0x23, nothing set but the transmit timestamp, which differs between two scrapes and is not near the clock.
+- `TestNTPOffsetAndDelayAreWorkedOutFromTheFourTimestamps`: a request received at t1+10.03s, answered at t1+10.05s and back 100ms after t1 is an offset of 9.99s and a delay of 80ms, and a server 2 seconds behind with a 20ms round trip an offset of -2.01s; a stratum 1 reference id is its ASCII code, or `0x` and its bytes when they are not printable; a reference timestamp of 0 is `reference_time` 0 and an empty `reference_time_rfc3339`.
+- `TestNTPTimestampsAreReadAcrossTheEndOfAnEra`: 2036-02-07T06:28:16Z is timestamp 0; a timestamp of era 1 is read beside a clock of era 0 and one of era 0 beside a clock of era 1 as the times they are; with the exporter's clock 6 seconds before the end of era 0 and a server 10 seconds ahead, the offset is about 10 and the transmit time 2036-02-07T06:28:20Z.
+- `TestAnNTPReplyThatIsNotTheRequestsIsIgnored`: a datagram with another origin timestamp, which would say the server is 1000 seconds ahead, is passed over for the reply after it; datagrams with another origin timestamp, of mode 3, of version 2, with no transmit timestamp and of 47 bytes are ignored, and the scrape fails at its deadline wrapping `context.DeadlineExceeded` and saying that 2 datagrams were ignored and why the last was; a reply of version 3 is taken.
+- `TestAnNTPServerThatDoesNotKeepTheTimeFailsTheScrape`: Kiss-o'-Death RATE and DENY fail the scrape at once naming the code and its meaning, the code told to the caller; an unknown code is quoted in the error and withheld from the caller; leap indicator 3 and stratum 16 fail as not synchronised, and stratum 99 as no server's, withheld from the caller.
+- `TestAnNTPServerThatDoesNotAnswerFailsAtTheDeadline`: a server that never answers fails the scrape at a 300ms timeout with `no reply from <host:port> before the deadline`, wrapping `context.DeadlineExceeded`, after exactly one request; a closed port fails it at once, reading the reply.
+- `TestAnNTPCollectorKeepsToItsTargetLists`: a denied address, one `allowed_targets` does not list, and `localhost` with the loopback networks denied, refused on the address the UDP socket is connected to, are `ErrTargetRefused` with nothing sent; an allowed address is answered.
+- `TestAnNTPCollectorsKeysAndTargetsAreChecked`: `path` and `tls` are refused; an empty target, a scheme, a path, a user, port 0 or a name, a bare IPv6 address with a port and a blank are refused; `host`, `host:port`, `[v6]:port` and an address are labelled `ntp://host:port`, port 123 when left out, in lower case; the method is `QUERY`, the stage `ntp`, an invalid target displayed `<invalid target>`; a debug trace shows `QUERY`, the URL, `Ntp-Version: 4` and the stratum and offset as its outcome.
+- `TestAnNTPCollectorProbe`: a probe through the exporter gives a jq collector's `ntp_offset_seconds` of about 3 for a server 3 seconds ahead, `ntp_delay_seconds`, and `ntp_stratum{reference_id="192.0.2.7"} 2`, and the verbose self-metrics label it `ntp://host:port` and `QUERY`.
+- `TestADebugProbeOfAnNTPCollector`: a debug probe shows the request and the document; a probe without a target or with a scheme is answered 400, a target outside `allowed_targets` 403 and counted in `http_exporter_targets_refused_total`; a Kiss-o'-Death RATE is answered 502, `collector clock ntp failed:` naming the server and the code.
+- `TestAnNTPCollectorsLabelValuesAndAPythonTransform`: `param_<name>` fills an ntp collector's label values, its default when left out, and a python transform reads the document as data.
+- `TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary`: a build of ntp alone links no package a build of no request type lacks but the standard library's, as a build of tcp alone does not.
+
+### Defaults for the collectors of a file
+
+- A collector takes each key of its file's `defaults` it does not write,
+  key by key at every depth: one that writes `limits.max_metrics`,
+  `retry.attempts`, `failure_backoff.after` or `tls.server_name` keeps the
+  block's other keys of that block, one that writes `cache.ttl: 0s` keeps
+  its 0s, and one that writes `allowed_targets` keeps its own list alone;
+  the keys each took are recorded in the block's order
+  (`TestDefaultsApplyKeyByKey`, § 5.0b).
+- The configuration's `defaults` reach its own collectors and no collector
+  file's, and a collector file's its own collectors and no other file's
+  (`TestDefaultsApplyToTheCollectorsOfTheirFileAlone`).
+- A key `defaults` cannot set — a collector key, `request.path`,
+  `request.type`, a request type's own key, an unknown key at any depth —
+  and a value of the wrong kind or no mapping are refused naming the key
+  and its line, in the configuration and, naming the file, in a collector
+  file (`TestDefaultsRefuseTheKeysTheyCannotSet`).
+- A value of `defaults` that is wrong whatever collector takes it — a
+  negative or too small limit, an unknown error policy, retry attempts out
+  of range, a `failure_backoff` refused — is refused once as
+  `defaults.<key> ...`, naming the collector file, and not once for each
+  collector (`TestDefaultsRefuseABadValueNamingTheBlock`).
+- A request key of `defaults` reaches the collectors whose type takes it
+  (`retry` and `tls` an http collector, not a dns one); one that no
+  collector of the file takes, for their types or because each sets it, and
+  a `defaults` in a configuration file without collectors, are refused
+  (`TestADefaultRequestKeyAppliesToTheTypesThatTakeIt`).
+- A collector's problem in a value it took from `defaults` ends with
+  `(<key> comes from the defaults of the file)`, and one in a value it
+  writes does not (`TestAProblemWithADefaultedValueSaysWhereItIsWritten`).
+- The request keys a collector takes from `defaults` follow its own in its
+  request block's order, in the block's order, and a key the collector
+  writes that its type refuses is named at every load
+  (`TestDefaultedRequestKeysComeAfterTheCollectorsOwn`).
+- Moving values from every collector into `defaults` changes no collector
+  on a reload and leaves each collector's YAML as it was; changing a
+  default changes the collectors that take it and no other
+  (`TestAReloadComparesCollectorsWithTheirDefaults`).
+- `${NAME}` in a collector file's `defaults` is expanded with
+  `--config.expand-env`, and unexpanded is refused as a value taken from
+  defaults (`TestDefaultsAreExpandedFromTheEnvironment`); a key merged into
+  a collector counts as written and one merged into `defaults` as the
+  block's (`TestDefaultsReadMergeKeysAsTheDecoderDoes`); a collector on the
+  debug page refuses `defaults` (`TestADebugPageCollectorHasNoDefaults`).
+- The allocator's bundle carries the configuration and a collector file
+  with their `defaults` as written, and the replica's collectors take each
+  file's (`TestABundleCarriesTheDefaultsOfEachFile`).
+- `--dry-run` lists under `details.collector_defaults` the keys each
+  collector took (`TestDryRunReportsTheKeysTakenFromDefaults`).
+- Both committed schemas take `defaults` with its keys, held to the
+  collector's rules, and refuse any other key or a bad value in it
+  (`TestTheSchemasTakeDefaultsWithTheKeysTheyMaySet`); the keys held to
+  text alone include those of `defaults`
+  (`TestTheKeysHeldToTextAloneAreTheSchemas`).
+- Every key of `defaults` the schemas hold to values, a pattern or a size
+  has a row, made from the collector key's, that holds the schemas and the
+  exporter to one verdict on it left out, written `""`, written well and
+  badly, in the configuration and in a collector file
+  (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty`,
+  `TestEveryConstrainedKeyOfTheSchemasIsInATable`,
+  `TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten`); a key a
+  collector writes `""` is left out and taken from `defaults`
+  (`TestDefaultsApplyKeyByKey`).
+
+### Services that greet first, and a tcp exchange as a document
+
+- `TestATCPGreetingIsReadBeforeSendIsWritten`: with `greeting`, stand-ins that note whether the client wrote before they greeted see `QUIT` only after their greeting, for an SMTP greeting on one line, one over `220-` lines ending with `220 `, with `220` alone or with line feeds alone, FTP's free lines between, an IMAP `* OK` line and a four-digit code with a `-`; the answer to `QUIT` is the body and the greeting's lines, without line ends, are `X-Tcp-Greeting`.
+- `TestWhatFollowsATCPGreetingIsTheAnswers`: what a server writes after its greeting in the same write is the start of the answer.
+- `TestATCPGreetingWithoutSendIsTheAnswer`: without `send` an SSH banner is the body, no answer is read though the server keeps the connection open, there is no `X-Tcp-Answer-Seconds`, and the method is `READ`.
+- `TestATCPScrapeReportsItsTimings`: a greeting 300ms late gives an `X-Tcp-Greeting-Seconds` of at least 0.29 beside `X-Tcp-Connect-Seconds` and `X-Tcp-Answer-Seconds`, no `X-Tcp-Tls-Seconds` without TLS; a collector without a greeting gets its body as before with only the connection's and the answer's seconds.
+- `TestATCPGreetingComesAfterTheTLSHandshake`: over TLS, as SMTPS, the greeting is read after the handshake, `QUIT` after it, and `X-Tcp-Tls-Seconds` is set.
+- `TestATCPGreetingThatIsNotThereFailsTheScrape`: a greeting that does not match fails the scrape quoting the greeting and the pattern, the caller text withholding the greeting, and `send` is never written; a server closing without a greeting, one closing in the middle of a `220-` greeting (its part quoted and withheld), one never greeting (the deadline's error, `waiting for the greeting`) and a greeting past the response limit (a limit exceeded) fail it; a greeting of exactly the limit is taken.
+- `TestATCPGreetingIsCheckedAtLoad`: a `greeting` Go's regexp does not compile (a backreference too), one with a placeholder, one past 64 KiB, and `terminator` with `greeting` without `send` are refused at load; with `send` the three together load.
+- `TestATCPGreetingIsTraced`: a debug trace shows the pattern in `Tcp-Greeting` beside `Tcp-Send`, the greeting quoted in the outcome before the bytes read, `nothing sent, the greeting is the answer` for a greeting-only check, and a mismatching greeting whole in the error.
+- `TestATCPGreetingThroughTheExporter`: through `/probe`, a greeting-only SSH check answers the version a regex rule reads from the banner; a mismatching SMTP greeting fails the probe in the tcp stage, the answer naming the pattern with the greeting `[withheld; in the exporter's log]` and holding none of it, while the log and a debug probe's report show it, the report listing `Tcp-Greeting` before `Tcp-Send`.
+- `TestATCPScrapesTimingsReachTheRules`: through `/probe`, plain jq rules of a collector with `document: true`, no script, read an up series from the answer to `QUIT` after a two-line greeting and `tcp_connect_seconds`, `tcp_greeting_seconds`, `tcp_answer_seconds` and `tcp_duration_seconds` from the document, and `$headers` still has the connection's seconds; the debug report shows the greeting step and the `X-Tcp-*` headers.
+- `TestATCPScrapesTimingsReachPython`: a python transform reads `response.headers["X-Tcp-Greeting"]` as a list of lines and `response.header("x-tcp-connect-seconds")`.
+- `TestATCPDocumentHoldsTheExchange`: `document: true` answers a JSON document with `Content-Type: application/json` and the `X-Tcp-*` headers kept: for a greeting alone `greeting`, `connect_seconds`, `greeting_seconds` and `duration_seconds`; for a greeting and `send` `answer` and `answer_seconds` besides; for `send` alone no greeting keys; over TLS `tls_seconds` besides; texts as read, seconds from 0 to the whole; an empty answer is `""`.
+- `TestATCPDocumentRefusesBytesThatAreNotText`: with `document: true` a greeting or an answer that is not UTF-8 fails the scrape, naming which and the target.
+- `TestATCPDocumentIsDecodedAsJSON`: a tcp collector with `document: true` decodes with json, its decoder left out, `auto` or `json`, with no warning; `text` or `yaml`, and a `regex` or `csv` transform, are refused at load naming the document; without `document` a regex transform loads.
+- `TestTCPGreetingDocumentationExamples`: docs/TCP.md's SMTP, FTP, POP3, IMAP and SSH examples, plain jq rules over `document: true`, work as written against stand-ins, each giving its up or info series and its timings, the regex SSH example reading the raw banner the version, an OpenSSH older than the SSH example's greeting failing the probe with 502, and the greeting request snippet loading.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -28378,7 +28643,7 @@ The repository MUST include documentation covering:
     collector's keys, the target, and static targets: `graphite` in
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
-    `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
+    `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
     `ldap` in `docs/LDAP.md` and `sshexec` in `docs/SSHEXEC.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for

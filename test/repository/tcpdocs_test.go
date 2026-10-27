@@ -118,3 +118,79 @@ func TestTCPDocumentationExamples(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// greetingStandIn greets as a service that speaks first, then answers the
+// line it is sent with answer and closes the connection, or, with answer
+// empty, keeps it open, as an SSH server waits for its client.
+func greetingStandIn(greeting, answer string) func(net.Conn) {
+	return func(conn net.Conn) {
+		_, _ = io.WriteString(conn, greeting)
+		if answer == "" {
+			_, _ = io.Copy(io.Discard, conn)
+			return
+		}
+		if _, err := testutil.ReadUntil(conn, "\n"); err == nil {
+			_, _ = io.WriteString(conn, answer)
+		}
+	}
+}
+
+// The greeting examples of docs/TCP.md work as written against stand-ins
+// greeting as SMTP (over two lines), FTP, POP3, IMAP and OpenSSH do: each
+// reads its request.document with plain jq rules, giving its up series and
+// the connection's and the greeting's seconds, SMTP the answer's and the
+// whole exchange's too, SSH its software as a label; the raw banner gives,
+// through regex, OpenSSH's version; an OpenSSH older than the greeting
+// takes fails the probe; the request snippet loads.
+func TestTCPGreetingDocumentationExamples(t *testing.T) {
+	blocks := pageBlocks(t, "docs/TCP.md", "yaml")
+	var b strings.Builder
+	b.WriteString("collectors:\n")
+	for _, name := range []string{"smtp", "ftp", "pop3", "imap", "ssh", "ssh_version"} {
+		b.WriteString(pageBlock(t, blocks, "  - name: "+name+"\n"))
+	}
+	conf := b.String()
+	dir := t.TempDir()
+	path := testutil.WriteIn(t, dir, "config.yaml", conf)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, conf)
+	}
+	exp := exporter.NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	ssh := testutil.NewTCPStub(t, greetingStandIn("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13\r\n", ""))
+	timings := []string{"tcp_connect_seconds ", "tcp_greeting_seconds "}
+	for _, tc := range []struct {
+		collector, greeting, answer string
+		wants                       []string
+	}{
+		{"smtp", "220-mx.example.com ESMTP\r\n220 ready\r\n", "221 2.0.0 Bye\r\n", append([]string{"smtp_up 1", "tcp_answer_seconds ", "tcp_duration_seconds "}, timings...)},
+		{"ftp", "220 FTP server ready\r\n", "221 Goodbye.\r\n", append([]string{"ftp_up 1"}, timings...)},
+		{"pop3", "+OK POP3 server ready\r\n", "+OK bye\r\n", append([]string{"pop3_up 1"}, timings...)},
+		{"imap", "* OK [CAPABILITY IMAP4rev1] ready\r\n", "* BYE logging out\r\na OK LOGOUT completed\r\n", append([]string{"imap_up 1"}, timings...)},
+		{"ssh", "", "", append([]string{`ssh_banner_info{software="OpenSSH_9.6p1"} 1`}, timings...)},
+		{"ssh_version", "", "", []string{"ssh_openssh_version 9.6"}},
+	} {
+		target := ssh.Addr
+		if tc.greeting != "" {
+			target = testutil.NewTCPStub(t, greetingStandIn(tc.greeting, tc.answer)).Addr
+		}
+		recorder := httptest.NewRecorder()
+		exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+target+"&collector="+tc.collector, nil))
+		for _, want := range tc.wants {
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "\n"+want) {
+				t.Errorf("%s: %d, want %q in\n%s", tc.collector, recorder.Code, want, recorder.Body)
+			}
+		}
+	}
+	old := testutil.NewTCPStub(t, greetingStandIn("SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10\r\n", ""))
+	recorder := httptest.NewRecorder()
+	exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+old.Addr+"&collector=ssh", nil))
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "does not match request.greeting") {
+		t.Errorf("an older OpenSSH: %d %s", recorder.Code, recorder.Body)
+	}
+	request := pageBlock(t, blocks, "request:\n  type: tcp\n  greeting: ")
+	document := "collectors:\n  - name: smtp\n    " + strings.ReplaceAll(strings.TrimSuffix(request, "\n"), "\n", "\n    ") + "\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        expression: '(\\d+)'\n"
+	if _, err := config.Load(testutil.WriteIn(t, dir, "greeting.yaml", document)); err != nil {
+		t.Errorf("%v\n%s", err, document)
+	}
+}

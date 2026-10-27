@@ -21,7 +21,8 @@ import (
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
 // statement on a database, dns resolves a name, tlscert reads the
-// certificates of a TLS handshake, s3file reads an object from S3 or a
+// certificates of a TLS handshake, ntp asks an NTP server for the time,
+// s3file reads an object from S3 or a
 // store that speaks its API, kubernetes lists objects from a Kubernetes API
 // server, redis reads INFO and read-only commands from a Redis or Valkey
 // server, tcp sends a line to a text-protocol service over TCP and reads
@@ -63,13 +64,14 @@ const (
 	RequestTypeTCP        = "tcp"
 	RequestTypeLDAP       = "ldap"
 	RequestTypeSSHExec    = "sshexec"
+	RequestTypeNTP        = "ntp"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links
@@ -264,6 +266,13 @@ type RequestType struct {
 	// JSONAnswer says the exporter makes the type's answer, a JSON document,
 	// so its decoder is json and its transform one that reads JSON.
 	JSONAnswer bool
+	// JSONDocument says, for a type whose answer is a JSON document the
+	// exporter makes on some collectors alone, what that document is when
+	// a collector's answer is one, as a refusal of another decoder or
+	// transform names it, and "" when it is not: a tcp collector with
+	// request.document. Such a collector is held to json and to the
+	// transforms that read it, as one of a JSONAnswer type is.
+	JSONDocument func(c *model.Collector) string
 	// Decoder is the decoder a collector of the type uses when its
 	// decoder.type is left out, rather than one chosen for each response.
 	Decoder string

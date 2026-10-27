@@ -4,10 +4,12 @@ package repository
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -321,6 +323,7 @@ func httpSchemaKeys() []schemaKey {
 		}
 	}
 	keys = append(keys, login("collectors[].request", jqCollector, request, "      ")...)
+	keys = append(keys, defaultsSchemaKeys(keys, collector, request)...)
 	for _, row := range login("targets[].request", strings.Replace(oneTarget, target, "    request:\n      # target request\n", 1), "      # target request\n", "      ") {
 		row.file = inTargetFile
 		keys = append(keys, row)
@@ -329,6 +332,44 @@ func httpSchemaKeys() []schemaKey {
 		if keys[i].file == inTargetFile {
 			keys[i].configuration = targetsConfiguration
 		}
+	}
+	return keys
+}
+
+// defaultsSchemaKeys are the rows of the keys of defaults, which both the
+// configuration and a collector file have: each the row of the collector's
+// key it sets, written in a defaults block at the top of the file over the
+// collector of the row, which takes it. The schemas and the exporter hold
+// a key of defaults to what they hold the collector's to.
+func defaultsSchemaKeys(rows []schemaKey, collector, request string) []schemaKey {
+	var keys []schemaKey
+	for _, row := range rows {
+		rest, ok := strings.CutPrefix(row.key, "collectors[].")
+		if !ok || row.document != jqCollector || row.at != collector && row.at != request {
+			continue
+		}
+		block, _, _ := strings.Cut(rest, ".")
+		if row.at == request {
+			block, _, _ = strings.Cut(strings.TrimPrefix(rest, "request."), ".")
+			block = "request." + strings.TrimRight(block, "[]")
+		}
+		if !slices.Contains(model.DefaultsKeys, block) {
+			continue
+		}
+		// The collector's setting, indented under defaults.
+		setting := "defaults:\n"
+		indent := "    "
+		if row.at == request {
+			setting += "  request:\n"
+			indent = "      "
+		}
+		for _, line := range strings.SplitAfter(row.setting, "\n") {
+			if line != "" {
+				setting += strings.Replace(line, indent, indent[2:], 1)
+			}
+		}
+		row.key, row.document, row.at, row.setting = "defaults."+rest, "# defaults\n"+jqCollector, "# defaults\n", setting
+		keys = append(keys, row)
 	}
 	return keys
 }

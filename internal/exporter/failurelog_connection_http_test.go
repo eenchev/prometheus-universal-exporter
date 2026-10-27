@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -73,8 +74,9 @@ func (r *resettingTarget) close() { _ = r.listener.Close() }
 // time. It is one failure to the log all the same: logged in full once, as
 // an error, and then as repeats at debug level; five minutes on the line
 // comes again with every repeat counted and when the failure began; and the
-// recovery counts every failed probe. Each line, and each answer, has the
-// error in full, with the port of that probe's connection. A different
+// recovery counts every failed probe. Each line has the error in full, with
+// the port of that probe's connection; each answer has it with the address
+// the connection was made from withheld, as the exporter's own. A different
 // failure of the same target, a connection refused where it was reset, is
 // still logged in full.
 func TestATargetThatResetsEveryConnectionIsOneFailureToTheLog(t *testing.T) {
@@ -99,8 +101,13 @@ func TestATargetThatResetsEveryConnectionIsOneFailureToTheLog(t *testing.T) {
 		if !strings.HasPrefix(text, want) || strings.Contains(text, "#") {
 			t.Fatalf("the line's error is %q, want it in full, starting %q", text, want)
 		}
-		if answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), text) {
-			t.Fatalf("answered %d %q, want 502 with the error %q", answer.Code, answer.Body, text)
+		told := text
+		if arrow := strings.Index(text, "->"); arrow >= 0 {
+			from := strings.LastIndexByte(text[:arrow], ' ') + 1
+			told = text[:from] + model.WithheldMark + text[arrow:]
+		}
+		if answer.Code != http.StatusBadGateway || !strings.Contains(answer.Body.String(), told) {
+			t.Fatalf("answered %d %q, want 502 with the error %q", answer.Code, answer.Body, told)
 		}
 		return lines[0]
 	}

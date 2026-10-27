@@ -458,6 +458,12 @@ BIND cn=exporter,dc=example,dc=org ***: the server answered invalidCredentials (
 SEARCH people base="ou=people,dc=example,dc=org" scope=sub filter=(objectClass=person) attributes=1.1: the server answered noSuchObject (32)
 ```
 
+The bind's DN is the operator's account: a probe's caller is answered the
+failed bind as `BIND [withheld; in the exporter's log] ***: the server
+answered invalidCredentials (49): ...`, and the log and a debug probe's
+report name it. See
+[What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told).
+
 A server the target lists refuse counts in
 `http_exporter_targets_refused_total`, answered `403`. Transforms see no
 status (`$status` is `null`, Python's `response.status_code` `None`) and the

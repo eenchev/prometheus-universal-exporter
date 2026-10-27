@@ -175,8 +175,26 @@ func callerText(err error) (text string, ok bool) {
 		return e.callerText()
 	case *sameAsError:
 		return callerText(e.err)
+	case TextRewriter:
+		inner, ok := callerText(e.Unwrap())
+		if !ok {
+			return "", false
+		}
+		return e.RewriteText(inner), true
 	}
 	return withCallerParts(err, err.Error())
+}
+
+// TextRewriter is an error whose text is the text of the error it wraps
+// rewritten, as a redaction rewrites the URLs in it: RewriteText makes of a
+// text of the wrapped error's what the error makes of its own. CallerText
+// tells a caller such an error as it rewrites what the caller is told of
+// the wrapped one, which a search for the wrapped error's text in the
+// rewritten one would not find.
+type TextRewriter interface {
+	error
+	Unwrap() error
+	RewriteText(text string) string
 }
 
 // withCallerParts replaces in text, the text of an error that wraps err, the
@@ -184,7 +202,7 @@ func callerText(err error) (text string, ok bool) {
 // shows: false when one of those is not found in text.
 func withCallerParts(err error, text string) (string, bool) {
 	switch e := err.(type) { //nolint:errorlint // this is the walk down the chain
-	case *operatorError, *movingError, *sameAsError:
+	case *operatorError, *movingError, *sameAsError, TextRewriter:
 		shown, ok := callerText(e)
 		if !ok {
 			return "", false

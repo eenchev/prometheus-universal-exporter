@@ -65,9 +65,10 @@ func shortURLErrors(err error) error {
 		return err
 	}
 	text := err.Error()
-	short := strings.NewReplacer(said...).Replace(text)
+	rewrite := strings.NewReplacer(said...)
+	short := rewrite.Replace(text)
 	if short == text {
 		return err
 	}
-	return model.SameFailureAs(&redactedError{text: short, err: err}, strings.NewReplacer(recognised...).Replace(model.SameFailureText(err)))
+	return model.SameFailureAs(&redactedError{text: short, err: err, rewrite: rewrite}, strings.NewReplacer(recognised...).Replace(model.SameFailureText(err)))
 }

@@ -14,6 +14,7 @@ package kubetest
 import (
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,7 @@ type Server struct {
 	token    string
 	lists    map[string]List
 	forbid   map[string]bool
+	raw      map[string]string
 	requests []Request
 	delay    time.Duration
 }
@@ -59,7 +61,7 @@ type Request struct {
 // token-1 and whose namespace is monitoring.
 func New(t testing.TB) *Server {
 	t.Helper()
-	s := &Server{Dir: t.TempDir(), lists: map[string]List{}, forbid: map[string]bool{}}
+	s := &Server{Dir: t.TempDir(), lists: map[string]List{}, forbid: map[string]bool{}, raw: map[string]string{}}
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw})
@@ -100,6 +102,14 @@ func (s *Server) Serve(path string, list List) {
 	s.lists[path] = list
 }
 
+// Answer has the server answer a listing of path 200 with body as it is,
+// as an API server, or what stands before it, answers what is no list.
+func (s *Server) Answer(path, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raw[path] = body
+}
+
 // Forbid has the server refuse a listing of path with 403, as it refuses a
 // service account without the permission.
 func (s *Server) Forbid(path string) {
@@ -137,6 +147,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.requests = append(s.requests, Request{Path: r.URL.Path, Query: r.URL.Query(), Authorization: r.Header.Get("Authorization")})
 	list, listed := s.lists[r.URL.Path]
 	forbidden := s.forbid[r.URL.Path]
+	raw, answered := s.raw[r.URL.Path]
 	token := s.token
 	delay := s.delay
 	s.mu.Unlock()
@@ -158,6 +169,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	resource := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	if forbidden {
 		status(w, http.StatusForbidden, "Forbidden", resource+` is forbidden: User "system:serviceaccount:monitoring:exporter" cannot list resource "`+resource+`"`)
+		return
+	}
+	if answered {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, raw)
 		return
 	}
 	if !listed {

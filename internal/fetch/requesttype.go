@@ -813,8 +813,9 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	// and debug reports without the credentials a URL in it carries, with
 	// a URL as long as a scraper or a redirect made it shown by its start
 	// (shortURLErrors), and is the same failure to the log whichever
-	// connection it happened on.
-	return response, sameFetchFailure(shortURLErrors(RedactURLErrors(err)))
+	// connection it happened on. A probe's caller is told it without the
+	// addresses of the exporter's side of the network (transportwithheld.go).
+	return response, withTransportWithheld(sameFetchFailure(shortURLErrors(RedactURLErrors(err))))
 }
 
 // ErrMissingTarget is CheckTarget's answer to a target left out by a type

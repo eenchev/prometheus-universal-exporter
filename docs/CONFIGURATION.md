@@ -2972,8 +2972,15 @@ has the whole of it. What is withheld from the answer:
 - **What a server said of a refusal**: a login provider's answer
   ([When a login fails](AUTHENTICATION.md#when-a-login-fails)), a
   database's message, which is answered by its code
-  ([SQL](SQL.md#errors-and-self-metrics)), and an
+  ([SQL](SQL.md#errors-and-self-metrics)), a Kubernetes API server's
+  message and its URL ([Permissions](KUBERNETES.md#permissions)), and an
   [`sshexec`](SSHEXEC.md) command's stderr.
+- **The operator's own accounts and addresses**: an LDAP bind's DN
+  ([LDAP](LDAP.md)), and the addresses of the exporter's side of the
+  network — the address and port a connection was made from (`read tcp
+  [withheld; in the exporter's log]->10.1.2.3:443`), the proxy a request
+  went through, the name server a lookup asked. The address the connection
+  went to stays: the caller named it.
 
 An error over the 2,000 bytes every failure is cut to is cut after what the
 caller may be told is taken from it, so nothing withheld reaches the answer

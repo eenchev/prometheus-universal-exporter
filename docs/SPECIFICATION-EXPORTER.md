@@ -458,6 +458,7 @@ Recommended top-level structure:
 
 ```yaml
 rate_limits: []   # optional; rate limits per host for every collector (§ 5.1, http)
+defaults: {}      # optional; what this file's collectors take for keys they do not set (§ 5.0b)
 collectors:
   - name: example
     metrics_prefix: example   # optional
@@ -504,8 +505,8 @@ collector_files:
   nothing, so an empty directory of collector files is valid.
 - A file matched by more than one entry MUST be read once, and the
   configuration file itself MUST NOT be read as a collector file.
-- A collector file MUST be a mapping whose only key is `collectors`, holding a
-  non-empty list. Any other key — the exporter-wide `web` and `otlp` settings,
+- A collector file MUST be a mapping whose only keys are `collectors`, holding a
+  non-empty list, and `defaults` (§ 5.0b). Any other key — the exporter-wide `web` and `otlp` settings,
   a nested `collector_files`, a misspelling — MUST be an error naming the file,
   the key and its line, so a file of collectors can never change exporter-wide
   behaviour. An empty file and an empty list MUST be errors. Unknown keys inside
@@ -530,6 +531,60 @@ collector_files:
   the merged list MUST NOT be empty.
 - `${NAME}` expansion (§ 42.15a) MUST apply to collector files whenever it
   applies to the configuration.
+
+### 5.0b Defaults for the collectors of a file
+
+The configuration file and each collector file MAY have a top-level
+`defaults` block, which gives the collectors of that file, and of no other,
+the keys of it they do not set themselves:
+
+- `defaults` MUST take exactly the keys of `request.tls`, `request.retry`,
+  `request.max_response_bytes`, `request.allowed_targets`,
+  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff` and
+  `cache`, each of the kind a collector's takes. Any other key — of a
+  collector, of a request type's own, `request.type`, or of nothing — and a
+  value of the wrong kind MUST be refused when the configuration loads, at
+  startup, by `--dry-run` and on reload, naming the key and its line, and the
+  collector file when it is in one.
+- A collector MUST take a key of the block exactly when it does not write
+  the key itself, at every depth, whatever value it writes but `""`, which
+  is the key left out, in the collector and in the block alike: one that writes
+  `limits.max_metrics` keeps the block's other limits. A list MUST be one key,
+  replaced whole and never joined. A `request.tls` or `failure_backoff`
+  written in the block, even empty, MUST be taken as written by a collector
+  that does not write it. What a merge key (`<<`) brings in MUST count as
+  written where it is merged, as the decoder reads it.
+- A key of `request` MUST be given only to the collectors whose request type
+  takes it (§ 5.1), and a key of `retry` only where it applies to the type, so
+  collectors of several types can share a file. A key of the block that no
+  collector of the file takes — because no type of theirs takes it, or each
+  collector that would take it writes it — MUST be refused naming the key and
+  why, since a setting nothing uses would be silently ignored; so MUST a
+  `defaults` block in a configuration file that defines no collectors of its
+  own. The defaults of one file MUST NOT reach the collectors of another.
+- The block MUST be given before the collectors are validated, and a
+  collector MUST be validated, fingerprinted (§ 42.13) and compared on a
+  reload (§ 24.1a) with the values it took as if it had written them: moving
+  a value from every collector into `defaults` MUST change no collector, and
+  changing a default MUST change each collector that takes it. A value of
+  the block that is wrong whatever collector takes it — a limit out of its
+  range, an unknown error policy, retry attempts or backoff out of range, a
+  `failure_backoff` or `cache` value the collector checks refuse — MUST be
+  refused once, as `defaults.<key> ...`, and not once for each collector,
+  and the block then given to none. A problem validation finds with one
+  collector in a value it took MUST end by saying so, as `(<key> comes from
+  the defaults of the file)`.
+- The request keys a collector takes MUST follow its own in the order its
+  request block's keys are checked in (§ 5.1), in the order the block has
+  them, so that of several keys refused the error names one the collector
+  writes first, the same at every load.
+- `--dry-run` MUST list under `details.collector_defaults`, for each
+  collector that took any, the keys it took (§ 30.1). `${NAME}` expansion
+  (§ 42.15a) MUST apply to the block as to the rest of its file, and the
+  target allocator's bundle (§ 42.14d) MUST carry the files as written,
+  `defaults` and all. A collector
+  written on the debug page MUST refuse a `defaults` key, which is a key of
+  a file.
 
 ### 5.0a Metrics prefix
 
@@ -8028,7 +8083,8 @@ force on its `static targets reloaded` line the static targets: as
 lists that are not empty in that order, each sorted, or `no changes` when
 none is. A collector MUST be changed when its fingerprint (§ 42.13)
 differs, which the reload MUST read from those it works out to follow the
-configuration, encoding no definition for it, and a static target when
+configuration, encoding no definition for it, a key it takes from its
+file's `defaults` (§ 5.0b) as much as one it writes, and a static target when
 anything in its entry differs. Each list MUST name at most 10 and count the
 rest (`and 3 more`). A refused reload MUST NOT change what the last said.
 The landing page (§ 23) MUST show the time of the last reload that put
@@ -8579,8 +8635,10 @@ The example configurations in `configs/` MUST begin with the
 The configuration schema MUST require `collectors` or `collector_files`, each
 non-empty when it is the one present. The repository MUST also publish
 `configs/collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
-non-empty `collectors` list and no other key, its collectors described by the
-same rules as the configuration's, which a test MUST check.
+non-empty `collectors` list, `defaults` and no other key, its collectors described by the
+same rules as the configuration's, which a test MUST check. Both schemas MUST
+describe `defaults` (§ 5.0b) with exactly the keys it takes, each by the rules
+of the collector's key it sets, which a test MUST check.
 `--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
 the committed file differs from what the code generates.
 
@@ -9639,6 +9697,9 @@ The steps MUST be:
 - `config` — the configuration file and its collector files (§ 5.0) load and
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
+  each collector that took keys from its file's `defaults` (§ 5.0b) is listed
+  under `details.collector_defaults` with the keys it took, in the block's
+  order;
   each collector that sets `allowed_targets`, `denied_targets`,
   `accept_status`, `accept_codes`, `retry.statuses`, `retry.retry_after`,
   `pagination`, `login` or `rate_limit` is listed under `details.request_policies` with

@@ -430,7 +430,7 @@ func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[strin
 	for _, key := range []string{"collectors[].metrics[].value_map", "collectors[].metrics[].labels[].value_map"} {
 		delete(schemaNode(t, schema, key), "propertyNames")
 	}
-	for _, key := range []string{"collectors[].request.allowed_targets[]", "collectors[].request.denied_targets[]"} {
+	for _, key := range []string{"collectors[].request.allowed_targets[]", "collectors[].request.denied_targets[]", "defaults.request.allowed_targets[]", "defaults.request.denied_targets[]"} {
 		delete(schemaNode(t, schema, key), "minLength")
 	}
 	// A name of request.headers or request.query was any text, and an entry
@@ -477,7 +477,7 @@ func (k schemaKey) files(t *testing.T, schemas keySchemas) []checkedFile {
 			}
 			return schemaProblems(t, schemas.configuration, document), schemaProblems(t, schemas.configurationWas, document), loaded, err
 		}}}
-		if strings.HasPrefix(k.document, "collectors:\n") && strings.HasPrefix(k.key, "collectors[]") {
+		if strings.HasPrefix(k.document, "collectors:\n") && strings.HasPrefix(k.key, "collectors[]") || strings.HasPrefix(k.key, "defaults.") {
 			// A collector file is loaded as the configuration listing it is.
 			files = append(files, checkedFile{"a collector file", func(t *testing.T, document string) ([]string, []string, any, error) {
 				t.Helper()

@@ -248,3 +248,23 @@ func TestTheWatchPutsAChangedFileInForce(t *testing.T) {
 		return !ok
 	})
 }
+
+// The defaults block of the configuration and of a collector file travel
+// with the files, which the bundle carries as written, so a replica's
+// collectors take them as the allocator's do.
+func TestABundleCarriesTheDefaultsOfEachFile(t *testing.T) {
+	config := "defaults:\n  limits: {max_metrics: 70}\n" + testConfig
+	p := writeInputs(t, config, "", "")
+	team := "defaults:\n  cache: {ttl: 45s}\n" + testCollectorFile
+	testutil.WriteIn(t, filepath.Dir(p.Config), "teams/a.yaml", team)
+	a, _ := settledAllocator(t, mustLoad(t, p), "r1")
+	b := a.Bundle("r1")
+	if b.Files[allocapi.ConfigFile] != config || b.Files["teams/a.yaml"] != team {
+		t.Fatalf("the bundle does not carry the files as written:\n%s\n%s", b.Files[allocapi.ConfigFile], b.Files["teams/a.yaml"])
+	}
+	conf, _ := loadBundle(t, b)
+	demo, other := conf.Collectors[0], conf.Collectors[1]
+	if demo.Limits.MaxMetrics != 70 || demo.Cache.TTL != 0 || other.Limits.MaxMetrics != 10000 || other.Cache.TTL != model.Duration(45*time.Second) {
+		t.Errorf("the replica's collectors take demo %+v %+v, other %+v %+v", demo.Limits, demo.Cache, other.Limits, other.Cache)
+	}
+}

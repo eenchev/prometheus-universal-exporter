@@ -49,7 +49,7 @@ func configSchema() map[string]any {
 const collectorFileSchemaID = schemaBaseURL + "collector-file.schema.json"
 
 // collectorFileSchema describes a collector file (collectorfiles.go): a
-// collectors list, required and non-empty, and no other key. The collectors
+// collectors list, required and non-empty, defaults, and no other key. The collectors
 // are described exactly as in the configuration schema, from the same rules.
 func collectorFileSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(collectorFile{}), "", configSchemaRules())
@@ -57,7 +57,7 @@ func collectorFileSchema() map[string]any {
 	schema["required"] = []string{collectorFileKey}
 	collectors := schema["properties"].(map[string]any)[collectorFileKey].(map[string]any)
 	collectors["minItems"] = 1
-	schema["description"] = "A collector file of the exporter, listed under collector_files in the configuration. It holds collectors and nothing else. See docs/CONFIGURATION.md#collector-files."
+	schema["description"] = "A collector file of the exporter, listed under collector_files in the configuration. It holds collectors and the defaults they take, and nothing else. See docs/CONFIGURATION.md#collector-files."
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = collectorFileSchemaID
 	allowExtensionKeys(schema)
@@ -435,6 +435,32 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
+	return withDefaultsRules(collectorSchemaRules())
+}
+
+// withDefaultsRules adds to rules those of a defaults block, the same, key
+// for key, as those of the collector keys it sets (model.DefaultsKeys), so
+// an editor holds a value of defaults to what it holds the collector's to.
+func withDefaultsRules(rules map[string]map[string]any) map[string]map[string]any {
+	for path, rule := range rules {
+		key, ok := strings.CutPrefix(path, "collectors[].")
+		if !ok {
+			continue
+		}
+		for _, block := range model.DefaultsKeys {
+			if key == block || strings.HasPrefix(key, block+".") || strings.HasPrefix(key, block+"[]") {
+				rules["defaults."+key] = rule
+			}
+		}
+	}
+	rules["defaults"] = map[string]any{"description": "What every collector of this file takes for a key of these it does not set itself, key by key: one that sets limits.max_metrics keeps the other limits written here. A list is replaced whole. A request key applies to the collectors whose request type takes it. Collectors of other files do not take it. See docs/CONFIGURATION.md#defaults-for-the-collectors-of-a-file."}
+	rules["defaults.request"] = map[string]any{"description": "The request keys every collector of this file takes when it does not set them and its request type takes them."}
+	return rules
+}
+
+// collectorSchemaRules are configSchemaRules but for those of a defaults
+// block.
+func collectorSchemaRules() map[string]map[string]any {
 	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
 	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
 	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
@@ -446,7 +472,7 @@ func configSchemaRules() map[string]map[string]any {
 			"description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
 		},
 		"collectors":               {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
-		"collector_files":          {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
+		"collector_files":          {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and their defaults, and nothing else. See docs/CONFIGURATION.md#collector-files."},
 		"collector_files[]":        {"type": "string", "minLength": 1},
 		"rate_limits":              {"description": "Rate limits per host, shared by every collector: every http and graphite request to one of an entry's hosts, each attempt, page, followed redirect and login request counted, from any collector, probe or static target, takes a turn under the entry's rate_limit, as well as under its collector's own request.rate_limit. The first entry whose hosts match applies. Other request types are not limited. See docs/REQUESTS.md#rate-limits-per-host."},
 		"rate_limits[]":            {"required": []string{"name", "hosts", "rate_limit"}},

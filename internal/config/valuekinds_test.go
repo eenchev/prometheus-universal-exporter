@@ -225,6 +225,8 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	for _, key := range collector {
 		ofCollectors = append(ofCollectors, "collectors[]."+key)
 	}
+	// A defaults block holds a key to what a collector's is held to.
+	ofCollectors = append(ofCollectors, "defaults.error_handling.on_decode_error", "defaults.error_handling.on_fetch_error", "defaults.error_handling.on_transform_error", "defaults.request.retry.codes[]")
 	for name, tc := range map[string]struct {
 		file reflect.Type
 		want []string

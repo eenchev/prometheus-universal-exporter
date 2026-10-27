@@ -68,7 +68,7 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		if namedFilesUnread {
 			x.DescriptorFilesUnread = true
 		}
-		errs = append(errs, inCollectorFile(file, validateCollector(c, x)))
+		errs = append(errs, inCollectorFile(file, withDefaultsNoted(validateCollector(c, x), x)))
 	}
 	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
 	if err := model.JoinProblems(errs...); err != nil {
@@ -123,17 +123,8 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := checkPlaceholdersAreFilled(x); err != nil {
 		return err
 	}
-	if x.Limits.MaxResponseBytes < 0 {
-		return fmt.Errorf("collector %q limits.max_response_bytes must not be negative", x.Name)
-	}
-	if err := checkLimits(x); err != nil {
+	if err := checkLimitValues(x); err != nil {
 		return err
-	}
-	if err := checkLeastLimits(x); err != nil {
-		return err
-	}
-	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
-		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
 	}
 	applyLimitDefaults(&x.Limits)
 	if err := validateCache(x); err != nil {
@@ -206,6 +197,25 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	// The derived entries read the rules' names and types, and are checked
 	// once those are sound.
 	return transform.CheckDerived(x)
+}
+
+// checkLimitValues refuses a limit, or request.max_response_bytes, that is
+// no limit: negative, or under the least it may be. A defaults block's are
+// checked with it too (checkDefaults).
+func checkLimitValues(x *model.Collector) error {
+	if x.Limits.MaxResponseBytes < 0 {
+		return fmt.Errorf("collector %q limits.max_response_bytes must not be negative", x.Name)
+	}
+	if err := checkLimits(x); err != nil {
+		return err
+	}
+	if err := checkLeastLimits(x); err != nil {
+		return err
+	}
+	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
+		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
+	}
+	return nil
 }
 
 // checkCSVColumns requires a csv transform reading rows without a header row
@@ -1174,7 +1184,9 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	if err = oneDocument(dec); err != nil {
 		return nil, err
 	}
-	err = mergeCollectorFiles(&c, path, opts)
+	// The configuration's defaults are its own collectors', given before
+	// the collector files' join them.
+	err = model.JoinProblems(applyOwnDefaults(&c, b), mergeCollectorFiles(&c, path, opts))
 	if decoded != nil {
 		decoded(&c)
 	}

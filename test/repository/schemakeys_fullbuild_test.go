@@ -77,8 +77,10 @@ func TestEveryConstrainedKeyOfTheSchemasIsInATable(t *testing.T) {
 			}
 		}
 	}
-	if got, want := constrainedKeys(loadSchemaFile(t, collectorFileSchemaFile)), slices.DeleteFunc(constrainedKeys(loadSchema(t)), func(key string) bool { return !strings.HasPrefix(key, "collectors[]") }); !slices.Equal(got, want) {
-		t.Errorf("a collector file's schema holds %v, and the configuration's holds of its collectors %v", got, want)
+	if got, want := constrainedKeys(loadSchemaFile(t, collectorFileSchemaFile)), slices.DeleteFunc(constrainedKeys(loadSchema(t)), func(key string) bool {
+		return !strings.HasPrefix(key, "collectors[]") && !strings.HasPrefix(key, "defaults.")
+	}); !slices.Equal(got, want) {
+		t.Errorf("a collector file's schema holds %v, and the configuration's holds of its collectors and defaults %v", got, want)
 	}
 	if held < 50 {
 		t.Errorf("only %d keys are held to a rule by the schemas", held)
@@ -110,9 +112,9 @@ func sizeKeys(schema map[string]any) []string {
 
 // Every key of the schemas that takes a size is put through the ways a
 // number of bytes is written (sizeForms): its row says so, and a size key
-// that is added fails here until its row does. A collector file has five,
-// the configuration those and otlp.batch_max_bytes, and the target file
-// none.
+// that is added fails here until its row does. A collector file has nine,
+// a collector's five and the four of them defaults sets, the configuration
+// those and otlp.batch_max_bytes, and the target file none.
 func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T) {
 	marked := map[string]bool{}
 	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys()) {
@@ -129,8 +131,8 @@ func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T)
 			t.Errorf("%s takes a size and no row of schemakeys_*_test.go says size: true of it", key)
 		}
 	}
-	if len(sizes) != 6 || len(marked) != len(sizes) {
-		t.Errorf("the configuration's schema has the size keys %v, and the rows mark %d: want the six sizes, each marked", sizes, len(marked))
+	if len(sizes) != 10 || len(marked) != len(sizes) {
+		t.Errorf("the configuration's schema has the size keys %v, and the rows mark %d: want the ten sizes, each marked", sizes, len(marked))
 	}
 	if inFile := sizeKeys(loadSchemaFile(t, collectorFileSchemaFile)); !slices.Equal(append(slices.Clone(inFile), "otlp.batch_max_bytes"), sizes) {
 		t.Errorf("a collector file's schema has the size keys %v, and the configuration's %v", inFile, sizes)

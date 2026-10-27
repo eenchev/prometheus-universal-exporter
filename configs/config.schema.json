@@ -32,7 +32,7 @@
   },
   "properties": {
     "collector_files": {
-      "description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files.",
+      "description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and their defaults, and nothing else. See docs/CONFIGURATION.md#collector-files.",
       "items": {
         "minLength": 1,
         "type": "string"
@@ -3455,6 +3455,356 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "defaults": {
+      "additionalProperties": false,
+      "description": "What every collector of this file takes for a key of these it does not set itself, key by key: one that sets limits.max_metrics keeps the other limits written here. A list is replaced whole. A request key applies to the collectors whose request type takes it. Collectors of other files do not take it. See docs/CONFIGURATION.md#defaults-for-the-collectors-of-a-file.",
+      "properties": {
+        "cache": {
+          "additionalProperties": false,
+          "description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching.",
+          "properties": {
+            "revalidate": {
+              "description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses.",
+              "type": "boolean"
+            },
+            "stale_if_error": {
+              "description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "ttl": {
+              "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "error_handling": {
+          "additionalProperties": false,
+          "properties": {
+            "allow_missing_keys": {
+              "type": "boolean"
+            },
+            "on_decode_error": {
+              "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
+              "enum": [
+                "fail",
+                "log",
+                "ignore",
+                ""
+              ],
+              "type": "string"
+            },
+            "on_fetch_error": {
+              "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
+              "enum": [
+                "fail",
+                "log",
+                "ignore",
+                ""
+              ],
+              "type": "string"
+            },
+            "on_transform_error": {
+              "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
+              "enum": [
+                "fail",
+                "log",
+                "ignore",
+                ""
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "failure_backoff": {
+          "additionalProperties": false,
+          "description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets.",
+          "properties": {
+            "after": {
+              "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3.",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "initial": {
+              "description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "max": {
+              "description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "min_budget": {
+              "description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "limits": {
+          "additionalProperties": false,
+          "properties": {
+            "max_cache_entries": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_help_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_label_name_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_label_value_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_labels_per_metric": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_metric_name_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_metrics": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_output_bytes": {
+              "anyOf": [
+                {
+                  "const": 0
+                },
+                {
+                  "minimum": 38
+                }
+              ],
+              "description": "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 38 bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+              "minimum": 0,
+              "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "max_response_bytes": {
+              "anyOf": [
+                {
+                  "const": 0
+                },
+                {
+                  "minimum": 1024
+                }
+              ],
+              "description": "The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+              "minimum": 0,
+              "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "max_script_memory": {
+              "description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux.",
+              "minimum": 0,
+              "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "script_timeout": {
+              "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "request": {
+          "additionalProperties": false,
+          "description": "The request keys every collector of this file takes when it does not set them and its request type takes them.",
+          "properties": {
+            "allowed_targets": {
+              "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql, tlscert, redis, tcp and ldap; dns matches its names by name alone, and a PTR target by address; for s3file, whose target is a bucket, the buckets it may read, by name or glob, and no address.",
+              "items": {
+                "minLength": 1,
+                "not": {
+                  "pattern": "[^\\x00-\\x7F]",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            },
+            "denied_targets": {
+              "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is.",
+              "items": {
+                "minLength": 1,
+                "not": {
+                  "pattern": "[^\\x00-\\x7F]",
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            },
+            "max_response_bytes": {
+              "anyOf": [
+                {
+                  "const": 0
+                },
+                {
+                  "minimum": 1024
+                }
+              ],
+              "description": "http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+              "minimum": 0,
+              "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "retry": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "description": "How many times a failed request is retried, from 0, the default, to 10.",
+                  "maximum": 10,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "backoff": {
+                  "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
+                  "maximum": 0,
+                  "minimum": 0,
+                  "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                  "type": [
+                    "string",
+                    "integer"
+                  ]
+                },
+                "codes": {
+                  "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "non_idempotent": {
+                  "description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
+                  "type": "boolean"
+                },
+                "retry_after": {
+                  "description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read.",
+                  "type": "boolean"
+                },
+                "statuses": {
+                  "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused.",
+                  "items": {
+                    "maximum": 599,
+                    "minimum": 100,
+                    "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "tls": {
+              "additionalProperties": false,
+              "properties": {
+                "ca_file": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "cert_file": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "insecure_skip_verify": {
+                  "type": "boolean"
+                },
+                "key_file": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "server_name": {
+                  "description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "otlp": {
       "additionalProperties": false,

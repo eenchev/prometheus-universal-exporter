@@ -29,6 +29,8 @@ var yamlPlaces = map[string]string{
 	"SelfMetricsConfig":   "web.self_metrics",
 	"ExporterBasicAuth":   "web.basic_auth",
 	"Collector":           "a collector",
+	"CollectorDefaults":   "defaults",
+	"DefaultsRequest":     "defaults.request",
 	"RequestConfig":       "request",
 	"RetryConfig":         "retry",
 	"TargetRetryConfig":   "retry",

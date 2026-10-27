@@ -54,6 +54,55 @@ func TestCollectorFileSchemaAcceptsCollectorsOnly(t *testing.T) {
 	}
 }
 
+// Both schemas take a defaults block with the keys defaults may set, each
+// held to what a collector's is, and refuse any other key in it.
+func TestTheSchemasTakeDefaultsWithTheKeysTheyMaySet(t *testing.T) {
+	collectors := testutil.CollectorsDocument("demo")
+	for name, tc := range map[string]struct {
+		defaults string
+		valid    bool
+	}{
+		"every block": {`defaults:
+  request:
+    tls: {ca_file: /etc/ca.pem, insecure_skip_verify: false}
+    retry: {attempts: 2, backoff: 1s, statuses: ["5xx"], codes: [UNAVAILABLE], retry_after: true, non_idempotent: true}
+    max_response_bytes: 1MiB
+    allowed_targets: ["*.example.com"]
+    denied_targets: [169.254.169.254]
+  limits: {max_metrics: 500, script_timeout: 1s}
+  error_handling: {on_fetch_error: log, allow_missing_keys: true}
+  failure_backoff: {after: 2, initial: 30s}
+  cache: {ttl: 1m}
+`, true},
+		"empty":                 {"defaults: {}\n", true},
+		"a collector key":       {"defaults: {metrics: []}\n", false},
+		"an unknown key":        {"defaults: {limitz: {}}\n", false},
+		"a request key":         {"defaults: {request: {path: /x}}\n", false},
+		"the request type":      {"defaults: {request: {type: http}}\n", false},
+		"a key of a type's own": {"defaults: {request: {record_type: A}}\n", false},
+		"an unknown limit":      {"defaults: {limits: {max_metricz: 1}}\n", false},
+		"a negative limit":      {"defaults: {limits: {max_metrics: -1}}\n", false},
+		"an error policy":       {"defaults: {error_handling: {on_fetch_error: panic}}\n", false},
+		"a retry status":        {"defaults: {request: {retry: {statuses: [600]}}}\n", false},
+		"a duration":            {"defaults: {cache: {ttl: soon}}\n", false},
+		"a backoff's after":     {"defaults: {failure_backoff: {after: 0}}\n", false},
+		"not a mapping":         {"defaults: 5\n", false},
+	} {
+		for _, file := range []string{configSchemaFile, collectorFileSchemaFile} {
+			t.Run(name+" in "+file, func(t *testing.T) {
+				var doc any
+				if err := yaml.Unmarshal([]byte(tc.defaults+collectors), &doc); err != nil {
+					t.Fatal(err)
+				}
+				errs := validateAgainstSchema(loadSchemaFile(t, file), normalizeYAML(doc))
+				if tc.valid != (len(errs) == 0) {
+					t.Fatalf("valid=%v, errors=%v", tc.valid, errs)
+				}
+			})
+		}
+	}
+}
+
 // configs/config.schema.json is the JSON Schema of the configuration file, generated
 // from the Config struct (config/configschema.go) and printed by --config.schema.
 

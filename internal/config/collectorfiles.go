@@ -102,10 +102,17 @@ func problemFile(err error, configPath string) string {
 // collectorFile is the shape of a collector file.
 type collectorFile struct {
 	Collectors []model.Collector `yaml:"collectors"`
+	// Defaults are what the file's collectors take for the keys they do
+	// not write (defaults.go).
+	Defaults *model.CollectorDefaults `yaml:"defaults"`
 }
 
-// collectorFileKey is the one key a collector file may have.
-const collectorFileKey = "collectors"
+// collectorFileKey is the key of a collector file's collectors, and
+// defaultsKey that of its defaults, the one other key it may have.
+const (
+	collectorFileKey = "collectors"
+	defaultsKey      = "defaults"
+)
 
 // isGlobPattern reports whether a collector_files entry is a pattern rather
 // than the name of one file.
@@ -191,8 +198,8 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	// The keys are the file's own and those a merge key (<<) brings in, as
 	// the decoder reads them, a key that is an alias the key it names.
 	for _, entry := range model.MappingEntries(root) {
-		if key := model.KeyName(entry.Key); key != collectorFileKey && !isExtensionKey(key) {
-			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s, and x- keys of its own for YAML anchors", path, entry.Key.Line, key, collectorFileKey)
+		if key := model.KeyName(entry.Key); key != collectorFileKey && key != defaultsKey && !isExtensionKey(key) {
+			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s and %s, and x- keys of its own for YAML anchors", path, entry.Key.Line, key, collectorFileKey, defaultsKey)
 		}
 	}
 	var file collectorFile
@@ -206,6 +213,9 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	}
 	if len(file.Collectors) == 0 {
 		return nil, fmt.Errorf("collector file %s defines no collectors", path)
+	}
+	if err := applyDefaults(file.Defaults, root, file.Collectors, false); err != nil {
+		return nil, inCollectorFile(path, err)
 	}
 	return file.Collectors, nil
 }
@@ -239,7 +249,12 @@ func mergeCollectorFiles(c *model.Config, configPath string, opts []LoadOption) 
 	for _, file := range files {
 		collectors, err := loadCollectorFile(file, opts)
 		if err != nil {
-			errs = append(errs, &fileProblem{file: file, err: err, named: true})
+			// The problems of its defaults name the file already, each.
+			var inFile *fileProblem
+			if _, several := err.(model.Problems); !several && !errors.As(err, &inFile) { //nolint:errorlint // see inCollectorFile
+				err = &fileProblem{file: file, err: err, named: true}
+			}
+			errs = append(errs, err)
 			continue
 		}
 		for i := range collectors {

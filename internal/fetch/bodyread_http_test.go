@@ -173,8 +173,10 @@ func megabyteTarget(t *testing.T, declared bool) (string, []byte) {
 // than the megabyte: the request, the answer's headers and the body, once.
 // Read with io.ReadAll it was 2.2 MiB. The bound is between the two, and
 // holds for the whole fetch, the target's side of it included, since both run
-// here. A chunked answer, whose length nothing says, is read as before, and
-// whole.
+// here. A chunked answer, whose length nothing says, after one of the same
+// collector and target is read into a buffer the size of that one
+// (readHintedBody), and is held to the same bound: the first fetch, which
+// alloctest does not count, leaves the hint.
 func TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce(t *testing.T) {
 	for name, declared := range map[string]bool{"with a length": true, "chunked": false} {
 		target, body := megabyteTarget(t, declared)
@@ -185,7 +187,7 @@ func TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce(t *testing.T) {
 				t.Fatalf("%s: err=%v", name, err)
 			}
 		})
-		if declared && size > 3<<19 {
+		if size > 3<<19 {
 			t.Errorf("%s: fetching %d bytes allocated %d, want little more than the body", name, len(body), size)
 		}
 	}

@@ -6898,6 +6898,16 @@ is the exporter's own, so one in a collector's or a static target's
 be forwarded; listed in `forward_headers`, it MUST be refused at load
 (§ 42.4).
 
+An answer without a `Content-Length`, a chunked or a compressed one, SHOULD
+be read into a buffer the size of the last such answer of the same collector
+and target, with an eighth more, rather than into buffers grown as it comes.
+That size is a hint only: an answer longer than it MUST be read whole within
+the bound and one shorter MUST be the bytes that came. The hints MUST take a
+bounded amount of memory whatever targets are probed, MUST NOT make a first
+buffer of more than 4 MiB or the bound, and an answer much shorter than its
+buffer MUST NOT keep the buffer: the response, which the cache may hold,
+holds little more than its body.
+
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
 header's values — so where one list ends and the next begins is part of the
@@ -13851,7 +13861,8 @@ Tests MUST show:
 - A megabyte of declared length is read with at most 1.5 MiB and 4
   allocations (one, of the body; `io.ReadAll` took 2.1 MiB in 25). A body of
   unknown length, as a chunked or a compressed answer is, is read as
-  `io.ReadAll` reads it.
+  `io.ReadAll` reads it the first time, and then into a buffer the size of
+  the last one (§ 34.229).
 - An HTTP answer is read whole and held to `max_response_bytes` whether it
   declares its length or not: a body up to the limit is the response's, to
   the byte, megabytes included; one over it is refused with `response size N
@@ -13867,7 +13878,8 @@ Tests MUST show:
 - Fetching a megabyte over HTTP from an answer that declares its length
   allocates at most 1.5 MiB in all, the target's side included (1.01 MiB;
   2.1 MiB read with `io.ReadAll`); a chunked answer of a megabyte is read
-  whole.
+  whole, and after one of the same collector and target within the same
+  bound (§ 34.229).
 - A local file that has a size is read whole into a buffer of its size and
   one byte: a file up to the limit is the body, megabytes included, an empty file an empty
   body, not nil, a file a byte over the limit is refused with `file F:
@@ -28774,6 +28786,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestChartRendersItsOptions`: `server.gzipLevel` of `0`, `9` and the string `"6"` render `--web.gzip-level` with that level; the defaults render none.
 - `TestChartRefusesInvalidOptions`: `server.gzipLevel` of `10`, `-1`, `1.5` and `fast`, and `--web.gzip-level=9` in `extraArgs`, fail rendering naming `server.gzipLevel`.
 - `TestChartHoldsTheGzipLevelWithTheSchemaSkipped`: with the schema skipped, `10`, `-1`, `1.5`, `fast` and `07` fail rendering in the template naming the value, and `0` and `"9"` render.
+- `TestABodyIsReadAsBefore` and `TestARandomBodyIsReadAsBefore`: a body without a length read with a hint of the last one's size (`first`) of 1, 100, 1000, 4096 or 50,000 bytes is read as `io.ReadAll` read it, to the byte, the error and what was taken from the source.
+- `TestABodySizeHintIsBounded`: a hint is the size and an eighth and 512 bytes, at most the limit and 4 MiB (an answer of 100 MiB leaves 4 MiB).
+- `TestABodySizeHintIsKeptPerCollectorAndTarget`: one collector and target find one slot; 64 collectors probing one target find at least 32.
+- `TestAnUnsizedBodyIsReadIntoABufferTheSizeOfTheLast`: a megabyte without a length, in pieces of 16 KiB, after one of the same size, is read with at most 1.25 MiB and 2 allocations (`io.ReadAll` took 2.1 MiB in 25), and leaves the hint of its size.
+- `TestAShorterBodyDoesNotKeepTheLastOnesBuffer`: 1,000 bytes after a megabyte are in a buffer of at most 6,096 bytes; 900 after 1,000 in the hinted buffer of 1,638.
+- `TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce`: a chunked megabyte fetched after another from the same target allocates at most 1.5 MiB in all, as one with a length does (2.2 MiB before).
 
 # 35. Documentation requirements
 

@@ -213,6 +213,9 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.retry.statuses[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
 		{key: "collectors[].request.allowed_targets[]", document: jqCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.denied_targets[]", document: jqCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
+		// A collector's proxy: both refuse a scheme no proxy is reached
+		// by, and take "", the environment's proxy, as the key left out.
+		{key: "collectors[].request.proxy_url", document: jqCollector, at: request, setting: "      proxy_url: %s\n", valid: "http://proxy.example:3128", invalid: "ftp://proxy.example", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
 		// An entry of include or exclude is a regular expression: both
 		// refuse the empty one, which matches every name, and one of

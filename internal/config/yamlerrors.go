@@ -36,6 +36,7 @@ var yamlPlaces = map[string]string{
 	"TargetRetryConfig":   "retry",
 	"BasicAuth":           "basic_auth",
 	"BasicAuthFile":       "basic_auth_file",
+	"ProxyBasicAuthFile":  "proxy_basic_auth_file",
 	"TLSConfig":           "tls",
 	"ResponseConfig":      "response",
 	"CSVConfig":           "response.csv",

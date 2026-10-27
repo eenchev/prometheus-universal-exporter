@@ -540,8 +540,12 @@ the keys of it they do not set themselves:
 
 - `defaults` MUST take exactly the keys of `request.tls`, `request.retry`,
   `request.max_response_bytes`, `request.allowed_targets`,
-  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff` and
-  `cache`, each of the kind a collector's takes. Any other key — of a
+  `request.denied_targets`, `request.proxy_url`,
+  `request.proxy_basic_auth_file`, `limits`, `error_handling`,
+  `failure_backoff` and `cache`, each of the kind a collector's takes. A
+  collector that writes `proxy_url: direct` MUST leave out the
+  `proxy_basic_auth_file` the block gives it; one that writes it itself
+  beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
   startup, by `--dry-run` and on reload, naming the key and its line, and the
@@ -1000,6 +1004,8 @@ and the source MUST list the opt-in types.
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
+| `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
+| `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -1008,6 +1014,8 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
+Neither a probe parameter nor a static target MAY set `proxy_url` or
+`proxy_basic_auth_file`.
 
 ##### Pagination
 
@@ -1376,7 +1384,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -6873,8 +6881,10 @@ failure withholds: a successful probe answers them.
 The addresses of the exporter's side of the network MUST be withheld from
 the caller of any request type's failed fetch, read from the errors' types
 as the failure log reads them (§ 25): the address a connection was made
-from (`*net.OpError`'s `Source`), the proxy a `proxyconnect` dialed, the
-name server a lookup asked (`*net.DNSError`'s `Server`), and the source
+from (`*net.OpError`'s `Source`), the whole of what a connection to a proxy
+failed with (a `proxyconnect` error: the proxy's address, the name it is
+reached by, its certificate), what a proxy said in refusing a tunnel (§
+42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
 of the one it wraps, as the redaction of URLs does, MUST tell the caller
@@ -9483,8 +9493,10 @@ whether or not a proxy is in between.
   against the address each connection is made to, without a lookup of the
   exporter's own before it, so a name is resolved once per connection and one
   that resolves elsewhere between lookups is still refused. For a target
-  reached through a proxy, the connection is the proxy's and MUST NOT be
-  checked as the target's; the exporter MUST resolve the target's name itself
+  reached through a proxy, the environment's or the collector's
+  `request.proxy_url`, the connection is the proxy's and MUST NOT be
+  checked as the target's, nor the proxy's address held to the lists, which
+  the configuration names; the exporter MUST resolve the target's name itself
   before the request and check those addresses. When that lookup fails, the
   request MUST go on to the proxy, which resolves the name, unless the
   collector's own lists hold an address or a network, in which case it MUST
@@ -31731,8 +31743,8 @@ The Helm chart MUST expose both as list-valued `params` entries on each
 Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
-`server_name`, a static target's own `tls` block being its set — and HTTP/2
-choice, shared by every collector and scrape that uses the same set, rather
+`server_name`, a static target's own `tls` block being its set — HTTP/2
+choice and proxy (`request.proxy_url` and its credentials' files, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
 closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
@@ -31753,8 +31765,30 @@ lower-case spellings, as Go's `golang.org/x/net/http/httpproxy` interprets
 them; requests to localhost and loopback addresses MUST go direct. This MUST
 apply to target requests and OTLP exports alike. The environment MUST be read
 when a transport is built rather than once per process, so a test can set it.
-There MUST NOT be a proxy setting in the configuration: the proxy belongs to
-where the exporter runs, not to a collector.
+An `http` or `graphite` collector MAY name its own proxy, `request.proxy_url`,
+which MUST then carry every request of the collector — its retries, pages,
+followed redirects and login included, `localhost` too — in place of the
+environment's; `direct` MUST send them to their targets without a proxy,
+whatever the environment names, and leaving the key out MUST leave the
+environment's in force. `proxy_url` MUST be `http://`, `https://`,
+`socks5://` or `socks5h://` with a host and an optional port from 1 to 65535,
+and nothing else; a path, a query, a fragment, a placeholder, an unknown
+scheme and userinfo MUST be refused when the configuration loads, the
+refusal naming the URL by its scheme and host alone, never the credentials
+or path written in it. Credentials for the proxy MUST come from
+`request.proxy_basic_auth_file`, `username` and `password` files, both
+required, read at every request and sent as `Proxy-Authorization` or as the
+SOCKS5 username and password; the files without a `proxy_url` to send them
+to MUST be refused. The TLS connection to an `https://` proxy MUST be
+verified against the system's roots, with the proxy's host as the server
+name and no client certificate: the collector's `tls` block MUST apply to
+the target alone, through the tunnel. The proxy and its credentials' files
+MUST be part of the pool's settings, so collectors with different proxies or
+credentials never share a connection. The proxy is configuration: no probe
+parameter and no static target MAY set it. A `CONNECT` the proxy answers
+other than `200` MUST fail as the proxy's refusal, naming the target and the
+proxy's status (`the proxy refused the tunnel to api.example:443: 403
+Forbidden`), the environment's proxy and a collector's alike.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

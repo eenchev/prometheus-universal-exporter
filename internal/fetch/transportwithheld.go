@@ -11,7 +11,9 @@ import (
 // A failed fetch's error names addresses of the exporter's side of the
 // network as Go's packages write them: the address and port a connection was
 // made from (`read tcp 10.0.0.7:51234->10.1.2.3:443`), the proxy a request
-// went through (`proxyconnect tcp: dial tcp 10.0.0.5:3128`), the name
+// went through (`proxyconnect tcp: dial tcp 10.0.0.5:3128`, everything a
+// connection to it failed with, and a proxy's words in refusing a tunnel,
+// ProxyRefusedError), the name
 // server a lookup asked (`lookup db on 10.96.0.10:53`), and, in the text of
 // a resolver's exchange or a gRPC status, the same source address. Those are
 // the operator's: the pod's address, the proxy's and the cluster's resolver
@@ -78,10 +80,18 @@ func appendTransportParts(parts []string, e error) []string {
 				add(" "+source+": ", " "+model.WithheldMark+": ")
 			}
 		}
-		// A proxy's address is the Addr of the dial its connect wraps.
-		var dial *net.OpError
-		if e.Op == "proxyconnect" && errors.As(e.Err, &dial) && dial != nil && dial.Addr != nil {
-			add(" "+dial.Addr.String(), " "+model.WithheldMark)
+		// Everything a connection to the proxy failed with is of the
+		// proxy: its address, the name it is reached by in a failed
+		// lookup, the names of an https proxy's certificate. So the
+		// whole of it is withheld, and, should the text have been
+		// rewritten past matching, the address of the dial at least.
+		if e.Op == "proxyconnect" && e.Err != nil {
+			prefix := "proxyconnect " + e.Net + ": "
+			add(prefix+e.Err.Error(), prefix+model.WithheldMark)
+			var dial *net.OpError
+			if errors.As(e.Err, &dial) && dial != nil && dial.Addr != nil {
+				add(" "+dial.Addr.String(), " "+model.WithheldMark)
+			}
 		}
 	case *net.DNSError:
 		if e != nil {
@@ -89,6 +99,11 @@ func appendTransportParts(parts []string, e error) []string {
 				add(" on "+e.Server+":", " on "+model.WithheldMark+":")
 			}
 			add(e.Err, withheld(e.Err))
+		}
+	case *ProxyRefusedError:
+		// What the proxy said in refusing the tunnel is its own.
+		if e != nil {
+			add(": "+e.Status, ": "+model.WithheldMark)
 		}
 	case *CallStatusError:
 		if e != nil {

@@ -578,8 +578,9 @@ type loginToken struct {
 func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, host string) (loginToken, error) {
 	tlsSettings := loginTLS(c, l)
 	// No redirect is followed: the login's secrets go where the
-	// configuration says and nowhere a redirect would take them.
-	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: c.Request.EnableHTTP2, policy: policyOf(c)}, false, 0)
+	// configuration says and nowhere a redirect would take them. The
+	// login goes through the collector's proxy, as its requests do.
+	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: c.Request.EnableHTTP2, policy: policyOf(c)}, c), false, 0)
 	if err != nil {
 		return loginToken{}, err
 	}

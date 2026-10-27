@@ -38,7 +38,8 @@ import (
 // transportIdleConnTimeout.
 //
 // Every transport sends its requests through the proxy the environment names,
-// as curl and most Go programs do: HTTP_PROXY for http URLs, HTTPS_PROXY for
+// unless an http or graphite collector names its own (proxy.go), as curl
+// and most Go programs do: HTTP_PROXY for http URLs, HTTPS_PROXY for
 // https ones, and NO_PROXY for the hosts, domains and networks to reach
 // directly. The lower-case spellings work too. Requests to localhost and
 // loopback addresses always go direct. The environment is read when a
@@ -118,6 +119,13 @@ type TransportSettings struct {
 	// request to an address its own policy refuses. Policies are interned,
 	// so collectors with the same lists still share a pool.
 	policy *targetPolicy
+	// proxy is the collector's request.proxy_url, "" for the proxy the
+	// environment names and model.ProxyDirect for none, and proxyAuth the
+	// files of the credentials sent to it (proxy.go). A connection made
+	// through one proxy, or with one proxy credential, must not carry a
+	// request meant for another.
+	proxy     string
+	proxyAuth model.ProxyBasicAuthFile
 }
 
 type cachedTransport struct {
@@ -157,19 +165,29 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 	if err != nil {
 		return nil, err
 	}
+	proxy, proxyURL, err := transportProxy(settings)
+	if err != nil {
+		return nil, err
+	}
+	// Every connection is checked against the allowed_targets and
+	// denied_targets of the request that made it (targetpolicy.go).
+	dial := policyDialer((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext)
 	transport := &http.Transport{
-		Proxy:             environmentProxy(),
-		TLSClientConfig:   tlsCfg,
-		ForceAttemptHTTP2: settings.EnableHTTP2,
-		// Every connection is checked against the allowed_targets and
-		// denied_targets of the request that made it (targetpolicy.go).
-		DialContext:         policyDialer((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext),
+		Proxy:               proxy,
+		TLSClientConfig:     tlsCfg,
+		ForceAttemptHTTP2:   settings.EnableHTTP2,
+		DialContext:         dial,
 		MaxIdleConnsPerHost: transportMaxIdlePerHost,
 		IdleConnTimeout:     transportIdleConnTimeout,
 		TLSHandshakeTimeout: handshakeTimeout(),
 		// An answer with more headers than this fails the request
 		// (responseHeadersTooLarge).
 		MaxResponseHeaderBytes: maxResponseHeaderBytes,
+		// A proxy's refusal to tunnel fails as one (proxy.go).
+		OnProxyConnectResponse: refuseProxyConnect,
+	}
+	if proxyURL != nil && proxyURL.Scheme == "https" {
+		transport.DialTLSContext = proxyTLSDialer(dial, handshakeTimeout())
 	}
 	c.entries[settings] = &cachedTransport{stamp: stamp, transport: transport, lastUsed: now}
 	return transport, nil

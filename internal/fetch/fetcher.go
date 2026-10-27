@@ -748,7 +748,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// TLS and HTTP/2 settings (transport.go), so a static target with a tls
 	// block of its own has a pool of its own, and no connection made with
 	// one client certificate carries a request that is to present another.
-	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, followRedirects, 0)
+	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, c), followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}

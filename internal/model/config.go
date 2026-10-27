@@ -262,6 +262,15 @@ type RequestConfig struct {
 	// not asked faster than it can answer (fetch/ratelimit.go). Left out
 	// of a collector written as YAML when unset.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+	// ProxyURL belongs to the http and graphite types: the proxy every
+	// request of the collector, its login's included, goes through in
+	// place of the one the environment names, or ProxyDirect for none;
+	// "" leaves the environment's in force (fetch/proxy.go).
+	// ProxyBasicAuthFile is the files of the credentials sent to that
+	// proxy, which its URL may not carry. Both are left out of a collector
+	// written as YAML when unset.
+	ProxyURL           string              `yaml:"proxy_url,omitempty"`
+	ProxyBasicAuthFile *ProxyBasicAuthFile `yaml:"proxy_basic_auth_file,omitempty"`
 
 	// Own holds the keys only the collector's request type takes, read
 	// into the struct its registration declares (fetch.RequestType.Config;
@@ -456,6 +465,19 @@ type BasicAuthFile struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 }
+
+// ProxyBasicAuthFile is request.proxy_basic_auth_file: the paths of files
+// holding the username and the password a collector's request.proxy_url is
+// sent, read on every request so a rotated secret is picked up. Its JSON
+// names are its keys', for --dry-run.
+type ProxyBasicAuthFile struct {
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
+}
+
+// ProxyDirect is the request.proxy_url that sends a collector's requests to
+// their targets directly, whatever proxy the environment names.
+const ProxyDirect = "direct"
 
 // TLSConfig is a tls block: the CA to verify the server with, a client
 // certificate and key, and whether verification is skipped.

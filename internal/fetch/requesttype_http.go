@@ -44,6 +44,7 @@ func init() {
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
 			"allowed_targets", "denied_targets", "accept_status", "login", "rate_limit",
+			"proxy_url", "proxy_basic_auth_file",
 		},
 		Config:   HTTPConfig{},
 		KeyRules: httpKeyRules,

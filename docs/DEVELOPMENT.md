@@ -369,6 +369,7 @@ two to the same lines and the same entries, a full log among them.
 make new-request-type NAME=memcache                          # a type of every build
 make new-request-type NAME=memcache OPT_IN=1                 # an opt-in type
 make new-request-type NAME=sshexec OPT_IN=1 GO_NAME=SSHExec  # its Go name given
+make new-request-type NAME=uuid GO_NAME=UUID ARTICLE=a        # its article given
 ```
 
 runs `tools/new-request-type.sh`, POSIX `sh`, `sed` and `awk` as macOS has
@@ -379,7 +380,18 @@ anything. `GO_NAME` is how the type's Go identifiers spell the name,
 the letters of an initialism in capitals, as Go writes them, `SSHExec` for
 `sshexec`; left out, the name with its first letter in capitals,
 `Memcache`. One that is not the name's letters, in their order, or does
-not start with a capital, is refused. For a new name it writes
+not start with a capital, is refused. The generated comments, docs and test
+names write the article the name is read with — "an `ntp` collector",
+`TestAnNTPCollector…`, "a `dns` collector" — which the script works out
+from the name and its Go name: an initialism, a Go name with two capitals
+or more at its start (`NTP`, `S3File`) or a name without a vowel (`smtp`),
+is read letter by letter, so "an" goes before a letter whose name starts
+with a vowel sound, a, e, f, h, i, l, m, n, o, r, s and x; a word (`imap`,
+`redis`) is read as one, so "an" goes before a, e, i, o and u. `ARTICLE=a`
+or `ARTICLE=an` says it where that reading is wrong, as for `uuid` written
+without its Go name, and
+`sh tools/new-request-type.sh --article <name> [<GoName>]` prints the choice
+without writing anything. For a new name it writes
 
 - `internal/fetch/requesttype_<name>.go`, under the type's build constraint
   (an opt-in type's tag alone), with the registration: a
@@ -417,12 +429,30 @@ constraints that name every opt-in type (`optinkeys_test.go`,
 documentation marks `<!-- request-types -->`, a row in a table of the types
 and a sentence in the others, and the build information's list of a default
 build; the README's index, the related pages of `docs/CONFIGURATION.md` and
-spec § 35's list of pages; and the tables of the repository's and the fetch
+spec § 35's list of pages; for a type of the default build, every copy in
+the documentation of the sorted list of a default build's types the
+exporter writes in its messages (`it was built with: dns, graphite, …` in
+the opt-in types' pages, `write one of dns, graphite, …`); and the tables of the repository's and the fetch
 tests that hold a value of each type, the words the READMEs name it with
 (`readmeSourceNames`, `chartSourceNames`), its refusal of an unused probe
 parameter (`unusedRefusals`) and the pages whose Static targets section a
 test holds to the keys a target may set, its page among them, whose
-section names `timeout`. Then it runs `make schemas`, since the
+section names `timeout`.
+
+Where it adds the type follows how each list is ordered. A list the
+exporter or a script writes is sorted, and so are the Makefile's loops and
+ci.yml's matrix. The documentation's lists of the types name those of the
+default build first and the opt-in ones after them, each group in the order
+the types came: a table of the types (`docs/STATIC-TARGETS.md`), the
+related pages of `docs/CONFIGURATION.md` and spec § 35's list get a type of
+the default build after the last of that group, before the opt-in ones,
+and an opt-in type last. The README's index groups the pages by what they
+read, so the type's line goes after the last type's, its title and words a
+`TODO(<name>)` that says to move it beside the types it is like; the
+sentences in a marked list get the type last, with a `TODO(<name>)` to
+write it in its place. `knownRequestTypes` and the opt-in lists of the
+Makefile and ci.yml are in the order the types came, the new one last.
+Then it runs `make schemas`, since the
 committed schemas list the types of a default build. The lists the tests
 read from the tree, the types of `internal/fetch/requesttype_*.go`, need
 no edit: `tools/request-type-tags.sh` finds a type by its file and its
@@ -440,8 +470,14 @@ generated tests and to the tests that compare the lists of the types. It
 needs a few minutes of a
 cold build cache, so it runs in the default build only, and not under
 `-short` or the race detector; CI runs it in a job of its own, `scaffold`,
-and `make test-scaffold` runs it alone. Every place left to a person says
-`TODO(<name>)`, and the script ends by printing what that is:
+and `make test-scaffold` runs it alone. It holds the article and the
+places of the type in the lists too, scaffolding a type of the default
+build read with "an" and an opt-in one read with "a". Every place left to
+a person says `TODO(<name>)`, and the type's file fails its scrapes with
+`the <name> request type is not implemented yet`;
+`TestNoScaffoldPlaceholderIsLeftInTheTree` (`test/repository`) fails while
+either is left for a type of the tree, so a type is not committed half
+written. The script ends by printing what is left:
 
 1. the logic, in the type's file: its keys and their `KeyRules`, `Fields`,
    `Overrides`, `TargetFields`, the `Requester`'s methods and the hooks the
@@ -452,14 +488,54 @@ and `make test-scaffold` runs it alone. Every place left to a person says
 4. the README's tagline and sources paragraph, the chart README's opening
    and, for a type of the default build, `Chart.yaml`'s description, in the
    words it gave `readmeSourceNames` and `chartSourceNames`;
-5. the prose that lists every type, such as the comment on the request
-   types in `requesttype.go` and the code layout above, and the sentences
-   of which types take a key, which `go test ./test/repository/` finds;
+5. the prose that lists every type, below, which the script cannot write,
+   since each sentence says what the types it names have in common;
 6. spec § 5.1's rules of the type and § 34's bullets of its tests;
 7. examples, and a section of the chart README if the type is deployed
    with anything of its own.
 
 `make ci` does not run `make new-request-type`, which changes the tree.
+
+#### Prose that names the types
+
+These sentences and comments name the request types as prose, each saying
+what the types it lists share, so a new type joins those of them that are
+true of it by hand. Most have no test that fails when the type is left out
+(the README's and the chart's words do: `readmeSourceNames`,
+`chartSourceNames`).
+
+- `README.md`: the tagline, "Turn a source that was never meant for
+  Prometheus — …", and the sources paragraph, "The exporter can collect
+  metrics from almost any source: …", in the words of `readmeSourceNames`.
+- `charts/prometheus-universal-exporter/README.md`: the opening paragraph,
+  in the words of `chartSourceNames`, and the features list's line of the
+  collectors other than `http`'s (a type of the default build before "and",
+  an opt-in one after it); `Chart.yaml`'s `description`, for a type of the
+  default build.
+- `docs/CONFIGURATION.md`: the sentence after the `request.type` table of
+  what each type does ("`dns` resolves a name — see [DNS](DNS.md) — …");
+  under Choosing request types at build time, the types an http-only build
+  leaves out and those that need nothing outside the standard library.
+- `docs/REQUESTS.md`: the types `allowed_targets` and `denied_targets`
+  bound, and those that refuse the cloud metadata service.
+- `docs/SELF-METRICS.md`: the types `http_exporter_targets_refused_total`
+  counts, when the type takes the target lists.
+- `docs/STATIC-TARGETS.md`: the types whose target's port is checked at
+  load ("as a `grpc`, `sshfile`, `sql`, `tlscert` or `ntp` target's is"),
+  and the row of the credentials table the type belongs in.
+- `docs/DEVELOPMENT.md`: the code layout's row of `internal/fetch`, and the
+  types with a table of schema rows under the schema tests.
+- `internal/fetch/requesttype.go`: the comment on the request types, of what
+  each does.
+- `docs/SPECIFICATION-EXPORTER.md`: § 1's bullet "Reach its sources
+  itself", § 5.1's sentence of the types that are implemented and its rule
+  of the types that import nothing outside the standard library, and
+  § 26.1's opening, of the types that take the target lists.
+- `test/repository/requesttypedeps_test.go` and `sqldriverdeps_test.go`:
+  the builds whose linked modules are checked, for a type that needs
+  nothing outside the standard library.
+- For an opt-in type, the Makefile's comment on `OPT_IN_REQUEST_TYPES`,
+  which names the opt-in types and their pages.
 
 ## Repeatable tests
 

@@ -7,21 +7,33 @@
 #   sh tools/new-request-type.sh <name>                  # a type of every build
 #   sh tools/new-request-type.sh <name> opt-in           # an opt-in type
 #   sh tools/new-request-type.sh <name> default SSHExec  # its Go name given
+#   sh tools/new-request-type.sh <name> default "" an    # its article given
+#   sh tools/new-request-type.sh --article <name> [<GoName>]
 #
-# make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>] runs it.
+# make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>]
+# [ARTICLE=a|an] runs it. --article prints the article the script would
+# write before the name, "a" or "an", and changes nothing.
 # The name is lowercase letters and digits, starting with a letter, and no
 # type of the tree already. The Go name is how the type's identifiers spell
 # it, RequestType<GoName> and <GoName>Config: the name with its first letter
 # in capitals when it is not given, and otherwise the name with the letters
 # of an initialism in capitals, as Go writes them (SSHExec for sshexec), the
-# same letters in the same order. It writes
+# same letters in the same order. The article is the one the name is read
+# with, "an ntp collector", "a dns collector": an initialism, a Go name with
+# two capitals or more at its start or a name without a vowel, is read
+# letter by letter, "an" before a letter whose name starts with a vowel
+# sound (f, h, l, m, n, r, s, x as well as a, e, i, o), and a word by its
+# first letter, "an" before a, e, i, o and u; ARTICLE, the fourth argument,
+# says it when that reading is wrong, as "a uuid" read as a word would be.
+# It writes
 # internal/fetch/requesttype_<name>.go, its tests in internal/fetch and
 # internal/exporter, its table of schema rows in test/repository and
 # docs/<NAME>.md; adds the type to the lists of
 # internal/fetch/requesttype.go, the guard of requesttype_none.go, the loops
 # and the opt-in lists of the Makefile and .github/workflows/ci.yml, the
 # lists the documentation marks <!-- request-types -->, the indexes of the
-# README and docs/CONFIGURATION.md, spec § 35's list of pages, the tables of
+# README and docs/CONFIGURATION.md, spec § 35's list of pages, the copies in
+# the documentation of the sorted list of a default build's types, the tables of
 # the repository tests that name every type and the pages whose static
 # targets they read; runs make schemas; and prints what is left to write by
 # hand. Each place it writes that a person has to finish says TODO(<name>).
@@ -30,14 +42,39 @@
 # gofmt and make. Run it from the repository root.
 set -eu
 
-name="${1:-}"
-mode="${2:-}"
-goName="${3:-}"
-
 fail() {
 	echo "new-request-type: $*" >&2
 	exit 1
 }
+
+# article NAME TITLE is the article NAME is written with: "a" or "an".
+# TITLE is its Go name, whose capitals say whether it is an initialism.
+article() {
+	lead=$(printf '%s' "$2" | sed 's/[^A-Z0-9].*//')
+	case "$1" in
+	*[aeiouy]*) letters="" ;;
+	*) letters=1 ;;
+	esac
+	[ "${#lead}" -lt 2 ] || letters=1
+	if [ -n "$letters" ]; then
+		case "$1" in [aefhilmnorsx]*) echo an ;; *) echo a ;; esac
+	else
+		case "$1" in [aeiou]*) echo an ;; *) echo a ;; esac
+	fi
+}
+
+if [ "${1:-}" = "--article" ]; then
+	[ -n "${2:-}" ] || fail "usage: sh tools/new-request-type.sh --article <name> [<GoName>]"
+	t="${3:-}"
+	[ -n "$t" ] || t="$2"
+	article "$2" "$t"
+	exit 0
+fi
+
+name="${1:-}"
+mode="${2:-}"
+goName="${3:-}"
+articleGiven="${4:-}"
 
 case "$mode" in
 "" | default) optin="" ;;
@@ -46,7 +83,7 @@ opt-in | 1) optin=1 ;;
 esac
 
 case "$name" in
-"") fail "usage: sh tools/new-request-type.sh <name> [opt-in]" ;;
+"") fail "usage: sh tools/new-request-type.sh <name> [opt-in|default] [<GoName>] [a|an]" ;;
 *[!a-z0-9]*) fail "\"$name\" is not a request type's name: lowercase letters and digits only" ;;
 [!a-z]*) fail "\"$name\" is not a request type's name: it starts with a letter" ;;
 none) fail "\"none\" is the name of the guard of a build without types, internal/fetch/requesttype_none.go" ;;
@@ -67,6 +104,12 @@ if [ -n "$goName" ]; then
 	Title="$goName"
 fi
 NAME=$(printf '%s' "$name" | tr 'a-z' 'A-Z')
+case "$articleGiven" in
+"") a=$(article "$name" "$Title") ;;
+a | an) a="$articleGiven" ;;
+*) fail "the article is \"a\" or \"an\", not \"$articleGiven\"" ;;
+esac
+A=$(printf '%s' "$a" | sed 's/^a/A/')
 for file in "docs/${NAME}.md" "internal/fetch/requesttype_${name}_test.go" "internal/exporter/requesttype_${name}_test.go" \
 	"test/repository/schemakeys_${name}_test.go" "test/repository/schemakeys_${name}rows_test.go"; do
 	[ ! -e "$file" ] || fail "$file exists already"
@@ -117,9 +160,10 @@ rewrite() {
 }
 
 # fill writes a template with the type's names in place of @name@, @Title@
-# and @NAME@.
+# and @NAME@, and its article in place of @a@, and of @A@ at the start of a
+# sentence or of a word of an identifier.
 fill() {
-	sed -e "s/@name@/${name}/g" -e "s/@Title@/${Title}/g" -e "s/@NAME@/${NAME}/g"
+	sed -e "s/@name@/${name}/g" -e "s/@Title@/${Title}/g" -e "s/@NAME@/${NAME}/g" -e "s/@a@/${a}/g" -e "s/@A@/${A}/g"
 }
 
 if [ -n "$optin" ]; then
@@ -151,7 +195,7 @@ import (
 //	request:
 //	  type: @name@
 
-// @Title@Config is a @name@ collector's own request keys, those no other type
+// @Title@Config is @a@ @name@ collector's own request keys, those no other type
 // takes, each a field with its yaml key, which a collector's request holds
 // in Own (requestkeys.go); a key several types take is one of
 // model.RequestConfig's common part, and goes in Fields instead.
@@ -197,42 +241,42 @@ func init() {
 	})
 }
 
-// errNotImplemented@Title@ is what a scrape of a @name@ collector fails with
+// errNotImplemented@Title@ is what a scrape of @a@ @name@ collector fails with
 // until the type is written.
 var errNotImplemented@Title@ = errors.New("the @name@ request type is not implemented yet")
 
 // @name@Requester is the @name@ request type's Requester.
 type @name@Requester struct{}
 
-// Validate checks a @name@ collector's request and fills in its defaults.
+// Validate checks @a@ @name@ collector's request and fills in its defaults.
 // TODO(@name@): the type's required keys, defaults and rules between keys,
 // each refusal naming the collector and the key; until then every request
 // is accepted, and its scrape fails.
 func (@name@Requester) Validate(*model.Collector) error { return nil }
 
-// Fetch performs one request of a @name@ collector. TODO(@name@): reach the
+// Fetch performs one request of @a@ @name@ collector. TODO(@name@): reach the
 // target through the target policy, within ctx's deadline, and hand the
 // answer back as an HTTPResponse, held to the response limit.
 func (@name@Requester) Fetch(_ context.Context, _ string, _ *model.Collector, _ RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	return nil, errNotImplemented@Title@
 }
 
-// CheckTarget checks a @name@ collector's target. TODO(@name@): what a
+// CheckTarget checks @a@ @name@ collector's target. TODO(@name@): what a
 // target is, refused before anything is sent when it is not one; until
 // then any target is taken.
 func (@name@Requester) CheckTarget(*model.Collector, string, bool) error { return nil }
 
-// Label is the url label of a @name@ request. TODO(@name@): the target as
+// Label is the url label of @a@ @name@ request. TODO(@name@): the target as
 // the verbose self-metrics label it, without credentials.
 func (@name@Requester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
 	return target, nil
 }
 
-// Method is the http_method label of a @name@ request. TODO(@name@): what a
+// Method is the http_method label of @a@ @name@ request. TODO(@name@): what a
 // scrape does, in capitals, as tlscert's HANDSHAKE.
 func (@name@Requester) Method(*model.Collector, RequestOverrides) string { return "" }
 
-// Display renders a @name@ target for logs and labels. TODO(@name@): without
+// Display renders @a@ @name@ target for logs and labels. TODO(@name@): without
 // credentials.
 func (@name@Requester) Display(target string) string { return target }
 
@@ -267,7 +311,7 @@ import (
 
 // Until the @name@ type is written, a collector of it validates, and its
 // scrape fails, saying the type is not implemented yet.
-func TestA@Title@CollectorIsNotImplementedYet(t *testing.T) {
+func Test@A@@Title@CollectorIsNotImplementedYet(t *testing.T) {
 	c := &model.Collector{Name: "@name@", Request: model.RequestConfig{Type: RequestType@Title@}}
 	if err := ValidateRequest(c); err != nil {
 		t.Fatal(err)
@@ -311,7 +355,7 @@ import (
 
 // Until the @name@ type is written, a probe of a collector of it fails,
 // saying so, whatever reads its answer, a python transform included.
-func TestAProbeOfA@Title@CollectorFailsUntilTheTypeIsWritten(t *testing.T) {
+func TestAProbeOf@A@@Title@CollectorFailsUntilTheTypeIsWritten(t *testing.T) {
 	requirePython(t)
 	server := labelServer(t, `collectors:
   - name: demo
@@ -349,7 +393,7 @@ fi
 	printf 'package repository\n\n'
 	[ -n "$optin" ] || printf 'import "testing"\n\n'
 	fill <<'EOF'
-// @name@SchemaKeys are the keys of a @name@ collector that a schema holds to
+// @name@SchemaKeys are the keys of @a@ @name@ collector that a schema holds to
 // a rule: allowed values, a pattern or a length. TODO(@name@): a row for
 // each, as schemakeys_tcprows_test.go has, built: true for a key of an
 // opt-in type, which the committed schemas, the default build's, leave out.
@@ -360,7 +404,7 @@ EOF
 	if [ -z "$optin" ]; then
 		fill <<'EOF'
 
-// The keys of a @name@ collector get one verdict from the schema and the
+// The keys of @a@ @name@ collector get one verdict from the schema and the
 // exporter, left out, written "", written well and written badly.
 func TestSchemaAndExporterAgreeOn@Title@KeysWrittenEmpty(t *testing.T) {
 	checkSchemaKeys(t, @name@SchemaKeys())
@@ -376,7 +420,7 @@ package repository
 
 import "testing"
 
-// The keys of a @name@ collector get one verdict from the schema and the
+// The keys of @a@ @name@ collector get one verdict from the schema and the
 // exporter, left out, written "", written well and written badly.
 func TestSchemaAndExporterAgreeOn@Title@KeysWrittenEmpty(t *testing.T) {
 	checkSchemaKeys(t, @name@SchemaKeys())
@@ -412,7 +456,7 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=@name@ -t exporter:@name@ .
 go build -tags "$(sh tools/request-type-tags.sh '' '' @name@)" .
 ```
 
-The tag is `request_type_@name@`. A configuration with a `@name@` collector
+The tag is `request_type_@name@`. A configuration with @a@ `@name@` collector
 is refused by a build without the type, at startup, on a reload and by
 `--dry-run`, saying how to build one that has it.
 
@@ -436,7 +480,7 @@ shown in logs and labels.
 
 ## Static targets
 
-A [static target](STATIC-TARGETS.md) of a `@name@` collector may set
+A [static target](STATIC-TARGETS.md) of @a@ `@name@` collector may set
 `timeout` under its `request`. TODO(@name@): what a static target of the
 type is, and every other key its `request` may set, each named in this
 paragraph, as a test of the pages reads the type's TargetFields here.
@@ -448,9 +492,9 @@ and anything of the type's own.
 
 ## Errors and self-metrics
 
-Until the type is written, every scrape of a `@name@` collector fails: `the
-@name@ request type is not implemented yet`. TODO(@name@): what fails a scrape, how each failure reads,
-and the self-metrics of the type's collectors.
+TODO(@name@): what fails a scrape, how each failure reads, and the
+self-metrics of the type's collectors. Until the type is written, every
+scrape fails: `the @name@ request type is not implemented yet`.
 
 ## Limitations
 
@@ -556,15 +600,18 @@ rewrite .github/workflows/ci.yml awk -v name="$name" -v old="'' '' ${oldOptIn})"
 '
 
 # The documentation's marked lists: a list of every type gets a TODO naming
-# this one as the list writes a type (a row, in a table of the types), and
-# the default build's list names it when it is in a default build.
+# this one as the list writes a type, and the default build's list names it
+# when it is in a default build. A table of the types lists those of the
+# default build first and the opt-in ones, marked so, after them, each group
+# in the order the types came: a row of the default build goes after the
+# last row of one, before the opt-in rows, and an opt-in row last.
 for page in README.md docs/*.md charts/*/README.md; do
 	[ -f "$page" ] || continue
 	grep -q '^<!-- request-types: ' "$page" || continue
 	rewrite "$page" awk -v name="$name" -v NAME="$NAME" -v optin="$optin" -v defaults="$defaultCommas" '
 		function flush(    i, last, row, cells, n, line) {
 			last = 0
-			for (i = 1; i <= count; i++) if (lines[i] ~ /^\| \[`[a-z0-9]+`\]/) last = i
+			for (i = 1; i <= count; i++) if (lines[i] ~ /^\| \[`[a-z0-9]+`\]/ && (optin != "" || lines[i] !~ /^\| \[`[a-z0-9]+`\]\([^)]*\), opt-in \|/)) last = i
 			for (i = 1; i <= count; i++) {
 				line = lines[i]
 				if (kind == "default" && optin == "") gsub(/request_types="[^"]*"/, "request_types=\"" defaults "\"", line)
@@ -578,7 +625,7 @@ for page in README.md docs/*.md charts/*/README.md; do
 			}
 			if (kind == "all" && last == 0) {
 				print ""
-				printf format ", TODO(%s): say here what the list says of each other type.\n", name, name
+				printf format ", TODO(%s): say here what this list says of each other type, and move it to its place among them.\n", name, name
 			}
 			count = 0
 		}
@@ -612,24 +659,78 @@ add_after_last() {
 	rm -f "$tmp"
 }
 
+# The README's index groups the pages by what they read, so the type's line
+# goes after the last of the types', for a person to move beside those it
+# is like. docs/CONFIGURATION.md's related pages, as spec § 35's list, name
+# the types of the default build and then the opt-in ones: the line goes
+# after the last of its group.
 if [ -n "$optin" ]; then
-	readmeLine="- [The ${name} request type](docs/${NAME}.md) — the \`${name}\` request type, in a build that asks for it: TODO(${name})."
+	readmeLine="- [TODO(${name}): the page's title](docs/${NAME}.md) — the \`${name}\` request type, in a build that asks for it: TODO(${name}): what it reads, and this line moved beside the types it is like."
 	relatedLine="- [${NAME}.md](${NAME}.md) — the opt-in \`${name}\` request type."
+	relatedGroup='^- \[[A-Z0-9]+\.md\]\([A-Z0-9]+\.md\) — the opt-in `[a-z0-9]+` request type'
 else
-	readmeLine="- [The ${name} request type](docs/${NAME}.md) — the \`${name}\` request type: TODO(${name})."
+	readmeLine="- [TODO(${name}): the page's title](docs/${NAME}.md) — the \`${name}\` request type: TODO(${name}): what it reads, and this line moved beside the types it is like."
 	relatedLine="- [${NAME}.md](${NAME}.md) — the \`${name}\` request type."
+	relatedGroup='^- \[[A-Z0-9]+\.md\]\([A-Z0-9]+\.md\) — the `[a-z0-9]+` request type'
 fi
 add_after_last README.md '^- \[.*\]\(docs/[A-Z0-9]+\.md\) — the `[a-z0-9]+` request type' "$readmeLine"
-add_after_last docs/CONFIGURATION.md '^- \[[A-Z0-9]+\.md\]\([A-Z0-9]+\.md\) — the .*`[a-z0-9]+` request type' "$relatedLine"
+grep -E -q -e "$relatedGroup" docs/CONFIGURATION.md || relatedGroup='^- \[[A-Z0-9]+\.md\]\([A-Z0-9]+\.md\) — the .*`[a-z0-9]+` request type'
+add_after_last docs/CONFIGURATION.md "$relatedGroup" "$relatedLine"
 
-# Spec § 35's list of the request types' pages.
-rewrite docs/SPECIFICATION-EXPORTER.md awk -v add=", \`${name}\` in \`docs/${NAME}.md\` (TODO(${name}): in its place in this list), with \`localfile\` and \`grpc\` above" '
-	!done && (i = index($0, ", with `localfile` and `grpc` above")) > 0 {
-		$0 = substr($0, 1, i - 1) add substr($0, i + length(", with `localfile` and `grpc` above"))
-		done = 1
+# Spec § 35's list of the request types' pages: a type of the default build
+# before ", and the opt-in" in the lines before the end of the list, an
+# opt-in type last; when the list is written otherwise, at its end with a
+# TODO.
+rewrite docs/SPECIFICATION-EXPORTER.md awk -v name="$name" -v NAME="$NAME" -v optin="$optin" '
+	{ lines[NR] = $0 }
+	END {
+		end = ", with `localfile` and `grpc` above"
+		item = "`" name "` in `docs/" NAME ".md`"
+		for (n = 1; n <= NR; n++) if (index(lines[n], end) > 0) break
+		placed = 0
+		if (n <= NR && optin == "") {
+			for (k = n; k >= 1 && k > n - 8; k--) if ((i = index(lines[k], ", and the opt-in `")) > 0) {
+				lines[k] = substr(lines[k], 1, i - 1) ", " item substr(lines[k], i)
+				placed = 1
+				break
+			}
+		} else if (n <= NR) {
+			i = index(lines[n], end)
+			head = substr(lines[n], 1, i - 1)
+			if (match(head, / and `[a-z0-9]+` in `docs\/[A-Z0-9]+\.md`$/)) {
+				lines[n] = substr(head, 1, RSTART - 1) ", " substr(head, RSTART + 5) " and " item substr(lines[n], i)
+				placed = 1
+			}
+		}
+		if (n <= NR && !placed) {
+			i = index(lines[n], end)
+			lines[n] = substr(lines[n], 1, i - 1) ", " item " (TODO(" name "): in its place in this list)" substr(lines[n], i)
+		}
+		for (k = 1; k <= NR; k++) print lines[k]
 	}
-	{ print }
 '
+
+# The lists the exporter writes of the types of a default build, sorted, as
+# its message for a type the build left out gives them ("it was built with:
+# dns, graphite, ...") and a schema's error for a type written as a number
+# ("write one of dns, graphite, ..."): a type of the default build joins
+# each copy in the documentation.
+if [ -z "$optin" ]; then
+	oldDefaultWords=$(printf '%s\n' "$defaultTypes" | grep -v -x -e "$name" | paste -s -d , - | sed 's/,/, /g')
+	newDefaultWords=$(printf '%s\n' "$defaultTypes" | paste -s -d , - | sed 's/,/, /g')
+	for page in README.md docs/*.md charts/*/README.md; do
+		[ -f "$page" ] || continue
+		grep -q -F -e "$oldDefaultWords" "$page" || continue
+		rewrite "$page" awk -v old="$oldDefaultWords" -v new="$newDefaultWords" '
+			function replace(s, from, to,    i, out) {
+				out = ""
+				while ((i = index(s, from)) > 0) { out = out substr(s, 1, i - 1) to; s = substr(s, i + length(from)) }
+				return out s
+			}
+			{ print replace($0, old, new) }
+		'
+	done
+fi
 
 # The repository tests' tables of how the README and the chart name each
 # type, whose words a person chooses.
@@ -677,8 +778,10 @@ make schemas
 
 cat <<EOF
 
-The ${name} request type is in the tree$([ -n "$optin" ] && printf ', opt-in'). What is left by hand, each place marked
-TODO(${name}) (grep -rn 'TODO(${name})' .):
+The ${name} request type is in the tree$([ -n "$optin" ] && printf ', opt-in'), written "${a} ${name} collector"
+(ARTICLE=a or ARTICLE=an says otherwise). What is left by hand, each place
+marked TODO(${name}) (grep -rn 'TODO(${name})' .), which
+TestNoScaffoldPlaceholderIsLeftInTheTree fails on until it is gone:
 
   1. The logic: internal/fetch/requesttype_${name}.go, its keys in ${Title}Config
      with their KeyRules, Fields, Overrides, TargetFields, the Requester's
@@ -688,16 +791,14 @@ TODO(${name}) (grep -rn 'TODO(${name})' .):
      internal/exporter/requesttype_${name}_test.go, against a stand-in of what
      it reads, and a row of ${name}SchemaKeys (test/repository/schemakeys_${name}*)
      for each key the schema holds to allowed values, a pattern or a length.
-  3. Its page, docs/${NAME}.md, and the TODOs of the lists the documentation
-     marks <!-- request-types -->, the README's index, docs/CONFIGURATION.md's
-     related pages and spec § 35.
+  3. Its page, docs/${NAME}.md, the TODOs of the lists the documentation
+     marks <!-- request-types -->, each moved to its place in its list, and
+     the README's index line, moved beside the types it is like.
   4. The README's tagline and sources paragraph, the chart README's opening
      and, for a type of the default build, Chart.yaml's description, naming
      the type in the words readmeSourceNames and chartSourceNames give.
-  5. The prose that lists every type: the comment on the request types in
-     internal/fetch/requesttype.go, docs/DEVELOPMENT.md's code layout, and the
-     sentences of which types take a key (go test ./test/repository/ finds
-     those that fall behind).
+  5. The prose that lists every type, which the script cannot write: each
+     place docs/DEVELOPMENT.md lists under "Prose that names the types".
   6. Spec: § 5.1's rules of the type (a subsection of its own, as the other
      types have) and § 34's bullets for its tests.
   7. Examples under examples/, and the chart README's section of the type, if

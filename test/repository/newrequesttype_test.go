@@ -21,7 +21,10 @@ import (
 // for an opt-in type and a type of every build, and holds the copy to what
 // the tree is held to: it builds and vets in the default build, with every
 // opt-in type and with each new type alone, the generated tests pass, and
-// the tests that keep the lists of types in step pass in it.
+// the tests that keep the lists of types in step pass in it. The default
+// type's name is read with "an" and the opt-in one's with "a", and each
+// lands in the lists where its group goes; the placeholders it leaves fail
+// TestNoScaffoldPlaceholderIsLeftInTheTree.
 //
 // It builds the copy's packages, a few minutes on a cold build cache, so
 // it runs in the default build alone, not under -short or the race
@@ -115,13 +118,25 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	refused(`usage:`)
 	refused(`the Go name "ZZOther" is not "zzdemo" with some of its letters in capitals`, "zzdemo", "opt-in", "ZZOther")
 	refused(`the Go name "zZDemo" does not start with a capital letter`, "zzdemo", "opt-in", "zZDemo")
+	refused(`the article is "a" or "an", not "the"`, "zzdemo", "opt-in", "", "the")
 	if out := run("git", "status", "--porcelain"); out != "" {
 		t.Fatalf("a refused name changed the copy:\n%s", out)
 	}
 
+	// The article: an initialism, a Go name with capitals at its start or a
+	// name without a vowel, is read letter by letter, a word as a word.
+	for in, want := range map[string]string{
+		"ntp": "an", "ntp NTP": "an", "smtp": "an", "smtp SMTP": "an", "imap": "an", "imap IMAP": "an", "foo": "a",
+		"ldap": "a", "ldap LDAP": "an", "s3file S3File": "an", "uuid UUID": "a", "tcp": "a", "dns DNS": "a", "redis": "a", "xml": "an",
+	} {
+		if got := strings.TrimSpace(run("sh", append([]string{"tools/new-request-type.sh", "--article"}, strings.Fields(in)...)...)); got != want {
+			t.Errorf("the article of %s is %q, want %q", in, got, want)
+		}
+	}
+
 	// The opt-in type is given its Go name, an initialism's capitals in it,
 	// and the other is spelt as its name with a capital first.
-	for _, c := range []struct{ name, optIn, goName string }{{"zzdemo", "OPT_IN=1", "GO_NAME=ZZDemo"}, {"zzdefault", "", ""}} {
+	for _, c := range []struct{ name, optIn, goName string }{{"zzdemo", "OPT_IN=1", "GO_NAME=ZZDemo"}, {"ozdefault", "", ""}} {
 		args := []string{"--no-print-directory", "new-request-type", "NAME=" + c.name}
 		for _, arg := range []string{c.optIn, c.goName} {
 			if arg != "" {
@@ -135,20 +150,65 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	for _, file := range []string{
 		"internal/fetch/requesttype_zzdemo.go", "internal/fetch/requesttype_zzdemo_test.go", "internal/exporter/requesttype_zzdemo_test.go",
 		"test/repository/schemakeys_zzdemorows_test.go", "test/repository/schemakeys_zzdemo_test.go", "docs/ZZDEMO.md",
-		"internal/fetch/requesttype_zzdefault.go", "internal/fetch/requesttype_zzdefault_test.go", "internal/exporter/requesttype_zzdefault_test.go",
-		"test/repository/schemakeys_zzdefault_test.go", "docs/ZZDEFAULT.md",
+		"internal/fetch/requesttype_ozdefault.go", "internal/fetch/requesttype_ozdefault_test.go", "internal/exporter/requesttype_ozdefault_test.go",
+		"test/repository/schemakeys_ozdefault_test.go", "docs/OZDEFAULT.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
 			t.Errorf("the scaffold wrote no %s", file)
 		}
 	}
-	if !strings.Contains(read(t, filepath.Join(dir, "docs/ZZDEMO.md")), "\n## Building with zzdemo\n") || strings.Contains(read(t, filepath.Join(dir, "docs/ZZDEFAULT.md")), "\n## Building with") {
+	if !strings.Contains(read(t, filepath.Join(dir, "docs/ZZDEMO.md")), "\n## Building with zzdemo\n") || strings.Contains(read(t, filepath.Join(dir, "docs/OZDEFAULT.md")), "\n## Building with") {
 		t.Error("only the opt-in type's page says how to build with it")
 	}
-	if registry := read(t, filepath.Join(dir, "internal/fetch/requesttype.go")); !strings.Contains(registry, `RequestTypeZZDemo `) || !strings.Contains(registry, `RequestTypeZzdefault `) {
-		t.Error("the types' constants are not spelt by their Go names, ZZDemo and Zzdefault")
+	if registry := read(t, filepath.Join(dir, "internal/fetch/requesttype.go")); !strings.Contains(registry, `RequestTypeZZDemo `) || !strings.Contains(registry, `RequestTypeOzdefault `) {
+		t.Error("the types' constants are not spelt by their Go names, ZZDemo and Ozdefault")
 	}
-	if pages := read(t, filepath.Join(dir, "test/repository/docfacts_test.go")); !strings.Contains(pages, `{"docs/ZZDEMO.md", "internal/fetch/requesttype_zzdemo.go"},`) || !strings.Contains(pages, `{"docs/ZZDEFAULT.md", "internal/fetch/requesttype_zzdefault.go"},`) {
+	// "an ozdefault", read as a word, and "a ZZDemo", an initialism.
+	for file, want := range map[string][]string{
+		"internal/fetch/requesttype_ozdefault.go":         {"is an ozdefault collector's own request keys", "a scrape of an ozdefault collector"},
+		"internal/fetch/requesttype_ozdefault_test.go":    {"func TestAnOzdefaultCollectorIsNotImplementedYet("},
+		"internal/exporter/requesttype_ozdefault_test.go": {"func TestAProbeOfAnOzdefaultCollectorFailsUntilTheTypeIsWritten("},
+		"docs/OZDEFAULT.md":                               {"of an `ozdefault` collector may set"},
+		"internal/fetch/requesttype_zzdemo.go":            {"is a zzdemo collector's own request keys"},
+		"docs/ZZDEMO.md":                                  {"A configuration with a `zzdemo` collector", "of a `zzdemo` collector may set"},
+	} {
+		text := read(t, filepath.Join(dir, file))
+		for _, w := range want {
+			if !strings.Contains(text, w) {
+				t.Errorf("%s does not say %q", file, w)
+			}
+		}
+		if strings.Contains(text, "a ozdefault") || strings.Contains(text, "a `ozdefault`") || strings.Contains(text, "AOzdefault") {
+			t.Errorf("%s writes \"a ozdefault\"", file)
+		}
+	}
+
+	// A type of the default build lands after the last of the default
+	// build's in the lists that group them, before the opt-in ones, and an
+	// opt-in type last; the sorted lists of a default build name the type
+	// of the default build.
+	inOrder := func(file string, parts ...string) {
+		t.Helper()
+		text, at := read(t, filepath.Join(dir, file)), 0
+		for _, part := range parts {
+			i := strings.Index(text[at:], part)
+			if i < 0 {
+				t.Errorf("%s: %q is not after %q", file, part, parts[0])
+				return
+			}
+			at += i + len(part)
+		}
+	}
+	inOrder("docs/STATIC-TARGETS.md", "| [`kubernetes`](KUBERNETES.md#static-targets)", "| [`ozdefault`](OZDEFAULT.md#static-targets) |", "| [`s3file`](S3FILE.md#static-targets), opt-in", "| [`sshexec`](SSHEXEC.md#static-targets), opt-in", "| [`zzdemo`](ZZDEMO.md#static-targets), opt-in |", "<!-- /request-types -->")
+	inOrder("docs/CONFIGURATION.md", "- [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.\n- [OZDEFAULT.md](OZDEFAULT.md) — the `ozdefault` request type.\n- [S3FILE.md](S3FILE.md)", "- [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.\n- [ZZDEMO.md](ZZDEMO.md) — the opt-in `zzdemo` request type.\n")
+	inOrder("docs/SPECIFICATION-EXPORTER.md", "`kubernetes` in `docs/KUBERNETES.md`, `ozdefault` in `docs/OZDEFAULT.md`, and the opt-in `s3file`", ", `sshexec` in `docs/SSHEXEC.md` and `zzdemo` in `docs/ZZDEMO.md`, with `localfile` and `grpc` above")
+	inOrder("docs/REDIS.md", "it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, ozdefault, sql, sshfile, tlscert.")
+	inOrder("docs/CONFIGURATION.md", "write one\n  of dns, graphite, grpc, http, kubernetes, localfile, ntp, ozdefault, sql, sshfile, tlscert`")
+	if spec := read(t, filepath.Join(dir, "docs/SPECIFICATION-EXPORTER.md")); strings.Contains(spec, "in its place in this list") {
+		t.Error("spec § 35's list was given a TODO, not the types in their places")
+	}
+
+	if pages := read(t, filepath.Join(dir, "test/repository/docfacts_test.go")); !strings.Contains(pages, `{"docs/ZZDEMO.md", "internal/fetch/requesttype_zzdemo.go"},`) || !strings.Contains(pages, `{"docs/OZDEFAULT.md", "internal/fetch/requesttype_ozdefault.go"},`) {
 		t.Error("the new types' pages are not among those whose Static targets section is read")
 	}
 
@@ -159,7 +219,7 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	run("go", "build", "./...")
 	run("go", "vet", "./...")
 	run("go", "vet", "-tags", optIn, "./...")
-	for _, name := range []string{"zzdemo", "zzdefault"} {
+	for _, name := range []string{"zzdemo", "ozdefault"} {
 		alone := tags(name)
 		run("go", "build", "-tags", alone, "./...")
 		run("go", "vet", "-tags", alone, "./...")
@@ -171,8 +231,9 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 		t.Helper()
 		var tests []string
 		for _, name := range names {
-			title := map[string]string{"zzdemo": "ZZDemo", "zzdefault": "Zzdefault"}[name]
-			tests = append(tests, "TestA"+title+"CollectorIsNotImplementedYet", "TestAProbeOfA"+title+"CollectorFailsUntilTheTypeIsWritten", "TestSchemaAndExporterAgreeOn"+title+"KeysWrittenEmpty")
+			title := map[string]string{"zzdemo": "ZZDemo", "ozdefault": "Ozdefault"}[name]
+			article := map[string]string{"zzdemo": "A", "ozdefault": "An"}[name]
+			tests = append(tests, "Test"+article+title+"CollectorIsNotImplementedYet", "TestAProbeOf"+article+title+"CollectorFailsUntilTheTypeIsWritten", "TestSchemaAndExporterAgreeOn"+title+"KeysWrittenEmpty")
 			if name == "zzdemo" {
 				tests = append(tests, "TestTheZZDemoTypesOptInKeysAreListed")
 			}
@@ -184,10 +245,20 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 			}
 		}
 	}
-	generated("", "zzdefault")
-	generated(optIn, "zzdemo", "zzdefault")
+	generated("", "ozdefault")
+	generated(optIn, "zzdemo", "ozdefault")
 	generated(tags("zzdemo"), "zzdemo")
-	generated(tags("zzdefault"), "zzdefault")
+	generated(tags("ozdefault"), "ozdefault")
+	// What the scaffold leaves to a person fails the check of placeholders.
+	cmd := exec.Command("go", "test", "-count=1", "-run", "^TestNoScaffoldPlaceholderIsLeftInTheTree$", "./test/repository/") // #nosec G204 -- the test's own commands
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	for _, want := range []string{"docs/OZDEFAULT.md: TODO(ozdefault)", "internal/fetch/requesttype_zzdemo.go: the zzdemo request type is not implemented yet", "README.md: TODO(zzdemo)"} {
+		if err == nil || !strings.Contains(string(out), want) {
+			t.Errorf("the check of placeholders did not find %q in the copy: %v\n%s", want, err, out)
+		}
+	}
 	for pkg, tests := range copyWiringTests {
 		out := run("go", "test", "-count=1", "-v", "-run", "^("+strings.Join(tests, "|")+")$", pkg)
 		for _, test := range tests {

@@ -861,13 +861,28 @@ and the source MUST list the opt-in types.
   type's tests in `internal/fetch`, `internal/exporter` and its table of
   schema rows, which pass, and `docs/<NAME>.md` with the sections of the
   other types' pages, and add the type to every list in the tree that names
-  each type, then run `make schemas`. Each place left to a person MUST say `TODO(<name>)`, and
-  the script MUST end by printing what is left. A test MUST run it on a
+  each type, then run `make schemas`. What it writes MUST put the article
+  the name is read with before it, "an" before an initialism whose first
+  letter's name starts with a vowel sound or a word starting with a vowel
+  (`an ntp collector`, `TestAnNTP…`), "a" otherwise, an initialism being a
+  Go name with two capitals or more at its start or a name without a
+  vowel; `ARTICLE=a` or `ARTICLE=an` MUST override it. A type of the default
+  build MUST be added to the documentation's lists that name the default
+  build's types and then the opt-in ones after the last of the default
+  build's, and an opt-in type last; the sorted lists of a default build's
+  types the documentation quotes from the exporter's messages MUST name a
+  type of the default build. Each place left to a person MUST say `TODO(<name>)`, and
+  the script MUST end by printing what is left, pointing to the list in
+  `docs/DEVELOPMENT.md` of the prose that names the types, which it cannot
+  write. A test MUST fail while a `TODO(<name>)` of a type of the tree, or
+  the not-implemented failure in the type's file, is left anywhere in the
+  tree. A test MUST run it on a
   copy of the tree, for an opt-in type and a type of every build, and find
   that the copy builds and vets in the default build, with every opt-in
-  type and with each new type alone, that the generated tests pass, and
-  that the tests comparing the lists of the types pass. `make ci` MUST NOT
-  run it.
+  type and with each new type alone, that the generated tests pass, that
+  the tests comparing the lists of the types pass, that the article and
+  the places in the lists are as above, and that the test of what is left
+  fails in it. `make ci` MUST NOT run it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1), and the `sql` type's drivers on the startup
   log line, as `sql_drivers`, empty in a build without the type.
@@ -28141,7 +28156,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the vendored modules linked, built with `-trimpath` so the build cache
   serves what the copy shares with the tree) refuses `http`, `Zz-demo`,
   `9zz` and no name before writing anything, then adds the opt-in `zzdemo`
-  and the default `zzdefault`, each printing a checklist naming
+  and the default `ozdefault`, each printing a checklist naming
   `TODO(<name>)`, writes their files, tests (internal/fetch,
   internal/exporter, the schema rows) and pages, only the opt-in one's page
   with "Building with"; the copy builds and vets in the default build, vets

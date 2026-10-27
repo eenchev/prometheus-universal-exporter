@@ -1793,6 +1793,10 @@
                 ],
                 "type": "string"
               },
+              "document": {
+                "description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, connect_seconds, tls_seconds, greeting_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape. See docs/TCP.md#the-exchange-as-a-document.",
+                "type": "boolean"
+              },
               "driver": {
                 "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md.",
                 "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Mm][Yy][Ss][Qq][Ll]|[Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss]|[Ss][Qq][Ll][Ss][Ee][Rr][Vv][Ee][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",

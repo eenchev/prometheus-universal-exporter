@@ -137,9 +137,11 @@ func greetingStandIn(greeting, answer string) func(net.Conn) {
 
 // The greeting examples of docs/TCP.md work as written against stand-ins
 // greeting as SMTP (over two lines), FTP, POP3, IMAP and OpenSSH do: each
-// gives its up series and the connection's and the greeting's seconds, SSH
-// its software as a label and, through regex, its version; an OpenSSH older
-// than the greeting takes fails the probe; the request snippet loads.
+// reads its request.document with plain jq rules, giving its up series and
+// the connection's and the greeting's seconds, SMTP the answer's and the
+// whole exchange's too, SSH its software as a label; the raw banner gives,
+// through regex, OpenSSH's version; an OpenSSH older than the greeting
+// takes fails the probe; the request snippet loads.
 func TestTCPGreetingDocumentationExamples(t *testing.T) {
 	blocks := pageBlocks(t, "docs/TCP.md", "yaml")
 	var b strings.Builder
@@ -161,7 +163,7 @@ func TestTCPGreetingDocumentationExamples(t *testing.T) {
 		collector, greeting, answer string
 		wants                       []string
 	}{
-		{"smtp", "220-mx.example.com ESMTP\r\n220 ready\r\n", "221 2.0.0 Bye\r\n", append([]string{"smtp_up 1", "tcp_answer_seconds "}, timings...)},
+		{"smtp", "220-mx.example.com ESMTP\r\n220 ready\r\n", "221 2.0.0 Bye\r\n", append([]string{"smtp_up 1", "tcp_answer_seconds ", "tcp_duration_seconds "}, timings...)},
 		{"ftp", "220 FTP server ready\r\n", "221 Goodbye.\r\n", append([]string{"ftp_up 1"}, timings...)},
 		{"pop3", "+OK POP3 server ready\r\n", "+OK bye\r\n", append([]string{"pop3_up 1"}, timings...)},
 		{"imap", "* OK [CAPABILITY IMAP4rev1] ready\r\n", "* BYE logging out\r\na OK LOGOUT completed\r\n", append([]string{"imap_up 1"}, timings...)},

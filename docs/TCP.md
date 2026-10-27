@@ -105,6 +105,7 @@ sum; a server that has had no get yet has no ratio.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `tcp`. |
+| `document` | `false` | `true` hands the transforms a JSON document of the exchange, the greeting, the answer and each step's seconds, in place of the server's text; the decoder is then `json`. See [The exchange as a document](#the-exchange-as-a-document). |
 | `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` the greeting is the answer. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
 | `send` | nothing | The text written once the connection is made, such as `"stats\r\n"`. Write it in double quotes, in which YAML reads `\r\n` as a carriage return and a line feed; in single quotes or none, `\r\n` is four characters. May hold `{{param_name}}` placeholders. At most 64 KiB. Left out, nothing is written, and the answer is what the server says first. See [What a scrape sends](#what-a-scrape-sends). |
 | `terminator` | none | What the answer ends with, such as `"END\r\n"`: reading stops once it has come. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See [Reading the answer](#reading-the-answer). |
@@ -213,9 +214,10 @@ for the next command, holds the scrape until its deadline, which fails it:
 give such a service its `terminator`.
 
 Either way the answer is the body: as the server wrote it, in no JSON
-envelope, with no status (`$status` is `null`, Python's
-`response.status_code` `None`) and no headers of the server's: the only
-headers it carries are the exporter's [timings](#timings-and-the-greeting).
+envelope unless [`document`](#the-exchange-as-a-document) asks for one,
+with no status (`$status` is `null`, Python's `response.status_code`
+`None`) and no headers of the server's: the only headers it carries are
+the exporter's [timings](#timings-as-headers).
 
 ## Services that speak first
 
@@ -282,37 +284,73 @@ IMAPS on 993 and POP3S on 995, which speak TLS from the start. A protocol
 that starts in plaintext and turns to TLS after a command, SMTP's
 `STARTTLS`, is not spoken.
 
-### Timings and the greeting
+### The exchange as a document
 
-Every `tcp` answer, with `greeting` or without, carries how long each step
-of its scrape took, in seconds, and the greeting, as headers: a `tcp`
-answer has none of its own, so these name nothing the server sent, and a
-collector reading only the body sees the answer it always did.
+`document: true` hands the transforms a JSON document of the exchange in
+place of the server's text, so plain `jq` rules read the greeting, the
+answer and how long each step took, with no script:
+
+```json
+{
+  "greeting": "220-mx.example.com ESMTP\r\n220 ready\r\n",
+  "answer": "221 2.0.0 Bye\r\n",
+  "connect_seconds": 0.0012,
+  "greeting_seconds": 0.0381,
+  "answer_seconds": 0.0007,
+  "duration_seconds": 0.0401
+}
+```
+
+- `greeting` is the greeting as it was read, line ends included, with
+  `greeting`; `answer` is what was read after it, or, without `greeting`,
+  the whole answer, `""` when the server wrote nothing. A greeting-only
+  check, with no `send`, has a `greeting` and no `answer`.
+- `connect_seconds` is how long making the connection took, the name's
+  lookup included; `tls_seconds` the TLS handshake, with `tls`;
+  `greeting_seconds` from the connection, or the handshake, until the
+  greeting ended, with `greeting`; `answer_seconds` from the write of
+  `send`, or from when reading began without it, until reading stopped,
+  when an answer was read; and `duration_seconds` the whole exchange, from
+  the connection to the end of the read.
+- A step the scrape did not take is left out, not written `null` or `0`,
+  as a [DNS](DNS.md) record's fields of another type are: a rule reading
+  `.tls_seconds` of a collector without `tls` finds nothing, which is a
+  missing value.
+- JSON text is UTF-8, so a greeting or an answer holding bytes that are not
+  fails the scrape, `the answer of host:port holds bytes that are not UTF-8
+  text, ...`, as a [Redis](REDIS.md) reply does, rather than reaching the
+  rules with its bytes replaced. Leave `document` out to read them as they
+  came.
+
+The decoder is `json`, left out or written; any other is refused at load,
+and so is a transform other than `jq`, `yq` and `python`:
+
+```text
+collector "smtp" decodes with text, but it is answered with the JSON document request.document makes of what a tcp server says; leave decoder.type out, or set json
+```
+
+### Timings as headers
+
+Every `tcp` answer, with `document` or without, carries the same timings,
+in seconds, and the greeting, as headers: a `tcp` answer has none of its
+own, so these name nothing the server sent, and a collector reading only
+the body sees the answer it always did.
 
 | Header | When | What |
 | --- | --- | --- |
-| `X-Tcp-Connect-Seconds` | always | Making the connection, the name's lookup included. |
-| `X-Tcp-Tls-Seconds` | with `tls` | The TLS handshake. |
-| `X-Tcp-Greeting-Seconds` | with `greeting` | From the connection, or the handshake, until the greeting ended. |
+| `X-Tcp-Connect-Seconds` | always | `connect_seconds`. |
+| `X-Tcp-Tls-Seconds` | with `tls` | `tls_seconds`. |
+| `X-Tcp-Greeting-Seconds` | with `greeting` | `greeting_seconds`. |
 | `X-Tcp-Greeting` | with `greeting` | The greeting, a value for each of its lines, without its line end. |
-| `X-Tcp-Answer-Seconds` | when an answer is read | From the write of `send`, or from when reading began without it, until reading stopped. None for a greeting-only check. |
+| `X-Tcp-Answer-Seconds` | when an answer is read | `answer_seconds`. None for a greeting-only check. |
 
 A `jq` or `yq` rule reads them as `$headers`, by lower-case name, as for an
-`http` answer: `$headers["x-tcp-connect-seconds"] | tonumber`. A Python
+`http` answer: `$headers["x-tcp-connect-seconds"] | tonumber`; a Python
 script reads `response.header("X-Tcp-Connect-Seconds")`, or
-`response.headers["X-Tcp-Greeting"]`, the greeting's lines as a list. A
-`regex` rule reads the body alone. jq reads a document, not text, so a `jq`
-collector of a text answer hands the rules one with a `pre_script`, which
-may name the `text` decoder:
-
-```yaml
-decoder:
-  type: text
-transform:
-  type: jq
-  pre_script: |
-    data = {"answer": response.text}
-```
+`response.headers["X-Tcp-Greeting"]`, the greeting's lines as a list. They
+are for a collector that reads the server's text itself, an answer in JSON
+or one a Python script parses; a `regex` rule reads the body alone, and
+`document: true` is the way to the timings without a script.
 
 A debug probe's report shows the greeting step in its request section, the
 pattern as `Tcp-Greeting` before `Tcp-Send`, and the greeting read before
@@ -328,9 +366,10 @@ Requests
 ### Checking SMTP, FTP, POP3, IMAP and SSH
 
 Each collector below checks that the service greets as it should and
-answers a command that ends the session, and turns the timings into series;
-a server that greets otherwise, or not at all, fails the probe, which
-Prometheus's `up` for the probe shows as `0`.
+answers a command that ends the session, and turns the timings of its
+[document](#the-exchange-as-a-document) into series; a server that greets
+otherwise, or not at all, fails the probe, which Prometheus's `up` for the
+probe shows as `0`.
 
 SMTP, port 25 or 587: a greeting with `220`, on one line or several, and
 `221` to `QUIT`, after which the server closes the connection:
@@ -341,22 +380,21 @@ SMTP, port 25 or 587: a greeting with `220`, on one line or several, and
       type: tcp
       greeting: '^220[ -]'
       send: "QUIT\r\n"
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"answer": response.text}
     metrics:
       - name: smtp_up
         description: 1 when the server greeted with 220 and answered QUIT with 221
         expression: 'if (.answer | startswith("221")) then 1 else 0 end'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
       - name: tcp_answer_seconds
-        expression: '$headers["x-tcp-answer-seconds"] | tonumber'
+        expression: .answer_seconds
+      - name: tcp_duration_seconds
+        expression: .duration_seconds
 ```
 
 ```text
@@ -372,23 +410,20 @@ with `221`:
       type: tcp
       greeting: '^220[ -]'
       send: "QUIT\r\n"
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"answer": response.text}
     metrics:
       - name: ftp_up
         expression: 'if (.answer | startswith("221")) then 1 else 0 end'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
 ```
 
-POP3, port 110, `+OK` to greet and to `QUIT`; POP3S on 995 is the same
-with `tls: {}`:
+POP3, port 110, `+OK` to greet and to `QUIT`. POP3S on 995 is the same
+with `tls: {}`, and its handshake's time is `.tls_seconds`:
 
 ```yaml
   - name: pop3
@@ -396,19 +431,16 @@ with `tls: {}`:
       type: tcp
       greeting: '^\+OK'
       send: "QUIT\r\n"
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"answer": response.text}
     metrics:
       - name: pop3_up
         expression: 'if (.answer | startswith("+OK")) then 1 else 0 end'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
 ```
 
 IMAP, port 143, greeting `* OK`; `LOGOUT`, tagged `a`, is answered with an
@@ -421,56 +453,51 @@ same with `tls: {}`:
       type: tcp
       greeting: '^\* OK'
       send: "a LOGOUT\r\n"
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"answer": response.text}
     metrics:
       - name: imap_up
         expression: 'if (.answer | test("(?m)^a OK")) then 1 else 0 end'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
 ```
 
 SSH, port 22: the server's banner, `SSH-2.0-` and its software, is its
 greeting, and the client is to speak next, so the check sends nothing and
-the banner is the answer. The greeting below takes OpenSSH 9.6 and later
-alone, so an older server fails the probe; the series name the software:
+the document has the greeting and no answer. The greeting below takes
+OpenSSH 9.6 and later alone, so an older server fails the probe; the series
+name the software:
 
 ```yaml
   - name: ssh
     request:
       type: tcp
       greeting: '^SSH-2\.0-OpenSSH_(9\.([6-9]|[1-9][0-9])|[1-9][0-9]+\.)'
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"banner": response.text.strip()}
     metrics:
       - name: ssh_banner_info
         description: 1, the software the server's banner names as a label
         expression: '1'
         labels:
           - name: software
-            expression: '.banner | capture("^SSH-2\\.0-(?<software>\\S+)").software'
+            expression: '.greeting | capture("^SSH-2\\.0-(?<software>\\S+)").software'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
 ```
 
 ```text
 /probe?collector=ssh&target=bastion.example.com:22
 ```
 
-The same banner read by a `regex` rule, which reads the body and so needs
-no script, gives the version as a number, though not the timings:
+Without `document`, a greeting-only check's body is the greeting itself,
+which a `regex` rule reads as it came; here the version as a number:
 
 ```yaml
   - name: ssh_version
@@ -647,7 +674,7 @@ answered `403`.
 A [debug probe](CONFIGURATION.md#debug-probes) shows in its request section
 the bytes sent, quoted so that a carriage return and a line feed are seen,
 and how many bytes were read and how reading stopped, after the greeting
-step with `greeting` ([Timings and the greeting](#timings-and-the-greeting));
+step with `greeting` ([Timings as headers](#timings-as-headers));
 its response section shows the answer and its headers:
 
 ```text

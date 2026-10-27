@@ -4,9 +4,11 @@ package fetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -303,5 +305,97 @@ func TestATCPGreetingIsTraced(t *testing.T) {
 	}
 	if r := trace.Requests(); len(r) != 1 || r[0].Outcome != `error: the greeting of `+banner.Addr+`, "SSH-2.0-OpenSSH_9.6\r\n", does not match request.greeting "^220 "` {
 		t.Errorf("traced %+v", r)
+	}
+}
+
+// tcpDocumentOf is the JSON document of a scrape of target through a
+// collector with request.document and own's other keys, decoded.
+func tcpDocumentOf(t *testing.T, target string, own TCPConfig, edit ...func(*model.Collector)) map[string]any {
+	t.Helper()
+	own.Document = true
+	c := tcpCollector(t, append([]func(*model.Collector){func(c *model.Collector) { c.Request.Own = own }}, edit...)...)
+	resp, err := FetchCollector(context.Background(), target, c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Headers.Get("Content-Type") != "application/json" || resp.Headers.Get("X-Tcp-Connect-Seconds") == "" {
+		t.Errorf("headers %v", resp.Headers)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		t.Fatalf("%v: %s", err, resp.Body)
+	}
+	return doc
+}
+
+// documentKeys are a document's keys, in order, and its text values checked
+// against want; the seconds are numbers from 0 to 5, the whole at least
+// each step.
+func documentKeys(t *testing.T, name string, doc map[string]any, text map[string]string) string {
+	t.Helper()
+	var keys []string
+	for key, value := range doc {
+		keys = append(keys, key)
+		if strings.HasSuffix(key, "_seconds") {
+			if n, ok := value.(float64); !ok || n < 0 || n > 5 || n > doc["duration_seconds"].(float64) {
+				t.Errorf("%s: %s is %v", name, key, value)
+			}
+		} else if value != text[key] {
+			t.Errorf("%s: %s is %q, want %q", name, key, value, text[key])
+		}
+	}
+	slices.Sort(keys)
+	return strings.Join(keys, " ")
+}
+
+// request.document answers a JSON document of the exchange: the greeting
+// and the answer as text, the seconds of each step taken, and the whole,
+// the steps not taken left out: greeting alone, greeting and send, send
+// alone, and over TLS.
+func TestATCPDocumentHoldsTheExchange(t *testing.T) {
+	banner := testutil.NewTCPStub(t, greeter(0, "SSH-2.0-OpenSSH_9.6\r\n", "", nil))
+	doc := tcpDocumentOf(t, banner.Addr, TCPConfig{Greeting: "^SSH-2"})
+	if keys := documentKeys(t, "greeting alone", doc, map[string]string{"greeting": "SSH-2.0-OpenSSH_9.6\r\n"}); keys != "connect_seconds duration_seconds greeting greeting_seconds" {
+		t.Errorf("greeting alone: %s", keys)
+	}
+	smtp := testutil.NewTCPStub(t, greeter(0, "220-mx.example ESMTP\r\n220 ready\r\n", "221 Bye\r\n", nil))
+	doc = tcpDocumentOf(t, smtp.Addr, TCPConfig{Greeting: "^220[ -]", Send: "QUIT\r\n"})
+	if keys := documentKeys(t, "greeting and send", doc, map[string]string{"greeting": "220-mx.example ESMTP\r\n220 ready\r\n", "answer": "221 Bye\r\n"}); keys != "answer answer_seconds connect_seconds duration_seconds greeting greeting_seconds" {
+		t.Errorf("greeting and send: %s", keys)
+	}
+	server := testutil.NewTCPStub(t, memcached(nil))
+	doc = tcpDocumentOf(t, server.Addr, TCPConfig{Send: "stats\r\n", Terminator: "END\r\n"})
+	if keys := documentKeys(t, "send alone", doc, map[string]string{"answer": memcachedStats}); keys != "answer answer_seconds connect_seconds duration_seconds" {
+		t.Errorf("send alone: %s", keys)
+	}
+	secure := testutil.NewTLSTCPStub(t, greeter(0, "220 smtps.example ESMTP\r\n", "221 Bye\r\n", nil))
+	doc = tcpDocumentOf(t, secure.Addr, TCPConfig{Greeting: "^220 ", Send: "QUIT\r\n"}, func(c *model.Collector) { c.Request.TLS.CAFile = secure.CAFile })
+	if keys := documentKeys(t, "TLS", doc, map[string]string{"greeting": "220 smtps.example ESMTP\r\n", "answer": "221 Bye\r\n"}); keys != "answer answer_seconds connect_seconds duration_seconds greeting greeting_seconds tls_seconds" {
+		t.Errorf("TLS: %s", keys)
+	}
+	// An answer that is empty is there, empty.
+	empty := testutil.NewTCPStub(t, func(net.Conn) {})
+	if doc := tcpDocumentOf(t, empty.Addr, TCPConfig{}); doc["answer"] != "" {
+		t.Errorf("an empty answer: %v", doc)
+	}
+}
+
+// JSON text is UTF-8: a greeting or an answer holding other bytes fails a
+// scrape with request.document, which says how to read them as they came.
+func TestATCPDocumentRefusesBytesThatAreNotText(t *testing.T) {
+	for name, tc := range map[string]struct {
+		server func(net.Conn)
+		own    TCPConfig
+		want   string
+	}{
+		"a greeting": {greeter(0, "220 caf\xe9\r\n", "", nil), TCPConfig{Greeting: "^220", Document: true}, "the greeting of "},
+		"an answer":  {func(conn net.Conn) { _, _ = io.WriteString(conn, "\x00\xff\xfe") }, TCPConfig{Document: true}, "the answer of "},
+	} {
+		server := testutil.NewTCPStub(t, tc.server)
+		c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = tc.own })
+		_, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+		if err == nil || err.Error() != tc.want+server.Addr+" holds bytes that are not UTF-8 text, which the JSON document of request.document cannot hold as they are; leave request.document out to read them as they came" {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

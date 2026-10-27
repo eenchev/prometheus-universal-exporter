@@ -336,6 +336,21 @@ func normalizeFormats(x *model.Collector) error {
 			return fmt.Errorf("collector %q transforms with %s, which cannot read the JSON %s %s collector is answered with; use jq, yq or python", x.Name, x.Transform.Type, fetch.TypeArticle(x.Request.Type), x.Request.Type)
 		}
 	}
+	if rt.JSONDocument != nil {
+		if document := rt.JSONDocument(x); document != "" {
+			switch x.Decoder.Type {
+			case "auto", "json":
+				x.Decoder.Type = "json"
+			default:
+				return fmt.Errorf("collector %q decodes with %s, but it is answered with %s; leave decoder.type out, or set json", x.Name, x.Decoder.Type, document)
+			}
+			switch x.Transform.Type {
+			case "jq", "yq", "python":
+			default:
+				return fmt.Errorf("collector %q transforms with %s, which cannot read %s; use jq, yq or python", x.Name, x.Transform.Type, document)
+			}
+		}
+	}
 	if fetch.CollectorPolicy(x).Pagination != nil {
 		// The pages are read as JSON to find the next one and their items,
 		// and merged into one JSON document, whatever their Content-Type.

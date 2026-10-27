@@ -16,10 +16,10 @@ import (
 
 // greetingExporter is an exporter of a collector checking an SSH server's
 // banner, with a regex rule reading the version from it, and one checking
-// an SMTP server, with jq rules reading the answer to QUIT and the scrape's
-// timings, and the stand-in server that greets as each, by its port:
-// sshd's banner, or an SMTP greeting over two lines and 221 to QUIT. The
-// logs are returned beside it.
+// an SMTP server, with jq rules reading the answer to QUIT and the
+// scrape's timings from request.document, and the stand-in server that
+// greets as each, by its port: sshd's banner, or an SMTP greeting over two
+// lines and 221 to QUIT. The logs are returned beside it.
 func greetingExporter(t *testing.T, ssh, smtp string) (*Server, string, string, *strings.Builder) {
 	t.Helper()
 	banner := testutil.NewTCPStub(t, func(conn net.Conn) {
@@ -47,21 +47,22 @@ func greetingExporter(t *testing.T, ssh, smtp string) (*Server, string, string, 
       type: tcp
       greeting: '^220[ -]'
       send: "QUIT\r\n"
-    decoder:
-      type: text
+      document: true
     transform:
       type: jq
-      pre_script: |
-        data = {"answer": response.text}
     metrics:
       - name: smtp_up
         expression: 'if (.answer | startswith("221")) then 1 else 0 end'
       - name: tcp_connect_seconds
-        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+        expression: .connect_seconds
       - name: tcp_greeting_seconds
-        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+        expression: .greeting_seconds
       - name: tcp_answer_seconds
-        expression: '$headers["x-tcp-answer-seconds"] | tonumber'
+        expression: .answer_seconds
+      - name: tcp_duration_seconds
+        expression: .duration_seconds
+      - name: tcp_header_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -101,20 +102,20 @@ func TestATCPGreetingThroughTheExporter(t *testing.T) {
 	}
 }
 
-// The timings of a scrape reach jq rules as $headers, through a pre-script
-// that hands them the answer: a greeting over two lines, then QUIT, gives
-// an up series and the connection's, the greeting's and the answer's
-// seconds; a debug probe's report shows the greeting step and the timings
-// among the answer's headers.
+// The timings of a scrape reach plain jq rules through request.document,
+// with no script: a greeting over two lines, then QUIT, gives an up series
+// read from the answer and the connection's, the greeting's, the answer's
+// and the whole exchange's seconds, and $headers still has them; a debug
+// probe's report shows the greeting step and the timings among the
+// answer's headers.
 func TestATCPScrapesTimingsReachTheRules(t *testing.T) {
-	requirePython(t)
 	exp, _, smtp, _ := greetingExporter(t, "", "220-mx.example ESMTP\r\n220 ready\r\n")
 	recorder := probeOnce(t, exp, "/probe?collector=smtp&target="+smtp, nil)
 	got := seriesLines(recorder.Body.String())
-	if recorder.Code != http.StatusOK || len(got) != 4 {
+	if recorder.Code != http.StatusOK || len(got) != 6 {
 		t.Fatalf("%d %v\n%s", recorder.Code, got, recorder.Body)
 	}
-	for i, prefix := range []string{"smtp_up 1", "tcp_answer_seconds ", "tcp_connect_seconds ", "tcp_greeting_seconds "} {
+	for i, prefix := range []string{"smtp_up 1", "tcp_answer_seconds ", "tcp_connect_seconds ", "tcp_duration_seconds ", "tcp_greeting_seconds ", "tcp_header_connect_seconds "} {
 		if !strings.HasPrefix(got[i], prefix) {
 			t.Errorf("series %q, want %q", got[i], prefix)
 		}

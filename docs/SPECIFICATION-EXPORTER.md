@@ -2605,6 +2605,7 @@ types at build time): only a build asked for it carries it. Its keys:
 | `greeting` | none | A regular expression (Go's `regexp`, RE2) the server's greeting must match before `send` is written. At most 64 KiB; no placeholder. |
 | `send` | none | The text written once the connection is made, or once the greeting has come; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
 | `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
+| `document` | `false` | `true`: the answer is a JSON document of the exchange in place of the server's text. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
@@ -2636,7 +2637,21 @@ types at build time): only a build asked for it carries it. Its keys:
   `X-Tcp-Tls-Seconds` with TLS, `X-Tcp-Greeting-Seconds` and
   `X-Tcp-Greeting`, a value for each line of the greeting without its line
   end, with `greeting`, and `X-Tcp-Answer-Seconds` when an answer was read
-  after the greeting or without one; the body MUST stay the answer alone.
+  after the greeting or without one; without `document` the body MUST stay
+  the answer alone.
+- With `document: true` the body MUST be a JSON object, with the
+  `Content-Type` `application/json`: `greeting`, the greeting as read, with
+  `greeting`; `answer`, what was read after it or the whole answer without
+  it, `""` when nothing was, whenever an answer was read; and, as numbers of
+  seconds, `connect_seconds` always, `tls_seconds` with TLS,
+  `greeting_seconds` with `greeting`, `answer_seconds` when an answer was
+  read, and `duration_seconds`, the exchange from the dial to the end of the
+  read. A key of a step not taken MUST be left out, not written `null` or
+  `0`. A greeting or an answer that is not UTF-8 MUST fail the scrape,
+  naming which and the target. The decoder MUST be `json`, left out or
+  written, with no warning of a decoder left to each response; any other
+  decoder, and a transform other than `jq`, `yq` and `python`, MUST be
+  refused at load, naming the document.
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,
@@ -2667,7 +2682,7 @@ types at build time): only a build asked for it carries it. Its keys:
   was what the deadline ended, the terminator waited for, or, without one,
   that the server kept the connection open.
 - The answer MUST be the body, with no status, as a local file's has none,
-  and no `Content-Type`; the decoder MUST be `decoder.type`, or the one the
+  and, without `document`, no `Content-Type`; the decoder MUST be `decoder.type`, or the one the
   transform implies, or what the body reads as. A failed scrape MUST be
   reported in the `tcp` stage.
 - The target MUST be `host:port` or `[v6]:port`, the port required, with no

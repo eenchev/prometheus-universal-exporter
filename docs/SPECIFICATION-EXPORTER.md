@@ -28643,6 +28643,53 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestATCPDocumentIsDecodedAsJSON`: a tcp collector with `document: true` decodes with json, its decoder left out, `auto` or `json`, with no warning; `text` or `yaml`, and a `regex` or `csv` transform, are refused at load naming the document; without `document` a regex transform loads.
 - `TestTCPGreetingDocumentationExamples`: docs/TCP.md's SMTP, FTP, POP3, IMAP and SSH examples, plain jq rules over `document: true`, work as written against stand-ins, each giving its up or info series and its timings, the regex SSH example reading the raw banner the version, an OpenSSH older than the SSH example's greeting failing the probe with 502, and the greeting request snippet loading.
 
+## 34.227 Fixes to collector defaults, tcp greetings and ntp; a collector turning off its defaults' backoff; the request-type scaffold
+
+### Defaults
+
+- The problems with the keys of a `defaults` block are all reported, in the
+  order of the file: an unknown key of `request.tls`, `cache` or
+  `failure_backoff` among those of `limits`, `error_handling` and
+  `retry`, and none lost when `cache` or `failure_backoff` refuses its own
+  (`TestDefaultsReportEveryKeyProblemInFileOrder`, § 5.0b).
+- A `defaults` block refused for a bad value leaves the collectors of its
+  file unchecked, so the block's error is the only one of that file, and
+  the collectors of other files are checked all the same
+  (`TestARefusedDefaultsBlockLeavesItsCollectorsUnchecked`).
+- A warning about a value a collector took from `defaults`, the retries a
+  `POST` collector does not make, ends with `(<key> comes from the defaults
+  of the file)` (`TestAWarningAboutADefaultedValueSaysWhereItIsWritten`).
+- A `request.tls` or `failure_backoff` block of `defaults` that applies to
+  no collector is refused once, not again for each key written in it
+  (`TestAnUnusedDefaultsBlockIsRefusedOnce`).
+- `failure_backoff: {enabled: false}` turns off the backoff a collector's
+  `defaults` give it, the collector taking none of the block's
+  `failure_backoff` keys; in a collector without defaults it is the block
+  left out, in its YAML on a reload, and `enabled: true` the block without
+  it; `enabled: false` in `defaults`, `failure_backoff: false` and a bad
+  value beside `enabled: false` are refused
+  (`TestACollectorTurnsOffTheBackoffOfItsDefaults`, § 42.13c);
+  `failure_backoff`'s unknown-key error lists `enabled`
+  (`TestFailureBackoffIsCheckedAndFilledIn`).
+
+### tcp
+
+- `TestATCPScrapeCancelledAfterTheTLSHandshakeDoesNotRace`: a scrape with `greeting` of a TLS stand-in that completes the handshake and never greets, cancelled after 200ms, three times, fails with the cancellation, waiting for the greeting, and `go test -race` finds no race between the cancellation's func, which sets the deadline of the connection dialed, and the variable that becomes the TLS connection.
+- `TestATCPGreetingOfTheLimitWithoutALineEndFailsAtOnce`: a greeting of exactly `max_response_bytes` (1,024) with no line end, the server then silent with the connection open, fails the scrape as a limit exceeded at once, in under 2 seconds of a 5-second deadline.
+- `TestATCPDocumentIsHeldToTheResponseLimit`: under a limit of 1,024, with `document: true`, a greeting and an answer of 600 bytes each fail as a limit exceeded, the greeting and the answer larger together than the limit, and an answer of 400 control bytes, a document of about 2,400, fails naming the document's size; without `document` both exchanges are taken.
+- `TestATCPGreetingIsCompiledOnce`: a scrape against a `greeting` of about 55 KB allocates no more than 1,000 allocations beyond one against `^220 `, where compiling the long pattern at each scrape took about 20,000.
+- `TestATCPSendThatComesOutEmptyIsRefused`: `send: "{{param_cmd:}}{{param_end:}}"` with no parameters is refused by the probe's check and by the scrape, naming both parameters, before the server is connected to; `"{{param_cmd:}}\r\n"` with `param_cmd=stats` is sent and answered.
+- `TestATCPProbeWhoseSendComesOutEmptyIsRefused`: through `/probe`, a collector with `send: "{{param_cmd:}}"` probed without `param_cmd` is answered 400 saying `request.send is empty once param_cmd is filled in`, and the stand-in is never connected to.
+- `TestATCPGreetingsControlCharactersAreEscapedInTheReport`: a debug probe's report shows a greeting holding a carriage return, an escape sequence and a bell as `X-Tcp-Greeting: 220 mx.example\r250 forged\x1b[2J\a`, with none of those bytes raw in the report; a header value with a tab and an `é` is listed as it is, and one with U+0085 and DEL as `\u0085` and `\x7f`.
+
+### ntp and the request-type scaffold
+
+### The request-type scaffold
+
+- `TestANewRequestTypeIsWiredByTheScaffold` (extended): an article that is neither `a` nor `an` is refused before anything is written; `--article` gives `an` for ntp, NTP, smtp, SMTP, imap, IMAP, LDAP, S3File and xml and `a` for foo, ldap read as a word, UUID, tcp, DNS and redis; the default-build `ozdefault`, read as a word, is written "an ozdefault collector", `TestAnOzdefaultCollectorIsNotImplementedYet` and `TestAProbeOfAnOzdefaultCollector…`, and the opt-in `zzdemo` "a zzdemo collector" and "a `zzdemo` collector"; `ozdefault` lands after `kubernetes` and before the opt-in rows in the static targets table, the related pages of docs/CONFIGURATION.md and spec § 35's list, and `zzdemo` after `sshexec`, last; the "it was built with:" list of docs/REDIS.md and the "write one of" list of docs/CONFIGURATION.md name `ozdefault` in its sorted place; spec § 35 gets no TODO; and `TestNoScaffoldPlaceholderIsLeftInTheTree` fails in the copy, finding `TODO(ozdefault)` in docs/OZDEFAULT.md, `TODO(zzdemo)` in README.md and the not-implemented failure in requesttype_zzdemo.go.
+- `TestNoScaffoldPlaceholderIsLeftInTheTree`: no file of the tree but those under .git, vendor and bin holds `TODO(<name>)` for a request type of the tree, and no `requesttype_<name>.go` its `the <name> request type is not implemented yet`.
+- `TestTheScaffoldPlaceholderCheckFindsWhatIsLeft`: in a tree of its own, the check finds `TODO(zz)` in a page and the not-implemented failure in `requesttype_zz.go`, and not `TODO(other)`, a name of no type, nor anything under vendor.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -578,6 +578,7 @@ values schema:
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.debug` | `--web.debug=<level>`, rendered only for `edit` or `full`; empty, the default, and `off` render no flag, and any other value MUST fail rendering, by the schema's enum and in the template |
+| `server.gzipLevel` | `--web.gzip-level=<level>`, a whole number from 0 to 9, as a number or as a string; empty, the default, renders no flag, `0` MUST render, and any other value MUST fail rendering, by the schema and in the template |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -1329,7 +1330,11 @@ are skipped and the text checks of the templates still run:
    MUST render `--web.debug=edit` and `--web.debug=full`; the default and
    `off` MUST render no `--web.debug`; any other value MUST fail rendering,
    naming `server.debug`; and the flag in `extraArgs` MUST fail rendering,
-   naming `server.debug`.
+   naming `server.debug`. Likewise `server.gzipLevel` of `0`, `9` and `"6"`
+   MUST render `--web.gzip-level` with that level, the default MUST render
+   none, `10`, `-1`, `1.5` and `"fast"` MUST fail rendering naming
+   `server.gzipLevel`, and `--web.gzip-level` in `extraArgs` MUST fail
+   rendering naming `server.gzipLevel`.
 20. Names, network policy, monitors and scheduling: releases `blue` and
    `green` MUST get objects of their own names, a release named after the
    chart the chart's name, and `fullnameOverride` its own; the network policy

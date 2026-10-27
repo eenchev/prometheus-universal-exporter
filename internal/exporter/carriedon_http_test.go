@@ -617,7 +617,7 @@ func renderTrip(result *probeResult) renderedTrip {
 				request.Header.Set("Accept-Encoding", encoding)
 			}
 			recorder := httptest.NewRecorder()
-			compressed(result.writeTo)(recorder, request)
+			newAnswerCompression(DefaultGzipLevel).wrap(result.writeTo)(recorder, request)
 			out.answers[format.name+"/"+encoding] = scrapedAnswer{status: recorder.Code, header: recorder.Header(), body: recorder.Body.String()}
 		}
 	}
@@ -853,8 +853,9 @@ func TestProbesThatDoNotCarryOnAreAnsweredAsBefore(t *testing.T) {
 				header.Set("Content-Length", strconv.Itoa(len(got.body)))
 				var compressedBody bytes.Buffer
 				if gzipped {
-					// As the exporter compresses: one write, then the end.
-					gz := gzip.NewWriter(&compressedBody)
+					// As the exporter compresses: at its default level,
+					// one write, then the end.
+					gz, _ := gzip.NewWriterLevel(&compressedBody, DefaultGzipLevel)
 					_, _ = gz.Write([]byte(body))
 					_ = gz.Close()
 				} else {

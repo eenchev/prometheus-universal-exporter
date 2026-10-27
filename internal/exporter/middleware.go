@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,7 +21,8 @@ import (
 // passed-through target's whole exposition, or the verbose self-metrics with a
 // series per request. The answers of /probe, the self-metrics path and the
 // static targets path are gzipped for a client that accepts it, as Prometheus's own client library
-// does; an answer is text that typically shrinks to a tenth. Other
+// does; an answer is text that typically shrinks to a tenth. --web.gzip-level
+// sets the level, or turns compression off. Other
 // endpoints answer a line or two, and /health and /ready are read by kubelets
 // that do not ask.
 
@@ -57,7 +59,53 @@ func acceptsGzip(header string) bool {
 	return wildcard > 0
 }
 
-var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
+// DefaultGzipLevel is the level of --web.gzip-level when it is not given:
+// gzip.BestSpeed. A probe's answer is compressed on every scrape and read
+// once, so the time spent compressing it is spent again on the next scrape,
+// while the bytes it saves are a few percent of a level-6 answer: in the
+// probe benchmarks (probe_bench_test.go) level 1 compressed in a fifth or less
+// of level 6's time, and its answers were at most about a tenth larger.
+const DefaultGzipLevel = gzip.BestSpeed
+
+// ValidateGzipLevel refuses a --web.gzip-level that is not 0, for answers
+// sent uncompressed, or a gzip level from 1 to 9.
+func ValidateGzipLevel(level int) error {
+	if level < 0 || level > gzip.BestCompression {
+		return fmt.Errorf("--web.gzip-level must be from 0, which answers uncompressed, to 9, got %d", level)
+	}
+	return nil
+}
+
+// answerCompression gzips answers at one level. Its writers are pooled: a
+// gzip.Writer holds several hundred kilobytes of tables, and one made for
+// every answer was most of what compressing it allocated. Reset keeps a
+// writer's level, so every writer in the pool has the one it was made with.
+type answerCompression struct {
+	// level is from 1 to 9, or 0 for answers sent as they are.
+	level   int
+	writers sync.Pool
+}
+
+// newAnswerCompression makes the compression of --web.gzip-level, which
+// ValidateGzipLevel has accepted.
+func newAnswerCompression(level int) *answerCompression {
+	c := &answerCompression{level: level}
+	c.writers.New = func() any {
+		gz, err := gzip.NewWriterLevel(nil, level)
+		if err != nil {
+			// Only a level outside 1 to 9 is refused, and the flag's
+			// was checked at startup.
+			panic(err)
+		}
+		return gz
+	}
+	return c
+}
+
+// SetGzipLevel sets the gzip level of /probe's, the self-metrics' and the
+// static targets' answers, from --web.gzip-level: 1 to 9, or 0 to answer
+// uncompressed whatever the client accepts. It is set before Handler.
+func (s *Server) SetGzipLevel(level int) { s.compression = newAnswerCompression(level) }
 
 // gzipResponseWriter compresses what a handler writes.
 type gzipResponseWriter struct {
@@ -97,15 +145,20 @@ func (w *gzipResponseWriter) Write(p []byte) (int, error) {
 	return w.gz.Write(p)
 }
 
-// compressed gzips a handler's answer for a client that accepts gzip.
-func compressed(next http.HandlerFunc) http.HandlerFunc {
+// wrap gzips a handler's answer for a client that accepts gzip. At level 0
+// every answer is sent as it is, which every client accepts, Prometheus
+// included; it does not vary with Accept-Encoding, and does not say it does.
+func (c *answerCompression) wrap(next http.HandlerFunc) http.HandlerFunc {
+	if c.level == 0 {
+		return next
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		if r.Method == http.MethodHead || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
 			next(w, r)
 			return
 		}
-		gz := gzipWriters.Get().(*gzip.Writer)
+		gz := c.writers.Get().(*gzip.Writer)
 		gz.Reset(w)
 		cw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
 		defer func() {
@@ -113,7 +166,7 @@ func compressed(next http.HandlerFunc) http.HandlerFunc {
 				_ = gz.Close()
 			}
 			gz.Reset(nil)
-			gzipWriters.Put(gz)
+			c.writers.Put(gz)
 		}()
 		next(cw, r)
 	}

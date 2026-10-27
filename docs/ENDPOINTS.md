@@ -17,7 +17,7 @@ the [command-line flags](FLAGS.md).
 | `/-/reload` | `POST` or `PUT` reloads the configuration, with `--web.enable-lifecycle`, as either does Prometheus's own; any other method is answered `405`. See [Reloading on demand](CONFIGURATION.md#reloading-on-demand). |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it), the exporter is shutting down, or in allocator mode before the first bundle, not after a rejected reload; see [Readiness](CONFIGURATION.md#readiness). Never authenticated. |
 
-`/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
+`/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape. They are compressed at `--web.gzip-level`, by default `1`, the fastest: an answer is compressed on every scrape and read once, and level `1` compresses one in a fifth or less of the time level `6` takes, for an answer at most about a tenth larger. `9` makes the smallest answers, for a scrape over a slow link; `0` answers uncompressed whatever the client accepts, which Prometheus takes as well, when the network is cheaper than the exporter's CPU.
 
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`

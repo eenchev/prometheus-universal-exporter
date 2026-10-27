@@ -91,7 +91,7 @@ func TestHealthAndReadyAreNeverGzipped(t *testing.T) {
 	server, _ := newCacheTestServer(t, testutil.Collector("app", "text"))
 	for _, path := range []string{"/health", "/ready"} {
 		r := get(server, http.MethodGet, path, "gzip")
-		if r.Code != http.StatusOK || r.Header().Get("Content-Encoding") != "" || r.Header().Get("Vary") != "" {
+		if r.Code != http.StatusOK || r.Header().Get("Content-Encoding") != "" || strings.Contains(strings.Join(r.Header().Values("Vary"), ","), "Accept-Encoding") {
 			t.Errorf("%s: %d, Content-Encoding %q, Vary %q", path, r.Code, r.Header().Get("Content-Encoding"), r.Header().Get("Vary"))
 		}
 	}
@@ -251,5 +251,67 @@ func TestTheExportersOwnBasicUsernameWithAColonIsRefused(t *testing.T) {
 	}
 	if got := selfMetricsAs(t, server, "export:er", "s3:cret"); got != http.StatusInternalServerError {
 		t.Fatalf("a username file rotated to a colon answered %d", got)
+	}
+}
+
+// passThroughServer is an exporter with one collector, pass, that passes a
+// target's exposition through.
+func passThroughServer(t *testing.T, exposition string) (server *Server, probe string) {
+	t.Helper()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte(exposition))
+	}))
+	t.Cleanup(target.Close)
+	c := testutil.Collector("pass", "")
+	c.Transform.Type, c.Metrics, c.Limits.MaxResponseBytes, c.Limits.MaxMetrics = "prometheus", nil, 64<<20, 100000
+	server, _ = newCacheTestServer(t, c)
+	return server, "/probe?collector=pass&target=" + url.QueryEscape(target.URL)
+}
+
+// Without --web.gzip-level a probe's answer is compressed at gzip's fastest
+// level, 1, rather than at its default, 6.
+func TestAProbeIsGzippedAtTheFastestLevelByDefault(t *testing.T) {
+	server, probe := passThroughServer(t, variedExposition())
+	plain := get(server, http.MethodGet, probe, "")
+	zipped := get(server, http.MethodGet, probe, "gzip")
+	if plain.Code != http.StatusOK || zipped.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("%d, Content-Encoding %q: %.300s", plain.Code, zipped.Header().Get("Content-Encoding"), plain.Body.String())
+	}
+	if gunzip(t, zipped.Body.Bytes()) != plain.Body.String() {
+		t.Fatal("the compressed answer does not decompress to the plain one")
+	}
+	if fastest := zippedAt(1, plain.Body.String()).Body.Len(); zipped.Body.Len() != fastest {
+		t.Errorf("%d bytes compressed, level 1 makes %d (level 6 %d)", zipped.Body.Len(), fastest, zippedAt(6, plain.Body.String()).Body.Len())
+	}
+}
+
+// At --web.gzip-level=0 /probe, the self-metrics and the static targets are
+// answered as they are to a client that accepts gzip, with no
+// Content-Encoding, and without Vary: Accept-Encoding, as nothing varies with
+// it.
+// Level 9 makes a smaller probe answer than level 1.
+func TestGzipLevelZeroAnswersUncompressed(t *testing.T) {
+	server, probe := passThroughServer(t, variedExposition())
+	plain := get(server, http.MethodGet, probe, "").Body.String()
+	server.SetGzipLevel(0)
+	for _, path := range []string{probe, "/self-metrics", "/static-targets"} {
+		r := get(server, http.MethodGet, path, "gzip, deflate, br")
+		if r.Code != http.StatusOK || r.Header().Get("Content-Encoding") != "" || strings.Contains(strings.Join(r.Header().Values("Vary"), ","), "Accept-Encoding") {
+			t.Fatalf("%s: %d, Content-Encoding %q, Vary %q", path, r.Code, r.Header().Get("Content-Encoding"), r.Header().Get("Vary"))
+		}
+		if path == probe && r.Body.String() != plain {
+			t.Errorf("the probe's answer at level 0 is not the plain one")
+		}
+	}
+	server.SetGzipLevel(1)
+	fastest := get(server, http.MethodGet, probe, "gzip")
+	server.SetGzipLevel(9)
+	smallest := get(server, http.MethodGet, probe, "gzip")
+	if gunzip(t, smallest.Body.Bytes()) != plain || gunzip(t, fastest.Body.Bytes()) != plain {
+		t.Fatal("an answer does not decompress to the plain one")
+	}
+	if smallest.Body.Len() >= fastest.Body.Len() {
+		t.Errorf("level 9 made %d bytes and level 1 %d", smallest.Body.Len(), fastest.Body.Len())
 	}
 }

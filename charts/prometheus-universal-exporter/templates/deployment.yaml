@@ -155,6 +155,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.debug" .) }}
             - {{ printf "--web.debug=%s" . | quote }}
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.gzipLevel" .) }}
+            - {{ printf "--web.gzip-level=%s" . | quote }}
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}
             - {{ printf "--probe.timeout-offset=%s" . | quote }}
             {{- end }}

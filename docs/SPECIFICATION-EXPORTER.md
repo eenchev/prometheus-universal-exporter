@@ -8016,6 +8016,15 @@ answer. `/health`, `/ready` and `/-/reload` MUST NOT be compressed: their
 answers are a line or two, and a load balancer checking health may not decode
 gzip.
 
+The gzip level MUST be `--web.gzip-level`, by default `1` (the fastest): `1`
+to `9` are gzip's levels, and an answer at any of them MUST decompress to the
+bytes of the uncompressed answer. `0` MUST answer these paths uncompressed
+whatever the request accepts, without `Content-Encoding` and without
+`Vary: Accept-Encoding`, since the answer then does not vary with it. Any
+other value MUST be refused as a malformed command line, with exit status 2,
+at startup and with `--dry-run`. The level MUST NOT change how OTLP exports
+are compressed (`otlp.compression`).
+
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
 keep-alive connection closed after two minutes. The tests MAY give the headers
@@ -28752,6 +28761,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   corpus must reach each refusal at least once in 1,000 cases, where it was
   once in 400, which the race detector's 2,000 cases of a tcp-only build
   did not reach for one refusal.
+
+## 34.229 Configurable answer compression, and fewer allocations per probe
+
+- `TestEachGzipLevelDecompressesToTheSameAnswer`: a 20,000-series exposition answered through the compression of each `--web.gzip-level` from 1 to 9 decompresses to the exposition byte for byte, is the size gzip makes at that level, and level 9's answer is smaller than level 1's.
+- `TestAPooledGzipWriterKeepsItsLevel`: two answers at level 9, the second through a writer taken from the pool again after `Reset`, are of one size.
+- `TestValidateGzipLevel`: 0 to 9 are taken; -1, 10 and 100 are refused saying `--web.gzip-level must be from 0`.
+- `TestAProbeIsGzippedAtTheFastestLevelByDefault`: without `--web.gzip-level`, a passed-through exposition answered to `Accept-Encoding: gzip` decompresses to the plain answer and is the size level 1 makes of it, not level 6.
+- `TestGzipLevelZeroAnswersUncompressed`: at level 0, `/probe`, the self-metrics and the static targets answer `Accept-Encoding: gzip, deflate, br` with no `Content-Encoding` and no `Vary: Accept-Encoding`, the probe's answer the plain one; set to 9 after 1, the probe's answer is smaller and both decompress to the plain one.
+- `TestOutOfRangeLimitsAreCommandLineErrors`: `--web.gzip-level=10`, `-1` and `fast` exit 2, at startup and with `--dry-run`, naming the flag.
+- `TestEveryGzipLevelIsNoCommandLineError`: `--dry-run` with `--web.gzip-level` of 0, 1, 6 and 9 is no command-line error.
+- `TestChartRendersItsOptions`: `server.gzipLevel` of `0`, `9` and the string `"6"` render `--web.gzip-level` with that level; the defaults render none.
+- `TestChartRefusesInvalidOptions`: `server.gzipLevel` of `10`, `-1`, `1.5` and `fast`, and `--web.gzip-level=9` in `extraArgs`, fail rendering naming `server.gzipLevel`.
+- `TestChartHoldsTheGzipLevelWithTheSchemaSkipped`: with the schema skipped, `10`, `-1`, `1.5`, `fast` and `07` fail rendering in the template naming the value, and `0` and `"9"` render.
 
 # 35. Documentation requirements
 

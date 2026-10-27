@@ -158,6 +158,12 @@ server:
   # collector written on the page never runs Python or reads a file of the
   # pod. Off by default; behind web.basic_auth when that is configured.
   debug: ""
+  # The gzip level of the answers of /probe, the self-metrics and the static
+  # targets to a scrape that accepts gzip, as Prometheus's do
+  # (--web.gzip-level): 1, the fastest, to 9, the smallest; 0 answers them
+  # uncompressed. Empty keeps the exporter's default, 1, and leaves the flag
+  # out.
+  gzipLevel: ""
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
   # on top of each collector's max_concurrent_probes. Each holds a response

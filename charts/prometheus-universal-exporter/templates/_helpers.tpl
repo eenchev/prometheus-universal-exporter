@@ -25,6 +25,7 @@
   "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.debug" "set server.debug instead"
+  "--web.gzip-level" "set server.gzipLevel instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead"
   "--allocator.url" "set allocator.enabled instead, which points the exporter at the chart's allocator"
@@ -490,6 +491,20 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- if has $level (list "edit" "full") -}}
 {{- $level -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.gzipLevel" -}}
+{{- /* Empty or null leaves the flag out, and the exporter's default, 1,
+       applies; 0, which answers uncompressed, is rendered like the levels
+       1 to 9. Anything else would stop the exporter at startup, so it fails
+       rendering here instead. */ -}}
+{{- $value := .Values.server.gzipLevel -}}
+{{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
+{{- $text := include "prometheus-universal-exporter.text" $value -}}
+{{- if not (regexMatch "^[0-9]$" $text) -}}
+{{- fail (printf "server.gzipLevel %q must be a whole number from 0, which answers uncompressed, to 9, or empty to keep the exporter's default, 1" $text) -}}
+{{- end -}}
+{{- $text -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.probeTimeoutOffset" -}}

@@ -81,6 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable /-/reload, which on POST or PUT reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	debugLevel := flags.String("web.debug", "off", "Debugging collectors: off; edit, the /debug page, where a collector written there or a configured one is run on a pasted response and each stage of its trip shown, nothing fetched; or full, which adds fetching a target or a static target's scrape on that page, /probe?...&debug=true and /static-targets?debug=<name>, all of which show what the target answered")
+	gzipLevel := flags.Int("web.gzip-level", exporter.DefaultGzipLevel, "The gzip level of the answers of /probe, the self-metrics and the static targets to a client that accepts gzip, as Prometheus does: 1, the fastest, to 9, the smallest; or 0 to answer uncompressed whatever the client accepts")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
@@ -146,6 +147,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := exporter.ValidateDefaultProbeTimeout(*defaultProbeTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateGzipLevel(*gzipLevel); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -312,6 +317,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetDebug(debug)
+	server.SetGzipLevel(*gzipLevel)
 	if alloc != nil {
 		server.SetAwaitingReason(alloc.awaitingSentence())
 	}

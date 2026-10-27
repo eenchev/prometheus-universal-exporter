@@ -28739,6 +28739,20 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestATCPSTARTTLSThroughTheExporter`: through `/probe`, `starttls: smtp` with `document: true` and the stand-in's CA answers `smtp_up 1`, `tcp_starttls_seconds` and `tcp_tls_seconds` from jq rules, the stand-in reading only `EHLO [127.0.0.1]` and `STARTTLS` in plaintext; a stand-in answering `454` is answered 502 with the reply withheld from the caller and in the log; a debug probe's report shows the outcome with each step, `Tcp-Starttls: smtp` and `X-Tcp-Starttls-Seconds`; a static target setting `request.starttls` is refused as an unknown key of a static target's request.
 - `TestTCPStartTLSDocumentationExamples`: the `smtp_submission`, `imap_starttls` and `pop3_starttls` examples of docs/TCP.md, with the stand-ins' CA, answer `smtp_up 1`, `imap_starttls_up 1` and `pop3_up 1` and their seconds against stand-ins of SMTP on 587, IMAP on 143 and POP3 on 110.
 
+### Two tests that failed by chance
+
+- `TestAnSSHExecOutputIsHeldToTheResponseLimit` (sshexec build): a command
+  writing without end past a 4096-byte limit fails the scrape as over the
+  limit, the command stops and is sent KILL. It waited for the stand-in to
+  count the command as ended by the signal, which it does only when the
+  signal is read before the session's close fails the write the command is
+  blocked in, and failed in CI when the close came first; it waits for the
+  command to have stopped, by either, and for the KILL.
+- `TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid`: the
+  corpus must reach each refusal at least once in 1,000 cases, where it was
+  once in 400, which the race detector's 2,000 cases of a tcp-only build
+  did not reach for one refusal.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

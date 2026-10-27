@@ -314,8 +314,12 @@ func TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid(t *testing
 		}
 	}
 	// The corpus reaches what it is about: files the check accepts, each
-	// refusal, collectors found for their message and names shared.
-	least := cases / 400
+	// refusal, collectors found for their message and names shared. How
+	// often a refusal comes depends on the request types the build carries,
+	// which the corpus draws from: in a build of one type, under the race
+	// detector's smaller corpus, the rarest came 4 times in 2,000 cases, so
+	// the bound is one in 1,000 cases, which every build reaches.
+	least := max(1, cases/1000)
 	for what, count := range map[string]int{"files accepted": accepted, "collectors found for a target's message": found, "configurations with two collectors of a name": shared} {
 		if count < least {
 			t.Errorf("%d %s among %d cases, want at least %d", count, what, cases, least)

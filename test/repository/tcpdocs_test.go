@@ -194,3 +194,68 @@ func TestTCPGreetingDocumentationExamples(t *testing.T) {
 		t.Errorf("%v\n%s", err, document)
 	}
 }
+
+// startTLSStandIn greets, answers each line sent in plaintext with the next
+// of replies, the last of which says to begin TLS, begins it, and answers
+// the line sent over TLS with answer.
+func startTLSStandIn(greeting string, replies []string, answer string) func(net.Conn, func() (net.Conn, error)) {
+	return func(conn net.Conn, begin func() (net.Conn, error)) {
+		_, _ = io.WriteString(conn, greeting)
+		for _, reply := range replies {
+			if _, err := testutil.ReadUntil(conn, "\n"); err != nil {
+				return
+			}
+			_, _ = io.WriteString(conn, reply)
+		}
+		secure, err := begin()
+		if err != nil {
+			return
+		}
+		if _, err := testutil.ReadUntil(secure, "\n"); err == nil {
+			_, _ = io.WriteString(secure, answer)
+		}
+	}
+}
+
+// The STARTTLS examples of docs/TCP.md work as written against stand-ins
+// that begin TLS as an SMTP submission server on 587, an IMAP server on 143
+// and a POP3 server on 110 do, each verified with the stand-ins' CA, which
+// replaces the examples' own or is added: SMTP's and POP3's up series and
+// the request's seconds after QUIT over TLS, IMAP's handshake alone.
+func TestTCPStartTLSDocumentationExamples(t *testing.T) {
+	blocks := pageBlocks(t, "docs/TCP.md", "yaml")
+	smtp := testutil.NewStartTLSStub(t, startTLSStandIn("220 mx.example.com ESMTP\r\n", []string{"250-mx.example.com\r\n250-PIPELINING\r\n250 STARTTLS\r\n", "220 2.0.0 Ready to start TLS\r\n"}, "221 2.0.0 Bye\r\n"))
+	imap := testutil.NewStartTLSStub(t, startTLSStandIn("* OK [CAPABILITY IMAP4rev1 STARTTLS] ready\r\n", []string{"a1 OK Begin TLS negotiation now\r\n"}, ""))
+	pop3 := testutil.NewStartTLSStub(t, startTLSStandIn("+OK POP3 ready\r\n", []string{"+OK Begin TLS negotiation now\r\n"}, "+OK bye\r\n"))
+	ca := "      tls:\n        ca_file: " + smtp.CAFile + "\n"
+	conf := "collectors:\n" +
+		strings.Replace(pageBlock(t, blocks, "  - name: smtp_submission\n"), "      document: true\n", "      document: true\n"+ca, 1) +
+		strings.Replace(pageBlock(t, blocks, "  - name: imap_starttls\n"), "/etc/exporter/mail-ca.pem", imap.CAFile, 1) +
+		strings.Replace(pageBlock(t, blocks, "  - name: pop3_starttls\n"), "      document: true\n", "      document: true\n      tls:\n        ca_file: "+pop3.CAFile+"\n", 1)
+	if strings.Count(conf, "ca_file: ") != 3 {
+		t.Fatalf("the stand-ins' CA is not in every example:\n%s", conf)
+	}
+	dir := t.TempDir()
+	path := testutil.WriteIn(t, dir, "config.yaml", conf)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, conf)
+	}
+	exp := exporter.NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	for collector, tc := range map[string]struct {
+		target string
+		wants  []string
+	}{
+		"smtp_submission": {smtp.Addr, []string{"smtp_up 1", "tcp_starttls_seconds ", "tcp_tls_seconds "}},
+		"imap_starttls":   {imap.Addr, []string{"imap_starttls_up 1", "tcp_tls_seconds "}},
+		"pop3_starttls":   {pop3.Addr, []string{"pop3_up 1", "tcp_starttls_seconds "}},
+	} {
+		recorder := httptest.NewRecorder()
+		exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+tc.target+"&collector="+collector, nil))
+		for _, want := range tc.wants {
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "\n"+want) {
+				t.Errorf("%s: %d, want %q in\n%s", collector, recorder.Code, want, recorder.Body)
+			}
+		}
+	}
+}

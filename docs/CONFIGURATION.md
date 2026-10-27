@@ -2614,7 +2614,10 @@ decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
 For `tcp`, in a build that [asks for it](TCP.md#building-with-tcp), no key
 is required: `send` is the text written once the connection is made, and
 `terminator` what the answer ends with, the answer ending when the server
-closes the connection without one; `tls`, `max_response_bytes`,
+closes the connection without one; `greeting` is the pattern a server that
+speaks first must greet with, `starttls`, `smtp`, `imap`, `pop3` or `ftp`,
+begins TLS after the greeting as that protocol asks for it, and `document`
+answers a JSON document of the exchange; `tls`, `max_response_bytes`,
 `allowed_targets` and `denied_targets` apply too. The answer is a body, read
 by any decoder; its table is in [Text protocols over TCP](TCP.md#a-collector).
 

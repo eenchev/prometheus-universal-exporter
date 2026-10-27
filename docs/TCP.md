@@ -14,7 +14,9 @@ thing to run:
 - NUT's `upsd`, `LIST VAR <ups>`, and Beanstalkd's `stats`;
 - whether a service that speaks first — SMTP, FTP, POP3, IMAP, SSH — greets
   as it should, and how long it took ([Services that speak
-  first](#services-that-speak-first)).
+  first](#services-that-speak-first));
+- whether a mail or FTP server that begins TLS on request, with `STARTTLS`,
+  does, with a certificate that verifies ([STARTTLS](#starttls)).
 
 Whatever reads a body reads the answer: `regex` for lines of text, `csv`,
 `prometheus` for a service that writes exposition, `jq` for one that answers
@@ -107,9 +109,10 @@ sum; a server that has had no get yet has no ratio.
 | `type` | — | **Required.** `tcp`. |
 | `document` | `false` | `true` hands the transforms a JSON document of the exchange, the greeting, the answer and each step's seconds, in place of the server's text; the decoder is then `json`. See [The exchange as a document](#the-exchange-as-a-document). |
 | `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` the greeting is the answer. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
+| `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on the plaintext connection, after the greeting, as that protocol asks for it, and write `send` over TLS. See [STARTTLS](#starttls). |
 | `send` | nothing | The text written once the connection is made, such as `"stats\r\n"`. Write it in double quotes, in which YAML reads `\r\n` as a carriage return and a line feed; in single quotes or none, `\r\n` is four characters. May hold `{{param_name}}` placeholders. At most 64 KiB. Left out, nothing is written, and the answer is what the server says first. See [What a scrape sends](#what-a-scrape-sends). |
 | `terminator` | none | What the answer ends with, such as `"END\r\n"`: reading stops once it has come. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See [Reading the answer](#reading-the-answer). |
-| `tls` | none | Speak TLS, verifying the server: see [TLS](#tls). |
+| `tls` | none | Speak TLS, verifying the server: see [TLS](#tls). With `starttls`, the settings of the TLS it begins. |
 | `max_response_bytes` | `10MiB` | The most bytes of the answer: see [Limits](#limits). |
 | `allowed_targets`, `denied_targets` | none | The services the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
 
@@ -138,7 +141,9 @@ a client certificate, both or neither, and `insecure_skip_verify` skips the
 verification. There is no scheme for TLS in the target: the block alone says
 it, and a `tls` block, even an empty one, makes the scrape speak TLS:
 `tls: {}` asks for TLS verified against the system's roots, never for
-plaintext, so the label of such a scrape is `tls://host:port`.
+plaintext, so the label of such a scrape is `tls://host:port`. With
+[`starttls`](#starttls) the block holds the settings of the TLS begun after
+the greeting rather than from the start.
 
 ```yaml
 request:
@@ -152,7 +157,8 @@ request:
 
 A scrape makes one connection, speaks TLS over it when the collector has a
 `tls` block, even an empty one, reads the server's greeting when the
-collector sets [`greeting`](#services-that-speak-first), writes `send` when
+collector sets [`greeting`](#services-that-speak-first) or
+[`starttls`](#starttls), begins TLS with `starttls`, writes `send` when
 it is set, reads the answer and closes the
 connection; the next scrape makes its own. `send` is written as it is,
 nothing added: a protocol whose commands end with a line feed or `\r\n`
@@ -293,9 +299,9 @@ to the [response limit](#limits) as the answer is, and the answer to it
 again.
 
 Over TLS the greeting comes after the handshake, as with SMTPS on port 465,
-IMAPS on 993 and POP3S on 995, which speak TLS from the start. A protocol
-that starts in plaintext and turns to TLS after a command, SMTP's
-`STARTTLS`, is not spoken.
+IMAPS on 993 and POP3S on 995, which speak TLS from the start. A server
+that starts in plaintext and turns to TLS when asked is read with
+[`starttls`](#starttls), the greeting then coming before the handshake.
 
 ### The exchange as a document
 
@@ -318,10 +324,13 @@ answer and how long each step took, with no script:
   `greeting`; `answer` is what was read after it, or, without `greeting`,
   the whole answer, `""` when the server wrote nothing. A greeting-only
   check, with no `send`, has a `greeting` and no `answer`.
+- `starttls` is the protocol whose request began TLS, with `starttls`.
 - `connect_seconds` is how long making the connection took, the name's
-  lookup included; `tls_seconds` the TLS handshake, with `tls`;
-  `greeting_seconds` from the connection, or the handshake, until the
-  greeting ended, with `greeting`; `answer_seconds` from the write of
+  lookup included; `tls_seconds` the TLS handshake, with `tls` or
+  `starttls`; `greeting_seconds` from the connection, or the handshake,
+  until the greeting ended, with `greeting` or `starttls`;
+  `starttls_seconds` from the greeting's end until the server said to begin
+  TLS, with `starttls`; `answer_seconds` from the write of
   `send`, or from when reading began without it, until reading stopped,
   when an answer was read; and `duration_seconds` the whole exchange, from
   the connection to the end of the read.
@@ -361,9 +370,10 @@ the body sees the answer it always did.
 | Header | When | What |
 | --- | --- | --- |
 | `X-Tcp-Connect-Seconds` | always | `connect_seconds`. |
-| `X-Tcp-Tls-Seconds` | with `tls` | `tls_seconds`. |
-| `X-Tcp-Greeting-Seconds` | with `greeting` | `greeting_seconds`. |
-| `X-Tcp-Greeting` | with `greeting` | The greeting, a value for each of its lines, without its line end. |
+| `X-Tcp-Tls-Seconds` | with `tls` or `starttls` | `tls_seconds`. |
+| `X-Tcp-Greeting-Seconds` | with `greeting` or `starttls` | `greeting_seconds`. |
+| `X-Tcp-Greeting` | with `greeting` or `starttls` | The greeting, a value for each of its lines, without its line end. |
+| `X-Tcp-Starttls-Seconds` | with `starttls` | `starttls_seconds`. |
 | `X-Tcp-Answer-Seconds` | when an answer is read | `answer_seconds`. None for a greeting-only check. |
 
 A `jq` or `yq` rule reads them as `$headers`, by lower-case name, as for an
@@ -533,6 +543,146 @@ which a `regex` rule reads as it came; here the version as a number:
         expression: '^SSH-2\.0-OpenSSH_(\d+\.\d+)'
 ```
 
+## STARTTLS
+
+SMTP on 25 and 587, IMAP on 143, POP3 on 110 and FTP on 21 start in
+plaintext and begin TLS when the client asks. `starttls` names the
+protocol whose request the scrape speaks, and the scrape reads the greeting,
+asks for TLS, makes the handshake and only then writes `send`, over TLS:
+
+| `starttls` | The greeting must begin | Sent before TLS | The server's yes |
+| --- | --- | --- | --- |
+| `smtp` | `220` | `EHLO [address]`, then `STARTTLS` once the answer, `250`, lists it | `220` |
+| `imap` | `* OK` | `a1 STARTTLS` | `a1 OK`, after any untagged lines |
+| `pop3` | `+OK` | `STLS` | `+OK` |
+| `ftp` | `220` | `AUTH TLS` | `234` |
+
+- The greeting is read as with [`greeting`](#services-that-speak-first),
+  over several lines for SMTP and FTP, whether `greeting` is set or not,
+  and must begin as the table says: anything else, an SMTP server's `554`,
+  or an IMAP server's `* PREAUTH`, which has no `STARTTLS` to offer, fails
+  the scrape before anything is sent. `greeting`, when set, is matched
+  against it too.
+- An SMTP client names itself in `EHLO`; the exporter gives its own address
+  on the connection, `[10.1.2.3]` or `[IPv6:2001:db8::7]`, as RFC 5321 has
+  a client without a name the server can look up do, which a pod's or a
+  machine's host name is not. The answer must be `250` and list `STARTTLS`
+  on one of its lines, in any case. IMAP's capabilities are not asked for:
+  a server without `STARTTLS` answers `NO` or `BAD`, which fails the scrape
+  as plainly, with one command less in plaintext.
+- The handshake takes the `tls` block's settings, `ca_file`, a client
+  certificate, `server_name`, `insecure_skip_verify`, as TLS from the start
+  does ([TLS](#tls)); without a block it verifies the server against the
+  system's roots for the target's host, never skipping TLS. The label is
+  `tls://host:port`.
+- Nothing but the commands of the table is written before the handshake:
+  `send`, which a probe's values may fill, goes over TLS alone. Without
+  `send` the scrape ends with the handshake, which checks that the server
+  begins TLS with a certificate that verifies; the greeting is the answer,
+  and `terminator` is refused at load then.
+- A server that does not list `STARTTLS`, refuses it — SMTP's `454`, IMAP's
+  `NO`, POP3's `-ERR`, FTP's `534` — or answers anything else fails the
+  scrape in the `tcp` stage, naming the step and quoting the server's
+  answer, which a probe's caller is told
+  [withheld](CONFIGURATION.md#what-a-failed-probes-caller-is-told), and the
+  log and a debug probe's report show. The scrape never goes on in
+  plaintext, so a network that strips `STARTTLS` from the server's answers
+  makes a failed scrape, not a plaintext one.
+- A server that writes more after its yes, before the handshake, fails the
+  scrape: those bytes came in plaintext, where anything on the way could
+  have written them, and would otherwise be read as the start of what the
+  server says over TLS.
+- Each answer is held to the [response limit](#limits) and the scrape's
+  deadline, as the greeting is.
+- `starttls` is the collector's alone: no static target or probe sets it. A
+  static target's `tls` block replaces the collector's settings for the
+  handshake, as it does for TLS from the start.
+
+The timings gain the request's: `starttls_seconds` in the
+[document](#the-exchange-as-a-document) and `X-Tcp-Starttls-Seconds`, from
+the end of the greeting until the server said yes, beside `tls_seconds`,
+the handshake's; the document's `starttls` names the protocol.
+
+SMTP submission, port 587, checked through `QUIT` over TLS:
+
+```yaml
+  - name: smtp_submission
+    request:
+      type: tcp
+      starttls: smtp
+      send: "QUIT\r\n"
+      document: true
+    transform:
+      type: jq
+    metrics:
+      - name: smtp_up
+        description: 1 when the server began TLS and answered QUIT with 221
+        expression: 'if (.answer | startswith("221")) then 1 else 0 end'
+      - name: tcp_starttls_seconds
+        expression: .starttls_seconds
+      - name: tcp_tls_seconds
+        expression: .tls_seconds
+```
+
+```text
+/probe?collector=smtp_submission&target=mx.example.com:587
+```
+
+IMAP, port 143, the handshake alone, with the server's CA:
+
+```yaml
+  - name: imap_starttls
+    request:
+      type: tcp
+      starttls: imap
+      document: true
+      tls:
+        ca_file: /etc/exporter/mail-ca.pem
+    transform:
+      type: jq
+    metrics:
+      - name: imap_starttls_up
+        description: 1 when the server began TLS with a certificate that verifies
+        expression: '1'
+      - name: tcp_tls_seconds
+        expression: .tls_seconds
+```
+
+POP3, port 110, `QUIT` over TLS:
+
+```yaml
+  - name: pop3_starttls
+    request:
+      type: tcp
+      starttls: pop3
+      send: "QUIT\r\n"
+      document: true
+    transform:
+      type: jq
+    metrics:
+      - name: pop3_up
+        expression: 'if (.answer | startswith("+OK")) then 1 else 0 end'
+      - name: tcp_starttls_seconds
+        expression: .starttls_seconds
+```
+
+A failed request for TLS reads:
+
+```text
+collector smtp_submission tcp failed: the server mx.example.com:587 did not begin TLS: it answered STARTTLS with "454 4.7.0 TLS not available due to local problem\r\n", not 220
+```
+
+and a debug probe's report names the protocol as `Tcp-Starttls` and shows
+each command sent and the server's answer, quoted, after the greeting, and
+the TLS version begun:
+
+```text
+Requests
+  1. SEND tls://mx.example.com:587 -> greeted with "220 mx.example.com ESMTP\r\n"; sent "EHLO [10.1.2.3]\r\n", answered "250-mx.example.com\r\n250 STARTTLS\r\n"; sent "STARTTLS\r\n", answered "220 2.0.0 Ready\r\n"; began TLS 1.3; read 15 bytes, the server closed the connection in 52ms
+     Tcp-Send: "QUIT\r\n"
+     Tcp-Starttls: smtp
+```
+
 ## Examples
 
 [`examples/tcp/`](../examples/tcp/config.yaml) holds complete collectors for
@@ -625,8 +775,8 @@ and `1` for any other:
 
 A [static target](STATIC-TARGETS.md) of a `tcp` collector names the service,
 `host:port`, as its `target`, which it requires, and may set under its
-`request` `timeout` and `tls`. What is sent and the terminator are the
-collector's, and `params` fills its placeholders:
+`request` `timeout` and `tls`. What is sent, the terminator and `starttls`
+are the collector's, and `params` fills its placeholders:
 
 ```yaml
 interval: 30s
@@ -675,7 +825,8 @@ without having ended, at once, though the server sends nothing more. With
 [`document`](#the-exchange-as-a-document) the greeting and the answer share
 the limit, and the JSON document they make is held to it as well.
 
-The connection, the TLS handshake, the greeting, the write and the read end at the
+The connection, the TLS handshake, the greeting, the request for TLS with
+`starttls`, the write and the read end at the
 probe's deadline, its `timeout` or the scrape's, 30 seconds without one:
 a server that stops answering, or keeps the connection open without the
 terminator, fails the scrape when it comes, with the deadline's error.
@@ -692,7 +843,8 @@ and the answer does not end with request.terminator "END\r\n"`, and, with
 request.greeting "^220[ -]"`, `the server mx.example.com:25 closed the
 connection without a greeting; request.greeting expects one`, `waiting for
 the greeting of mx.example.com:25, as request.greeting expects, 0 bytes
-read: ...`. A service
+read: ...`, and, with `starttls`, the step that failed
+([STARTTLS](#starttls)). A service
 the target lists refuse counts in `http_exporter_targets_refused_total`,
 answered `403`.
 
@@ -717,9 +869,12 @@ when it only reads.
 
 ## Limitations
 
-- **One line, one answer.** A scrape reads a greeting when asked, writes
-  `send` once and reads one answer; a dialogue, a login, `STARTTLS`, or an
-  answer read after a second command is not spoken. Write every command into `send` where the server takes them
+- **One line, one answer.** A scrape reads a greeting when asked, begins
+  TLS with `starttls`, writes `send` once and reads one answer; a dialogue,
+  a login, or an answer read after a second command is not spoken.
+  `starttls` speaks SMTP's, IMAP's, POP3's and FTP's request for TLS alone:
+  LMTP's, XMPP's, LDAP's (the [`ldap`](LDAP.md#tls) type's `start_tls`),
+  PostgreSQL's and MySQL's are not. Write every command into `send` where the server takes them
   together, as Beanstalkd's `stats\r\nquit\r\n`.
 - **Text matched as written.** The terminator is matched as bytes at the end
   of the answer, with no placeholder, and no pattern.
@@ -740,6 +895,9 @@ when it only reads.
 | `target "..." is not host:port; a tcp target names its port` | Add the port: `memcached-0.cache:11211`. |
 | `the greeting of ..., [withheld; in the exporter's log], does not match request.greeting ...` | The server greeted otherwise: the exporter's log, or a [debug probe](CONFIGURATION.md#debug-probes), shows what it said. Over several lines the pattern is matched against them all: `^220[ -]` takes `220-` on the first. |
 | `waiting for the greeting of ..., as request.greeting expects, 0 bytes read` | The server says nothing first: it is not a service that greets, or it greets only over TLS, which `tls` asks for. |
+| `the server ... does not offer STARTTLS in its answer to EHLO, ...` | The server has no TLS on that port: use the port where it speaks TLS from the start, 465, with `tls` and no `starttls`, or configure TLS on the server. |
+| `the server ... did not begin TLS: it answered ... with [withheld; in the exporter's log], not ...` | The server refused: the log, or a debug probe, shows its words. |
+| `the greeting of ..., [withheld; in the exporter's log], does not begin with 220, which request.starttls smtp needs ...` | The server will not serve the client, or speaks another protocol than `starttls` names. |
 | `... no answer ending with request.terminator "END\r\n" came, ...` | The terminator: written in double quotes, so that `\r\n` is a carriage return and a line feed, and the end of the whole answer. Or `send`: the server did not take it, and waits for more, often a line feed it lacks. |
 | `... the server kept the connection open, ...; without request.terminator ...` | The server does not close after answering: set `terminator`. |
 | `the server closed the connection after 0 bytes, ...` | The server refused what was sent: a ZooKeeper whose `4lw.commands.whitelist` does not name the word answers nothing and closes. |

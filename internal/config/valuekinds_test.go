@@ -218,7 +218,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		"lint.ignore[]", "metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
 		"request.accept_codes[]", "request.api_server", "request.commands[].name", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]", "request.group", "request.info_sections[]",
 		"request.login.auth_style", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type", "request.login.url",
-		"request.method", "request.namespaces[]", "request.pagination.type", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.transport", "request.type", "request.version",
+		"request.method", "request.namespaces[]", "request.pagination.type", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.starttls", "request.transport", "request.type", "request.version",
 		"response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string

@@ -6898,6 +6898,16 @@ is the exporter's own, so one in a collector's or a static target's
 be forwarded; listed in `forward_headers`, it MUST be refused at load
 (§ 42.4).
 
+An answer without a `Content-Length`, a chunked or a compressed one, SHOULD
+be read into a buffer the size of the last such answer of the same collector
+and target, with an eighth more, rather than into buffers grown as it comes.
+That size is a hint only: an answer longer than it MUST be read whole within
+the bound and one shorter MUST be the bytes that came. The hints MUST take a
+bounded amount of memory whatever targets are probed, MUST NOT make a first
+buffer of more than 4 MiB or the bound, and an answer much shorter than its
+buffer MUST NOT keep the buffer: the response, which the cache may hold,
+holds little more than its body.
+
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
 header's values — so where one list ends and the next begins is part of the
@@ -6929,7 +6939,10 @@ of no value it does not keep, and MUST fail with the same error as one with
 `items`. A value that makes no series MUST take no room. A jq rule without
 `items` that fails as a whole after it made series — its program failing part
 of the way, a label's values not pairing — MUST drop them and give their room
-back, as a rule with `items` does. A python transform's answer is bounded by
+back, as a rule with `items` does. Room made for the series of a jq rule
+whose `items` are counted beforehand SHOULD be made once for it and the
+rules after it over the same `items`, and MUST NOT be more than the limit
+leaves. A python transform's answer is bounded by
 `max_output_bytes`, and its metrics MUST be counted before they are read.
 
 The room is held by the series a scrape keeps, and by nothing else once a
@@ -7354,6 +7367,8 @@ http_exporter_trips_in_flight
 http_exporter_trips_max_concurrent
 http_exporter_static_targets_scrape_seconds_total
 http_exporter_probes_seconds_total
+http_exporter_answer_bytes_total
+http_exporter_answer_sent_bytes_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -7461,6 +7476,24 @@ per collector with no per-request series, MUST exist for every collector,
 that failed without contacting their target because the collector was
 backing off from it, and the targets it keeps its trips from now (§ 42.13c).
 A debug run MUST NOT be counted in either.
+`http_exporter_answer_bytes_total` and
+`http_exporter_answer_sent_bytes_total`, counters, MUST be exporter-wide,
+with no `collector` label, labelled `endpoint` with `probe`, `self_metrics`
+and `static_targets`, the endpoints whose answers are compressed (§ 23), a
+series of each for every endpoint from 0 from the exporter's start, with or
+without static targets, and its created time the exporter's start. The
+first MUST count the bytes the endpoint's handler wrote, before
+compression, and the second those written on to the client, after it, gzip's
+header and trailer included; an answer sent uncompressed — at
+`--web.gzip-level` 0, to a client that does not accept gzip, to `HEAD`, or a
+`204` or `304` — MUST add the same to both. Every answer of the endpoints
+MUST be counted, errors and refusals included, and a write that fails or is
+cut short MUST count what the writer it was written to took. They MUST be
+counted in the middleware that compresses the answers, with no lock taken
+for a write, and an answer added to them once, when it is done, so that an
+answer of the self-metrics never holds its own bytes and the next answer
+holds them exactly. They MUST be exported over OTLP as every other
+self-metric.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -7755,7 +7788,11 @@ http_exporter_python_pool_worker_stops_total          counter   {reason}
 http_exporter_python_pool_runs_total                  counter   {outcome}
 http_exporter_python_pool_runs_waiting                gauge
 http_exporter_trips_waiting                           gauge
+http_exporter_answer_gzip_level                       gauge
 ```
+
+`http_exporter_answer_gzip_level` MUST be `--web.gzip-level`, from `0` to
+`9`, without a label, and MUST NOT be published while verbose mode is off.
 
 `http_exporter_trips_waiting` MUST be the static target scrapes waiting for a
 trip slot, because their collector is at `max_concurrent_probes` or the
@@ -8015,6 +8052,17 @@ not, MUST carry `Vary: Accept-Encoding`. Errors are compressed like any other
 answer. `/health`, `/ready` and `/-/reload` MUST NOT be compressed: their
 answers are a line or two, and a load balancer checking health may not decode
 gzip.
+
+The gzip level MUST be `--web.gzip-level`, by default `1` (the fastest): `1`
+to `9` are gzip's levels, and an answer at any of them MUST decompress to the
+bytes of the uncompressed answer. `0` MUST answer these paths uncompressed
+whatever the request accepts, without `Content-Encoding` and without
+`Vary: Accept-Encoding`, since the answer then does not vary with it. Any
+other value MUST be refused as a malformed command line, with exit status 2,
+at startup and with `--dry-run`. The level MUST NOT change how OTLP exports
+are compressed (`otlp.compression`). The bytes of these answers, before and after
+compression, MUST be counted by endpoint in the self-metrics (§ 22,
+`http_exporter_answer_bytes_total`).
 
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
@@ -13842,7 +13890,8 @@ Tests MUST show:
 - A megabyte of declared length is read with at most 1.5 MiB and 4
   allocations (one, of the body; `io.ReadAll` took 2.1 MiB in 25). A body of
   unknown length, as a chunked or a compressed answer is, is read as
-  `io.ReadAll` reads it.
+  `io.ReadAll` reads it the first time, and then into a buffer the size of
+  the last one (§ 34.229).
 - An HTTP answer is read whole and held to `max_response_bytes` whether it
   declares its length or not: a body up to the limit is the response's, to
   the byte, megabytes included; one over it is refused with `response size N
@@ -13858,7 +13907,8 @@ Tests MUST show:
 - Fetching a megabyte over HTTP from an answer that declares its length
   allocates at most 1.5 MiB in all, the target's side included (1.01 MiB;
   2.1 MiB read with `io.ReadAll`); a chunked answer of a megabyte is read
-  whole.
+  whole, and after one of the same collector and target within the same
+  bound (§ 34.229).
 - A local file that has a size is read whole into a buffer of its size and
   one byte: a file up to the limit is the body, megabytes included, an empty file an empty
   body, not nil, a file a byte over the limit is refused with `file F:
@@ -28752,6 +28802,36 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   corpus must reach each refusal at least once in 1,000 cases, where it was
   once in 400, which the race detector's 2,000 cases of a tcp-only build
   did not reach for one refusal.
+
+## 34.229 Configurable answer compression, and fewer allocations per probe
+
+- `TestEachGzipLevelDecompressesToTheSameAnswer`: a 20,000-series exposition answered through the compression of each `--web.gzip-level` from 1 to 9 decompresses to the exposition byte for byte, is the size gzip makes at that level, and level 9's answer is smaller than level 1's.
+- `TestAPooledGzipWriterKeepsItsLevel`: two answers at level 9, the second through a writer taken from the pool again after `Reset`, are of one size.
+- `TestValidateGzipLevel`: 0 to 9 are taken; -1, 10 and 100 are refused saying `--web.gzip-level must be from 0`.
+- `TestAProbeIsGzippedAtTheFastestLevelByDefault`: without `--web.gzip-level`, a passed-through exposition answered to `Accept-Encoding: gzip` decompresses to the plain answer and is the size level 1 makes of it, not level 6.
+- `TestGzipLevelZeroAnswersUncompressed`: at level 0, `/probe`, the self-metrics and the static targets answer `Accept-Encoding: gzip, deflate, br` with no `Content-Encoding` and no `Vary: Accept-Encoding`, the probe's answer the plain one; set to 9 after 1, the probe's answer is smaller and both decompress to the plain one.
+- `TestOutOfRangeLimitsAreCommandLineErrors`: `--web.gzip-level=10`, `-1` and `fast` exit 2, at startup and with `--dry-run`, naming the flag.
+- `TestEveryGzipLevelIsNoCommandLineError`: `--dry-run` with `--web.gzip-level` of 0, 1, 6 and 9 is no command-line error.
+- `TestChartRendersItsOptions`: `server.gzipLevel` of `0`, `9` and the string `"6"` render `--web.gzip-level` with that level; the defaults render none.
+- `TestChartRefusesInvalidOptions`: `server.gzipLevel` of `10`, `-1`, `1.5` and `fast`, and `--web.gzip-level=9` in `extraArgs`, fail rendering naming `server.gzipLevel`.
+- `TestChartHoldsTheGzipLevelWithTheSchemaSkipped`: with the schema skipped, `10`, `-1`, `1.5`, `fast` and `07` fail rendering in the template naming the value, and `0` and `"9"` render.
+- `TestABodyIsReadAsBefore` and `TestARandomBodyIsReadAsBefore`: a body without a length read with a hint of the last one's size (`first`) of 1, 100, 1000, 4096 or 50,000 bytes is read as `io.ReadAll` read it, to the byte, the error and what was taken from the source.
+- `TestABodySizeHintIsBounded`: a hint is the size and an eighth and 512 bytes, at most the limit and 4 MiB (an answer of 100 MiB leaves 4 MiB).
+- `TestABodySizeHintIsKeptPerCollectorAndTarget`: one collector and target find one slot; 64 collectors probing one target find at least 32.
+- `TestAnUnsizedBodyIsReadIntoABufferTheSizeOfTheLast`: a megabyte without a length, in pieces of 16 KiB, after one of the same size, is read with at most 1.25 MiB and 2 allocations (`io.ReadAll` took 2.1 MiB in 25), and leaves the hint of its size.
+- `TestAShorterBodyDoesNotKeepTheLastOnesBuffer`: 1,000 bytes after a megabyte are in a buffer of at most 6,096 bytes; 900 after 1,000 in the hinted buffer of 1,638.
+- `TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce`: a chunked megabyte fetched after another from the same target allocates at most 1.5 MiB in all, as one with a length does (2.2 MiB before).
+- `TestPromParserMakesTheLabelTextOfManySeriesAtOnce`: 1,000 series of three labels, two of them new on each line, cost the Prometheus parser at most 2.25 allocations each (2.02: the map of the labels and a share of a chunk of text), where each new value was an allocation of its own (4.02); `TestPromParserAgreesWithTheOneItWasOnEdgeCases`, `TestPromParserAgreesWithTheOneItWasOnRandomExpositions` and the rest of the decoder's tests pass unchanged.
+- `TestJQRulesOverTheSameItemsMakeRoomForTheirSeriesOnce`: a jq collector with two rules over `.items[]` of 2,000 items allocates no more bytes a series than one rule alone, give or take a twentieth (185 against 211; 252 when the second rule made the room again and copied the first's series into it).
+- `TestCheckingAProbesParametersAllocatesNothing`: checking a probe's `target`, `collector` and a monitor's own parameter allocates nothing (4 allocations when a list of every type's parameters was made for each check).
+- `TestAParameterOfATypeRegisteredLaterIsKnown`: a parameter only a type registered after the first check takes is refused for a collector of another type while that type is registered, and ignored once it is taken out.
+- `TestAnswerBytesCountTheAnswerBeforeAndAfterCompression`: a probe answered plain, to `gzip, deflate, br`, to `gzip;q=0`, to `HEAD`, refused `400` compressed and refused `405` adds to `http_exporter_answer_bytes_total{endpoint="probe"}` the bytes of the plain answer and to `http_exporter_answer_sent_bytes_total{endpoint="probe"}` the bytes the client received, the same for an uncompressed answer, and moves no other endpoint's series.
+- `TestAnswerBytesAtGzipLevelZeroAreTheBytesSent`: at `--web.gzip-level` 0 a probe answered to `gzip` adds its length to both counters.
+- `TestTheSelfMetricsAndStaticTargetsCountTheirOwnAnswers`: the first answer of the self-metrics holds `0` for its own endpoint, and the third holds exactly the bytes of the first two, written and sent, the second compressed; a compressed answer of the static targets path adds to `endpoint="static_targets"` alone.
+- `TestAnswerBytesArePresentFromTheStart`: without verbose mode and without static targets, both families have their HELP, `counter` TYPE and a series at `0` for `probe`, `self_metrics` and `static_targets`, and `http_exporter_answer_gzip_level` is absent.
+- `TestTheGzipLevelIsPublishedWithVerboseSelfMetricsOnly`: `http_exporter_answer_gzip_level` is the default `1`, or `0`, `6` or `9` as set, as a gauge with verbose self-metrics, and absent without.
+- `TestTheStrictOpenMetricsParserReadsTheAnswerBytes`: in OpenMetrics the counters are the families `http_exporter_answer_bytes` and `http_exporter_answer_sent_bytes` with `_total` and `_created` samples for every endpoint, and the strict parser of prometheus_client reads them and the gauge.
+- `TestOnlyTheAnswerOfATripThatCarriedOnChanged`, `TestFollowingAReloadWorkedOutAheadDoesWhatItDid`, `TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics` and `TestAChainedExporterReadsTheSelfMetricsWithCreatedSamples` compare reads of the self-metrics without the bytes of their own answers, which grow with each read, and the reload sequences without any answer bytes, which the length of a duration changes.
 
 # 35. Documentation requirements
 

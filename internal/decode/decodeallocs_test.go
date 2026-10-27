@@ -60,10 +60,11 @@ func TestJSONDecoderAllocatesLittleForEachItem(t *testing.T) {
 	}
 }
 
-// A series with two labels costs the parser three allocations, two for the
-// map of its labels and one for a label value the series before it did not
-// have: the line is read where it lies, and its labels are made a map once.
-// It cost eight, with the line copied to a string, the labels collected in a
+// A series with two labels costs the parser little more than two
+// allocations, for the map of its labels: the line is read where it lies, its
+// labels are made a map once, and the label values the series before it did
+// not have are made together, many series' to an allocation. It cost three
+// when each such value was a string of its own, and eight, with the line copied to a string, the labels collected in a
 // slice that grew, a set made to find a name written twice, and each value
 // built a byte at a time.
 func TestPromParserAllocatesLittleForEachSeries(t *testing.T) {
@@ -76,6 +77,24 @@ func TestPromParserAllocatesLittleForEachSeries(t *testing.T) {
 	c := model.Collector{Decoder: model.DecoderConfig{Type: "prometheus"}}
 	if each := allocationsFor(t, c, "text/plain; version=0.0.4", body.String(), series); each > 5 {
 		t.Fatalf("%.1f allocations for each series, want at most 5", each)
+	}
+}
+
+// The text of the labels of many series is made at once: a series of three
+// labels whose values the series before it did not have, two of them, costs
+// the map of its labels, two allocations, and a part of one more shared with
+// other series, 2.02 in all, where each value was an allocation of its own,
+// four in all.
+func TestPromParserMakesTheLabelTextOfManySeriesAtOnce(t *testing.T) {
+	const series = 1000
+	var body strings.Builder
+	body.WriteString("# TYPE node_filesystem_avail_bytes gauge\n")
+	for i := 0; i < series; i++ {
+		fmt.Fprintf(&body, "node_filesystem_avail_bytes{device=\"/dev/sd%d\",fstype=\"ext4\",mountpoint=\"/mnt/data%d\"} %de6\n", i, i, i)
+	}
+	c := model.Collector{Decoder: model.DecoderConfig{Type: "prometheus"}}
+	if each := allocationsFor(t, c, "text/plain; version=0.0.4", body.String(), series); each > 2.25 {
+		t.Fatalf("%.2f allocations for each series, want at most 2.25", each)
 	}
 }
 

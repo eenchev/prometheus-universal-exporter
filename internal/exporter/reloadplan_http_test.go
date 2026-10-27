@@ -443,14 +443,16 @@ func answeredWith(outcome probeOutcome) string {
 }
 
 // shown is the server's self-metrics without what differs from run to run:
-// the series that measure time or memory, and the runtime's.
+// the series that measure time or memory, the runtime's, and the bytes of
+// the answers, whose length those change: a probe's answer holds its
+// duration.
 func (r *followRig) shown() string {
 	r.t.Helper()
 	var lines []string
 	for _, line := range strings.Split(selfMetrics(r.t, r.server), "\n") {
 		name, _, _ := strings.Cut(line, "{")
 		name, _, _ = strings.Cut(name, " ")
-		if strings.HasPrefix(line, "#") || !strings.HasPrefix(name, "http_exporter_") {
+		if strings.HasPrefix(line, "#") || !strings.HasPrefix(name, "http_exporter_") || strings.HasPrefix(name, "http_exporter_answer_") {
 			continue
 		}
 		timed := strings.Contains(name, "duration") || strings.Contains(name, "timestamp") || strings.Contains(name, "_age") || strings.Contains(name, "uptime") || strings.Contains(name, "start_time") || strings.HasSuffix(name, "_seconds_total")

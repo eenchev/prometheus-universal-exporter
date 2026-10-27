@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -88,7 +89,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 	}{
 		"defaults": {
 			want:  []string{"replicas: 1\n", "runAsUser: 65532", `"--runtime.memory-limit-ratio=0.8"`, "timeoutSeconds: 3", "failureThreshold: 5", "failureThreshold: 3"},
-			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.debug", "kind: ServiceMonitor", "kind: NetworkPolicy"},
+			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.debug", "--web.gzip-level", "kind: ServiceMonitor", "kind: NetworkPolicy"},
 		},
 		"limits": {
 			args: []string{"--set", "server.probeMaxConcurrent=64", "--set", "server.pythonMaxWorkers=8", "--set", "goMemLimit.ratio=0.6"},
@@ -188,6 +189,18 @@ func TestChartRendersItsOptions(t *testing.T) {
 		"debugging off": {
 			args:  []string{"--set", "server.debug=off"},
 			avoid: []string{"--web.debug"},
+		},
+		"answers uncompressed": {
+			args: []string{"--set", "server.gzipLevel=0"},
+			want: []string{"- \"--web.gzip-level=0\"\n"},
+		},
+		"the smallest answers": {
+			args: []string{"--set", "server.gzipLevel=9"},
+			want: []string{"- \"--web.gzip-level=9\"\n"},
+		},
+		"a gzip level as a string": {
+			args: []string{"--set-string", "server.gzipLevel=6"},
+			want: []string{"- \"--web.gzip-level=6\"\n"},
 		},
 		"session affinity": {
 			args: []string{"--set", "service.sessionAffinity=ClientIP"},
@@ -321,6 +334,11 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"a zero compound watch interval":               {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
 		"debugging as an extra":                        {[]string{"--set", "extraArgs[0]=--web.debug=full"}, "server.debug"},
 		"a debug level that is none":                   {[]string{"--set", "server.debug=on"}, "server.debug"},
+		"a gzip level above 9":                         {[]string{"--set", "server.gzipLevel=10"}, "server.gzipLevel"},
+		"a negative gzip level":                        {[]string{"--set", "server.gzipLevel=-1"}, "server.gzipLevel"},
+		"a fractional gzip level":                      {[]string{"--set", "server.gzipLevel=1.5"}, "server.gzipLevel"},
+		"a gzip level that is a word":                  {[]string{"--set", "server.gzipLevel=fast"}, "server.gzipLevel"},
+		"the gzip level as an extra":                   {[]string{"--set", "extraArgs[0]=--web.gzip-level=9"}, "server.gzipLevel"},
 		"a pod label the chart sets":                   {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
 		"a spread without a topology key":              {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
 		// The chart renders the collector and target parameters itself; a
@@ -394,6 +412,27 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 				t.Fatalf("ok=%v, want an error naming %q:\n%s", ok, tc.want, out)
 			}
 		})
+	}
+}
+
+// The template holds server.gzipLevel to 0 to 9 as the schema does, so a
+// render that skips the schema cannot start an exporter that refuses its
+// flag; 0 and a level given as a string render.
+func TestChartHoldsTheGzipLevelWithTheSchemaSkipped(t *testing.T) {
+	helm := requireHelm(t)
+	requireSchemaSkipping(t, helm)
+	for _, value := range []string{"10", "-1", "1.5", "fast", "07"} {
+		out, ok := helmTemplate(t, helm, chartDir, "--skip-schema-validation", "--set-string", "server.gzipLevel="+value)
+		if want := fmt.Sprintf("server.gzipLevel %q must be a whole number from 0, which answers uncompressed, to 9", value); ok || !strings.Contains(out, want) {
+			t.Errorf("%s: ok=%v, want an error saying %q:\n%s", value, ok, want, out)
+		}
+	}
+	for _, args := range [][]string{{"--set", "server.gzipLevel=0"}, {"--set-string", "server.gzipLevel=9"}} {
+		out, ok := helmTemplate(t, helm, chartDir, append([]string{"--skip-schema-validation"}, args...)...)
+		want := "- \"--web.gzip-level=" + args[1][len("server.gzipLevel="):] + "\"\n"
+		if !ok || !strings.Contains(out, want) {
+			t.Errorf("%v: ok=%v, want %q rendered:\n%s", args, ok, want, out)
+		}
 	}
 }
 

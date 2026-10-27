@@ -280,6 +280,8 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_static_targets_scrape_seconds_total":        "Seconds spent on static target scrapes, from the start of each to its end, waiting for a slot included; its rate is the average number of static target scrapes in progress.",
 	"http_exporter_probes_seconds_total":                       "Seconds spent serving probes, from the start of each to its answer being ready, cache hits and shared probes included; its rate is the average number of probes in progress.",
+	"http_exporter_answer_bytes_total":                         "Bytes of the answers of this endpoint (probe, self_metrics or static_targets) as its handler wrote them, before compression, errors and refusals included.",
+	"http_exporter_answer_sent_bytes_total":                    "Bytes of the answers of this endpoint (probe, self_metrics or static_targets) written on to the client, after compression; the same as http_exporter_answer_bytes_total for an answer sent uncompressed.",
 	"http_exporter_debug_runs_total":                           "Runs of the debug engine (--web.debug), by kind (probe: /probe?debug=true, static: /static-targets?debug=<name>, page: the debug page) and result: success (the trip went through whole), failure (it ran, or was taken and could not run, and did not go through whole) or invalid (it was refused before it ran); present only with --web.debug on, for the kinds its level serves.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
@@ -522,6 +524,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
+	out = append(out, countingSince(s.answerMetrics(), exporterStart())...)
 	// The reload counters are the configuration manager's and the OTLP ones
 	// the server's, neither of which a reload replaces, and the go_ and
 	// process_ ones the runtime's and the kernel's: all count since the

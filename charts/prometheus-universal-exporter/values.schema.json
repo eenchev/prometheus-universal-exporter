@@ -167,6 +167,13 @@
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
         "debug": {"type": "string", "enum": ["", "off", "edit", "full"], "description": "Rendered as --web.debug when edit or full: edit enables the /debug page on pasted responses, full also fetching targets there, /probe?debug=true and /static-targets?debug=<name>. Empty and off render no flag."},
+        "gzipLevel": {
+          "type": ["string", "integer", "null"],
+          "description": "Rendered as --web.gzip-level when set: the gzip level of the answers of /probe, the self-metrics and the static targets, 1, the fastest, to 9, the smallest, or 0 to answer them uncompressed. Empty keeps the exporter's default, 1.",
+          "pattern": "^$|^[0-9]$",
+          "minimum": 0,
+          "maximum": 9
+        },
         "probeTimeoutOffset": {
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",

@@ -986,7 +986,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if method == http.MethodHead {
 			declared = 0
 		}
-		body, readErr := readBody(resp.Body, limit, declared)
+		var body []byte
+		var readErr error
+		if declared > 0 {
+			body, readErr = readBody(resp.Body, limit, declared)
+		} else {
+			// Nothing says how long the body is, so the last answer of the
+			// same collector and target does.
+			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))
+		}
 		closeErr := resp.Body.Close()
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)

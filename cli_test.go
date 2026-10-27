@@ -276,6 +276,9 @@ func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
 func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 	for flag, message := range map[string]string{
 		"--probe.max-concurrent=-1":        "--probe.max-concurrent must not be negative",
+		"--web.gzip-level=10":              "--web.gzip-level must be from 0, which answers uncompressed, to 9, got 10",
+		"--web.gzip-level=-1":              "--web.gzip-level must be from 0, which answers uncompressed, to 9, got -1",
+		"--web.gzip-level=fast":            "for flag -web.gzip-level: parse error",
 		"--python.max-workers=-1":          "--python.max-workers must not be negative",
 		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
 		// A soft limit of a few kilobytes would have the Go runtime collect
@@ -293,6 +296,16 @@ func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 			if out.code != 2 || !strings.Contains(out.stderr, message) || out.stdout != "" {
 				t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
 			}
+		}
+	}
+}
+
+// Every --web.gzip-level from 0, uncompressed, to 9 is taken.
+func TestEveryGzipLevelIsNoCommandLineError(t *testing.T) {
+	for _, level := range []string{"0", "1", "6", "9"} {
+		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--web.gzip-level="+level)
+		if out.code == 2 || strings.Contains(out.stderr, "gzip-level") {
+			t.Errorf("level %s: exit=%d stderr=%s", level, out.code, out.stderr)
 		}
 	}
 }

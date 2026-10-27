@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
@@ -60,6 +61,8 @@ type bodyCase struct {
 	limit, declared int64
 	// first is the largest first buffer, where it is not the exporter's
 	// maxFirstBodyBuffer: outgrowing that one would take a body of 64 MiB.
+	// With no length declared it is the size the last answer left as a hint
+	// (readHintedBody).
 	first     int64
 	pieces    []int
 	failAfter int
@@ -96,9 +99,14 @@ func checkBodyRead(t *testing.T, c bodyCase) {
 	is := source()
 	var got []byte
 	var err error
-	if c.declared > 0 && c.first > 0 {
+	switch {
+	case c.declared > 0 && c.first > 0:
 		got, err = readSizedBody(is, c.limit, c.declared, c.first)
-	} else {
+	case c.first > 0:
+		var hint atomic.Int64
+		hint.Store(c.first)
+		got, err = readHintedBody(is, c.limit, &hint)
+	default:
 		got, err = readBody(is, c.limit, c.declared)
 	}
 	switch {
@@ -114,8 +122,9 @@ func checkBodyRead(t *testing.T, c bodyCase) {
 }
 
 // A body is read as io.ReadAll read it through a reader stopping one byte
-// past the limit: with no length declared, the right one, one too small or
-// too large, or one beyond the limit; shorter than, at and over the limit;
+// past the limit: with no length declared, with or without a hint of the
+// size the last one had, the right one, one too small or too large, or one
+// beyond the limit; shorter than, at and over the limit;
 // empty; at and around round sizes and the size at which the first buffer is
 // full; handed over whole or in pieces,
 // with the end coming with the last bytes or after them; and broken off by an
@@ -148,7 +157,7 @@ func TestABodyIsReadAsBefore(t *testing.T) {
 								if at++; at%every != 0 {
 									continue
 								}
-								if limit >= 0 && (declared > 0 || first == 0) {
+								if limit >= 0 {
 									check(bodyCase{size, limit, declared, first, pieces, failAfter, eofAtOnce})
 								}
 							}
@@ -293,5 +302,83 @@ func TestABodyOfDeclaredLengthIsAllocatedOnce(t *testing.T) {
 	})
 	if size > 3<<19 || allocations > 4 {
 		t.Errorf("reading %d bytes of declared length allocated %d bytes in %v allocations, want little more than the body, at once", len(data), size, allocations)
+	}
+}
+
+// A hint is the last answer's size and an eighth, up to the limit and to
+// maxBodySizeHint, so that one answer of a hundred megabytes does not have
+// every later one start in a buffer of that size.
+func TestABodySizeHintIsBounded(t *testing.T) {
+	for _, test := range []struct {
+		size  int
+		limit int64
+		want  int64
+	}{
+		{size: 0, limit: 10 << 20, want: 512},
+		{size: 8000, limit: 10 << 20, want: 9512},
+		{size: 8000, limit: 8200, want: 8200},
+		{size: 100 << 20, limit: math.MaxInt64 - 1, want: maxBodySizeHint},
+	} {
+		if got := nextBodySizeHint(test.size, test.limit); got != test.want {
+			t.Errorf("size %d, limit %d: a hint of %d, want %d", test.size, test.limit, got, test.want)
+		}
+	}
+}
+
+// The hints of a collector and target are its own: the same two find the
+// same slot, and among sixty-four collectors probing one target the slots
+// are not all one.
+func TestABodySizeHintIsKeptPerCollectorAndTarget(t *testing.T) {
+	collector, target := "app", "http://a"
+	if bodySizeHintOf(collector, target) != bodySizeHintOf("app", "http://"+"a") {
+		t.Fatal("one collector and target found two slots")
+	}
+	slots := map[*atomic.Int64]bool{}
+	for i := 0; i < 64; i++ {
+		slots[bodySizeHintOf(fmt.Sprintf("app%d", i), "http://a")] = true
+	}
+	if len(slots) < 32 {
+		t.Errorf("64 collectors share %d slots", len(slots))
+	}
+}
+
+// An answer without a length is read into a buffer the size of the last one:
+// a megabyte after a megabyte in one allocation of little more than the
+// megabyte, where io.ReadAll took 2.1 MiB in 25 allocations; and the size of
+// each answer is the next one's hint.
+func TestAnUnsizedBodyIsReadIntoABufferTheSizeOfTheLast(t *testing.T) {
+	data := bodyBytes()[:megabyteBody]
+	var hint atomic.Int64
+	source := &bodySource{data: data, pieces: []int{16 << 10}, failAfter: -1}
+	size, allocations := allocatedPerRun(func() {
+		*source = bodySource{data: data, pieces: []int{16 << 10}, failAfter: -1}
+		if body, err := readHintedBody(source, 10<<20, &hint); err != nil || !bytes.Equal(body, data) {
+			t.Fatalf("%d bytes, err=%v", len(body), err)
+		}
+	})
+	if size > megabyteBody+megabyteBody/4 || allocations > 2 {
+		t.Errorf("reading %d bytes without a length after as many allocated %d bytes in %v allocations, want one buffer of little more than the body", len(data), size, allocations)
+	}
+	if hint.Load() != nextBodySizeHint(megabyteBody, 10<<20) {
+		t.Errorf("a hint of %d after a body of %d", hint.Load(), megabyteBody)
+	}
+}
+
+// An answer much shorter than the last is not left in the last one's buffer,
+// which the response would hold as long as it is kept; one a little shorter
+// is.
+func TestAShorterBodyDoesNotKeepTheLastOnesBuffer(t *testing.T) {
+	var hint atomic.Int64
+	hint.Store(nextBodySizeHint(megabyteBody, 10<<20))
+	body, err := readHintedBody(bytes.NewReader(bodyBytes()[:1000]), 10<<20, &hint)
+	if err != nil || !bytes.Equal(body, bodyBytes()[:1000]) || cap(body) > 2*1000+4096 {
+		t.Fatalf("%d bytes in a buffer of %d, err=%v", len(body), cap(body), err)
+	}
+	if hint.Load() != nextBodySizeHint(1000, 10<<20) {
+		t.Errorf("a hint of %d after a body of 1000", hint.Load())
+	}
+	body, err = readHintedBody(bytes.NewReader(bodyBytes()[:900]), 10<<20, &hint)
+	if err != nil || len(body) != 900 || cap(body) != int(nextBodySizeHint(1000, 10<<20))+1 {
+		t.Errorf("900 bytes after 1000: %d bytes in a buffer of %d, err=%v", len(body), cap(body), err)
 	}
 }

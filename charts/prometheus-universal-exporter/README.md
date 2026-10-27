@@ -755,6 +755,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.debug` | `--web.debug`: `off`, `edit` or `full` | off |
+| `server.gzipLevel` | `--web.gzip-level`: `0` to `9` | unset: the exporter's `1` |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
@@ -769,6 +770,8 @@ The exporter's own flags are chart values rather than something to assemble by h
 `server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
 
 `server.probeDefaultTimeout` bounds a probe without a scrape timeout header, as from curl, a script or the exporter's collectors page with JavaScript off; a `timeout` parameter bounds the request within it and cannot lift it. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
+
+`server.gzipLevel` is the gzip level of the answers of `/probe`, the self-metrics and the static targets to a scrape that accepts gzip, as Prometheus's do: `1`, the exporter's default, is the fastest, and `9` makes the smallest answers, for a scrape over a slow link; `0` answers them uncompressed, which Prometheus takes as well, when the network is cheaper than the pod's CPU (see [Endpoints](../../docs/ENDPOINTS.md)). It takes a whole number from `0` to `9`, as a number or a string; anything else fails rendering, as does `--web.gzip-level` in `extraArgs`. Empty, the default, renders no flag.
 
 `server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit (the exporter's flag reads `010` as eight and refuses `08`), `0` for no limit, and are rendered only when set; the exporter itself takes a larger number on a 64-bit platform, and the chart does not. Size them to `resources.limits.memory`.
 
@@ -1582,7 +1585,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
 | `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

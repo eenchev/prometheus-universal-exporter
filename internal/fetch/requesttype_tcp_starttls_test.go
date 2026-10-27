@@ -88,7 +88,7 @@ var startTLSDialogues = map[string]struct {
 func startTLSCollector(t *testing.T, protocol, send, caFile string, edit ...func(*model.Collector)) *model.Collector {
 	t.Helper()
 	return tcpCollector(t, append([]func(*model.Collector){func(c *model.Collector) {
-		c.Request.Own, c.Request.TLS.CAFile = TCPConfig{StartTLS: protocol, Send: send}, caFile
+		c.Request.Own, c.Request.StartTLS, c.Request.TLS.CAFile = TCPConfig{Send: send}, protocol, caFile
 	}}, edit...)...)
 }
 
@@ -150,13 +150,13 @@ func TestATCPSTARTTLSVerifiesTheServer(t *testing.T) {
 	}
 	server = testutil.NewStartTLSStub(t, startTLSServer(d.greeting, d.replies, true, "+OK bye\r\n", nil))
 	c := startTLSCollector(t, "pop3", "QUIT\r\n", server.CAFile, func(c *model.Collector) {
-		c.Request.Own = TCPConfig{StartTLS: "pop3", Send: "QUIT\r\n", Greeting: "^\\+OK Courier"}
+		c.Request.Own, c.Request.StartTLS = TCPConfig{Send: "QUIT\r\n", Greeting: "^\\+OK Courier"}, "pop3"
 	})
 	if _, err := tcpScrape(t, c, server.Addr, nil); err == nil || !strings.Contains(err.Error(), "does not match request.greeting") {
 		t.Errorf("request.greeting: %v", err)
 	}
 	insecure := tcpCollector(t, func(c *model.Collector) {
-		c.Request.Own, c.Request.TLS.InsecureSkipVerify = TCPConfig{StartTLS: "pop3", Send: "QUIT\r\n"}, true
+		c.Request.Own, c.Request.StartTLS, c.Request.TLS.InsecureSkipVerify = TCPConfig{Send: "QUIT\r\n"}, "pop3", true
 	})
 	if body, err := tcpScrape(t, insecure, server.Addr, nil); err != nil || body != "+OK bye\r\n" {
 		t.Errorf("insecure_skip_verify: %q, %v", body, err)
@@ -284,7 +284,7 @@ func TestATCPSTARTTLSAnswersAreBounded(t *testing.T) {
 func TestATCPSTARTTLSDocument(t *testing.T) {
 	d := startTLSDialogues["smtp"]
 	server := testutil.NewStartTLSStub(t, startTLSServer(d.greeting, d.replies, true, "221 Bye\r\n", nil))
-	doc := tcpDocumentOf(t, server.Addr, TCPConfig{StartTLS: "smtp", Send: "QUIT\r\n"}, func(c *model.Collector) { c.Request.TLS.CAFile = server.CAFile })
+	doc := tcpDocumentOf(t, server.Addr, TCPConfig{Send: "QUIT\r\n"}, func(c *model.Collector) { c.Request.StartTLS, c.Request.TLS.CAFile = "smtp", server.CAFile })
 	if doc["starttls"] != "smtp" {
 		t.Errorf("starttls %v", doc["starttls"])
 	}
@@ -317,21 +317,22 @@ func TestATCPSTARTTLSIsTraced(t *testing.T) {
 // handshake takes, with request.greeting and with request.document.
 func TestATCPSTARTTLSIsCheckedAtLoad(t *testing.T) {
 	for name, tc := range map[string]struct {
-		own  TCPConfig
-		want string
+		starttls string
+		own      TCPConfig
+		want     string
 	}{
-		"an unknown protocol":   {TCPConfig{StartTLS: "ldap"}, `collector "stats" request.starttls "ldap" is not a protocol whose STARTTLS a tcp collector speaks; want smtp, imap, pop3 or ftp`},
-		"upper case":            {TCPConfig{StartTLS: "SMTP"}, `request.starttls "SMTP" is not a protocol`},
-		"a terminator, no send": {TCPConfig{StartTLS: "smtp", Terminator: "\r\n"}, `collector "stats" sets request.starttls and request.terminator without request.send`},
+		"an unknown protocol":   {"ldap", TCPConfig{}, `collector "stats" request.starttls "ldap" is not a protocol whose STARTTLS a tcp collector speaks; want smtp, imap, pop3 or ftp`},
+		"upper case":            {"SMTP", TCPConfig{}, `request.starttls "SMTP" is not a protocol`},
+		"a terminator, no send": {"smtp", TCPConfig{Terminator: "\r\n"}, `collector "stats" sets request.starttls and request.terminator without request.send`},
 	} {
-		c := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Own: tc.own}}
+		c := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Own: tc.own, StartTLS: tc.starttls}}
 		if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
 	tcpCollector(t, func(c *model.Collector) {
-		c.Request.Own = TCPConfig{StartTLS: "imap", Greeting: `^\* OK`, Send: "a LOGOUT\r\n", Terminator: "a OK", Document: true}
+		c.Request.Own, c.Request.StartTLS = TCPConfig{Greeting: `^\* OK`, Send: "a LOGOUT\r\n", Terminator: "a OK", Document: true}, "imap"
 		c.Request.TLS = model.TLSConfig{CAFile: "/ca.pem", CertFile: "/c.pem", KeyFile: "/k.pem", ServerName: "mail.example.com"}
 	})
-	tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{StartTLS: "ftp"} })
+	tcpCollector(t, func(c *model.Collector) { c.Request.StartTLS = "ftp" })
 }

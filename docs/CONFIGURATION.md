@@ -2581,8 +2581,9 @@ system's by default, and `transport` `udp` or `tcp`; `allowed_targets` and
 its table is in [DNS](DNS.md#a-collector).
 
 For `tlscert`, no key is required: `tls` sets the roots, a client
-certificate and the name verified, and `allowed_targets` and
-`denied_targets` apply as for `http`. The decoder is `json`; its table is in
+certificate and the name verified, `starttls`, `smtp`, `imap`, `pop3` or
+`ftp`, begins TLS after the greeting as that protocol asks for it, as for
+`tcp`, and `allowed_targets` and `denied_targets` apply as for `http`. The decoder is `json`; its table is in
 [TLS certificates](TLSCERT.md#a-collector).
 
 For `ntp`, no key is required, and the type has none of its own:

@@ -2267,17 +2267,20 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
 
 A `tlscert` collector makes a TLS handshake with the probe's `target` and
 hands the certificates the server presented to the transforms as a JSON
-document. Nothing MUST be sent over the connection, which MUST be closed
-after the handshake. Its keys are `tls` and `allowed_targets` /
+document. Nothing MUST be sent over TLS, and nothing in plaintext but the
+request for TLS of `starttls`; the connection MUST be closed after the
+handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
 `denied_targets`:
 
 | Key | Default | Rule |
 | --- | --- | --- |
 | `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` true MUST be refused at load, and by the schema (§ 24.3). The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
+| `starttls` | none | `tcp`'s key, one key of the common part with one meaning: `smtp`, `imap`, `pop3` or `ftp`, exactly, anything else refused at load naming the four; the configuration's alone, which no static target or probe MAY set. |
 | `allowed_targets`, `denied_targets` | none | As for `http`: the host's name before the connection, and the address the connection is made to. |
 
 - A target MUST be `host`, `host:port` or `[v6]:port`, port 443 when left
-  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  out, or with `starttls` the port registered for the protocol: 25 for
+  `smtp`, 143 for `imap`, 110 for `pop3`, 21 for `ftp`; a scheme, path, query or user and a port outside 1–65535 MUST be
   refused, a probe's with `400` before anything is dialed and a static
   target's at load. A probe MUST take `timeout` and `param_<name>`
   parameters, and a static target's request block `timeout`.
@@ -2290,7 +2293,7 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   fails and a deadline that comes first MUST fail the scrape in the `tls`
   stage, naming `host:port`.
 - The answer MUST be a JSON document of `host`, `port`, `server_name`,
-  `tls_version` and `cipher_suite` as the handshake settled them,
+  `starttls` (the protocol, `""` without it), `tls_version` and `cipher_suite` as the handshake settled them,
   `verified`, `verify_error`, `duration_seconds`, the first certificate's
   `not_after` and `seconds_until_expiry`, `chain` (`length`,
   `earliest_not_after`, `seconds_until_earliest_expiry`, `earliest_from`)
@@ -2311,14 +2314,34 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   `seconds_until_earliest_expiry` MUST be `earliest_not_after` less the
   time of the scrape. `verified`, `verify_error` and `certificates` MUST be
   of the presented chain either way.
-- STARTTLS is not supported: the handshake MUST start at the connection's
-  first byte.
+- Without `starttls` the handshake MUST start at the connection's first
+  byte. With it the scrape MUST speak the request for TLS `tcp`'s
+  `starttls` speaks (`tcp`, below), by the same code: read the greeting, which
+  MUST begin `220` (`smtp`, `ftp`), `* OK` in any case (`imap`) or `+OK`
+  (`pop3`), then write only the protocol's request for TLS, `EHLO` naming
+  the client by the connection's local address as an address literal and,
+  when its `250` answer lists `STARTTLS`, `STARTTLS`, answered `220`;
+  `a1 STARTTLS`, answered `a1 OK`; `STLS`, answered `+OK`; `AUTH TLS`,
+  answered `234`. The greeting and each answer MUST be held to
+  `limits.max_response_bytes`, a reply past it failing as a limit exceeded
+  that names that key, and with the dialogue's reads and writes to the
+  scrape's deadline and cancellation. A greeting that does not begin so, a
+  server that does not list `STARTTLS`, answers otherwise, closes the
+  connection or writes any byte after its yes before the handshake MUST
+  fail the scrape in the `tls` stage, naming the step and, where the
+  server answered, quoting it with `model.Quoted`, so a probe's caller is
+  told it withheld (§ 19.4); the scrape MUST NOT go on without TLS. The
+  handshake and the document MUST then be those without `starttls`, the
+  document's `starttls` naming the protocol; nothing the server said
+  before TLS MAY be in the document.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `HANDSHAKE`, `tls://host:port`,
-  the name sent as SNI and whether a client certificate is presented, with
-  the version, the number of certificates and whether the chain verified,
-  or the error, as its outcome. The verbose `url` label MUST be
+  the name sent as SNI, whether a client certificate is presented and, with
+  `starttls`, the protocol as `Tls-Starttls`, with the version, the number
+  of certificates and whether the chain verified, or the error, as its
+  outcome, which with `starttls` MUST begin with the greeting and each
+  command sent and the server's answer, quoted. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
 
 #### `ntp`
@@ -2775,7 +2798,8 @@ types at build time): only a build asked for it carries it. Its keys:
   the system roots for the target's host, and `send` written and the answer
   read over TLS; without `send` the scrape MUST end after the handshake,
   the greeting being the answer. No static target or probe MAY set
-  `starttls`.
+  `starttls`. `starttls` is a key of the common part, which `tlscert` takes
+  too with the same values and dialogue (`tlscert`, above).
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,

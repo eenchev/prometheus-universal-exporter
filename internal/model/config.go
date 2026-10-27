@@ -246,6 +246,11 @@ type RequestConfig struct {
 	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
 	IdleTimeout        *Duration `yaml:"idle_timeout"`
 	MaxOpenConnections int       `yaml:"max_open_connections"`
+	// StartTLS belongs to the types that begin TLS on a plaintext
+	// connection, tcp and tlscert: the protocol, one of StartTLSProtocols,
+	// whose own request for TLS is spoken after the server's greeting,
+	// none when empty (fetch/starttls.go).
+	StartTLS string `yaml:"starttls"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -405,6 +410,13 @@ const (
 
 // PaginationTypes are the values of request.pagination.type.
 var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCursor, PaginationPage, PaginationOffset}
+
+// StartTLSProtocols are the values of request.starttls, in the order an
+// error lists them. They are here rather than beside the dialogue that
+// speaks them (fetch/starttls.go) because the configuration schema, which
+// is the same in every build, names them in a build without either type
+// that takes the key.
+var StartTLSProtocols = []string{"smtp", "imap", "pop3", "ftp"}
 
 // RetryConfig is request.retry: how often a failed request is tried again,
 // and how long to wait before each attempt.

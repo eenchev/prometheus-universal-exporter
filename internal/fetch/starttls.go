@@ -1,4 +1,4 @@
-//go:build request_type_tcp
+//go:build !select_request_types || request_type_tcp || request_type_tlscert
 
 package fetch
 
@@ -11,6 +11,9 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -27,9 +30,12 @@ import (
 // the exchange: it never goes on in plaintext, so stripping STARTTLS from
 // the server's answers makes a failure, not a plaintext scrape.
 //
-// The dialogue is written apart from the tcp request type, over a
-// connection and a reader of it, so that a type that reads a server's
-// certificate could begin TLS the same way.
+// The dialogue is written apart from the request types that speak it, over
+// a connection and a reader of it: tcp, which goes on over TLS with send,
+// and tlscert, which reads the certificate the handshake presents. The file
+// is built with either, and holds what both need of a plain connection:
+// reading the greeting and a reply, and the failure of a connection the
+// scrape's deadline ended (tcpFailure).
 
 // The protocols whose request for TLS the exchange speaks.
 const (
@@ -40,8 +46,18 @@ const (
 )
 
 // startTLSProtocols are the protocols request.starttls names, in the order
-// an error lists them.
-var startTLSProtocols = []string{startTLSSMTP, startTLSIMAP, startTLSPOP3, startTLSFTP}
+// an error lists them (model.StartTLSProtocols, which the configuration
+// schema names).
+var startTLSProtocols = model.StartTLSProtocols
+
+// validateStartTLS checks request.starttls of a collector of requestType,
+// when it is set: one of the protocols the exchange speaks.
+func validateStartTLS(name, requestType, protocol string) error {
+	if protocol != "" && !slices.Contains(startTLSProtocols, protocol) {
+		return fmt.Errorf("collector %q request.starttls %q is not a protocol whose STARTTLS %s %s collector speaks; want smtp, imap, pop3 or ftp", name, protocol, TypeArticle(requestType), requestType)
+	}
+	return nil
+}
 
 // startTLSIMAPTag is the tag of the IMAP STARTTLS command: the only command
 // sent before TLS, so any tag is unique.
@@ -164,14 +180,15 @@ func hasPrefixFold(b []byte, prefix string) bool {
 // yes: the caller makes the handshake next, on the connection reader reads.
 // conn is what the commands are written to; local is the connection's own
 // address, which names the client to an SMTP server. Each answer is held
-// to limit, and the connection's deadline ends a server that does not
+// to limit, which an error says to raise by limitKeys, the keys that set it
+// for the type, and the connection's deadline ends a server that does not
 // answer, as ctx's cancellation does (tcpFailure). A server that wrote more
 // than its yes before the handshake fails it: those bytes came in
 // plaintext, where anyone on the path could have put them, and would be
 // read as if they had come over TLS (CVE-2011-0411 is the server's side of
 // the same).
-func startTLS(ctx context.Context, conn io.Writer, reader *bufio.Reader, protocol, hostPort string, local net.Addr, limit int64) ([]startTLSStep, error) {
-	d := startTLSDialogue{ctx: ctx, conn: conn, reader: reader, protocol: protocol, hostPort: hostPort, limit: limit}
+func startTLS(ctx context.Context, conn io.Writer, reader *bufio.Reader, protocol, hostPort string, local net.Addr, limit int64, limitKeys string) ([]startTLSStep, error) {
+	d := startTLSDialogue{ctx: ctx, conn: conn, reader: reader, protocol: protocol, hostPort: hostPort, limit: limit, limitKeys: limitKeys}
 	var err error
 	switch protocol {
 	case startTLSSMTP:
@@ -202,7 +219,9 @@ type startTLSDialogue struct {
 	protocol string
 	hostPort string
 	limit    int64
-	steps    []startTLSStep
+	// limitKeys are the keys an error says to raise limit by.
+	limitKeys string
+	steps     []startTLSStep
 }
 
 // smtp sends EHLO and, when the server's answer lists STARTTLS among its
@@ -289,7 +308,7 @@ func (d *startTLSDialogue) ask(command string, read func(*bufio.Reader, int64) (
 	case err == nil:
 		return reply, nil
 	case errors.Is(err, errReplyTooLarge):
-		return nil, model.MarkError(model.Errorf("the answer of %s to %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", d.hostPort, verb, model.Size(d.limit)), model.ErrLimitExceeded)
+		return nil, model.MarkError(model.Errorf("the answer of %s to %s is larger than the response limit of %d bytes; raise %s", d.hostPort, verb, model.Size(d.limit), d.limitKeys), model.ErrLimitExceeded)
 	case errors.Is(err, io.EOF) && len(reply) == 0:
 		return nil, fmt.Errorf("the server %s closed the connection without answering %s, which request.starttls %s sends", d.hostPort, verb, d.protocol)
 	case errors.Is(err, io.EOF):
@@ -354,4 +373,49 @@ func startTLSShown(steps []startTLSStep) string {
 		fmt.Fprintf(&b, "sent %s, answered %s", tcpShown(step.command), tcpShown(string(step.reply)))
 	}
 	return b.String()
+}
+
+// readGreeting reads what a server says first, before anything is sent,
+// as readReply reads a reply: its first line, or, after a line beginning
+// with three digits and a '-', every line up to the one beginning with the
+// same digits and no '-'. The greeting is held to limit, which an error
+// says to raise by limitKeys, and ends at the connection's deadline: a
+// server that writes no line end, or never ends its continuation, fails
+// the scrape. Its failures name key, the key that expects a greeting.
+func readGreeting(ctx context.Context, reader *bufio.Reader, hostPort string, limit int64, limitKeys, key string) ([]byte, error) {
+	greeting, err := readReply(reader, limit)
+	switch {
+	case err == nil:
+		return greeting, nil
+	case errors.Is(err, errReplyTooLarge):
+		return nil, model.MarkError(model.Errorf("the greeting of %s is larger than the response limit of %d bytes; raise %s", hostPort, model.Size(limit), limitKeys), model.ErrLimitExceeded)
+	case errors.Is(err, io.EOF) && len(greeting) == 0:
+		return nil, fmt.Errorf("the server %s closed the connection without a greeting; %s expects one", hostPort, key)
+	case errors.Is(err, io.EOF):
+		return nil, model.Errorf("the server %s closed the connection before its greeting ended, after %d bytes: %s", hostPort, len(greeting), model.Quoted(greeting))
+	}
+	return nil, tcpFailure(ctx, fmt.Errorf("waiting for the greeting of %s, as %s expects, %d bytes read: %w", hostPort, key, len(greeting), err))
+}
+
+// tcpShown is what a debug report shows of the bytes sent or read: quoted,
+// so a carriage return and a line feed are seen, and no longer than a
+// failure.
+func tcpShown(send string) string {
+	return model.CutTo(strconv.Quote(send), model.MaxFailureBytes, false)
+}
+
+// tcpFailure is the failure of a connection, a handshake, the write or a
+// read: the scrape's deadline or cancellation when that is what ended it,
+// since the connection's deadline is set to make it end. The connection's
+// deadline is the scrape's, and its timer can fire before the context's
+// own, so a connection that timed out is the deadline's failure whether or
+// not the context says so yet.
+func tcpFailure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		return fmt.Errorf("%w (%w)", ctxErr, err)
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w (%w)", context.DeadlineExceeded, err)
+	}
+	return err
 }

@@ -28504,6 +28504,105 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   metadata, `operation error S3: HeadObject, the AWS SDK found no
   credentials it could use; which it tried is in the exporter's log`.
 
+## 34.226 The ntp request type, defaults for the collectors of a file, and tcp greetings
+
+### The ntp request type
+
+- `TestAnNTPCollectorAnswersTheServersReplyAsADocument`: against a stand-in UDP server on 127.0.0.1 five seconds ahead, the document has an offset of about 5, a delay from 0 to 1 second, and the server's version, leap indicator, stratum, precision and poll (exponents and seconds), root delay and dispersion in seconds, the reference id as an IPv4 address, and reference and transmit times 64 seconds apart; each scrape sends one request of 48 bytes, first byte 0x23, nothing set but the transmit timestamp, which differs between two scrapes and is not near the clock.
+- `TestNTPOffsetAndDelayAreWorkedOutFromTheFourTimestamps`: a request received at t1+10.03s, answered at t1+10.05s and back 100ms after t1 is an offset of 9.99s and a delay of 80ms, and a server 2 seconds behind with a 20ms round trip an offset of -2.01s; a stratum 1 reference id is its ASCII code, or `0x` and its bytes when they are not printable; a reference timestamp of 0 is `reference_time` 0 and an empty `reference_time_rfc3339`.
+- `TestNTPTimestampsAreReadAcrossTheEndOfAnEra`: 2036-02-07T06:28:16Z is timestamp 0; a timestamp of era 1 is read beside a clock of era 0 and one of era 0 beside a clock of era 1 as the times they are; with the exporter's clock 6 seconds before the end of era 0 and a server 10 seconds ahead, the offset is about 10 and the transmit time 2036-02-07T06:28:20Z.
+- `TestAnNTPReplyThatIsNotTheRequestsIsIgnored`: a datagram with another origin timestamp, which would say the server is 1000 seconds ahead, is passed over for the reply after it; datagrams with another origin timestamp, of mode 3, of version 2, with no transmit timestamp and of 47 bytes are ignored, and the scrape fails at its deadline wrapping `context.DeadlineExceeded` and saying that 2 datagrams were ignored and why the last was; a reply of version 3 is taken.
+- `TestAnNTPServerThatDoesNotKeepTheTimeFailsTheScrape`: Kiss-o'-Death RATE and DENY fail the scrape at once naming the code and its meaning, the code told to the caller; an unknown code is quoted in the error and withheld from the caller; leap indicator 3 and stratum 16 fail as not synchronised, and stratum 99 as no server's, withheld from the caller.
+- `TestAnNTPServerThatDoesNotAnswerFailsAtTheDeadline`: a server that never answers fails the scrape at a 300ms timeout with `no reply from <host:port> before the deadline`, wrapping `context.DeadlineExceeded`, after exactly one request; a closed port fails it at once, reading the reply.
+- `TestAnNTPCollectorKeepsToItsTargetLists`: a denied address, one `allowed_targets` does not list, and `localhost` with the loopback networks denied, refused on the address the UDP socket is connected to, are `ErrTargetRefused` with nothing sent; an allowed address is answered.
+- `TestAnNTPCollectorsKeysAndTargetsAreChecked`: `path` and `tls` are refused; an empty target, a scheme, a path, a user, port 0 or a name, a bare IPv6 address with a port and a blank are refused; `host`, `host:port`, `[v6]:port` and an address are labelled `ntp://host:port`, port 123 when left out, in lower case; the method is `QUERY`, the stage `ntp`, an invalid target displayed `<invalid target>`; a debug trace shows `QUERY`, the URL, `Ntp-Version: 4` and the stratum and offset as its outcome.
+- `TestAnNTPCollectorProbe`: a probe through the exporter gives a jq collector's `ntp_offset_seconds` of about 3 for a server 3 seconds ahead, `ntp_delay_seconds`, and `ntp_stratum{reference_id="192.0.2.7"} 2`, and the verbose self-metrics label it `ntp://host:port` and `QUERY`.
+- `TestADebugProbeOfAnNTPCollector`: a debug probe shows the request and the document; a probe without a target or with a scheme is answered 400, a target outside `allowed_targets` 403 and counted in `http_exporter_targets_refused_total`; a Kiss-o'-Death RATE is answered 502, `collector clock ntp failed:` naming the server and the code.
+- `TestAnNTPCollectorsLabelValuesAndAPythonTransform`: `param_<name>` fills an ntp collector's label values, its default when left out, and a python transform reads the document as data.
+- `TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary`: a build of ntp alone links no package a build of no request type lacks but the standard library's, as a build of tcp alone does not.
+
+### Defaults for the collectors of a file
+
+- A collector takes each key of its file's `defaults` it does not write,
+  key by key at every depth: one that writes `limits.max_metrics`,
+  `retry.attempts`, `failure_backoff.after` or `tls.server_name` keeps the
+  block's other keys of that block, one that writes `cache.ttl: 0s` keeps
+  its 0s, and one that writes `allowed_targets` keeps its own list alone;
+  the keys each took are recorded in the block's order
+  (`TestDefaultsApplyKeyByKey`, § 5.0b).
+- The configuration's `defaults` reach its own collectors and no collector
+  file's, and a collector file's its own collectors and no other file's
+  (`TestDefaultsApplyToTheCollectorsOfTheirFileAlone`).
+- A key `defaults` cannot set — a collector key, `request.path`,
+  `request.type`, a request type's own key, an unknown key at any depth —
+  and a value of the wrong kind or no mapping are refused naming the key
+  and its line, in the configuration and, naming the file, in a collector
+  file (`TestDefaultsRefuseTheKeysTheyCannotSet`).
+- A value of `defaults` that is wrong whatever collector takes it — a
+  negative or too small limit, an unknown error policy, retry attempts out
+  of range, a `failure_backoff` refused — is refused once as
+  `defaults.<key> ...`, naming the collector file, and not once for each
+  collector (`TestDefaultsRefuseABadValueNamingTheBlock`).
+- A request key of `defaults` reaches the collectors whose type takes it
+  (`retry` and `tls` an http collector, not a dns one); one that no
+  collector of the file takes, for their types or because each sets it, and
+  a `defaults` in a configuration file without collectors, are refused
+  (`TestADefaultRequestKeyAppliesToTheTypesThatTakeIt`).
+- A collector's problem in a value it took from `defaults` ends with
+  `(<key> comes from the defaults of the file)`, and one in a value it
+  writes does not (`TestAProblemWithADefaultedValueSaysWhereItIsWritten`).
+- The request keys a collector takes from `defaults` follow its own in its
+  request block's order, in the block's order, and a key the collector
+  writes that its type refuses is named at every load
+  (`TestDefaultedRequestKeysComeAfterTheCollectorsOwn`).
+- Moving values from every collector into `defaults` changes no collector
+  on a reload and leaves each collector's YAML as it was; changing a
+  default changes the collectors that take it and no other
+  (`TestAReloadComparesCollectorsWithTheirDefaults`).
+- `${NAME}` in a collector file's `defaults` is expanded with
+  `--config.expand-env`, and unexpanded is refused as a value taken from
+  defaults (`TestDefaultsAreExpandedFromTheEnvironment`); a key merged into
+  a collector counts as written and one merged into `defaults` as the
+  block's (`TestDefaultsReadMergeKeysAsTheDecoderDoes`); a collector on the
+  debug page refuses `defaults` (`TestADebugPageCollectorHasNoDefaults`).
+- The allocator's bundle carries the configuration and a collector file
+  with their `defaults` as written, and the replica's collectors take each
+  file's (`TestABundleCarriesTheDefaultsOfEachFile`).
+- `--dry-run` lists under `details.collector_defaults` the keys each
+  collector took (`TestDryRunReportsTheKeysTakenFromDefaults`).
+- Both committed schemas take `defaults` with its keys, held to the
+  collector's rules, and refuse any other key or a bad value in it
+  (`TestTheSchemasTakeDefaultsWithTheKeysTheyMaySet`); the keys held to
+  text alone include those of `defaults`
+  (`TestTheKeysHeldToTextAloneAreTheSchemas`).
+- Every key of `defaults` the schemas hold to values, a pattern or a size
+  has a row, made from the collector key's, that holds the schemas and the
+  exporter to one verdict on it left out, written `""`, written well and
+  badly, in the configuration and in a collector file
+  (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty`,
+  `TestEveryConstrainedKeyOfTheSchemasIsInATable`,
+  `TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten`); a key a
+  collector writes `""` is left out and taken from `defaults`
+  (`TestDefaultsApplyKeyByKey`).
+
+### Services that greet first, and a tcp exchange as a document
+
+- `TestATCPGreetingIsReadBeforeSendIsWritten`: with `greeting`, stand-ins that note whether the client wrote before they greeted see `QUIT` only after their greeting, for an SMTP greeting on one line, one over `220-` lines ending with `220 `, with `220` alone or with line feeds alone, FTP's free lines between, an IMAP `* OK` line and a four-digit code with a `-`; the answer to `QUIT` is the body and the greeting's lines, without line ends, are `X-Tcp-Greeting`.
+- `TestWhatFollowsATCPGreetingIsTheAnswers`: what a server writes after its greeting in the same write is the start of the answer.
+- `TestATCPGreetingWithoutSendIsTheAnswer`: without `send` an SSH banner is the body, no answer is read though the server keeps the connection open, there is no `X-Tcp-Answer-Seconds`, and the method is `READ`.
+- `TestATCPScrapeReportsItsTimings`: a greeting 300ms late gives an `X-Tcp-Greeting-Seconds` of at least 0.29 beside `X-Tcp-Connect-Seconds` and `X-Tcp-Answer-Seconds`, no `X-Tcp-Tls-Seconds` without TLS; a collector without a greeting gets its body as before with only the connection's and the answer's seconds.
+- `TestATCPGreetingComesAfterTheTLSHandshake`: over TLS, as SMTPS, the greeting is read after the handshake, `QUIT` after it, and `X-Tcp-Tls-Seconds` is set.
+- `TestATCPGreetingThatIsNotThereFailsTheScrape`: a greeting that does not match fails the scrape quoting the greeting and the pattern, the caller text withholding the greeting, and `send` is never written; a server closing without a greeting, one closing in the middle of a `220-` greeting (its part quoted and withheld), one never greeting (the deadline's error, `waiting for the greeting`) and a greeting past the response limit (a limit exceeded) fail it; a greeting of exactly the limit is taken.
+- `TestATCPGreetingIsCheckedAtLoad`: a `greeting` Go's regexp does not compile (a backreference too), one with a placeholder, one past 64 KiB, and `terminator` with `greeting` without `send` are refused at load; with `send` the three together load.
+- `TestATCPGreetingIsTraced`: a debug trace shows the pattern in `Tcp-Greeting` beside `Tcp-Send`, the greeting quoted in the outcome before the bytes read, `nothing sent, the greeting is the answer` for a greeting-only check, and a mismatching greeting whole in the error.
+- `TestATCPGreetingThroughTheExporter`: through `/probe`, a greeting-only SSH check answers the version a regex rule reads from the banner; a mismatching SMTP greeting fails the probe in the tcp stage, the answer naming the pattern with the greeting `[withheld; in the exporter's log]` and holding none of it, while the log and a debug probe's report show it, the report listing `Tcp-Greeting` before `Tcp-Send`.
+- `TestATCPScrapesTimingsReachTheRules`: through `/probe`, plain jq rules of a collector with `document: true`, no script, read an up series from the answer to `QUIT` after a two-line greeting and `tcp_connect_seconds`, `tcp_greeting_seconds`, `tcp_answer_seconds` and `tcp_duration_seconds` from the document, and `$headers` still has the connection's seconds; the debug report shows the greeting step and the `X-Tcp-*` headers.
+- `TestATCPScrapesTimingsReachPython`: a python transform reads `response.headers["X-Tcp-Greeting"]` as a list of lines and `response.header("x-tcp-connect-seconds")`.
+- `TestATCPDocumentHoldsTheExchange`: `document: true` answers a JSON document with `Content-Type: application/json` and the `X-Tcp-*` headers kept: for a greeting alone `greeting`, `connect_seconds`, `greeting_seconds` and `duration_seconds`; for a greeting and `send` `answer` and `answer_seconds` besides; for `send` alone no greeting keys; over TLS `tls_seconds` besides; texts as read, seconds from 0 to the whole; an empty answer is `""`.
+- `TestATCPDocumentRefusesBytesThatAreNotText`: with `document: true` a greeting or an answer that is not UTF-8 fails the scrape, naming which and the target.
+- `TestATCPDocumentIsDecodedAsJSON`: a tcp collector with `document: true` decodes with json, its decoder left out, `auto` or `json`, with no warning; `text` or `yaml`, and a `regex` or `csv` transform, are refused at load naming the document; without `document` a regex transform loads.
+- `TestTCPGreetingDocumentationExamples`: docs/TCP.md's SMTP, FTP, POP3, IMAP and SSH examples, plain jq rules over `document: true`, work as written against stand-ins, each giving its up or info series and its timings, the regex SSH example reading the raw banner the version, an OpenSSH older than the SSH example's greeting failing the probe with 502, and the greeting request snippet loading.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

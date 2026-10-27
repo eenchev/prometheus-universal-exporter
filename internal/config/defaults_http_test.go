@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,15 +22,15 @@ import (
 // key of the collector.
 func defaultsCollector(name, requestType string, more ...string) string {
 	var b strings.Builder
-	b.WriteString("  - name: " + name + "\n")
+	fmt.Fprint(&b, "  - name: ", name, "\n")
 	switch strings.ToLower(requestType) {
 	case "http":
-		b.WriteString("    request: {type: http, path: /" + name + "}\n    transform: {type: regex}\n    metrics:\n      - name: " + name + "_value\n        expression: 'value=(\\d+)'\n")
+		fmt.Fprint(&b, "    request: {type: http, path: /", name, "}\n    transform: {type: regex}\n    metrics:\n      - name: ", name, "_value\n        expression: 'value=(\\d+)'\n")
 	case "dns":
-		b.WriteString("    request: {type: " + requestType + "}\n    transform: {type: jq}\n    metrics:\n      - name: " + name + "_value\n        expression: .answers | length\n")
+		fmt.Fprint(&b, "    request: {type: ", requestType, "}\n    transform: {type: jq}\n    metrics:\n      - name: ", name, "_value\n        expression: .answers | length\n")
 	}
 	for _, line := range more {
-		b.WriteString("    " + line + "\n")
+		fmt.Fprint(&b, "    ", line, "\n")
 	}
 	return b.String()
 }
@@ -338,9 +339,9 @@ func TestAReloadComparesCollectorsWithTheirDefaults(t *testing.T) {
 	// more keys of its own.
 	collector := func(name, request string, more ...string) string {
 		var b strings.Builder
-		b.WriteString("  - name: " + name + "\n    request: {type: http, path: /" + name + request + "}\n    transform: {type: regex}\n    metrics: [{name: " + name + "_value, expression: 'value=(\\d+)'}]\n")
+		fmt.Fprint(&b, "  - name: ", name, "\n    request: {type: http, path: /", name, request, "}\n    transform: {type: regex}\n    metrics: [{name: ", name, "_value, expression: 'value=(\\d+)'}]\n")
 		for _, line := range more {
-			b.WriteString("    " + line + "\n")
+			fmt.Fprint(&b, "    ", line, "\n")
 		}
 		return b.String()
 	}

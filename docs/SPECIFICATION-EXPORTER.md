@@ -552,14 +552,19 @@ the keys of it they do not set themselves:
   `limits.max_metrics` keeps the block's other limits. A list MUST be one key,
   replaced whole and never joined. A `request.tls` or `failure_backoff`
   written in the block, even empty, MUST be taken as written by a collector
-  that does not write it. What a merge key (`<<`) brings in MUST count as
+  that does not write it. A collector that writes `failure_backoff` with
+  `enabled: false` MUST take none of the block's `failure_backoff` keys, and
+  the block's own `failure_backoff.enabled: false` MUST be refused as
+  `defaults.failure_backoff.enabled ...`. What a merge key (`<<`) brings in MUST count as
   written where it is merged, as the decoder reads it.
 - A key of `request` MUST be given only to the collectors whose request type
   takes it (§ 5.1), and a key of `retry` only where it applies to the type, so
   collectors of several types can share a file. A key of the block that no
   collector of the file takes — because no type of theirs takes it, or each
-  collector that would take it writes it — MUST be refused naming the key and
-  why, since a setting nothing uses would be silently ignored; so MUST a
+  collector that would take it writes it or turns `failure_backoff` off — MUST
+  be refused naming the key and why, since a setting nothing uses would be
+  silently ignored, and a key of a `request.tls` or `failure_backoff` block
+  refused so MUST NOT be refused again on its own; so MUST a
   `defaults` block in a configuration file that defines no collectors of its
   own. The defaults of one file MUST NOT reach the collectors of another.
 - The block MUST be given before the collectors are validated, and a
@@ -571,9 +576,13 @@ the keys of it they do not set themselves:
   range, an unknown error policy, retry attempts or backoff out of range, a
   `failure_backoff` or `cache` value the collector checks refuse — MUST be
   refused once, as `defaults.<key> ...`, and not once for each collector,
-  and the block then given to none. A problem validation finds with one
-  collector in a value it took MUST end by saying so, as `(<key> comes from
-  the defaults of the file)`.
+  and the block then given to none; the collectors of its file MUST then not
+  be validated, since without the block they would be refused for values it
+  gives them. A problem validation finds with one collector in a value it
+  took, and a warning it gives about one, MUST end by saying so, as `(<key>
+  comes from the defaults of the file)`. The problems with the block's keys
+  and values of the wrong kind MUST all be reported, in the order of the
+  file, those of the blocks that check their own keys among the others.
 - The request keys a collector takes MUST follow its own in the order its
   request block's keys are checked in (§ 5.1), in the order the block has
   them, so that of several keys refused the error names one the collector
@@ -30449,7 +30458,12 @@ it a few dead endpoints can keep the slots full.
   `initial` when that is longer, and MUST NOT be shorter than `initial`;
   `min_budget` MUST default to `1s` and be a positive duration; anything
   else MUST be refused at load, naming the collector and the key.
-  Without `failure_backoff` every probe and scrape MUST contact the target.
+  Without `failure_backoff` every probe and scrape MUST contact the target,
+  and so MUST it with `failure_backoff.enabled: false`, which MUST turn off
+  the backoff a file's `defaults` give the collector (§ 5.0b) and MUST make
+  the collector the same, compared on a reload and in its fingerprint
+  (§ 42.13), as one without the block; its other keys MUST still be checked.
+  `enabled` MUST default to true.
 - A trip MUST count as failed for backoff when its fetch failed — the
   connection, a timeout, TLS, a status the collector does not accept, or the
   request type's own fetch error — whatever `error_handling.on_fetch_error`

@@ -56,21 +56,42 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 	for i := range collectors {
 		x := &collectors[i]
 		applies := func(key string) bool { return defaultApplies(x, key) }
-		x.FromDefaults = defaults.ApplyTo(x, model.DefaultableKeys(nodes[i]), applies)
+		written := model.DefaultableKeys(nodes[i])
+		// A collector that turns failure_backoff off takes none of the
+		// block's keys of it, as if it wrote each.
+		if model.BackoffSwitchedOff(x.FailureBackoff) {
+			for _, key := range defaults.Keys {
+				if key == "failure_backoff" || strings.HasPrefix(key, "failure_backoff.") {
+					written = append(written, key)
+				}
+			}
+		}
+		x.FromDefaults = defaults.ApplyTo(x, written, applies)
 		for _, key := range defaults.Keys {
 			taken[key] = taken[key] || slices.Contains(x.FromDefaults, key)
 			takes[key] = takes[key] || applies(key)
 		}
 	}
 	var errs []error
+	refused := map[string]bool{}
 	for _, key := range defaults.Keys {
 		if taken[key] || (key == "request.tls" || key == "failure_backoff") && slices.ContainsFunc(defaults.Keys, func(inner string) bool {
 			return strings.HasPrefix(inner, key+".") && taken[inner]
 		}) {
 			continue
 		}
+		refused[key] = true
+		// A key of a block refused already is refused with it: removing
+		// the block removes the key.
+		if i := strings.LastIndex(key, "."); i >= 0 && refused[key[:i]] {
+			continue
+		}
 		if takes[key] {
-			errs = append(errs, fmt.Errorf("defaults.%s applies to no collector of the file: each collector it would apply to sets %s itself; remove it from defaults", key, key))
+			how := "sets " + key + " itself"
+			if key == "failure_backoff" || strings.HasPrefix(key, "failure_backoff.") {
+				how += ", or turns the backoff off"
+			}
+			errs = append(errs, fmt.Errorf("defaults.%s applies to no collector of the file: each collector it would apply to %s; remove it from defaults", key, how))
 			continue
 		}
 		errs = append(errs, fmt.Errorf("defaults.%s applies to no collector of the file: %s does not apply to request.type %s of its collectors; remove it from defaults", key, key, joinRequestTypes(collectors)))
@@ -154,8 +175,16 @@ func checkDefaults(d *model.CollectorDefaults) error {
 	// for the block, and its name is replaced by it.
 	x := &model.Collector{Limits: d.Limits, Cache: d.Cache}
 	x.Request.MaxResponseBytes = d.Request.MaxResponseBytes
+	var errs []error
 	if d.FailureBackoff != nil {
 		backoff := *d.FailureBackoff
+		// A collector turns the backoff off for itself; the block
+		// turning it off for every collector would give them what leaving
+		// failure_backoff out of it does.
+		if model.BackoffSwitchedOff(&backoff) {
+			errs = append(errs, errors.New(`collector "" failure_backoff.enabled is false, which gives the collectors no backoff, as leaving failure_backoff out of defaults does; remove failure_backoff from defaults, and write failure_backoff: {enabled: false} in a collector to turn off the backoff the block gives it`))
+			backoff.Enabled = nil
+		}
 		// A max without initial is held to the initial of each collector
 		// that takes it, which may set one shorter than the default.
 		if backoff.Initial == nil && backoff.Max != nil && *backoff.Max > 0 {
@@ -163,7 +192,7 @@ func checkDefaults(d *model.CollectorDefaults) error {
 		}
 		x.FailureBackoff = &backoff
 	}
-	errs := []error{checkLimitValues(x), validateCache(x), validateFailureBackoff(x)}
+	errs = append(errs, checkLimitValues(x), validateCache(x), validateFailureBackoff(x))
 	for _, policy := range []struct{ key, value string }{
 		{"on_fetch_error", d.ErrorHandling.OnFetchError},
 		{"on_decode_error", d.ErrorHandling.OnDecodeError},
@@ -201,22 +230,38 @@ func withDefaultsNoted(err error, x *model.Collector) error {
 	}
 	out := make(model.Problems, 0, len(problems))
 	for _, problem := range problems {
-		var named []string
-		for _, key := range x.FromDefaults {
-			if namesKey(problem.Error(), key) {
-				named = append(named, key)
-			}
+		if note := defaultsNote(problem.Error(), x); note != "" {
+			problem = fmt.Errorf("%w%s", problem, note)
 		}
-		switch len(named) {
-		case 0:
-			out = append(out, problem)
-		case 1:
-			out = append(out, fmt.Errorf("%w (%s comes from the defaults of the file)", problem, named[0]))
-		default:
-			out = append(out, fmt.Errorf("%w (%s come from the defaults of the file)", problem, joinWords(named, "and")))
-		}
+		out = append(out, problem)
 	}
 	return model.JoinProblems(out...)
+}
+
+// defaultsNoted is a warning validation gave about a collector, saying, as
+// withDefaultsNoted does of a problem, which of the keys it names came from
+// the file's defaults: a warning that the collector sets a key is about a
+// value written there.
+func defaultsNoted(warning string, x *model.Collector) string {
+	return warning + defaultsNote(warning, x)
+}
+
+// defaultsNote is what withDefaultsNoted adds to text: which of the keys
+// text names x took from its file's defaults; "" for none.
+func defaultsNote(text string, x *model.Collector) string {
+	var named []string
+	for _, key := range x.FromDefaults {
+		if namesKey(text, key) {
+			named = append(named, key)
+		}
+	}
+	switch len(named) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf(" (%s comes from the defaults of the file)", named[0])
+	}
+	return fmt.Sprintf(" (%s come from the defaults of the file)", joinWords(named, "and"))
 }
 
 // namesKey says whether text names a key by its path, as a whole: not

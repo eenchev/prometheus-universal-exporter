@@ -592,12 +592,16 @@
           },
           "failure_backoff": {
             "additionalProperties": false,
-            "description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets.",
+            "description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, or with enabled false, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets.",
             "properties": {
               "after": {
                 "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3.",
                 "minimum": 1,
                 "type": "integer"
+              },
+              "enabled": {
+                "description": "false turns the backoff off, the one the file's defaults give the collector included: every scrape contacts the target, as without the block. Defaults to true. The other keys written beside false are checked all the same.",
+                "type": "boolean"
               },
               "initial": {
                 "description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s.",
@@ -3516,12 +3520,16 @@
         },
         "failure_backoff": {
           "additionalProperties": false,
-          "description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets.",
+          "description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, or with enabled false, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets.",
           "properties": {
             "after": {
               "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3.",
               "minimum": 1,
               "type": "integer"
+            },
+            "enabled": {
+              "description": "Only true, which leaving it out says too: false, which would give every collector what leaving failure_backoff out of defaults gives, is refused by the exporter when the configuration loads. A collector writes failure_backoff: {enabled: false} to turn off the backoff these defaults give it.",
+              "type": "boolean"
             },
             "initial": {
               "description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s.",

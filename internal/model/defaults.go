@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -65,7 +67,11 @@ var (
 // UnmarshalYAML reads a defaults block. A key defaults may not set is
 // refused, naming it, whether it is a key of a collector or of nothing; the
 // file's decoder does not look into a type that decodes itself, so the keys
-// of its blocks are checked here as it would check them.
+// of its blocks are checked here as it would check them. Each block is
+// decoded on its own, so the error of one that checks its own keys (tls,
+// cache, failure_backoff), which may end the decoding of everything around
+// it, loses none of the others, and every problem is reported in the order
+// of the file.
 func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 	type plain CollectorDefaults
 	n = resolveAlias(n)
@@ -80,6 +86,15 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		}
 		problems = append(problems, keyProblem{key.Line, key.Column, fmt.Sprintf("line %d: %s; defaults set the keys of %s", key.Line, why, joinWithAnd(DefaultsKeys))})
 	}
+	seen := map[string]bool{}
+	decoded := func(value *yaml.Node, err error) {
+		for _, message := range errorMessages(err) {
+			seen[message] = true
+			problems = append(problems, placedProblem(value, message))
+		}
+	}
+	var out plain
+	blocks := reflect.ValueOf(&out).Elem()
 	collector := reflect.TypeOf(Collector{})
 	for _, entry := range MappingEntries(n) {
 		block := KeyName(entry.Key)
@@ -90,19 +105,18 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		}
 		switch block {
 		case "request":
-			if entry.Value == nil || entry.Value.Kind != yaml.MappingNode {
-				continue
-			}
-			view := reflect.New(RequestViewType()).Elem()
-			for _, inner := range MappingEntries(entry.Value) {
-				key := KeyName(inner.Key)
-				if !slices.Contains(defaultsRequestKeys, key) {
-					_, known := fieldByKey(view, key)
-					refuse(inner.Key, "request."+key, known && key != "-")
-					continue
-				}
-				if key == "retry" {
-					problems = append(problems, unknownKeys(inner.Value, reflect.TypeOf(RetryConfig{}), "model.RetryConfig")...)
+			if value := resolveAlias(entry.Value); value != nil && value.Kind == yaml.MappingNode {
+				view := reflect.New(RequestViewType()).Elem()
+				for _, inner := range MappingEntries(value) {
+					key := KeyName(inner.Key)
+					if !slices.Contains(defaultsRequestKeys, key) {
+						_, known := fieldByKey(view, key)
+						refuse(inner.Key, "request."+key, known && key != "-")
+						continue
+					}
+					if key == "retry" {
+						problems = append(problems, unknownKeys(inner.Value, reflect.TypeOf(RetryConfig{}), "model.RetryConfig")...)
+					}
 				}
 			}
 		case "limits":
@@ -110,28 +124,58 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		case "error_handling":
 			problems = append(problems, unknownKeys(entry.Value, reflect.TypeOf(ErrorHandling{}), "model.ErrorHandling")...)
 		}
+		field, _ := fieldByKey(blocks, block)
+		decoded(entry.Value, entry.Value.Decode(reflect.New(field.Type()).Interface()))
 	}
-	slices.SortStableFunc(problems, func(a, b keyProblem) int {
-		return cmp.Or(cmp.Compare(a.line, b.line), cmp.Compare(a.column, b.column))
-	})
-	var out plain
-	err := n.Decode(&out)
+	// The block decoded whole is what the collectors take; what it finds
+	// that no block on its own did, a key written twice, is reported too.
+	for _, message := range errorMessages(n.Decode(&out)) {
+		if !seen[message] {
+			problems = append(problems, placedProblem(n, message))
+		}
+	}
 	if len(problems) > 0 {
+		slices.SortStableFunc(problems, func(a, b keyProblem) int {
+			return cmp.Or(cmp.Compare(a.line, b.line), cmp.Compare(a.column, b.column))
+		})
 		messages := make([]string, 0, len(problems))
 		for _, problem := range problems {
 			messages = append(messages, problem.message)
 		}
-		if typeErr, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the decoder's own, as it returns it
-			messages = append(messages, typeErr.Errors...)
-		}
 		return &yaml.TypeError{Errors: messages}
-	}
-	if err != nil {
-		return err
 	}
 	*d = CollectorDefaults(out)
 	d.Keys = DefaultableKeys(n)
 	return nil
+}
+
+// errorMessages are the messages of a decoding error: each of a
+// *yaml.TypeError's, or the error's own.
+func errorMessages(err error) []string {
+	if typeErr, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the decoder's own, as it returns it
+		return typeErr.Errors
+	}
+	if err != nil {
+		return []string{err.Error()}
+	}
+	return nil
+}
+
+// linePrefix is the line a decoding message starts by naming.
+var linePrefix = regexp.MustCompile(`^line (\d+):`)
+
+// placedProblem is a message of decoding value, placed at the line it names,
+// and on value's own line at value's column, so it sorts among the keys
+// refused around it.
+func placedProblem(value *yaml.Node, message string) keyProblem {
+	value = resolveAlias(value)
+	line, column := value.Line, value.Column
+	if m := linePrefix.FindStringSubmatch(message); m != nil {
+		if named, err := strconv.Atoi(m[1]); err == nil && named != line {
+			line, column = named, 0
+		}
+	}
+	return keyProblem{line, column, message}
 }
 
 // DefaultableKeys are the keys a collector, or a defaults block, written as

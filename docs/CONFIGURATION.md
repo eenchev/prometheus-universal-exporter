@@ -3932,16 +3932,18 @@ collectors:
   `allowed_targets` is the list it is held to, never joined with the block's.
   A `request.tls` or `failure_backoff` written in `defaults`, even empty,
   turns TLS, or the backoff with its own defaults, on for every collector
-  that does not write it; a collector cannot turn off a `failure_backoff` its
-  file's defaults give it, so one that must never back off belongs in
-  another file. A key merged in with `<<:` is written where the merge puts
-  it, in a collector and in `defaults` alike.
+  that does not write it. A collector that must never back off writes
+  `failure_backoff: {enabled: false}`, and takes none of the block's
+  `failure_backoff` keys; `enabled: false` in `defaults` itself, which would
+  give every collector what leaving `failure_backoff` out gives, is refused.
+  A key merged in with `<<:` is written where the merge puts it, in a
+  collector and in `defaults` alike.
 - **Request types.** A key of `request` applies only to the collectors whose
   request type takes it, so collectors of several types share one file:
   `retry` does not reach a `dns` collector, nor `retry.statuses` a `grpc` one.
   A key that applies to no collector of the file — none of their types takes
-  it, or each that does sets it itself — would be a setting nothing uses, and
-  is refused, as `defaults.request.retry.attempts applies to no collector of
+  it, or each that does sets it itself, or turns the backoff off — would be a
+  setting nothing uses, and is refused, once for a block and its keys, as `defaults.request.retry.attempts applies to no collector of
   the file: request.retry.attempts does not apply to request.type "dns" of
   its collectors; remove it from defaults`. So is a `defaults` block in a
   configuration file that defines no collectors of its own.
@@ -3954,7 +3956,13 @@ collectors:
   that is no bucket name for an `s3file` collector, or a `failure_backoff.max`
   shorter than the `initial` the block gives, is refused with that
   collector, and the error ends by saying where the value is written:
-  `(failure_backoff.initial comes from the defaults of the file)`.
+  `(failure_backoff.initial comes from the defaults of the file)`. So does a
+  warning about such a value, logged at load and listed in the
+  [dry run](#dry-run), as the one that a `POST` collector's `retry.attempts`
+  makes no retries. The problems with the keys of the block
+  itself are reported together, in the order of the file; while the block is
+  refused, the collectors of its file are not checked, since without the
+  values it was to give them they would be refused for what it gives.
 - **The collectors are what count.** A collector is validated, compared on a
   reload and keyed in the [response cache](#response-caching) with the
   values it took, as if it wrote them: moving a value from every collector
@@ -4526,6 +4534,13 @@ target, such as a probe of a collector with `coalesce: false`, fails at once
 as during the wait. Without `failure_backoff` every scrape contacts the
 target. `after` below 1, an `initial` or `min_budget` that is not a positive
 duration and a `max` shorter than `initial` are refused at load.
+
+`failure_backoff: {enabled: false}` turns the backoff off: every scrape
+contacts the target, as without the block. It is how a collector turns off
+the backoff its file's [defaults](#defaults-for-the-collectors-of-a-file)
+give it, and in a collector without defaults it is the block left out,
+which a reload and the response cache take it as. Keys written beside it are
+checked all the same. `enabled` defaults to true.
 
 A failed scrape is one whose fetch failed: the connection was refused or
 reset, it timed out, TLS failed, the target answered a status the collector

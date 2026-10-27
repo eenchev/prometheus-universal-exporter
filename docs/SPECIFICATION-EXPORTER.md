@@ -28797,6 +28797,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce`: a chunked megabyte fetched after another from the same target allocates at most 1.5 MiB in all, as one with a length does (2.2 MiB before).
 - `TestPromParserMakesTheLabelTextOfManySeriesAtOnce`: 1,000 series of three labels, two of them new on each line, cost the Prometheus parser at most 2.25 allocations each (2.02: the map of the labels and a share of a chunk of text), where each new value was an allocation of its own (4.02); `TestPromParserAgreesWithTheOneItWasOnEdgeCases`, `TestPromParserAgreesWithTheOneItWasOnRandomExpositions` and the rest of the decoder's tests pass unchanged.
 - `TestJQRulesOverTheSameItemsMakeRoomForTheirSeriesOnce`: a jq collector with two rules over `.items[]` of 2,000 items allocates no more bytes a series than one rule alone, give or take a twentieth (185 against 211; 252 when the second rule made the room again and copied the first's series into it).
+- `TestCheckingAProbesParametersAllocatesNothing`: checking a probe's `target`, `collector` and a monitor's own parameter allocates nothing (4 allocations when a list of every type's parameters was made for each check).
+- `TestAParameterOfATypeRegisteredLaterIsKnown`: a parameter only a type registered after the first check takes is refused for a collector of another type while that type is registered, and ignored once it is taken out.
 
 # 35. Documentation requirements
 

@@ -686,16 +686,23 @@ func requestTypeOf(c *model.Collector) *RequestType {
 	return RequestTypes[c.Request.Type]
 }
 
-// knownOverrides is every /probe parameter some request type accepts. A
-// parameter outside it is not an override at all and is ignored, as it always
-// was — a monitor may carry parameters of its own — but one inside it that the
-// collector's type does not accept is a mistake worth a 400.
-func knownOverrides() []string {
-	var all []string
+// overriddenBySomeType reports whether key is a /probe parameter some request
+// type accepts. A parameter no type accepts is not an override at all and is
+// ignored, as it always was — a monitor may carry parameters of its own — but
+// one some type accepts that the collector's type does not is a mistake worth
+// a 400.
+//
+// The types are looked through themselves, rather than a list of every
+// type's parameters, which was made afresh on every probe for this one
+// question: nothing is allocated, and a type a test registers, or takes out,
+// is seen as soon as it is.
+func overriddenBySomeType(key string) bool {
 	for _, rt := range RequestTypes {
-		all = append(all, rt.Overrides...)
+		if matchesOverride(rt.Overrides, key) {
+			return true
+		}
 	}
-	return all
+	return false
 }
 
 // CheckOverrideParams rejects probe parameters that belong to a different
@@ -705,13 +712,12 @@ func CheckOverrideParams(c *model.Collector, values url.Values) error {
 	if rt == nil {
 		return fmt.Errorf("collector %q has no registered request type", c.Name)
 	}
-	known := knownOverrides()
 	var rejected []string
 	for key := range values {
 		if key == "target" || key == "collector" {
 			continue
 		}
-		if matchesOverride(known, key) && !matchesOverride(rt.Overrides, key) {
+		if !matchesOverride(rt.Overrides, key) && overriddenBySomeType(key) {
 			rejected = append(rejected, key)
 			continue
 		}

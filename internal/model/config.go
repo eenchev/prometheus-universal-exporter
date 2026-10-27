@@ -871,30 +871,47 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 // failure up to Max. A trip that failed by running out of its budget counts
 // only when that budget was at least MinBudget. Each is nil until the load
 // fills in its default (config.validateFailureBackoff), so a value written
-// 0 is told from one left out.
+// 0 is told from one left out. Enabled false turns the backoff off, for a
+// collector whose file's defaults give it one; the load then leaves
+// FailureBackoff nil, as for a collector without the block, and a
+// backoff on with Enabled nil.
 type FailureBackoffConfig struct {
+	Enabled   *bool     `yaml:"enabled,omitempty"`
 	After     *int      `yaml:"after"`
 	Initial   *Duration `yaml:"initial"`
 	Max       *Duration `yaml:"max"`
 	MinBudget *Duration `yaml:"min_budget"`
 }
 
-var failureBackoffKeys = []string{"after", "initial", "max", "min_budget"}
+var failureBackoffKeys = []string{"enabled", "after", "initial", "max", "min_budget"}
+
+// BackoffSwitchedOff says whether a failure_backoff written says
+// enabled: false.
+func BackoffSwitchedOff(b *FailureBackoffConfig) bool {
+	return b != nil && b.Enabled != nil && !*b.Enabled
+}
 
 // UnmarshalYAML refuses the keys it does not know in the words the cache's
 // do, naming the block rather than the type, and explains the one-value
 // form. The keys of a mapping merged in with << are the block's own keys,
 // and a key that is an alias is the key it names (KeyName).
 func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == boolTag {
+		var on bool
+		if n.Decode(&on) == nil && on {
+			return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {} to back off with the defaults of its keys", n.Line)
+		}
+		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {enabled: false} to turn off the backoff the file's defaults give the collector, or leave failure_backoff out for no backoff", n.Line)
+	}
 	if n.Kind == yaml.ScalarNode {
 		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Line, n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: failure_backoff must be a mapping with after, initial, max and min_budget", n.Line)
+		return fmt.Errorf("line %d: failure_backoff must be a mapping with enabled, after, initial, max and min_budget", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(failureBackoffKeys, key) {
-			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes after, initial, max and min_budget", entry.Key.Line, key)
+			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes enabled, after, initial, max and min_budget", entry.Key.Line, key)
 		}
 	}
 	type plain FailureBackoffConfig

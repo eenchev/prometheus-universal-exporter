@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -1218,7 +1219,7 @@ func headerLines(h http.Header) []string {
 	for _, name := range names {
 		for _, value := range h[name] {
 			if headers++; headers <= debugHeaderLimit {
-				lines = append(lines, name+": "+shownStart(fetch.RedactHeaderValue(name, value), debugHeaderValueLimit))
+				lines = append(lines, name+": "+shownStart(shownHeaderValue(fetch.RedactHeaderValue(name, value)), debugHeaderValueLimit))
 			}
 		}
 	}
@@ -1226,6 +1227,38 @@ func headerLines(h http.Header) []string {
 		lines = append(lines, fmt.Sprintf("... (%d headers)", headers))
 	}
 	return lines
+}
+
+// shownHeaderValue is a header's value as a report writes it: a control
+// character other than a tab written as Go writes it in a quoted string,
+// \r, \x01 or \u0085, and the rest as it is. An HTTP answer's header holds
+// none, since net/http refuses them, so its value is shown unchanged; a tcp
+// answer's X-Tcp-Greeting holds what the server greeted with, which may
+// hold a carriage return or an escape sequence a terminal would act on, or
+// would end the report's line.
+func shownHeaderValue(value string) string {
+	if !strings.ContainsFunc(value, headerControl) {
+		return value
+	}
+	var b strings.Builder
+	for i := 0; i < len(value); {
+		r, size := utf8.DecodeRuneInString(value[i:])
+		if headerControl(r) {
+			quoted := strconv.QuoteRune(r)
+			b.WriteString(quoted[1 : len(quoted)-1])
+		} else {
+			// A byte that is not UTF-8 is kept, not replaced.
+			b.WriteString(value[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// headerControl says whether a report escapes r in a header's value: a C0
+// or C1 control character, or DEL, but not a tab, which a header may hold.
+func headerControl(r rune) bool {
+	return r != '\t' && unicode.IsControl(r)
 }
 
 // orNone is s, or "(none)" when it is empty.

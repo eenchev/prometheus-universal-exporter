@@ -15,12 +15,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -125,6 +126,7 @@ func init() {
 		},
 	})
 	templateEscapers["line"] = escapeLineValue
+	templateRenderedRules["line"] = refuseEmptySend
 }
 
 // tcpRequester is the tcp request type's Requester.
@@ -226,7 +228,10 @@ func validateTCPGreeting(name string, r TCPConfig) error {
 	if HasPathParams(r.Greeting) {
 		return fmt.Errorf("collector %q request.greeting %q has a placeholder; the greeting is matched against the pattern as it is written", name, r.Greeting)
 	}
-	if _, err := regexp.Compile(r.Greeting); err != nil {
+	// Compiled through expr's cache, as a regex rule's pattern is, so that a
+	// scrape finds it compiled rather than compiling up to 64 KiB of
+	// pattern each time (tcpGreetingPattern).
+	if _, err := tcpGreetingPattern(r.Greeting); err != nil {
 		return fmt.Errorf("collector %q request.greeting %q is not a regular expression Go reads: %w", name, r.Greeting, err)
 	}
 	if r.Send == "" && r.Terminator != "" {
@@ -234,6 +239,10 @@ func validateTCPGreeting(name string, r TCPConfig) error {
 	}
 	return nil
 }
+
+// tcpGreetingPattern is request.greeting compiled, once per distinct
+// pattern while it is in use (expr.CompileRegex).
+var tcpGreetingPattern = expr.CompileRegex
 
 // tcpAddress is a target as a scrape reaches it: host as the policy
 // matches it and TLS verifies it, hostPort what is dialed.
@@ -369,7 +378,7 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	traceOutcome(ctx, x.outcome())
 	headers, body := x.headers(), x.body
 	if tcpRequest(c).Document {
-		if body, err = x.document(address); err != nil {
+		if body, err = x.document(address, responseLimit(c)); err != nil {
 			return nil, err
 		}
 		headers.Set("Content-Type", "application/json")
@@ -421,8 +430,12 @@ type tcpDocument struct {
 // document is the exchange as a JSON document (tcpDocument). JSON text is
 // UTF-8, so a greeting or an answer holding other bytes fails the scrape,
 // as a redis reply or an LDAP value does, rather than reaching the rules
-// with its bytes replaced.
-func (x *tcpExchanged) document(address tcpAddress) ([]byte, error) {
+// with its bytes replaced. The document is the body the rules read, so it
+// is held to the response limit as a body is: the greeting and the answer
+// share the limit as they are read (tcpExchange), but JSON writes a control
+// byte in six ("\u0001") and adds its keys and timings, so a document of
+// a greeting and an answer within it can still be past it.
+func (x *tcpExchanged) document(address tcpAddress, limit int64) ([]byte, error) {
 	seconds := func(d time.Duration) *float64 { s := d.Seconds(); return &s }
 	doc := tcpDocument{ConnectSeconds: x.connect.Seconds(), DurationSeconds: x.total.Seconds()}
 	if x.secure {
@@ -442,7 +455,14 @@ func (x *tcpExchanged) document(address tcpAddress) ([]byte, error) {
 		answer := string(x.body)
 		doc.Answer, doc.AnswerSeconds = &answer, seconds(x.answer)
 	}
-	return json.Marshal(doc)
+	document, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(document)) > limit {
+		return nil, model.MarkError(model.Errorf("the JSON document request.document makes of what %s said is %d bytes, larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, len(document), model.Size(limit)), model.ErrLimitExceeded)
+	}
+	return document, nil
 }
 
 // The headers a tcp answer carries, for the transforms (tcpHeaders).
@@ -526,11 +546,15 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	// it is cancelled.
 	deadline, _ := ctx.Deadline()
 	_ = conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	// The connection dialed, not conn, which becomes the TLS connection
+	// below while the deadline's func may be running: setting the dialed
+	// connection's deadline ends the TLS connection's reads and writes too.
+	raw := conn
+	stop := context.AfterFunc(ctx, func() { _ = raw.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 	if cfg != nil {
 		began = time.Now()
-		tlsConn := tls.Client(conn, cfg)
+		tlsConn := tls.Client(raw, cfg)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			return nil, tcpFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err))
 		}
@@ -542,6 +566,9 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	reader := bufio.NewReader(conn)
 	limit := responseLimit(c)
 	r := tcpRequest(c)
+	// A document holds the greeting and the answer both, so with
+	// request.document the answer gets what the greeting left of the limit.
+	var shared int64
 	if r.Greeting != "" {
 		began = time.Now()
 		greeting, err := tcpReadGreeting(ctx, reader, address, limit)
@@ -549,12 +576,19 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 			return nil, err
 		}
 		x.greet, x.greeting = time.Since(began), greeting
-		if !regexp.MustCompile(r.Greeting).Match(greeting) {
+		pattern, err := tcpGreetingPattern(r.Greeting)
+		if err != nil {
+			return nil, fmt.Errorf("request.greeting %q: %w", r.Greeting, err)
+		}
+		if !pattern.Match(greeting) {
 			return nil, model.Errorf("the greeting of %s, %s, does not match request.greeting %q", address.hostPort, model.Quoted(greeting), r.Greeting)
 		}
 		if send == "" {
 			x.body, x.total = greeting, time.Since(dialed)
 			return x, nil
+		}
+		if r.Document {
+			shared = int64(len(greeting))
 		}
 	}
 	began = time.Now()
@@ -563,7 +597,7 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 			return nil, tcpFailure(ctx, fmt.Errorf("sending request.send to %s: %w", address.hostPort, err))
 		}
 	}
-	x.body, x.how, err = tcpRead(ctx, reader, address, []byte(r.Terminator), limit)
+	x.body, x.how, err = tcpRead(ctx, reader, address, []byte(r.Terminator), limit, shared)
 	if err != nil {
 		return nil, err
 	}
@@ -594,24 +628,25 @@ func tcpReadGreeting(ctx context.Context, reader *bufio.Reader, address tcpAddre
 			}
 			return nil, tcpFailure(ctx, fmt.Errorf("waiting for the greeting of %s, as request.greeting expects, %d bytes read: %w", address.hostPort, len(greeting), err))
 		}
-		if int64(len(greeting)) >= limit {
-			return nil, model.MarkError(model.Errorf("the greeting of %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
-		}
 		greeting = append(greeting, b)
-		if b != '\n' {
-			continue
-		}
-		line := greeting[lineStart:]
-		lineStart = len(greeting)
-		if code == "" {
-			if !tcpContinues(line) {
+		if b == '\n' {
+			line := greeting[lineStart:]
+			lineStart = len(greeting)
+			if code == "" && !tcpContinues(line) {
 				return greeting, nil
 			}
-			code = string(line[:3])
-			continue
+			if code == "" {
+				code = string(line[:3])
+			} else if bytes.HasPrefix(line, []byte(code)) && !tcpContinues(line) {
+				return greeting, nil
+			}
 		}
-		if bytes.HasPrefix(line, []byte(code)) && !tcpContinues(line) {
-			return greeting, nil
+		// A greeting that has reached the limit and not ended can only grow
+		// past it: it fails now rather than when the next byte comes, or the
+		// deadline, which would be a server's that wrote the limit and
+		// stopped.
+		if int64(len(greeting)) >= limit {
+			return nil, model.MarkError(model.Errorf("the greeting of %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
 		}
 	}
 }
@@ -632,14 +667,18 @@ func tcpContinues(line []byte) bool {
 
 // tcpRead reads the answer from conn until it ends with terminator, or,
 // without one, until the server closes the connection, holding it to limit
-// as it arrives.
-func tcpRead(ctx context.Context, conn io.Reader, address tcpAddress, terminator []byte, limit int64) ([]byte, string, error) {
+// as it arrives, with the shared bytes of the greeting a document holds
+// beside it counted against limit too.
+func tcpRead(ctx context.Context, conn io.Reader, address tcpAddress, terminator []byte, limit, shared int64) ([]byte, string, error) {
 	var body []byte
 	chunk := make([]byte, 32<<10)
 	for {
 		n, err := conn.Read(chunk)
 		if n > 0 {
-			if int64(len(body))+int64(n) > limit {
+			if shared+int64(len(body))+int64(n) > limit {
+				if shared > 0 {
+					return nil, "", model.MarkError(model.Errorf("the greeting and the answer of %s are larger together than the response limit of %d bytes, which the JSON document of request.document is held to; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
+				}
 				return nil, "", model.MarkError(model.Errorf("the answer of %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
 			}
 			body = append(body, chunk[:n]...)
@@ -711,13 +750,32 @@ func escapeLineValue(where, name, value string) (string, error) {
 	return value, nil
 }
 
+// refuseEmptySend refuses a send that its placeholders' values leave
+// empty, as {{param_cmd:}} does when the probe gives no param_cmd. Writing
+// nothing would make the scrape a read of what the server says first, which
+// a server that waits for a command never ends but at the deadline, while
+// the collector's method, its terminator and its debug report say it sends:
+// the probe is refused, naming the parameters, as one missing a value is.
+func refuseEmptySend(where string, placeholders []pathPlaceholder, rendered string) error {
+	if rendered != "" {
+		return nil
+	}
+	names := make([]string, 0, len(placeholders))
+	for _, p := range placeholders {
+		if !slices.Contains(names, p.Name) {
+			names = append(names, p.Name)
+		}
+	}
+	return fmt.Errorf("%s is empty once %s is filled in, with no value from the probe and an empty default; a tcp collector with send writes it, so give %s a value, or its placeholder a default that is not empty", where, strings.Join(names, ", "), names[0])
+}
+
 // tcpKeyRules is what the configuration schema says of a tcp collector's
 // own keys.
 func tcpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"document":   {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, connect_seconds, tls_seconds, greeting_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape. See docs/TCP.md#the-exchange-as-a-document."},
+		"document":   {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, connect_seconds, tls_seconds, greeting_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
 		"greeting":   {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
-		"send":       {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
+		"send":       {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
 		"terminator": {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
 	}
 }

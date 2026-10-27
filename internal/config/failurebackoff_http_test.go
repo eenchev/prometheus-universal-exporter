@@ -58,7 +58,7 @@ func TestFailureBackoffIsCheckedAndFilledIn(t *testing.T) {
 		{block: "    failure_backoff: {initial: -1s}\n", refused: `failure_backoff.initial must be a positive duration`},
 		{block: "    failure_backoff: {initial: 1m, max: 30s}\n", refused: `collector "dead" failure_backoff.max 30s must not be shorter than failure_backoff.initial 1m0s`},
 		{block: "    failure_backoff: {max: 5s}\n", refused: `failure_backoff.max 5s must not be shorter than failure_backoff.initial 30s`},
-		{block: "    failure_backoff: {afte: 3}\n", refused: `failure_backoff has the unknown key "afte"; it takes after, initial, max and min_budget`},
+		{block: "    failure_backoff: {afte: 3}\n", refused: `failure_backoff has the unknown key "afte"; it takes enabled, after, initial, max and min_budget`},
 		{block: "    failure_backoff: 30s\n", refused: "failure_backoff is a mapping: write failure_backoff: {initial: 30s}"},
 	} {
 		initial, longest, after, err := load(tc.block)

@@ -68,7 +68,11 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 		if namedFilesUnread {
 			x.DescriptorFilesUnread = true
 		}
+		warned := len(c.Warnings)
 		errs = append(errs, inCollectorFile(file, withDefaultsNoted(validateCollector(c, x), x)))
+		for j := warned; j < len(c.Warnings); j++ {
+			c.Warnings[j] = defaultsNoted(c.Warnings[j], x)
+		}
 	}
 	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
 	if err := model.JoinProblems(errs...); err != nil {
@@ -1201,7 +1205,8 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	}
 	// The configuration's defaults are its own collectors', given before
 	// the collector files' join them.
-	err = model.JoinProblems(applyOwnDefaults(&c, b), mergeCollectorFiles(&c, path, opts))
+	ownDefaultsErr := applyOwnDefaults(&c, b)
+	err = model.JoinProblems(ownDefaultsErr, mergeCollectorFiles(&c, path, opts))
 	if decoded != nil {
 		decoded(&c)
 	}
@@ -1210,8 +1215,15 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 		apply(&options)
 	}
 	// The collectors that were read are checked even when a collector file
-	// could not be, so one run reports the mistakes of every file.
+	// could not be, so one run reports the mistakes of every file. Those of
+	// a file whose defaults were refused are not: checked without the
+	// values they would have taken, they would be refused for what the
+	// block was to give them; a collector file's are left out with it
+	// (loadCollectorFile), and the configuration's own here.
 	if err != nil {
+		if ownDefaultsErr != nil {
+			c.Collectors = slices.DeleteFunc(c.Collectors, func(x model.Collector) bool { return c.CollectorSources[x.Name] == path })
+		}
 		if len(c.Collectors) > 0 {
 			err = model.JoinProblems(err, validate(&c, options.namedFilesUnread))
 		}
@@ -2212,43 +2224,60 @@ func normalizeErrorPolicy(collector, key string, value *string) error {
 	return nil
 }
 
-// validateCache checks a collector's cache when the configuration loads.
 // validateFailureBackoff checks failure_backoff and fills in its defaults:
 // after 3, initial 30s, max 10m or initial when that is longer, so a block
 // that sets only initial past 10m is not refused for a max it did not
-// write, and min_budget 1s.
+// write, and min_budget 1s. A block that says enabled: false is checked
+// alike, as a schema checks it, and then removed: the collector backs off
+// from nothing, and is compared on a reload and keyed in the cache as one
+// without the block, which it scrapes as. One on is kept without
+// enabled, the same written either way.
 func validateFailureBackoff(c *model.Collector) error {
 	b := c.FailureBackoff
 	if b == nil {
 		return nil
 	}
+	if err := checkFailureBackoff(c.Name, b); err != nil {
+		return err
+	}
+	if model.BackoffSwitchedOff(b) {
+		c.FailureBackoff = nil
+	}
+	b.Enabled = nil
+	return nil
+}
+
+// checkFailureBackoff is validateFailureBackoff's check of the block of
+// the collector named, filling in its defaults.
+func checkFailureBackoff(name string, b *model.FailureBackoffConfig) error {
 	if b.After == nil {
 		after := model.DefaultFailureBackoffAfter
 		b.After = &after
 	} else if *b.After < 1 {
-		return fmt.Errorf("collector %q failure_backoff.after must be at least 1, the consecutive failed scrapes of a target before its scrapes stop contacting it; got %d", c.Name, *b.After)
+		return fmt.Errorf("collector %q failure_backoff.after must be at least 1, the consecutive failed scrapes of a target before its scrapes stop contacting it; got %d", name, *b.After)
 	}
 	if b.Initial == nil {
 		initial := model.Duration(model.DefaultFailureBackoffInitial)
 		b.Initial = &initial
 	} else if *b.Initial <= 0 {
-		return fmt.Errorf("collector %q failure_backoff.initial must be a positive duration, such as 30s; got %s", c.Name, time.Duration(*b.Initial))
+		return fmt.Errorf("collector %q failure_backoff.initial must be a positive duration, such as 30s; got %s", name, time.Duration(*b.Initial))
 	}
 	if b.Max == nil {
 		longest := max(model.Duration(model.DefaultFailureBackoffMax), *b.Initial)
 		b.Max = &longest
 	} else if *b.Max < *b.Initial {
-		return fmt.Errorf("collector %q failure_backoff.max %s must not be shorter than failure_backoff.initial %s", c.Name, time.Duration(*b.Max), time.Duration(*b.Initial))
+		return fmt.Errorf("collector %q failure_backoff.max %s must not be shorter than failure_backoff.initial %s", name, time.Duration(*b.Max), time.Duration(*b.Initial))
 	}
 	if b.MinBudget == nil {
 		floor := model.Duration(model.DefaultFailureBackoffMinBudget)
 		b.MinBudget = &floor
 	} else if *b.MinBudget <= 0 {
-		return fmt.Errorf("collector %q failure_backoff.min_budget must be a positive duration, the least budget a trip that timed out must have had to count as the target's failure, such as 1s; got %s", c.Name, time.Duration(*b.MinBudget))
+		return fmt.Errorf("collector %q failure_backoff.min_budget must be a positive duration, the least budget a trip that timed out must have had to count as the target's failure, such as 1s; got %s", name, time.Duration(*b.MinBudget))
 	}
 	return nil
 }
 
+// validateCache checks a collector's cache when the configuration loads.
 func validateCache(c *model.Collector) error {
 	if c.Cache.TTL < 0 {
 		return fmt.Errorf("collector %q cache.ttl must not be negative", c.Name)

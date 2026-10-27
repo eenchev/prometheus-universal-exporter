@@ -158,3 +158,45 @@ func TestATCPScrapesTimingsReachPython(t *testing.T) {
 		t.Errorf("%d %v\n%s", recorder.Code, got, recorder.Body)
 	}
 }
+
+// A greeting holding control characters reaches a debug probe's report
+// through X-Tcp-Greeting escaped, a carriage return as \r and an escape as
+// \x1b, so it neither rewrites the report's line on a terminal nor acts on
+// it; a header without one, a tab in it included, is shown as it is.
+func TestATCPGreetingsControlCharactersAreEscapedInTheReport(t *testing.T) {
+	exp, _, smtp, _ := greetingExporter(t, "", "220 mx.example\r250 forged\x1b[2J\x07\r\n")
+	exp.SetDebug(DebugFull)
+	report := probeOnce(t, exp, "/probe?debug=true&collector=smtp&target="+smtp, nil).Body.String()
+	if !strings.Contains(report, `X-Tcp-Greeting: 220 mx.example\r250 forged\x1b[2J\a`) || strings.ContainsAny(report, "\r\x1b\x07") {
+		t.Errorf("the greeting's control characters reach the report:\n%q", report)
+	}
+	if lines := headerLines(http.Header{"X-Plain": {"a\tb é"}, "X-Next": {"c\u0085d\x7f"}}); strings.Join(lines, "|") != `X-Next: c\u0085d\x7f|X-Plain: a`+"\t"+`b é` {
+		t.Errorf("lines %q", lines)
+	}
+}
+
+// A probe whose send would come out empty, {{param_cmd:}} without
+// param_cmd, is answered 400 naming the parameter, and the server is never
+// connected to.
+func TestATCPProbeWhoseSendComesOutEmptyIsRefused(t *testing.T) {
+	server := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+	exp := labelServer(t, `collectors:
+  - name: memcached
+    request:
+      type: tcp
+      send: "{{param_cmd:}}"
+      terminator: "END\r\n"
+    transform:
+      type: regex
+    metrics:
+      - name: memcached_up
+        expression: '^STAT pid (\d+)'
+`)
+	recorder := probeOnce(t, exp, "/probe?collector=memcached&target="+server.Addr, nil)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "request.send is empty once param_cmd is filled in") {
+		t.Errorf("%d %s", recorder.Code, recorder.Body)
+	}
+	if n := server.Accepted(); n != 0 {
+		t.Errorf("the server was connected to %d times", n)
+	}
+}

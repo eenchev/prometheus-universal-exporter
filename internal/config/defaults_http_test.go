@@ -427,3 +427,138 @@ collectors:
 		t.Errorf("took %q, want %q", c.Collectors[0].FromDefaults, want)
 	}
 }
+
+// Every problem with the keys of a defaults block is reported, in the order
+// of the file, those of the blocks that check their own keys (tls, cache,
+// failure_backoff) among the others, and none lost when such a block's
+// error would end the decoding of the rest.
+func TestDefaultsReportEveryKeyProblemInFileOrder(t *testing.T) {
+	collectors := "collectors:\n" + defaultsCollector("a", "http")
+	for name, tc := range map[string]struct{ defaults, want string }{
+		"tls before limits": {"defaults:\n  request: {tls: {bogus: 1}}\n  limits: {bogus: 1}\n",
+			`line 2: unknown key "bogus" in tls; line 3: unknown key "bogus" in limits`},
+		"cache before limits": {"defaults:\n  cache: {bogus: 1}\n  limits: {bogus: 1}\n",
+			`line 2: cache has the unknown key "bogus"; it takes ttl, stale_if_error and revalidate; line 3: unknown key "bogus" in limits`},
+		"backoff among others": {"defaults:\n  error_handling: {bogus: 1}\n  failure_backoff: {bogus: 1}\n  request:\n    retry: {bogus: 1}\n  cache: {bogus: 1}\n",
+			`line 2: unknown key "bogus" in error_handling; line 3: failure_backoff has the unknown key "bogus"; it takes enabled, after, initial, max and min_budget; line 5: unknown key "bogus" in retry; line 6: cache has the unknown key "bogus"; it takes ttl, stale_if_error and revalidate`},
+		"a value and a key": {"defaults:\n  limits: {max_metrics: many}\n  request: {tls: {bogus: 1}}\n",
+			`line 2: expected a whole number`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(testutil.WriteFile(t, "config.yaml", tc.defaults+collectors))
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Errorf("err = %v\nwant %s", err, tc.want)
+			}
+			if name == "a value and a key" && (err == nil || !strings.Contains(err.Error(), `line 3: unknown key "bogus" in tls`)) {
+				t.Errorf("err = %v, want the tls key after the value", err)
+			}
+		})
+	}
+}
+
+// A defaults block refused for a bad value leaves the collectors of its
+// file unchecked: checked without the values the block was to give them,
+// they would be refused for what it gives, and the load fails anyway.
+func TestARefusedDefaultsBlockLeavesItsCollectorsUnchecked(t *testing.T) {
+	document := "defaults:\n  limits: {max_metrics: -1}\n  failure_backoff: {initial: 5s}\ncollectors:\n" + defaultsCollector("a", "http", "failure_backoff: {max: 10s}")
+	want := "defaults.limits.max_metrics is -1, and a limit must not be negative; leave it out, or 0, for the default"
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", document)); err == nil || err.Error() != want {
+		t.Errorf("err = %v\nwant %s alone", err, want)
+	}
+	// The collectors of another file are checked all the same.
+	dir := t.TempDir()
+	testutil.WriteIn(t, dir, "team.yaml", "collectors:\n"+defaultsCollector("team", "http", "limits: {max_metrics: -2}"))
+	_, err := Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: [team.yaml]\n"+document))
+	if err == nil || !strings.HasPrefix(err.Error(), want+"\n") || !strings.Contains(err.Error(), `collector "team" limits.max_metrics`) || strings.Contains(err.Error(), `collector "a"`) {
+		t.Errorf("err = %v, want the block's error and team's alone", err)
+	}
+}
+
+// A warning about a value a collector took from defaults says where the
+// value is written, as an error does.
+func TestAWarningAboutADefaultedValueSaysWhereItIsWritten(t *testing.T) {
+	c, err := Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request: {retry: {attempts: 2}}\ncollectors:\n"+strings.Replace(defaultsCollector("a", "http"), "type: http,", "type: http, method: POST,", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `collector "a" sets request.retry.attempts, but its method POST is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway (request.retry.attempts comes from the defaults of the file)`
+	if !slices.Contains(c.Warnings, want) {
+		t.Errorf("warnings %q, want %q", c.Warnings, want)
+	}
+}
+
+// A block of defaults that applies to no collector is refused once: the
+// keys written in it go with it.
+func TestAnUnusedDefaultsBlockIsRefusedOnce(t *testing.T) {
+	for name, tc := range map[string]struct{ document, want string }{
+		"tls": {"defaults:\n  request: {tls: {insecure_skip_verify: true}}\ncollectors:\n" + defaultsCollector("names", "dns"),
+			`defaults.request.tls applies to no collector of the file: request.tls does not apply to request.type "dns" of its collectors; remove it from defaults`},
+		"failure_backoff": {"defaults:\n  failure_backoff: {initial: 5s}\ncollectors:\n" + defaultsCollector("a", "http", "failure_backoff: {enabled: false}"),
+			"defaults.failure_backoff applies to no collector of the file: each collector it would apply to sets failure_backoff itself, or turns the backoff off; remove it from defaults"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(testutil.WriteFile(t, "config.yaml", tc.document)); err == nil || err.Error() != tc.want {
+				t.Errorf("err = %v\nwant %s alone", err, tc.want)
+			}
+		})
+	}
+}
+
+// failure_backoff: {enabled: false} turns the backoff off: in a collector
+// its file's defaults give one, which then takes none of the block's keys of
+// it, and in one without defaults, where it is the block left out. The
+// collector is compared on a reload and keyed in the cache as one without
+// the block. Defaults that turn it off are refused, as a block that gives
+// what leaving it out gives.
+func TestACollectorTurnsOffTheBackoffOfItsDefaults(t *testing.T) {
+	c, err := Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  failure_backoff: {initial: 5s, after: 2}\n  limits: {max_metrics: 9}\ncollectors:\n"+
+		defaultsCollector("off", "http", "failure_backoff: {enabled: false}")+defaultsCollector("on", "http", "failure_backoff: {enabled: true}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, on := collectorNamed(t, c, "off"), collectorNamed(t, c, "on")
+	if off.FailureBackoff != nil || !slices.Equal(off.FromDefaults, []string{"limits.max_metrics"}) {
+		t.Errorf("off: failure_backoff %+v, took %q; want none, and limits alone", off.FailureBackoff, off.FromDefaults)
+	}
+	if b := on.FailureBackoff; b == nil || b.Enabled != nil || *b.After != 2 || *b.Initial != model.Duration(5*time.Second) {
+		t.Errorf("on: failure_backoff %+v, want the defaults', enabled left out", b)
+	}
+
+	without, err := Load(testutil.WriteFile(t, "config.yaml", "collectors:\n"+defaultsCollector("a", "http")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	switchedOff, err := Load(testutil.WriteFile(t, "config.yaml", "collectors:\n"+defaultsCollector("a", "http", "failure_backoff: {enabled: false}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if switchedOff.Collectors[0].FailureBackoff != nil || encodedDefinition(without, 0) != encodedDefinition(switchedOff, 0) {
+		t.Errorf("enabled: false is not the block left out:\n%s\n%s", encodedDefinition(without, 0), encodedDefinition(switchedOff, 0))
+	}
+	empty, err := Load(testutil.WriteFile(t, "config.yaml", "collectors:\n"+defaultsCollector("a", "http", "failure_backoff: {}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	switchedOn, err := Load(testutil.WriteFile(t, "config.yaml", "collectors:\n"+defaultsCollector("a", "http", "failure_backoff: {enabled: true}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encodedDefinition(empty, 0) != encodedDefinition(switchedOn, 0) {
+		t.Errorf("enabled: true is not the block without it:\n%s\n%s", encodedDefinition(empty, 0), encodedDefinition(switchedOn, 0))
+	}
+
+	for name, tc := range map[string]struct{ document, want string }{
+		"in defaults": {"defaults:\n  failure_backoff: {enabled: false}\ncollectors:\n" + defaultsCollector("a", "http"),
+			"defaults.failure_backoff.enabled is false, which gives the collectors no backoff, as leaving failure_backoff out of defaults does; remove failure_backoff from defaults, and write failure_backoff: {enabled: false} in a collector to turn off the backoff the block gives it"},
+		"false alone": {"collectors:\n" + defaultsCollector("a", "http", "failure_backoff: false"),
+			"line 8: failure_backoff is a mapping: write failure_backoff: {enabled: false} to turn off the backoff the file's defaults give the collector, or leave failure_backoff out for no backoff"},
+		"a value switched off": {"collectors:\n" + defaultsCollector("a", "http", "failure_backoff: {enabled: false, after: 0}"),
+			`collector "a" failure_backoff.after must be at least 1`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(testutil.WriteFile(t, "config.yaml", tc.document)); err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Errorf("err = %v\nwant %s", err, tc.want)
+			}
+		})
+	}
+}

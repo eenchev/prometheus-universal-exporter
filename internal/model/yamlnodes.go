@@ -115,11 +115,12 @@ var unmarshalerType = reflect.TypeOf((*yaml.Unmarshaler)(nil)).Elem()
 // itself. A quoted "<<" is a key like any other.
 const mergeTag = "!!merge"
 
-// nullTag and stringTag are the tags of a scalar YAML reads as no value at
-// all, and as text.
+// nullTag, stringTag and boolTag are the tags of a scalar YAML reads as no
+// value at all, as text and as true or false.
 const (
 	nullTag   = "!!null"
 	stringTag = "!!str"
+	boolTag   = "!!bool"
 )
 
 // resolveAlias is the node an alias stands for, and any other node itself.

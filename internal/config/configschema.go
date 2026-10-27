@@ -454,6 +454,11 @@ func withDefaultsRules(rules map[string]map[string]any) map[string]map[string]an
 		}
 	}
 	rules["defaults"] = map[string]any{"description": "What every collector of this file takes for a key of these it does not set itself, key by key: one that sets limits.max_metrics keeps the other limits written here. A list is replaced whole. A request key applies to the collectors whose request type takes it. Collectors of other files do not take it. See docs/CONFIGURATION.md#defaults-for-the-collectors-of-a-file."}
+	// Defaults that turn the backoff off would give every collector what
+	// leaving failure_backoff out gives; a collector turns it off itself.
+	// The schema leaves the value to the exporter, as a key's kind is all
+	// it holds a boolean to.
+	rules["defaults.failure_backoff.enabled"] = map[string]any{"description": "Only true, which leaving it out says too: false, which would give every collector what leaving failure_backoff out of defaults gives, is refused by the exporter when the configuration loads. A collector writes failure_backoff: {enabled: false} to turn off the backoff these defaults give it."}
 	rules["defaults.request"] = map[string]any{"description": "The request keys every collector of this file takes when it does not set them and its request type takes them."}
 	return rules
 }
@@ -495,7 +500,8 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].lint":                         {"description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint."},
 		"collectors[].lint.ignore":                  {"description": "The ids of the lint rules whose advice is not given for this collector."},
 		"collectors[].lint.ignore[]":                {"enum": model.LintRules},
-		"collectors[].failure_backoff":              {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
+		"collectors[].failure_backoff":              {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, or with enabled false, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
+		"collectors[].failure_backoff.enabled":      {"description": "false turns the backoff off, the one the file's defaults give the collector included: every scrape contacts the target, as without the block. Defaults to true. The other keys written beside false are checked all the same."},
 		"collectors[].failure_backoff.after":        {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
 		"collectors[].failure_backoff.initial":      {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
 		"collectors[].failure_backoff.max":          {"description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer."},

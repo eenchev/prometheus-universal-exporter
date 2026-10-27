@@ -73,7 +73,10 @@ configuration loads. Use `jq`, `yq` or `python`.
 The target is `host:port`, `host` alone for port 123, an IPv6 address in
 brackets: `time.example.com`, `10.0.0.1:123`, `[2001:db8::1]:123`. A
 scheme, a path or a user is refused with `400` before anything is sent, a
-static target's when it loads. A name is resolved when the request is
+static target's when it loads. An IPv6 address without brackets is the
+address whole, on port 123, as for every type whose target is `host` or
+`host:port`: `2001:db8::1:123` is the address `2001:db8::1:123`, since it
+is one, and not `2001:db8::1` on port 123, which is `[2001:db8::1]:123`. A name is resolved when the request is
 sent, and the request goes to its first address.
 
 ## The document
@@ -109,7 +112,11 @@ sent, and the request goes to its first address.
   by the exporter's clock, and `t2` and `t3` the times the server received
   the request and sent the reply, by its own. `delay_seconds` is the round
   trip without the time the server held the request,
-  `(t4 - t1) - (t3 - t2)`.
+  `(t4 - t1) - (t3 - t2)`, and 0 when that is below 0: a server whose
+  clock reads coarser than the round trip, such as one of precision -6
+  (15.6ms) on a LAN, can say it held the request longer than the round
+  trip took. RFC 5905 floors the delay at the precision of the local
+  clock; the exporter's reads to the nanosecond, so its floor is 0.
 - `t1` is the exporter's wall clock when the request is sent, and `t4` is
   `t1` and the round trip timed by the monotonic clock, so that a step of
   the wall clock during the round trip changes neither. The differences are
@@ -161,6 +168,10 @@ last one was:
 ```text
 no reply from 192.0.2.10:123 before the deadline; 1 datagram was ignored, as its origin timestamp is not the request's: context deadline exceeded
 ```
+
+A scrape cancelled before its deadline, as when every probe waiting for it
+has gone away, says `before the scrape was cancelled` instead, and
+`context canceled`.
 
 Nothing is sent again: a server that limits its clients' rate answers a
 client that asks twice in quick succession with a Kiss-o'-Death instead of

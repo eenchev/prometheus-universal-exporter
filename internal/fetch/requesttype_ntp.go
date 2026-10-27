@@ -340,24 +340,30 @@ func ntpExchange(ctx context.Context, address ntpAddress) (ntpDocument, error) {
 }
 
 // ntpReadFailure words a read that ended without the reply: the deadline,
-// which wraps context.DeadlineExceeded as a lookup's does, saying how many
-// datagrams were ignored and why the last was; or an error of the socket,
+// which wraps context.DeadlineExceeded as a lookup's does, or the scrape's
+// cancellation, which wraps context.Canceled, saying how many datagrams
+// were ignored and why the last was; or an error of the socket,
 // such as the refusal an ICMP port unreachable brings.
 func ntpReadFailure(ctx context.Context, address ntpAddress, err error, ignored int, lastIgnored string) error {
 	if ctx.Err() == nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("reading the reply from %s: %w", address.hostPort, err)
 	}
-	cause := ctx.Err()
-	if cause == nil || errors.Is(cause, context.DeadlineExceeded) {
+	// A scrape cancelled before its deadline, as when every probe waiting
+	// for it went away, did not wait out the deadline; saying it did would
+	// send whoever reads the log after a slow server.
+	cause, until := ctx.Err(), "the deadline"
+	if errors.Is(cause, context.Canceled) {
+		until = "the scrape was cancelled"
+	} else {
 		cause = context.DeadlineExceeded
 	}
 	switch ignored {
 	case 0:
-		return fmt.Errorf("no reply from %s before the deadline: %w", address.hostPort, cause)
+		return fmt.Errorf("no reply from %s before %s: %w", address.hostPort, until, cause)
 	case 1:
-		return model.Errorf("no reply from %s before the deadline; %d datagram was ignored, as %s: %w", address.hostPort, model.Size(ignored), lastIgnored, cause)
+		return model.Errorf("no reply from %s before %s; %d datagram was ignored, as %s: %w", address.hostPort, until, model.Size(ignored), lastIgnored, cause)
 	}
-	return model.Errorf("no reply from %s before the deadline; %d datagrams were ignored, the last as %s: %w", address.hostPort, model.Size(ignored), lastIgnored, cause)
+	return model.Errorf("no reply from %s before %s; %d datagrams were ignored, the last as %s: %w", address.hostPort, until, model.Size(ignored), lastIgnored, cause)
 }
 
 // ntpPacket is the fields of a reply the document and the checks read.
@@ -452,7 +458,7 @@ func ntpDescribe(p ntpPacket, wall time.Time, elapsed time.Duration) ntpDocument
 	t4 := t1 + ntpDuration(elapsed)
 	doc := ntpDocument{
 		OffsetSeconds: (ntpDifference(p.receive, t1) + ntpDifference(p.transmit, t4)) / 2,
-		DelaySeconds:  ntpDifference(t4, t1) - ntpDifference(p.transmit, p.receive),
+		DelaySeconds:  ntpDelay(ntpDifference(t4, t1) - ntpDifference(p.transmit, p.receive)),
 		Version:       p.version, LeapIndicator: p.leap, Stratum: p.stratum,
 		Precision: int(p.precision), PrecisionSeconds: math.Ldexp(1, int(p.precision)),
 		Poll: int(p.poll), PollSeconds: math.Ldexp(1, int(p.poll)),
@@ -469,6 +475,15 @@ func ntpDescribe(p ntpPacket, wall time.Time, elapsed time.Duration) ntpDocument
 	}
 	return doc
 }
+
+// ntpDelay is the round trip without the time the server held the
+// request, never below 0. A server whose clock reads coarser than the
+// round trip, such as one of precision -6 (15.6ms) on a LAN, can say it
+// held the request longer than the round trip took, and the difference is
+// then below 0, which no delay is. RFC 5905 (A.5.1.1) floors it at the
+// precision of the local clock; the exporter's reads to the nanosecond, so
+// the floor is 0.
+func ntpDelay(delay float64) float64 { return math.Max(delay, 0) }
 
 // ntpReferenceID is the reference id as text: of stratum 1, the code of the
 // server's reference clock, such as GPS, when it is printable ASCII, and

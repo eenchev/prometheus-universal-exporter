@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // An s3file read reads through the S3 API what localfile reads through an
@@ -109,7 +111,7 @@ func (s *s3Source) Stat(name string) (fs.FileInfo, error) {
 		// once the object is found missing.
 		if errors.Is(err, fs.ErrNotExist) {
 			if _, bucketErr := s.client.HeadBucket(s.ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)}); errors.Is(s3Error(bucketErr), fs.ErrNotExist) {
-				return nil, fmt.Errorf("the bucket does not exist: %w", bucketErr)
+				return nil, fmt.Errorf("the bucket does not exist: %w", s3Told(bucketErr))
 			}
 		}
 		return nil, err
@@ -224,11 +226,46 @@ func (d *s3Dir) ReadDir(n int) ([]fs.DirEntry, error) {
 
 func (d *s3Dir) Close() error { return nil }
 
+// s3Told is err, a failed request's error, marked as the operator's
+// (model.WithOperatorDetail) when the store answered it or the SDK found no
+// credentials: the store's message names the account and the principal the
+// request was made as (`User: arn:aws:iam::123456789012:role/exporter is
+// not authorized ...`), and the SDK's credential chain the sources it tried,
+// their files and endpoints. A probe's caller is told the operation, the
+// status and the store's error code, or that no credentials were found,
+// and that the rest is in the exporter's log. A failure of the network is
+// left as it is.
+func s3Told(err error) error {
+	if err == nil {
+		return nil
+	}
+	operation := "the request"
+	var op *smithy.OperationError
+	if errors.As(err, &op) {
+		operation = "operation error " + op.Service() + ": " + op.Operation()
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		answered := "the store answered"
+		var status interface{ HTTPStatusCode() int }
+		if errors.As(err, &status) {
+			answered += " " + strconv.Itoa(status.HTTPStatusCode())
+		}
+		return model.WithOperatorDetail(err, operation+", "+answered+" "+api.ErrorCode()+"; its message is in the exporter's log")
+	}
+	// The SDK's words for an identity it could not get, before the chain's.
+	if op != nil && strings.Contains(err.Error(), "get identity: ") {
+		return model.WithOperatorDetail(err, operation+", the AWS SDK found no credentials it could use; which it tried is in the exporter's log")
+	}
+	return err
+}
+
 // s3Error is a failed request's error as the file reads word theirs
 // (localFileError): an object that is not there is fs.ErrNotExist, and an
 // answer of 403 says what the credentials lack. Anything else is the SDK's
 // error, which names the operation, the status and the store's own code.
 func s3Error(err error) error {
+	err = s3Told(err)
 	var api smithy.APIError
 	if errors.As(err, &api) && api.ErrorCode() == "NoSuchBucket" {
 		return fmt.Errorf("the bucket does not exist: %w", err)

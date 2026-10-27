@@ -2631,7 +2631,12 @@ decoder; its table is in [Commands over SSH](SSHEXEC.md#a-collector).
 Of several keys a request block may not set (a key of another type, a key
 its type does not take, a key of `retry` for other types, an unknown key),
 the error names the first in the file, the one on the earlier line or
-further left on the same line, and once that is fixed the next.
+further left on the same line, and once that is fixed the next. So does a
+check that refuses two keys alike — an ssh collector's negative
+`keepalive_interval` and `idle_timeout`, or its credential files written
+blank or with a placeholder, a kubernetes collector's blank selectors, a
+json login's blank `token` and `expires_in`, a login's keys of the other
+kind — on every load.
 
 <!-- request-types: all -->
 A key that belongs to a different type is an error rather than being ignored,
@@ -2973,7 +2978,9 @@ has the whole of it. What is withheld from the answer:
   ([When a login fails](AUTHENTICATION.md#when-a-login-fails)), a
   database's message, which is answered by its code
   ([SQL](SQL.md#errors-and-self-metrics)), a Kubernetes API server's
-  message and its URL ([Permissions](KUBERNETES.md#permissions)), and an
+  message and its URL ([Permissions](KUBERNETES.md#permissions)), an S3
+  store's, which names the principal and the account, and the AWS SDK's
+  credential chain's ([S3](S3FILE.md#errors-and-self-metrics)), and an
   [`sshexec`](SSHEXEC.md) command's stderr.
 - **The operator's own accounts and addresses**: an LDAP bind's DN
   ([LDAP](LDAP.md)), and the addresses of the exporter's side of the

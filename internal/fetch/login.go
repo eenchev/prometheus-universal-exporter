@@ -114,7 +114,9 @@ var oauth2OwnParams = []string{"grant_type", "scope", "client_id", "client_secre
 // target file, loads. It writes nothing into l, which may be a static
 // target's in force (CheckTargetRequest). where names the block, such as
 // "request.login".
-func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string) error {
+func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, order []string) error {
+	// Of several keys refused, the first in the file is named.
+	order = loginKeyOrder(order)
 	if !slices.Contains(model.LoginTypes, l.Type) {
 		if l.Type == "" {
 			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, or type: oauth2, for the OAuth 2.0 client credentials grant", where)
@@ -129,14 +131,14 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string) 
 	if l.Type == "oauth2" {
 		other = jsonLoginKeys
 	}
-	for _, key := range set {
+	for _, key := range model.InFileOrder(set, order) {
 		if slices.Contains(other, key) {
 			return fmt.Errorf("%s sets %s, which a login of type %s does not take", where, key, l.Type)
 		}
 	}
 	switch l.Type {
 	case "json":
-		if err := checkJSONLogin(l, where); err != nil {
+		if err := checkJSONLogin(l, where, order); err != nil {
 			return err
 		}
 	case "oauth2":
@@ -223,7 +225,7 @@ func checkLoginURL(raw string, allowedSchemes []string) error {
 // checkJSONLogin holds a json login's rules: the token read from exactly one
 // place, its expressions compiling, and a body of named fields, one of them
 // at least read from a file.
-func checkJSONLogin(l *model.LoginConfig, where string) error {
+func checkJSONLogin(l *model.LoginConfig, where string, order []string) error {
 	sources := 0
 	for _, source := range []string{l.Token, l.TokenHeader, l.TokenCookie} {
 		if source != "" {
@@ -233,7 +235,9 @@ func checkJSONLogin(l *model.LoginConfig, where string) error {
 	if sources != 1 {
 		return fmt.Errorf("%s sets %d of token, token_header and token_cookie; a json login reads its token from exactly one: the body, with a jq expression such as .access_token, a header of the answer, or a cookie it sets", where, sources)
 	}
-	for key, expression := range map[string]string{"token": l.Token, "expires_in": l.ExpiresIn} {
+	expressions := map[string]string{"token": l.Token, "expires_in": l.ExpiresIn}
+	for _, key := range model.InFileOrder([]string{"token", "expires_in"}, order) {
+		expression := expressions[key]
 		if expression == "" {
 			continue
 		}
@@ -320,13 +324,26 @@ func checkLoginBeside(l *model.LoginConfig, basic, bearer bool, headers map[stri
 	return nil
 }
 
+// loginKeyOrder is the keys of request.login in the order the file has
+// them, of order, the request block's (model.RequestConfig.Order), which
+// holds them as login.<key>.
+func loginKeyOrder(order []string) []string {
+	var keys []string
+	for _, path := range order {
+		if key, ok := strings.CutPrefix(path, "login."); ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
 // validateCollectorLogin checks a collector's request.login.
 func validateCollectorLogin(x *model.Collector) error {
 	l := x.Request.Login
 	if l == nil {
 		return nil
 	}
-	if err := validateLogin(l, x.Request.AllowedSchemes, "request.login"); err != nil {
+	if err := validateLogin(l, x.Request.AllowedSchemes, "request.login", x.Request.Order); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	r := &x.Request
@@ -343,7 +360,7 @@ func checkTargetLogin(c *model.Collector, t *model.StaticTarget) error {
 	if l == nil {
 		return nil
 	}
-	if err := validateLogin(l, c.Request.AllowedSchemes, "request.login"); err != nil {
+	if err := validateLogin(l, c.Request.AllowedSchemes, "request.login", t.Request.Order); err != nil {
 		return err
 	}
 	r := &t.Request

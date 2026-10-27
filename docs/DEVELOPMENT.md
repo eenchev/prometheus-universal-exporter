@@ -164,7 +164,8 @@ cache key, a reload's comparison); a key of another type's own goes into
 common part the type does not take. The block keeps the order the file has
 its keys in, `Request.Order` (`internal/model/keyorder.go`), so that of
 several keys refused the error names the first in the file, whatever
-refuses each; the decoder asks the registry which keys a type refuses
+refuses each, and a check of several keys alike ranges over them in that
+order (`model.InFileOrder`), never over a map; the decoder asks the registry which keys a type refuses
 (`model.RequestKeys.Refuses`), to leave an unknown key after one of them to
 be refused once it is gone. The type reads its keys with a typed
 accessor (`tcpRequest(c).Send`), and writes a changed value back into `Own`,

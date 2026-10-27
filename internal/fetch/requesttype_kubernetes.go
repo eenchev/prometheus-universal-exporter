@@ -211,8 +211,9 @@ func validateKubernetesRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q request.namespaces lists %q twice; its objects would be listed twice", x.Name, ns)
 		}
 	}
-	for key, selector := range map[string]string{"label_selector": own.LabelSelector, "field_selector": own.FieldSelector} {
-		if selector != "" && strings.TrimSpace(selector) == "" {
+	selectors := map[string]string{"label_selector": own.LabelSelector, "field_selector": own.FieldSelector}
+	for _, key := range model.InFileOrder([]string{"label_selector", "field_selector"}, r.Order) {
+		if selector := selectors[key]; selector != "" && strings.TrimSpace(selector) == "" {
 			return fmt.Errorf("collector %q request.%s is written with blanks alone; leave it out to list every object", x.Name, key)
 		}
 	}

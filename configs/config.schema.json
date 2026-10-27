@@ -1856,6 +1856,14 @@
                   "boolean"
                 ]
               },
+              "greeting": {
+                "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "group": {
                 "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name.",
                 "maxLength": 253,

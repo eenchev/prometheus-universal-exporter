@@ -2602,15 +2602,41 @@ types at build time): only a build asked for it carries it. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `send` | none | The text written once the connection is made; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
+| `greeting` | none | A regular expression (Go's `regexp`, RE2) the server's greeting must match before `send` is written. At most 64 KiB; no placeholder. |
+| `send` | none | The text written once the connection is made, or once the greeting has come; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
 | `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
-- `send` and `terminator` written `""` MUST be the keys left out. Either
-  longer than 64 KiB, a placeholder in `terminator`, and a placeholder of
-  `send` that does not parse or names a filter MUST be refused at load, as
-  MUST a `tls` block with one of `cert_file` and `key_file` alone.
+- `greeting`, `send` and `terminator` written `""` MUST be the keys left
+  out. Any of them longer than 64 KiB, a placeholder in `terminator` or
+  `greeting`, a `greeting` Go's `regexp` does not compile, `terminator` with
+  `greeting` and without `send`, and a placeholder of `send` that does not
+  parse or names a filter MUST be refused at load, as MUST a `tls` block
+  with one of `cert_file` and `key_file` alone. No probe parameter MAY set
+  `greeting`.
+- With `greeting`, a scrape MUST read the greeting after the connection and
+  the TLS handshake and before it writes anything: the server's first line,
+  through its line feed, or, when that line begins with three ASCII digits
+  and `-`, every line up to and including the first that begins with the
+  same three digits and is not followed by `-`. The greeting MUST be held
+  to the response limit as it arrives, and its read MUST end at the
+  scrape's deadline. The pattern MUST be matched against the whole greeting
+  as read, line ends included; a greeting that does not match MUST fail
+  the scrape without writing `send`, the error naming the target, quoting
+  the greeting with `model.Quoted`, so that a probe's caller is told it
+  withheld (§ 19.4), and the pattern. A server that closes the connection
+  before its greeting ended MUST fail the scrape, saying it sent no
+  greeting or quoting the part it sent alike, and one that has not greeted
+  by the deadline MUST fail it with the deadline's error. Bytes the server
+  wrote after the greeting MUST be the start of the answer. Without `send`
+  the greeting MUST be the answer, nothing being read after it.
+- Every answer MUST carry the scrape's timings as headers, in seconds,
+  written as decimal numbers: `X-Tcp-Connect-Seconds` always,
+  `X-Tcp-Tls-Seconds` with TLS, `X-Tcp-Greeting-Seconds` and
+  `X-Tcp-Greeting`, a value for each line of the greeting without its line
+  end, with `greeting`, and `X-Tcp-Answer-Seconds` when an answer was read
+  after the greeting or without one; the body MUST stay the answer alone.
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,
@@ -2653,8 +2679,9 @@ types at build time): only a build asked for it carries it. Its keys:
 - A debug probe's request section MUST show the scrape by its method and
   `tcp://host:port` (`tls://` over TLS), the bytes sent quoted, with a
   carriage return and a line feed written `\r` and `\n`, in a `Tcp-Send`
-  header, and as its outcome the bytes read and how reading stopped, or the
-  error. The verbose `url` label MUST be `tcp://host:port` or
+  header, with `greeting` the pattern quoted in a `Tcp-Greeting` header,
+  and as its outcome the greeting read, quoted, when there is one, the
+  bytes read and how reading stopped, or the error. The verbose `url` label MUST be `tcp://host:port` or
   `tls://host:port`, and `http_method` MUST be `SEND` for a collector with
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and
@@ -6651,7 +6678,9 @@ These MUST be withheld so: an XML syntax error's names and entities (each
 form `xmlcut.go` reads, its words kept), a TOML parser message that quotes a
 token, a jq program's error on the answer (`the jq program failed on the
 answer: [withheld; in the exporter's log]`), the start of a Graphite
-server's answer that is not render JSON (not that it is empty), and what Go's
+server's answer that is not render JSON (not that it is empty), a `tcp`
+server's greeting that its collector's `greeting` does not match, or that
+the server cut short, and what Go's
 HTTP client quotes of an answer that is no HTTP (`malformed HTTP response`,
 `malformed HTTP status code`, `malformed HTTP version` and the `malformed
 MIME header` forms, the text after Go's words withheld), for a target's

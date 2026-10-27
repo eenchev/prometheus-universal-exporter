@@ -2958,7 +2958,8 @@ has the whole of it. What is withheld from the answer:
 - **Every value of the answer an error quotes**: the token a decoder could
   not read (`expected float as value, got "..."`), a label value or a name of
   the document, a CSV header, a charset the answer names, the start of a
-  Graphite server's answer that is not render JSON. Each stands as
+  Graphite server's answer that is not render JSON, a `tcp` server's
+  [greeting](TCP.md#services-that-speak-first) that did not match. Each stands as
   `[withheld; in the exporter's log]`, and the rest of the error reads as it
   does in the log. The names of series that are valid are not withheld: they
   are what a successful probe answers.

@@ -11,7 +11,10 @@ thing to run:
 - memcached's `stats`;
 - ZooKeeper's four-letter words, such as `mntr`;
 - HAProxy's runtime API on a TCP socket, `show stat`, which answers CSV;
-- NUT's `upsd`, `LIST VAR <ups>`, and Beanstalkd's `stats`.
+- NUT's `upsd`, `LIST VAR <ups>`, and Beanstalkd's `stats`;
+- whether a service that speaks first — SMTP, FTP, POP3, IMAP, SSH — greets
+  as it should, and how long it took ([Services that speak
+  first](#services-that-speak-first)).
 
 Whatever reads a body reads the answer: `regex` for lines of text, `csv`,
 `prometheus` for a service that writes exposition, `jq` for one that answers
@@ -102,6 +105,7 @@ sum; a server that has had no get yet has no ratio.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `tcp`. |
+| `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` the greeting is the answer. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
 | `send` | nothing | The text written once the connection is made, such as `"stats\r\n"`. Write it in double quotes, in which YAML reads `\r\n` as a carriage return and a line feed; in single quotes or none, `\r\n` is four characters. May hold `{{param_name}}` placeholders. At most 64 KiB. Left out, nothing is written, and the answer is what the server says first. See [What a scrape sends](#what-a-scrape-sends). |
 | `terminator` | none | What the answer ends with, such as `"END\r\n"`: reading stops once it has come. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See [Reading the answer](#reading-the-answer). |
 | `tls` | none | Speak TLS, verifying the server: see [TLS](#tls). |
@@ -146,7 +150,9 @@ request:
 ## What a scrape sends
 
 A scrape makes one connection, speaks TLS over it when the collector has a
-`tls` block, even an empty one, writes `send` when it is set, reads the answer and closes the
+`tls` block, even an empty one, reads the server's greeting when the
+collector sets [`greeting`](#services-that-speak-first), writes `send` when
+it is set, reads the answer and closes the
 connection; the next scrape makes its own. `send` is written as it is,
 nothing added: a protocol whose commands end with a line feed or `\r\n`
 needs it written at the end of `send`, and ZooKeeper's four-letter words take
@@ -208,7 +214,275 @@ give such a service its `terminator`.
 
 Either way the answer is the body: as the server wrote it, in no JSON
 envelope, with no status (`$status` is `null`, Python's
-`response.status_code` `None`) and no headers.
+`response.status_code` `None`) and no headers of the server's: the only
+headers it carries are the exporter's [timings](#timings-and-the-greeting).
+
+## Services that speak first
+
+SMTP, FTP, POP3, IMAP and SSH servers greet a client before it says
+anything, and a client that writes first is out of turn: an SMTP server may
+refuse it as a spammer would be refused. `greeting` makes the scrape wait
+for the greeting, check it, and only then write `send`:
+
+```yaml
+request:
+  type: tcp
+  greeting: '^220[ -]'   # what an SMTP server greets with when it serves
+  send: "QUIT\r\n"
+```
+
+A scrape with `greeting` connects, speaks TLS when the collector has a
+`tls` block, reads the greeting, matches it against the pattern, then writes
+`send` and reads the answer as any scrape does. Without `send` nothing is
+written: the greeting is the answer, the body the rules read, and nothing
+is read after it, so a greeting-only check of a server that then waits for
+the client, as an SMTP or SSH server does, ends as soon as it has greeted;
+`terminator` is refused at load then, since there is nothing for it to
+end.
+
+The greeting is:
+
+- the server's first line, through the line feed that ends it, `\r\n` or
+  `\n` alone;
+- or, when that line begins with three digits and a `-`, as an SMTP or FTP
+  reply over several lines does (`220-mx.example.com ESMTP`), every line up
+  to and including the first that begins with the same three digits and no
+  `-` (`220 ready`, or `220` alone). The lines between may say anything:
+  FTP allows them free text.
+
+The pattern is a regular expression in [Go's syntax](https://pkg.go.dev/regexp/syntax)
+(RE2, so no backreference or lookaround), matched against the whole
+greeting as it was read, line ends included: `^` is the start of the
+greeting and, without `(?m)`, `$` its end, after the last line feed.
+`^220[ -]` takes an SMTP greeting on one line and over several; `^220 `
+takes only one on one line. Write it in single quotes, in which YAML keeps
+a `\` as it is. It holds no placeholder, and no probe parameter sets it:
+the greeting is the configuration's check of the server.
+
+A greeting that does not match fails the scrape in the `tcp` stage, and
+`send` is never written:
+
+```text
+collector smtp tcp failed: the greeting of mx.example.com:25, "554 mx.example.com no service\r\n", does not match request.greeting "^220[ -]"
+```
+
+A probe's caller is told the pattern, with the greeting
+[withheld](CONFIGURATION.md#what-a-failed-probes-caller-is-told), since it
+is what the server said: `the greeting of mx.example.com:25, [withheld; in
+the exporter's log], does not match request.greeting "^220[ -]"`. The log
+and a debug probe's report show it. A server that closes the connection
+before it has greeted, or in the middle of its greeting, fails the scrape
+saying so, and so does one that has not greeted, or not ended its
+greeting with a line feed, by the scrape's deadline. The greeting is held
+to the [response limit](#limits) as the answer is, and the answer to it
+again.
+
+Over TLS the greeting comes after the handshake, as with SMTPS on port 465,
+IMAPS on 993 and POP3S on 995, which speak TLS from the start. A protocol
+that starts in plaintext and turns to TLS after a command, SMTP's
+`STARTTLS`, is not spoken.
+
+### Timings and the greeting
+
+Every `tcp` answer, with `greeting` or without, carries how long each step
+of its scrape took, in seconds, and the greeting, as headers: a `tcp`
+answer has none of its own, so these name nothing the server sent, and a
+collector reading only the body sees the answer it always did.
+
+| Header | When | What |
+| --- | --- | --- |
+| `X-Tcp-Connect-Seconds` | always | Making the connection, the name's lookup included. |
+| `X-Tcp-Tls-Seconds` | with `tls` | The TLS handshake. |
+| `X-Tcp-Greeting-Seconds` | with `greeting` | From the connection, or the handshake, until the greeting ended. |
+| `X-Tcp-Greeting` | with `greeting` | The greeting, a value for each of its lines, without its line end. |
+| `X-Tcp-Answer-Seconds` | when an answer is read | From the write of `send`, or from when reading began without it, until reading stopped. None for a greeting-only check. |
+
+A `jq` or `yq` rule reads them as `$headers`, by lower-case name, as for an
+`http` answer: `$headers["x-tcp-connect-seconds"] | tonumber`. A Python
+script reads `response.header("X-Tcp-Connect-Seconds")`, or
+`response.headers["X-Tcp-Greeting"]`, the greeting's lines as a list. A
+`regex` rule reads the body alone. jq reads a document, not text, so a `jq`
+collector of a text answer hands the rules one with a `pre_script`, which
+may name the `text` decoder:
+
+```yaml
+decoder:
+  type: text
+transform:
+  type: jq
+  pre_script: |
+    data = {"answer": response.text}
+```
+
+A debug probe's report shows the greeting step in its request section, the
+pattern as `Tcp-Greeting` before `Tcp-Send`, and the greeting read before
+how reading the answer stopped, and the headers in its response section:
+
+```text
+Requests
+  1. SEND tcp://mx.example.com:25 -> greeted with "220 mx.example.com ESMTP\r\n", which matched request.greeting; read 15 bytes, the server closed the connection in 41ms
+     Tcp-Greeting: "^220[ -]"
+     Tcp-Send: "QUIT\r\n"
+```
+
+### Checking SMTP, FTP, POP3, IMAP and SSH
+
+Each collector below checks that the service greets as it should and
+answers a command that ends the session, and turns the timings into series;
+a server that greets otherwise, or not at all, fails the probe, which
+Prometheus's `up` for the probe shows as `0`.
+
+SMTP, port 25 or 587: a greeting with `220`, on one line or several, and
+`221` to `QUIT`, after which the server closes the connection:
+
+```yaml
+  - name: smtp
+    request:
+      type: tcp
+      greeting: '^220[ -]'
+      send: "QUIT\r\n"
+    decoder:
+      type: text
+    transform:
+      type: jq
+      pre_script: |
+        data = {"answer": response.text}
+    metrics:
+      - name: smtp_up
+        description: 1 when the server greeted with 220 and answered QUIT with 221
+        expression: 'if (.answer | startswith("221")) then 1 else 0 end'
+      - name: tcp_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+      - name: tcp_greeting_seconds
+        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+      - name: tcp_answer_seconds
+        expression: '$headers["x-tcp-answer-seconds"] | tonumber'
+```
+
+```text
+/probe?collector=smtp&target=mx.example.com:25
+```
+
+FTP, port 21, which greets as SMTP does, with `220`, and answers `QUIT`
+with `221`:
+
+```yaml
+  - name: ftp
+    request:
+      type: tcp
+      greeting: '^220[ -]'
+      send: "QUIT\r\n"
+    decoder:
+      type: text
+    transform:
+      type: jq
+      pre_script: |
+        data = {"answer": response.text}
+    metrics:
+      - name: ftp_up
+        expression: 'if (.answer | startswith("221")) then 1 else 0 end'
+      - name: tcp_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+      - name: tcp_greeting_seconds
+        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+```
+
+POP3, port 110, `+OK` to greet and to `QUIT`; POP3S on 995 is the same
+with `tls: {}`:
+
+```yaml
+  - name: pop3
+    request:
+      type: tcp
+      greeting: '^\+OK'
+      send: "QUIT\r\n"
+    decoder:
+      type: text
+    transform:
+      type: jq
+      pre_script: |
+        data = {"answer": response.text}
+    metrics:
+      - name: pop3_up
+        expression: 'if (.answer | startswith("+OK")) then 1 else 0 end'
+      - name: tcp_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+      - name: tcp_greeting_seconds
+        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+```
+
+IMAP, port 143, greeting `* OK`; `LOGOUT`, tagged `a`, is answered with an
+untagged `* BYE` and `a OK`, and the server closes. IMAPS on 993 is the
+same with `tls: {}`:
+
+```yaml
+  - name: imap
+    request:
+      type: tcp
+      greeting: '^\* OK'
+      send: "a LOGOUT\r\n"
+    decoder:
+      type: text
+    transform:
+      type: jq
+      pre_script: |
+        data = {"answer": response.text}
+    metrics:
+      - name: imap_up
+        expression: 'if (.answer | test("(?m)^a OK")) then 1 else 0 end'
+      - name: tcp_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+      - name: tcp_greeting_seconds
+        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+```
+
+SSH, port 22: the server's banner, `SSH-2.0-` and its software, is its
+greeting, and the client is to speak next, so the check sends nothing and
+the banner is the answer. The greeting below takes OpenSSH 9.6 and later
+alone, so an older server fails the probe; the series name the software:
+
+```yaml
+  - name: ssh
+    request:
+      type: tcp
+      greeting: '^SSH-2\.0-OpenSSH_(9\.([6-9]|[1-9][0-9])|[1-9][0-9]+\.)'
+    decoder:
+      type: text
+    transform:
+      type: jq
+      pre_script: |
+        data = {"banner": response.text.strip()}
+    metrics:
+      - name: ssh_banner_info
+        description: 1, the software the server's banner names as a label
+        expression: '1'
+        labels:
+          - name: software
+            expression: '.banner | capture("^SSH-2\\.0-(?<software>\\S+)").software'
+      - name: tcp_connect_seconds
+        expression: '$headers["x-tcp-connect-seconds"] | tonumber'
+      - name: tcp_greeting_seconds
+        expression: '$headers["x-tcp-greeting-seconds"] | tonumber'
+```
+
+```text
+/probe?collector=ssh&target=bastion.example.com:22
+```
+
+The same banner read by a `regex` rule, which reads the body and so needs
+no script, gives the version as a number, though not the timings:
+
+```yaml
+  - name: ssh_version
+    request:
+      type: tcp
+      greeting: '^SSH-2\.0-'
+    transform:
+      type: regex
+    metrics:
+      - name: ssh_openssh_version
+        expression: '^SSH-2\.0-OpenSSH_(\d+\.\d+)'
+```
 
 ## Examples
 
@@ -346,7 +620,10 @@ answer that grows past it fails the scrape when it does, without waiting
 for the rest, as a limit exceeded, which counts in
 `http_exporter_series_limit_exceeded_total`.
 
-The connection, the TLS handshake, the write and the read end at the
+The greeting is held to the limit too, on its own: a greeting that grows
+past it fails the scrape when it does.
+
+The connection, the TLS handshake, the greeting, the write and the read end at the
 probe's deadline, its `timeout` or the scrape's, 30 seconds without one:
 a server that stops answering, or keeps the connection open without the
 terminator, fails the scrape when it comes, with the deadline's error.
@@ -358,14 +635,20 @@ A failed scrape is reported in the `tcp` stage and follows
 `connecting to memcached-0.cache:11211: ...`, `reading from
 memcached-0.cache:11211: no answer ending with request.terminator "END\r\n"
 came, 12 bytes read: ...`, `the server closed the connection after 12 bytes,
-and the answer does not end with request.terminator "END\r\n"`. A service
+and the answer does not end with request.terminator "END\r\n"`, and, with
+`greeting`, `the greeting of mx.example.com:25, "554 ...", does not match
+request.greeting "^220[ -]"`, `the server mx.example.com:25 closed the
+connection without a greeting; request.greeting expects one`, `waiting for
+the greeting of mx.example.com:25, as request.greeting expects, 0 bytes
+read: ...`. A service
 the target lists refuse counts in `http_exporter_targets_refused_total`,
 answered `403`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows in its request section
 the bytes sent, quoted so that a carriage return and a line feed are seen,
-and how many bytes were read and how reading stopped; its response section
-shows the answer:
+and how many bytes were read and how reading stopped, after the greeting
+step with `greeting` ([Timings and the greeting](#timings-and-the-greeting));
+its response section shows the answer and its headers:
 
 ```text
 Requests
@@ -380,9 +663,9 @@ when it only reads.
 
 ## Limitations
 
-- **One line, one answer.** A scrape writes `send` once and reads one
-  answer; a dialogue, a login, or an answer read after a second command is
-  not spoken. Write every command into `send` where the server takes them
+- **One line, one answer.** A scrape reads a greeting when asked, writes
+  `send` once and reads one answer; a dialogue, a login, `STARTTLS`, or an
+  answer read after a second command is not spoken. Write every command into `send` where the server takes them
   together, as Beanstalkd's `stats\r\nquit\r\n`.
 - **Text matched as written.** The terminator is matched as bytes at the end
   of the answer, with no placeholder, and no pattern.
@@ -397,6 +680,8 @@ when it only reads.
 | --- | --- |
 | `... uses request.type "tcp", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=tcp` (see [Building with tcp](#building-with-tcp)); the published image does not carry it. |
 | `target "..." is not host:port; a tcp target names its port` | Add the port: `memcached-0.cache:11211`. |
+| `the greeting of ..., [withheld; in the exporter's log], does not match request.greeting ...` | The server greeted otherwise: the exporter's log, or a [debug probe](CONFIGURATION.md#debug-probes), shows what it said. Over several lines the pattern is matched against them all: `^220[ -]` takes `220-` on the first. |
+| `waiting for the greeting of ..., as request.greeting expects, 0 bytes read` | The server says nothing first: it is not a service that greets, or it greets only over TLS, which `tls` asks for. |
 | `... no answer ending with request.terminator "END\r\n" came, ...` | The terminator: written in double quotes, so that `\r\n` is a carriage return and a line feed, and the end of the whole answer. Or `send`: the server did not take it, and waits for more, often a line feed it lacks. |
 | `... the server kept the connection open, ...; without request.terminator ...` | The server does not close after answering: set `terminator`. |
 | `the server closed the connection after 0 bytes, ...` | The server refused what was sent: a ZooKeeper whose `4lw.commands.whitelist` does not name the word answers nothing and closes. |

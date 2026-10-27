@@ -1062,10 +1062,11 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		items.running = code.RunWithContext(ctx, data, data, vars.status, vars.headers)
 	}
 	// The rule's series are those of out from start on. Room is made for
-	// them at once where the number of items is known beforehand.
+	// them at once where the number of items is known beforehand, and for
+	// those of the rules after it over the same items (growItemsSeries).
 	start := len(out.Metrics)
 	if known, ok := items.expected(data, rule.Items); ok {
-		out.Metrics = growRuleSeries(ctx, out.Metrics, &rule, known)
+		out.Metrics = growItemsSeries(ctx, out.Metrics, &rule, later, known)
 	}
 	for index := 0; ; index++ {
 		item, more := items.next()

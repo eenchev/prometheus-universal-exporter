@@ -245,3 +245,23 @@ func TestRoomForSeriesIsBoundedByTheLimit(t *testing.T) {
 		})
 	}
 }
+
+// Two jq rules over the same items, a value and a size of each, make room
+// for the series of both at once: a series of the two costs no more bytes
+// than one of a rule alone, give or take a twentieth. When the first rule
+// made room for its own series only, the second made it again, twice the
+// size, and copied the first's into it: a series of the two cost 252 bytes,
+// where one of a rule alone costs 211 and one of the two now 185.
+func TestJQRulesOverTheSameItemsMakeRoomForTheirSeriesOnce(t *testing.T) {
+	body := boundItemsJSON(boundSeries)
+	jq := func(rules ...model.MetricRule) model.Collector {
+		return model.Collector{Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: rules}
+	}
+	value := model.MetricRule{Name: "item_value", Items: ".items[]", Expression: ".value"}
+	size := model.MetricRule{Name: "item_size_bytes", Items: ".items[]", Expression: ".size"}
+	_, alone := transformCost(t, jq(value), body, boundSeries)
+	_, both := transformCost(t, jq(value, size), body, 2*boundSeries)
+	if both > alone*1.05 {
+		t.Errorf("a series of two rules over the same items cost %.0f bytes, one of a rule alone %.0f", both, alone)
+	}
+}

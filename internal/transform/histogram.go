@@ -183,3 +183,27 @@ func growRuleSeries(ctx context.Context, metrics []model.Metric, rule *model.Met
 	}
 	return growSeries(ctx, metrics, n)
 }
+
+// growItemsSeries makes room for the series of rule, about to read n items,
+// and of every rule after it over the same items, which reads the same n
+// (jqSharing): two rules over one list of items, a value and a size of each,
+// are the commonest shape of a jq collector, and room made for the first
+// rule's series alone was made again, twice the size and copied into, for
+// the second's. Each of those rules makes room for its own series as it
+// begins, and finds it made. growSeries bounds the room to what
+// limits.max_metrics leaves.
+func growItemsSeries(ctx context.Context, metrics []model.Metric, rule *model.MetricRule, later []model.MetricRule, n int) []model.Metric {
+	rules := 0
+	if rule.Histogram == nil {
+		rules++
+	}
+	for i := range later {
+		if later[i].Items == rule.Items && later[i].Histogram == nil {
+			rules++
+		}
+	}
+	if rules == 0 {
+		return metrics
+	}
+	return growSeries(ctx, metrics, n*rules)
+}

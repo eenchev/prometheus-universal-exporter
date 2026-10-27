@@ -6939,7 +6939,10 @@ of no value it does not keep, and MUST fail with the same error as one with
 `items`. A value that makes no series MUST take no room. A jq rule without
 `items` that fails as a whole after it made series — its program failing part
 of the way, a label's values not pairing — MUST drop them and give their room
-back, as a rule with `items` does. A python transform's answer is bounded by
+back, as a rule with `items` does. Room made for the series of a jq rule
+whose `items` are counted beforehand SHOULD be made once for it and the
+rules after it over the same `items`, and MUST NOT be more than the limit
+leaves. A python transform's answer is bounded by
 `max_output_bytes`, and its metrics MUST be counted before they are read.
 
 The room is held by the series a scrape keeps, and by nothing else once a
@@ -28793,6 +28796,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAShorterBodyDoesNotKeepTheLastOnesBuffer`: 1,000 bytes after a megabyte are in a buffer of at most 6,096 bytes; 900 after 1,000 in the hinted buffer of 1,638.
 - `TestFetchingAMegabyteOfDeclaredLengthAllocatesItOnce`: a chunked megabyte fetched after another from the same target allocates at most 1.5 MiB in all, as one with a length does (2.2 MiB before).
 - `TestPromParserMakesTheLabelTextOfManySeriesAtOnce`: 1,000 series of three labels, two of them new on each line, cost the Prometheus parser at most 2.25 allocations each (2.02: the map of the labels and a share of a chunk of text), where each new value was an allocation of its own (4.02); `TestPromParserAgreesWithTheOneItWasOnEdgeCases`, `TestPromParserAgreesWithTheOneItWasOnRandomExpositions` and the rest of the decoder's tests pass unchanged.
+- `TestJQRulesOverTheSameItemsMakeRoomForTheirSeriesOnce`: a jq collector with two rules over `.items[]` of 2,000 items allocates no more bytes a series than one rule alone, give or take a twentieth (185 against 211; 252 when the second rule made the room again and copied the first's series into it).
 
 # 35. Documentation requirements
 

@@ -2502,7 +2502,8 @@ asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
 `sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
-certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) — and
+certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
+`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
 `kubernetes` lists Kubernetes objects — see [Kubernetes
 objects](KUBERNETES.md).
 A collector
@@ -2584,6 +2585,11 @@ certificate and the name verified, and `allowed_targets` and
 `denied_targets` apply as for `http`. The decoder is `json`; its table is in
 [TLS certificates](TLSCERT.md#a-collector).
 
+For `ntp`, no key is required, and the type has none of its own:
+`allowed_targets` and `denied_targets` apply as for `http`, checked on the
+address the request is sent to. The decoder is `json`; its table is in
+[NTP](NTP.md#a-collector).
+
 For `kubernetes`, `resource` is required; `group` and `version`,
 `namespaces` or `all_namespaces`, `label_selector`, `field_selector`,
 `max_objects`, `max_response_bytes`, and `api_server` with `tls` and
@@ -2655,7 +2661,8 @@ and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
 `param_<name>` too, and requires a `target`, the bucket. `sql` accepts `timeout` and
 `param_<name>`, and requires a `target`, the database server. `dns` and
 `tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
-name to resolve and the server, `host:port`. `kubernetes` accepts `timeout`
+name to resolve and the server, `host:port`, and so does `ntp`, its server
+`host:port`, port 123 when left out. `kubernetes` accepts `timeout`
 and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
 since the collector lists what its configuration names. `redis` accepts
 `timeout` and `param_<name>`, and requires a `target`, the server,
@@ -2716,12 +2723,12 @@ than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
 An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile`,
-`sql`, `dns`, `tlscert` and `kubernetes` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+`sql`, `dns`, `tlscert`, `ntp` and `kubernetes` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
 HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
-`tlscert` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
+`tlscert`, `ntp` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
 links the AWS SDK, below, the opt-in `redis`, `tcp` and `ldap` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
@@ -3215,7 +3222,7 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, kubernetes, localfile, sql, sshfile, tlscert`. And a boolean is `true` or
+  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. And a boolean is `true` or
   `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label
@@ -5966,6 +5973,7 @@ nothing there.
 - [SQL.md](SQL.md) — the `sql` request type.
 - [DNS.md](DNS.md) — the `dns` request type.
 - [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
+- [NTP.md](NTP.md) — the `ntp` request type.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
 - [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
 - [REDIS.md](REDIS.md) — the opt-in `redis` request type.

@@ -120,8 +120,8 @@ func optInRequestTypes(t *testing.T) []string {
 // type is grpc, the SSH modules only when it is sshfile or sshexec, the
 // SFTP module only when it is sshfile, and the AWS SDK only when it is
 // s3file; a build of graphite, http and localfile together links none
-// of them, nor does one of dns, tlscert and kubernetes, or of redis, tcp or
-// ldap alone, which need nothing outside the standard library; and the default
+// of them, nor does one of dns, tlscert, ntp and kubernetes, or of redis,
+// tcp or ldap alone, which need nothing outside the standard library; and the default
 // build, of every type but the opt-in s3file, redis, tcp and ldap, links gRPC's
 // and SSH's and no AWS SDK, which only a build asking for s3file
 // (OPT_IN_REQUEST_TYPES) links, and a build asking for redis, tcp or ldap alone
@@ -129,7 +129,7 @@ func optInRequestTypes(t *testing.T) []string {
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,kubernetes,ldap,redis,tcp,tlscert") {
+	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,kubernetes,ldap,ntp,redis,tcp,tlscert") {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestTypes []string
@@ -211,17 +211,20 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	}
 }
 
-// The opt-in tcp request type links nothing outside the standard library:
-// every package a build of it alone links beyond those of a build of no
-// type at all is the standard library's or the module's own, its client
-// being net and crypto/tls, as is the stand-in server of its tests in
+// The opt-in tcp request type and the ntp type link nothing outside the
+// standard library: every package a build of either alone links beyond
+// those of a build of no type at all is the standard library's or the
+// module's own, tcp's client being net and crypto/tls and ntp's net and
+// crypto/rand, as is the stand-in server of tcp's tests in
 // internal/testutil, which tests alone import.
-func TestTheTCPTypeLinksNothingOutsideTheStandardLibrary(t *testing.T) {
+func TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary(t *testing.T) {
 	none := linkedPackagesTagged(t, "select_request_types")
-	for _, pkg := range linkedPackages(t, "tcp") {
-		first, _, _ := strings.Cut(pkg, "/")
-		if !slices.Contains(none, pkg) && strings.Contains(first, ".") && !strings.HasPrefix(pkg, "github.com/eenchev/prometheus-universal-exporter/") {
-			t.Errorf("REQUEST_TYPES=tcp links %s, which a build of no request type does not and which is not the standard library's", pkg)
+	for _, types := range []string{"tcp", "ntp"} {
+		for _, pkg := range linkedPackages(t, types) {
+			first, _, _ := strings.Cut(pkg, "/")
+			if !slices.Contains(none, pkg) && strings.Contains(first, ".") && !strings.HasPrefix(pkg, "github.com/eenchev/prometheus-universal-exporter/") {
+				t.Errorf("REQUEST_TYPES=%s links %s, which a build of no request type does not and which is not the standard library's", types, pkg)
+			}
 		}
 	}
 }

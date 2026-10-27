@@ -21,7 +21,8 @@ import (
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
 // statement on a database, dns resolves a name, tlscert reads the
-// certificates of a TLS handshake, s3file reads an object from S3 or a
+// certificates of a TLS handshake, ntp asks an NTP server for the time,
+// s3file reads an object from S3 or a
 // store that speaks its API, kubernetes lists objects from a Kubernetes API
 // server, redis reads INFO and read-only commands from a Redis or Valkey
 // server, tcp sends a line to a text-protocol service over TCP and reads
@@ -63,13 +64,14 @@ const (
 	RequestTypeTCP        = "tcp"
 	RequestTypeLDAP       = "ldap"
 	RequestTypeSSHExec    = "sshexec"
+	RequestTypeNTP        = "ntp"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links

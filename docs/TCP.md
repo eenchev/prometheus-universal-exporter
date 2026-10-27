@@ -50,7 +50,7 @@ type, at startup, on a reload and by `--dry-run`, saying how to build one
 that has it:
 
 ```text
-collector "memcached" uses request.type "tcp", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, sql, sshfile, tlscert. tcp is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=tcp (make build, or the Dockerfile's build argument), which adds the tag request_type_tcp
+collector "memcached" uses request.type "tcp", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. tcp is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=tcp (make build, or the Dockerfile's build argument), which adds the tag request_type_tcp
 ```
 
 ## A collector

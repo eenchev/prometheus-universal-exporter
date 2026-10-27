@@ -41,7 +41,7 @@ type, at startup, on a reload and by `--dry-run`, saying how to build one
 that has it:
 
 ```text
-collector "backups" uses request.type "s3file", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, localfile, sql, sshfile, tlscert. s3file is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=s3file (make build, or the Dockerfile's build argument), which adds the tag request_type_s3file
+collector "backups" uses request.type "s3file", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. s3file is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=s3file (make build, or the Dockerfile's build argument), which adds the tag request_type_s3file
 ```
 
 ## A collector

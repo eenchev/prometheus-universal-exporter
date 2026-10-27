@@ -3145,6 +3145,7 @@
                   "http",
                   "kubernetes",
                   "localfile",
+                  "ntp",
                   "sql",
                   "sshfile",
                   "tlscert"

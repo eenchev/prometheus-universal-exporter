@@ -1835,6 +1835,7 @@ jobs:
           - kubernetes
           - ldap
           - localfile
+          - ntp
           - redis
           - s3file
           - sql

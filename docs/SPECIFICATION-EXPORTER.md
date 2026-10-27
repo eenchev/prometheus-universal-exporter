@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
 - Support jq transformations for JSON.
@@ -675,7 +675,7 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
+`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
 implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
@@ -805,7 +805,7 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -2296,6 +2296,65 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   the version, the number of certificates and whether the chain verified,
   or the error, as its outcome. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
+
+#### `ntp`
+
+An `ntp` collector sends one SNTP client request (RFC 4330, the packet of
+NTPv4, RFC 5905) to the probe's `target` and hands the server's reply to
+the transforms as a JSON document. It MUST need nothing outside Go's
+standard library, and MUST be in the default build. It has no keys of its
+own; of the common part it takes `allowed_targets` and `denied_targets`,
+as for `http`, the host's name before the request and the address the UDP
+socket is connected to before anything is sent (§ 26.1).
+
+- A target MUST be `host`, `host:port` or `[v6]:port`, port 123 when left
+  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  refused, a probe's with `400` before anything is sent and a static
+  target's at load. A probe MUST take `timeout` and `param_<name>`
+  parameters, and a static target's request block `timeout`.
+- A scrape MUST send one request, of 48 bytes, version 4, mode 3, whose
+  only field set besides is the transmit timestamp, which MUST be a random
+  number and not the exporter's clock. Nothing MUST be sent again within
+  the scrape. The scrape's deadline — the probe's `timeout`, the scrape's
+  own, 30 seconds when neither is set — MUST bound the whole of it.
+- A datagram MUST be taken as the reply only when it comes from the address
+  the request was sent to, is at least 48 bytes, carries the request's
+  transmit timestamp as its origin timestamp, is of mode 4 or 5 and of
+  version 3 or 4, and has a transmit timestamp. Any other datagram MUST be
+  ignored and the reply waited for; when the deadline comes first, the
+  scrape MUST fail wrapping `context.DeadlineExceeded`, saying how many
+  datagrams were ignored and why the last one was. An error of the socket,
+  such as the refusal of an ICMP port unreachable, MUST fail it at once.
+- The reply MUST fail the scrape in the `ntp` stage, naming `host:port`,
+  when it is a Kiss-o'-Death (stratum 0), naming its code; when its leap
+  indicator is 3 or its stratum 16, saying the server is not synchronised;
+  and when its stratum is past 16. A Kiss-o'-Death code RFC 5905 lists
+  MUST be told to a probe's caller; any other, and a stratum past 16, are
+  values of the answer and MUST be withheld from the caller (§ 19.4).
+- The offset MUST be `((t2 - t1) + (t3 - t4)) / 2` and the delay
+  `(t4 - t1) - (t3 - t2)`, `t1` the exporter's wall clock when the request
+  was sent and `t4` `t1` with the round trip timed by the monotonic clock
+  added, each difference taken of the 64-bit NTP timestamps as a signed
+  number, so that timestamps on either side of the end of an NTP era (2036)
+  give the difference they are. The server's timestamps MUST be read as
+  times in the era that puts them within 68 years of the exporter's clock.
+- The answer MUST be a JSON document of `host`, `port`, `address` (the
+  address the request was sent to), `offset_seconds`, `delay_seconds`,
+  `version`, `leap_indicator`, `stratum`, `precision` and `poll` (log2
+  seconds, as sent) with `precision_seconds` and `poll_seconds`,
+  `root_delay_seconds`, `root_dispersion_seconds`, `reference_id`,
+  `reference_time` and `transmit_time` in Unix seconds with their fraction
+  and as RFC 3339 in UTC (`_rfc3339`), and `duration_seconds`. The reference
+  id MUST be, of stratum 1, its printable ASCII without trailing NULs, or
+  `0x` and its bytes in hexadecimal when they are not printable; of a higher
+  stratum, a dotted IPv4 address. A reference timestamp of 0 MUST be given
+  as `reference_time` 0 and `reference_time_rfc3339` `""`.
+- The decoder MUST be `json`, as for `grpc`; another decoder, and a
+  transform other than `jq`, `yq` and `python`, MUST be refused at load.
+- A debug probe's request section MUST show `QUERY`, `ntp://host:port` and
+  the version sent, with the stratum, offset and delay, or the error, as
+  its outcome. The verbose `url` label MUST be `ntp://host:port` and
+  `http_method` MUST be `QUERY`.
 
 #### `s3file`
 
@@ -8555,7 +8614,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, localfile, sql, sshfile, tlscert`. A
+  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
@@ -9191,7 +9250,7 @@ Requirements:
 
 ## 26.1 Target allowlists and deny lists
 
-An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
+An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
 `s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
@@ -9294,7 +9353,9 @@ whether or not a proxy is in between.
   `UNAVAILABLE` grpc-go makes of a dialer's error, whether the call or the
   reflection question before it made it. A refused request MUST NOT be
   retried. A connection to a host the request did not check, when nothing it
-  checked goes through a proxy, MUST be refused.
+  checked goes through a proxy, MUST be refused. A UDP socket, an `ntp`
+  request's, MUST be checked as a connection is, against the address it is
+  connected to, before anything is sent.
 - An idle connection MUST NOT carry a request of a collector whose lists
   differ from those of the collector that opened it: connections are checked
   once, when made, so collectors with different lists MUST NOT share a
@@ -27042,7 +27103,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   verdict from the schema and the exporter
   (TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty).
 - A build of tcp alone links no package a build of no request type lacks
-  but the standard library's (TestTheTCPTypeLinksNothingOutsideTheStandardLibrary),
+  but the standard library's (TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary),
   and none of the gRPC, SSH or AWS modules, nor does OPT_IN_REQUEST_TYPES=tcp
   link the AWS SDK (TestOnlyTheTypesThatNeedThemLinkTheirModules).
 - tools/request-type-tags.sh takes tcp as an opt-in type, alone, with the
@@ -28483,7 +28544,7 @@ The repository MUST include documentation covering:
     collector's keys, the target, and static targets: `graphite` in
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
-    `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
+    `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
     `ldap` in `docs/LDAP.md` and `sshexec` in `docs/SSHEXEC.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for

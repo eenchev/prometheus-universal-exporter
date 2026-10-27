@@ -62,7 +62,7 @@ func constrainedKeys(schema map[string]any) []string {
 // "". Every row's key is a key of its schema, and some fifty are held.
 func TestEveryConstrainedKeyOfTheSchemasIsInATable(t *testing.T) {
 	rows := map[keyFile]map[string]bool{inConfiguration: {}, inTargetFile: {}}
-	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys()) {
+	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys()) {
 		rows[key.file][key.key] = true
 	}
 	held := 0
@@ -117,7 +117,7 @@ func sizeKeys(schema map[string]any) []string {
 // those and otlp.batch_max_bytes, and the target file none.
 func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T) {
 	marked := map[string]bool{}
-	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys()) {
+	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys()) {
 		if key.size {
 			if key.file != inConfiguration {
 				t.Errorf("%s is marked as a size in a file that has none", key.name())

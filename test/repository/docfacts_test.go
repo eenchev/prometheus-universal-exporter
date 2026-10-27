@@ -129,6 +129,7 @@ func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet(t *testing.T) {
 		{"docs/TCP.md", "internal/fetch/requesttype_tcp.go"},
 		{"docs/LDAP.md", "internal/fetch/requesttype_ldap.go"},
 		{"docs/SSHEXEC.md", "internal/fetch/requesttype_sshexec.go"},
+		{"docs/NTP.md", "internal/fetch/requesttype_ntp.go"},
 	} {
 		text := read(t, page.doc)
 		_, section, ok := strings.Cut(text, "\n## Static targets\n")

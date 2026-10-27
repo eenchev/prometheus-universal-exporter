@@ -45,7 +45,7 @@ type, at startup, on a reload and by `--dry-run`, saying how to build one
 that has it:
 
 ```text
-collector "redis" uses request.type "redis", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, sql, sshfile, tlscert. redis is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=redis (make build, or the Dockerfile's build argument), which adds the tag request_type_redis
+collector "redis" uses request.type "redis", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. redis is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=redis (make build, or the Dockerfile's build argument), which adds the tag request_type_redis
 ```
 
 ## A collector

@@ -646,7 +646,12 @@ Each type MUST own, and the implementation MUST keep in one registry:
   not take is refused once that key is gone, and one before it as an unknown
   key (§ 24.2a). The first in the file is the one on the earlier line, or
   further left on the same line; a key a merge key brings in is where its
-  anchor has it. So MUST a collector file's;
+  anchor has it. So MUST a collector file's, and so MUST each check that
+  refuses several keys alike name the first in the file, never in an order
+  that changes from one load to the next: `keepalive_interval` and
+  `idle_timeout` negative, the credential files blank or with a
+  placeholder, `label_selector` and `field_selector` blank, a login's
+  `token` and `expires_in` blank, and a login's keys of the other type;
 - the `/probe` parameters it accepts (§ 42.10). A parameter that some type
   accepts but the collector's type does not MUST be rejected with
   `400 Bad Request` naming the parameter and the type, before the target is
@@ -2290,7 +2295,14 @@ carries it. Its keys:
   and which permissions the credentials need. Every request MUST be sent
   once, without the SDK's retries, within the probe's deadline. A failed
   read MUST be reported in the `s3` stage, naming the key as the file under
-  `root` and the bucket as `s3://<bucket>`.
+  `root` and the bucket as `s3://<bucket>`. What the store answered MUST be
+  the operator's alone (§ 19.4): a probe's caller MUST be told, in place of
+  the SDK's error, `operation error S3: <operation>, the store answered
+  <status> <code>; its message is in the exporter's log`, the store's
+  message, which names the principal and the account, withheld; a request
+  the SDK found no credentials for MUST be told `..., the AWS SDK found no
+  credentials it could use; which it tried is in the exporter's log`. A
+  failure of the network MUST be told as it is.
 - A collector with `files` MUST list the objects directly under `root`'s
   prefix with ListObjectsV2 and the delimiter `/`, in pages of at most 256
   asked for one at a time as `localfile` lists a directory in batches, and
@@ -28304,6 +28316,27 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnLDAPCollectorBindsWithItsDNAndPasswordFile`: a bind refused for a
   wrong password is answered `BIND [withheld; in the exporter's log] ***:
   the server answered invalidCredentials (49) ...`, without the DN.
+
+## 34.225 Keys one check refuses named in the file's order, and an S3 store's words withheld from a probe's caller
+
+- `TestTwoKeysOneCheckRefusesAreNamedInTheFilesOrder`: an sshfile
+  collector's negative `keepalive_interval` and `idle_timeout`, its
+  `private_key_file` and `password_file` written blank or with a
+  placeholder, a kubernetes collector's blank `label_selector` and
+  `field_selector`, a json login's blank `token` and `expires_in`, and a
+  json login's `scopes` and `client_id`, each written in both orders and
+  loaded 20 times, are refused naming the first in the file every time.
+- `TestS3FilesCallerIsToldTheStoresCodeAndNotItsMessage` (with
+  `request_type_s3file`): a listing refused `AccessDenied` with a message
+  naming an IAM user's ARN is told the caller as `operation error S3:
+  ListObjectsV2, the store answered 403 AccessDenied; its message is in the
+  exporter's log`, after the advice, the error keeping the ARN; a refused
+  HeadObject as `... HeadObject, the store answered 403 Forbidden; ...`; a
+  missing bucket as `the bucket does not exist: operation error S3:
+  HeadBucket, the store answered 404 NotFound; ...`; and with no
+  credentials in the environment, the shared files or the instance's
+  metadata, `operation error S3: HeadObject, the AWS SDK found no
+  credentials it could use; which it tried is in the exporter's log`.
 
 # 35. Documentation requirements
 

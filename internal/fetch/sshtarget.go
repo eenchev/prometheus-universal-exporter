@@ -46,14 +46,15 @@ func validateSSHConnection(x *model.Collector, account string) error {
 	if strings.TrimSpace(r.KnownHostsFile) == "" {
 		return fmt.Errorf("collector %q request.known_hosts_file is required for request.type %s: the host's key is always verified, against the lines of this file (ssh-keyscan writes them)", x.Name, x.Request.Type)
 	}
-	if err := checkSSHCredentialKeys(x.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile); err != nil {
+	if err := checkSSHCredentialKeys(x.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if err := checkSSHFileKey("request.known_hosts_file", r.KnownHostsFile); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	for key, value := range map[string]*model.Duration{"keepalive_interval": r.KeepaliveInterval, "idle_timeout": r.IdleTimeout} {
-		if value != nil && *value < 0 {
+	durations := map[string]*model.Duration{"keepalive_interval": r.KeepaliveInterval, "idle_timeout": r.IdleTimeout}
+	for _, key := range model.InFileOrder([]string{"keepalive_interval", "idle_timeout"}, r.Order) {
+		if value := durations[key]; value != nil && *value < 0 {
 			return fmt.Errorf("collector %q request.%s must not be negative", x.Name, key)
 		}
 	}
@@ -75,16 +76,19 @@ func validateSSHConnection(x *model.Collector, account string) error {
 // left out, which "" is; and no placeholder in any of them, since none is a
 // template. An empty username is the collector's to require; a static
 // target's empty one keeps the collector's. requestType names the type in
-// the refusal.
-func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFile, passwordFile string) error {
+// the refusal, and order is the request block's keys in the order the file
+// has them, of which a refusal names the first.
+func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFile, passwordFile string, order []string) error {
 	if strings.Contains(username, "{{") {
 		return fmt.Errorf("request.username %q has a placeholder; the account is named as it is, so it takes none", username)
 	}
 	if err := checkSSHBlank("request.username", username); err != nil {
 		return err
 	}
-	for _, key := range []struct{ name, value string }{{"request.private_key_file", privateKeyFile}, {"request.passphrase_file", passphraseFile}, {"request.password_file", passwordFile}} {
-		if err := checkSSHBlank(key.name, key.value); err != nil {
+	files := map[string]string{"private_key_file": privateKeyFile, "passphrase_file": passphraseFile, "password_file": passwordFile}
+	inOrder := model.InFileOrder([]string{"private_key_file", "passphrase_file", "password_file"}, order)
+	for _, key := range inOrder {
+		if err := checkSSHBlank("request."+key, files[key]); err != nil {
 			return err
 		}
 	}
@@ -94,8 +98,8 @@ func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFil
 	if strings.TrimSpace(privateKeyFile) == "" && strings.TrimSpace(passwordFile) == "" {
 		return fmt.Errorf("sets neither request.private_key_file nor request.password_file; an %s request authenticates with a private key, a password, or both (the key is tried first)", requestType)
 	}
-	for key, value := range map[string]string{"request.private_key_file": privateKeyFile, "request.passphrase_file": passphraseFile, "request.password_file": passwordFile} {
-		if err := checkSSHFileKey(key, value); err != nil {
+	for _, key := range inOrder {
+		if err := checkSSHFileKey("request."+key, files[key]); err != nil {
 			return err
 		}
 	}
@@ -137,7 +141,7 @@ func checkSSHTargetAccount(c *model.Collector, t *model.StaticTarget) error {
 		}
 		return checkSSHBlank("request.username", r.Username)
 	}
-	if err := checkSSHCredentialKeys(c.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile); err != nil {
+	if err := checkSSHCredentialKeys(c.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order); err != nil {
 		return fmt.Errorf("%w; a target that sets a credential file replaces the collector's credential files with its own", err)
 	}
 	return nil

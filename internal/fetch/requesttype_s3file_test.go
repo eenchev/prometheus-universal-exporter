@@ -154,7 +154,12 @@ func s3ErrorAnswer(w http.ResponseWriter, r *http.Request, status int, code stri
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
-		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Message>%s</Message></Error>`, code, code)
+		message := code
+		if code == "AccessDenied" {
+			// As S3 says it: the principal, and with it the account.
+			message = "User: arn:aws:iam::123456789012:user/exporter is not authorized to perform: s3:GetObject"
+		}
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Message>%s</Message></Error>`, code, message)
 	}
 }
 
@@ -703,4 +708,53 @@ func TestS3FileClientsFollowTheConfiguration(t *testing.T) {
 // build does (checkOptInRequestKeys).
 func TestTheOptInRequestKeysAreTheTypesOwn(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeS3File)
+}
+
+// What the store said is the operator's: S3's AccessDenied names the
+// principal the request was made as, and with it the account. A probe's
+// caller is told the operation, the status and the store's code, and the
+// advice; the error, which the log shows, has the message. Without
+// credentials the SDK's chain says which sources it tried, which the
+// caller is not told either.
+func TestS3FilesCallerIsToldTheStoresCodeAndNotItsMessage(t *testing.T) {
+	f := newFakeS3(t)
+	f.put("metrics", "exports/app/a.prom", "a 1\n", time.Now())
+	f.put("locked", "exports/app/a.prom", "a 1\n", time.Now())
+	f.denied = "locked"
+	directory := func(r *model.RequestConfig) { r.Files = []string{"*.prom"} }
+	for _, tc := range []struct {
+		target, path string
+		change       []func(*model.RequestConfig)
+		told         string
+	}{
+		// A listing's answer has a body, with the message.
+		{"locked", "", []func(*model.RequestConfig){directory}, "access denied (403): the credentials need s3:GetObject on the object, and s3:ListBucket on the bucket for a missing object to be told apart and for a directory to be listed: operation error S3: ListObjectsV2, the store answered 403 AccessDenied; its message is in the exporter's log"},
+		// A HeadObject's has none: the SDK names the status.
+		{"locked", "a.prom", nil, "operation error S3: HeadObject, the store answered 403 Forbidden; its message is in the exporter's log"},
+		{"nowhere", "a.prom", nil, "the bucket does not exist: operation error S3: HeadBucket, the store answered 404 NotFound; its message is in the exporter's log"},
+	} {
+		_, err := FetchCollector(context.Background(), tc.target, f.collector(t, "failing", tc.path, tc.change...), RequestOverrides{}, nil)
+		if err == nil || tc.path == "" && !strings.Contains(err.Error(), "arn:aws:iam::123456789012") {
+			t.Fatalf("%s: err=%v, want the store's message in the error", tc.target, err)
+		}
+		if told := model.CallerText(err); !strings.Contains(told, tc.told) || strings.Contains(told, "123456789012") {
+			t.Errorf("%s: the caller is told %q, want %q in it", tc.target, told, tc.told)
+		}
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	c := f.collector(t, "chain", "a.prom", func(r *model.RequestConfig) {
+		s3Own(r, func(o *S3FileConfig) { o.AccessKeyIDFile, o.SecretAccessKeyFile = "", "" })
+	})
+	_, err := FetchCollector(context.Background(), "metrics", c, RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "get identity") {
+		t.Fatalf("no credentials: err=%v, want the SDK's words", err)
+	}
+	if told := model.CallerText(err); !strings.Contains(told, "operation error S3: HeadObject, the AWS SDK found no credentials it could use; which it tried is in the exporter's log") || strings.Contains(told, "get identity") {
+		t.Errorf("no credentials: the caller is told %q", told)
+	}
 }

@@ -311,6 +311,20 @@ object over the size limit counts in
 `http_exporter_series_limit_exceeded_total`, a bucket the target lists
 refuse in `http_exporter_targets_refused_total`, answered `403`.
 
+What the store answered is the operator's: S3's `AccessDenied` names the
+principal the request was made as, and with it the account, and the SDK's
+credential chain says which sources it tried. The exporter's log, a debug
+probe's report and, with `--web.debug=full`, the status page show it; the
+caller of `/probe` is told the operation, the status and the store's code:
+
+```text
+collector backups s3 failed: reading /reports/backup/last-run.json: access denied (403): the credentials need s3:GetObject on the object, and s3:ListBucket on the bucket for a missing object to be told apart and for a directory to be listed: operation error S3: HeadObject, the store answered 403 Forbidden; its message is in the exporter's log (in s3://acme-backups)
+```
+
+and, without credentials, `operation error S3: HeadObject, the AWS SDK found
+no credentials it could use; which it tried is in the exporter's log`. See
+[What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told).
+
 A [debug probe](CONFIGURATION.md#debug-probes) shows the read in its
 request section by the object's `s3://` URL, and never a credential:
 

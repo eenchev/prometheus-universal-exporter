@@ -9,6 +9,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,9 +279,17 @@ func TestAnSSHExecFailuresStderrIsNotForTheCaller(t *testing.T) {
 }
 
 // stdout is held to the response limit as it comes: the scrape fails as
-// over the limit, and the command is ended rather than read to its end.
+// over the limit, and the command is ended rather than read to its end:
+// it is sent KILL and its session closed. Which of the two ends the
+// stand-in's command first is the server's to say — the close fails the
+// write the command is blocked in before the signal is read, as often as
+// not — so the test waits for the command to have stopped, by either, and
+// for the KILL to have been sent; it waited for the signal alone (Ended),
+// which failed when the close came first.
 func TestAnSSHExecOutputIsHeldToTheResponseLimit(t *testing.T) {
+	var stopped atomic.Bool
 	f := newExecFixture(t, func(ctx context.Context, _ string, stdout, _ io.Writer) int {
+		defer stopped.Store(true)
 		chunk := strings.Repeat("x", 1024)
 		for ctx.Err() == nil {
 			if _, err := io.WriteString(stdout, chunk); err != nil {
@@ -294,7 +303,11 @@ func TestAnSSHExecOutputIsHeldToTheResponseLimit(t *testing.T) {
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "larger than the response limit of 4096 bytes") {
 		t.Errorf("err=%v, want the response limit", err)
 	}
-	testutil.WaitFor(t, "the command ended", func() bool { return f.server.Ended() == 1 })
+	testutil.WaitFor(t, "the command stopped", stopped.Load)
+	testutil.WaitFor(t, "the command sent KILL", func() bool {
+		execs := f.server.Execs()
+		return len(execs) == 1 && slices.Contains(execs[0].Signals, "KILL")
+	})
 }
 
 // At the scrape's deadline the command is sent KILL and its session closed,

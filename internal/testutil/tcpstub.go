@@ -23,8 +23,9 @@ import (
 type TCPStub struct {
 	// Addr is the server's host:port, on 127.0.0.1.
 	Addr string
-	// CAFile is the file of the certificate a TLS stub presents, which
-	// verifies it for 127.0.0.1; "" for a plain one.
+	// CAFile is the file of the certificate a TLS stub, or a STARTTLS one
+	// once it has begun TLS, presents, which verifies it for 127.0.0.1; ""
+	// for a plain one.
 	CAFile string
 
 	listener net.Listener
@@ -50,6 +51,43 @@ func NewTCPStub(t testing.TB, answer func(conn net.Conn)) *TCPStub {
 // 127.0.0.1, whose file is CAFile.
 func NewTLSTCPStub(t testing.TB, answer func(conn net.Conn)) *TCPStub {
 	t.Helper()
+	config, caFile := stubTLS(t)
+	var listen net.ListenConfig
+	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return startTCPStub(t, tls.NewListener(listener, config), caFile, answer)
+}
+
+// NewStartTLSStub starts a plain stub whose answer may turn a connection to
+// TLS, as a server speaking STARTTLS does once it has said to begin it:
+// upgrade makes the server's side of the handshake, with the certificate a
+// TLS stub presents, whose file is CAFile, and returns the TLS connection,
+// which answer goes on with.
+func NewStartTLSStub(t testing.TB, answer func(conn net.Conn, upgrade func() (net.Conn, error))) *TCPStub {
+	t.Helper()
+	config, caFile := stubTLS(t)
+	var listen net.ListenConfig
+	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return startTCPStub(t, listener, caFile, func(conn net.Conn) {
+		answer(conn, func() (net.Conn, error) {
+			server := tls.Server(conn, config)
+			if err := server.HandshakeContext(context.Background()); err != nil {
+				return nil, err
+			}
+			return server, nil
+		})
+	})
+}
+
+// stubTLS is the TLS configuration of a stub, with a certificate for
+// 127.0.0.1 and example.com, and the file of that certificate.
+func stubTLS(t testing.TB) (*tls.Config, string) {
+	t.Helper()
 	// httptest's own certificate, for 127.0.0.1 and example.com, which a
 	// TLS server it starts presents and Certificate returns.
 	issuer := httptest.NewUnstartedServer(nil)
@@ -60,12 +98,7 @@ func NewTLSTCPStub(t testing.TB, answer func(conn net.Conn)) *TCPStub {
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var config net.ListenConfig
-	listener, err := config.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return startTCPStub(t, tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}), caFile, answer)
+	return &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}, caFile
 }
 
 func startTCPStub(t testing.TB, listener net.Listener, caFile string, answer func(net.Conn)) *TCPStub {

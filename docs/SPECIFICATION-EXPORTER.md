@@ -2693,7 +2693,8 @@ types at build time): only a build asked for it carries it. Its keys:
 | `send` | none | The text written once the connection is made, or once the greeting has come; nothing is written without it. At most 64 KiB. `{{param_name}}` placeholders, without filters. |
 | `terminator` | none | What the answer ends with. At most 64 KiB; no placeholder. |
 | `document` | `false` | `true`: the answer is a JSON document of the exchange in place of the server's text. |
-| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
+| `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: TLS is begun on the plaintext connection, after the greeting, by that protocol's request for it. |
+| `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS, from the start, or, with `starttls`, once begun. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
 - `greeting`, `send` and `terminator` written `""` MUST be the keys left
@@ -2726,15 +2727,19 @@ types at build time): only a build asked for it carries it. Its keys:
   written as decimal numbers: `X-Tcp-Connect-Seconds` always,
   `X-Tcp-Tls-Seconds` with TLS, `X-Tcp-Greeting-Seconds` and
   `X-Tcp-Greeting`, a value for each line of the greeting without its line
-  end, with `greeting`, and `X-Tcp-Answer-Seconds` when an answer was read
+  end, with `greeting` or `starttls`, `X-Tcp-Starttls-Seconds` with
+  `starttls`, and `X-Tcp-Answer-Seconds` when an answer was read
   after the greeting or without one; without `document` the body MUST stay
   the answer alone.
 - With `document: true` the body MUST be a JSON object, with the
   `Content-Type` `application/json`: `greeting`, the greeting as read, with
   `greeting`; `answer`, what was read after it or the whole answer without
-  it, `""` when nothing was, whenever an answer was read; and, as numbers of
+  it, `""` when nothing was, whenever an answer was read; `starttls`, the
+  protocol, with `starttls`; and, as numbers of
   seconds, `connect_seconds` always, `tls_seconds` with TLS,
-  `greeting_seconds` with `greeting`, `answer_seconds` when an answer was
+  `greeting_seconds` with `greeting` or `starttls`, `starttls_seconds`, from
+  the end of the greeting until the server's yes to the request for TLS,
+  with `starttls`, `answer_seconds` when an answer was
   read, and `duration_seconds`, the exchange from the dial to the end of the
   read. A key of a step not taken MUST be left out, not written `null` or
   `0`. A greeting or an answer that is not UTF-8 MUST fail the scrape,
@@ -2744,6 +2749,33 @@ types at build time): only a build asked for it carries it. Its keys:
   written, with no warning of a decoder left to each response; any other
   decoder, and a transform other than `jq`, `yq` and `python`, MUST be
   refused at load, naming the document.
+- `starttls` MUST be one of `smtp`, `imap`, `pop3` and `ftp`, exactly, and
+  `terminator` with `starttls` and without `send` MUST be refused at load.
+  With `starttls` a scrape MUST read the greeting, as with `greeting` and
+  whether `greeting` is set or not, on the plaintext connection, and MUST
+  fail without writing anything when it does not begin with `220` (`smtp`,
+  `ftp`), `* OK` in any case (`imap`) or `+OK` (`pop3`), matching
+  `greeting` against it too when that is set. It MUST then write only the
+  protocol's request for TLS: for `smtp`, `EHLO` naming the client by the
+  connection's local address as an address literal (`[192.0.2.7]`,
+  `[IPv6:2001:db8::7]`), its answer read as a greeting is and required to
+  be `250` and to list `STARTTLS` on a line after its first, in any case,
+  then `STARTTLS`, answered `220`; for `imap`, `a1 STARTTLS`, its answer
+  the lines up to the first beginning `a1 `, which MUST be `a1 OK`; for
+  `pop3`, `STLS`, answered `+OK`; for `ftp`, `AUTH TLS`, answered `234`.
+  Each answer MUST be held to the response limit, the deadline and
+  cancellation as the greeting is. A server that does not list `STARTTLS`,
+  answers otherwise (a refusal such as `454`, `NO`, `BAD`, `-ERR` or `534`,
+  or what is no answer of the protocol), closes the connection or writes
+  any byte after its yes before the handshake MUST fail the scrape in the
+  `tcp` stage, naming the command and, where the server answered, quoting
+  the answer with `model.Quoted`; the scrape MUST NOT write `send` or any
+  other byte in plaintext, nor go on without TLS. The handshake MUST then
+  be made with the `tls` block's settings, or, without one, verifying with
+  the system roots for the target's host, and `send` written and the answer
+  read over TLS; without `send` the scrape MUST end after the handshake,
+  the greeting being the answer. No static target or probe MAY set
+  `starttls`.
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,
@@ -2760,7 +2792,8 @@ types at build time): only a build asked for it carries it. Its keys:
   target leaving it empty at load; the scrape MUST NOT write nothing in its
   place.
 - A scrape MUST make one connection, speak TLS over it when a `tls` block is
-  written, an empty one (`tls: {}`) as much as one with keys, verifying the
+  written, an empty one (`tls: {}`) as much as one with keys, from the start
+  without `starttls`, verifying the
   certificate with the system roots and `ca_file`'s,
   write `send` when it is set, nothing added to it, read the answer and
   close the connection; it MUST NOT close its writing half before the
@@ -2772,8 +2805,8 @@ types at build time): only a build asked for it carries it. Its keys:
 - The answer MUST be held to the response limit as it arrives: once its
   bytes are past the limit the scrape MUST fail as a limit exceeded, without
   reading on; an answer of exactly the limit MUST be taken.
-- The connection, the TLS handshake, the write and the read MUST end at the
-  scrape's deadline, 30 seconds without one, or when it is cancelled, and a
+- The connection, the TLS handshake, the greeting, the request for TLS, the
+  write and the read MUST end at the scrape's deadline, 30 seconds without one, or when it is cancelled, and a
   scrape ended so MUST fail with the deadline's error, saying, when reading
   was what the deadline ended, the terminator waited for, or, without one,
   that the server kept the connection open.
@@ -2788,10 +2821,14 @@ types at build time): only a build asked for it carries it. Its keys:
   address connected to, as `http`'s are, a refused one answered `403`,
   counted in `http_exporter_targets_refused_total`, and never connected to.
 - A debug probe's request section MUST show the scrape by its method and
-  `tcp://host:port` (`tls://` over TLS), the bytes sent quoted, with a
+  `tcp://host:port` (`tls://` over TLS, from the start or begun with
+  `starttls`), the bytes sent quoted, with a
   carriage return and a line feed written `\r` and `\n`, in a `Tcp-Send`
   header, with `greeting` the pattern quoted in a `Tcp-Greeting` header,
-  and as its outcome the greeting read, quoted, when there is one, the
+  with `starttls` the protocol in a `Tcp-Starttls` header,
+  and as its outcome the greeting read, quoted, when there is one, with
+  `starttls` each command of the request for TLS and the server's answer,
+  quoted, and the TLS version begun, the
   bytes read and how reading stopped, or the error. A report MUST write a
   control character of a header's value, other than a tab, escaped as Go
   writes it in a quoted string (`\r`, `\x1b`), and every other character
@@ -28689,6 +28726,32 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestANewRequestTypeIsWiredByTheScaffold` (extended): an article that is neither `a` nor `an` is refused before anything is written; `--article` gives `an` for ntp, NTP, smtp, SMTP, imap, IMAP, LDAP, S3File and xml and `a` for foo, ldap read as a word, UUID, tcp, DNS and redis; the default-build `ozdefault`, read as a word, is written "an ozdefault collector", `TestAnOzdefaultCollectorIsNotImplementedYet` and `TestAProbeOfAnOzdefaultCollector…`, and the opt-in `zzdemo` "a zzdemo collector" and "a `zzdemo` collector"; `ozdefault` lands after `kubernetes` and before the opt-in rows in the static targets table, the related pages of docs/CONFIGURATION.md and spec § 35's list, and `zzdemo` after `sshexec`, last; the "it was built with:" list of docs/REDIS.md and the "write one of" list of docs/CONFIGURATION.md name `ozdefault` in its sorted place; spec § 35 gets no TODO; and `TestNoScaffoldPlaceholderIsLeftInTheTree` fails in the copy, finding `TODO(ozdefault)` in docs/OZDEFAULT.md, `TODO(zzdemo)` in README.md and the not-implemented failure in requesttype_zzdemo.go.
 - `TestNoScaffoldPlaceholderIsLeftInTheTree`: no file of the tree but those under .git, vendor and bin holds `TODO(<name>)` for a request type of the tree, and no `requesttype_<name>.go` its `the <name> request type is not implemented yet`.
 - `TestTheScaffoldPlaceholderCheckFindsWhatIsLeft`: in a tree of its own, the check finds `TODO(zz)` in a page and the not-implemented failure in `requesttype_zz.go`, and not `TODO(other)`, a name of no type, nor anything under vendor.
+
+## 34.228 STARTTLS for the tcp request type
+
+- `TestATCPCollectorBeginsTLSWithSTARTTLS`: against STARTTLS stand-ins on 127.0.0.1, `starttls: smtp` greeted over two `220` lines sends `EHLO [127.0.0.1]` and, its `250` answer over five lines listing `starttls` in lower case, `STARTTLS`; `imap` sends `a1 STARTTLS`, answered after an untagged `* CAPABILITY` line; `pop3` sends `STLS`; `ftp`, greeted over three lines, `AUTH TLS`; each then makes the handshake verified with the stand-in's CA, and with `send: "QUIT\r\n"` the stand-in reads QUIT only over TLS and the body is its answer, while without `send` the client closes after the handshake and the body is the greeting; `X-Tcp-Starttls-Seconds`, `X-Tcp-Tls-Seconds`, `X-Tcp-Greeting-Seconds` and `X-Tcp-Greeting` are set and the label is `tls://`.
+- `TestATCPSTARTTLSVerifiesTheServer`: `starttls: pop3` without a `tls` block fails the handshake against the stand-in's certificate, which the system roots do not hold, after `STLS`, and `send` is never written; a `greeting` that does not match the greeting fails the scrape with `starttls`; `insecure_skip_verify` reads the answer.
+- `TestATCPSTARTTLSThatIsNotBegunFailsTheScrape`: SMTP without `STARTTLS` in its answer to EHLO, SMTP's `454`, IMAP's `NO` and `BAD`, POP3's `-ERR`, FTP's `534`, an SMTP `554` greeting, an IMAP `* PREAUTH` greeting, `HTTP/1.1 400` to EHLO, `OK sure` to STLS and a POP3 greeting where `smtp` is asked for each fail the scrape naming the step and quoting the server's words, which `model.CallerText` withholds; the stand-in sees nothing after the last command of the protocol, never `send`.
+- `TestATCPSTARTTLSAnswersAreBounded`: a server closing instead of answering STLS fails saying so; one silent after STARTTLS, and one that never greets, fail at a 300ms deadline with the deadline's error, naming the answer, or the greeting as `request.starttls` expects it; an IMAP answer of untagged lines past `max_response_bytes` (1,024) fails as a limit exceeded naming STARTTLS; a POP3 server writing `+OK forged\r\n` after its `+OK` in the same write fails with "wrote 12 bytes after it said to begin TLS and before the handshake", QUIT never sent.
+- `TestATCPSTARTTLSDocument`: with `document: true` an SMTP STARTTLS exchange's document has `starttls: "smtp"`, the greeting, the answer read over TLS, and `connect_seconds`, `greeting_seconds`, `starttls_seconds`, `tls_seconds`, `answer_seconds` and `duration_seconds`.
+- `TestATCPSTARTTLSIsTraced`: a debug trace of a POP3 STARTTLS scrape has `Tcp-Starttls: pop3`, the url `tls://`, and the outcome `greeted with "+OK Dovecot ready.\r\n"; sent "STLS\r\n", answered "+OK Begin TLS negotiation now.\r\n"; began TLS 1.3; read 9 bytes, the server closed the connection`.
+- `TestATCPSTARTTLSIsCheckedAtLoad`: `starttls: ldap` and `SMTP` are refused naming the four protocols, and `terminator` with `starttls` and without `send`; `starttls` with `greeting`, `send`, `terminator`, `document` and a `tls` block of every key, and `starttls: ftp` alone, load.
+- `TestATCPSTARTTLSThroughTheExporter`: through `/probe`, `starttls: smtp` with `document: true` and the stand-in's CA answers `smtp_up 1`, `tcp_starttls_seconds` and `tcp_tls_seconds` from jq rules, the stand-in reading only `EHLO [127.0.0.1]` and `STARTTLS` in plaintext; a stand-in answering `454` is answered 502 with the reply withheld from the caller and in the log; a debug probe's report shows the outcome with each step, `Tcp-Starttls: smtp` and `X-Tcp-Starttls-Seconds`; a static target setting `request.starttls` is refused as an unknown key of a static target's request.
+- `TestTCPStartTLSDocumentationExamples`: the `smtp_submission`, `imap_starttls` and `pop3_starttls` examples of docs/TCP.md, with the stand-ins' CA, answer `smtp_up 1`, `imap_starttls_up 1` and `pop3_up 1` and their seconds against stand-ins of SMTP on 587, IMAP on 143 and POP3 on 110.
+
+### Two tests that failed by chance
+
+- `TestAnSSHExecOutputIsHeldToTheResponseLimit` (sshexec build): a command
+  writing without end past a 4096-byte limit fails the scrape as over the
+  limit, the command stops and is sent KILL. It waited for the stand-in to
+  count the command as ended by the signal, which it does only when the
+  signal is read before the session's close fails the write the command is
+  blocked in, and failed in CI when the close came first; it waits for the
+  command to have stopped, by either, and for the KILL.
+- `TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid`: the
+  corpus must reach each refusal at least once in 1,000 cases, where it was
+  once in 400, which the race detector's 2,000 cases of a tcp-only build
+  did not reach for one refusal.
 
 # 35. Documentation requirements
 

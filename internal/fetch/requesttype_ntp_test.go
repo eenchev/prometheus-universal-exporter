@@ -194,7 +194,10 @@ func TestAnNTPCollectorAnswersTheServersReplyAsADocument(t *testing.T) {
 	}
 	first, second := binary.BigEndian.Uint64(requests[0][40:]), binary.BigEndian.Uint64(requests[1][40:])
 	clock := ntpTimestamp(time.Now())
-	if first == second || math.Abs(ntpDifference(first, clock)) < 3600 || math.Abs(ntpDifference(second, clock)) < 3600 {
+	// Random 64-bit timestamps are a second or less apart, or from the
+	// clock, once in about 2^31 runs each; the exporter's clock would be
+	// milliseconds from it.
+	if math.Abs(ntpDifference(first, second)) <= 1 || math.Abs(ntpDifference(first, clock)) <= 1 || math.Abs(ntpDifference(second, clock)) <= 1 {
 		t.Errorf("transmit timestamps %x and %x near the clock %x; want random ones", first, second, clock)
 	}
 }
@@ -220,6 +223,12 @@ func TestNTPOffsetAndDelayAreWorkedOutFromTheFourTimestamps(t *testing.T) {
 	behind := ntpDescribe(ntpPacket{stratum: 3, receive: t1 - seconds(2), transmit: t1 - seconds(2)}, wall, 20*time.Millisecond)
 	if !ntpNear(behind.OffsetSeconds, -2.01, 1e-6) || !ntpNear(behind.DelaySeconds, 0.02, 1e-6) {
 		t.Errorf("behind: offset %g, delay %g", behind.OffsetSeconds, behind.DelaySeconds)
+	}
+	// A server of precision -6 that says it held the request 15.6ms of a
+	// 1ms round trip gives a difference of -14.6ms, which no delay is.
+	coarse := ntpDescribe(ntpPacket{stratum: 2, precision: -6, receive: t1 + seconds(1), transmit: t1 + seconds(1.015625)}, wall, time.Millisecond)
+	if coarse.DelaySeconds != 0 || !ntpNear(coarse.OffsetSeconds, 1.0073125, 1e-6) {
+		t.Errorf("coarse precision: offset %g, delay %g; want the delay 0", coarse.OffsetSeconds, coarse.DelaySeconds)
 	}
 	if id := ntpReferenceID(1, [4]byte{0x01, 'P', 'S', 0}); id != "0x01505300" {
 		t.Errorf("reference id %q", id)
@@ -333,6 +342,16 @@ func TestAnNTPServerThatDoesNotAnswerFailsAtTheDeadline(t *testing.T) {
 	if got := len(s.received()); got != 1 {
 		t.Errorf("%d requests sent; want one", got)
 	}
+	// A scrape cancelled before its deadline says so, not that the
+	// deadline came.
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start = time.Now()
+	_, err = FetchCollector(ctx, s.addr, ntpCollector(t), RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if waited := time.Since(start); err == nil || !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(err.Error(), "no reply from "+s.addr+" before the scrape was cancelled") || waited > 3*time.Second {
+		t.Errorf("cancelled: after %s: %v", waited, err)
+	}
 	closed, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +412,9 @@ func TestAnNTPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 			t.Errorf("%q: taken", target)
 		}
 	}
-	for target, label := range map[string]string{"time.example.test": "ntp://time.example.test:123", "Time.Example.Test:1123": "ntp://time.example.test:1123", "[2001:db8::1]:123": "ntp://[2001:db8::1]:123", "192.0.2.1": "ntp://192.0.2.1:123"} {
+	// An IPv6 address without brackets is the address whole, on port 123:
+	// 2001:db8::1:123 is an address of its own, not 2001:db8::1 and a port.
+	for target, label := range map[string]string{"time.example.test": "ntp://time.example.test:123", "Time.Example.Test:1123": "ntp://time.example.test:1123", "[2001:db8::1]:123": "ntp://[2001:db8::1]:123", "192.0.2.1": "ntp://192.0.2.1:123", "2001:db8::1:123": "ntp://[2001:db8::1:123]:123"} {
 		if err := CheckTarget(c, target, false); err != nil {
 			t.Errorf("%q: %v", target, err)
 		}

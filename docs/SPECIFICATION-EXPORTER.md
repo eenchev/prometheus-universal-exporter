@@ -2317,7 +2317,9 @@ as for `http`, the host's name before the request and the address the UDP
 socket is connected to before anything is sent (§ 26.1).
 
 - A target MUST be `host`, `host:port` or `[v6]:port`, port 123 when left
-  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  out; an IPv6 address without brackets MUST be taken whole as the host,
+  on port 123, as every `host[:port]` target is read. A scheme, path,
+  query or user and a port outside 1–65535 MUST be
   refused, a probe's with `400` before anything is sent and a static
   target's at load. A probe MUST take `timeout` and `param_<name>`
   parameters, and a static target's request block `timeout`.
@@ -2332,7 +2334,9 @@ socket is connected to before anything is sent (§ 26.1).
   version 3 or 4, and has a transmit timestamp. Any other datagram MUST be
   ignored and the reply waited for; when the deadline comes first, the
   scrape MUST fail wrapping `context.DeadlineExceeded`, saying how many
-  datagrams were ignored and why the last one was. An error of the socket,
+  datagrams were ignored and why the last one was. A scrape cancelled
+  before its deadline MUST fail wrapping `context.Canceled` and saying
+  `before the scrape was cancelled`, not `before the deadline`. An error of the socket,
   such as the refusal of an ICMP port unreachable, MUST fail it at once.
 - The reply MUST fail the scrape in the `ntp` stage, naming `host:port`,
   when it is a Kiss-o'-Death (stratum 0), naming its code; when its leap
@@ -2341,7 +2345,7 @@ socket is connected to before anything is sent (§ 26.1).
   MUST be told to a probe's caller; any other, and a stratum past 16, are
   values of the answer and MUST be withheld from the caller (§ 19.4).
 - The offset MUST be `((t2 - t1) + (t3 - t4)) / 2` and the delay
-  `(t4 - t1) - (t3 - t2)`, `t1` the exporter's wall clock when the request
+  `(t4 - t1) - (t3 - t2)`, or 0 when that is below 0, `t1` the exporter's wall clock when the request
   was sent and `t4` `t1` with the round trip timed by the monotonic clock
   added, each difference taken of the 64-bit NTP timestamps as a signed
   number, so that timestamps on either side of the end of an NTP era (2036)
@@ -28529,14 +28533,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ### The ntp request type
 
-- `TestAnNTPCollectorAnswersTheServersReplyAsADocument`: against a stand-in UDP server on 127.0.0.1 five seconds ahead, the document has an offset of about 5, a delay from 0 to 1 second, and the server's version, leap indicator, stratum, precision and poll (exponents and seconds), root delay and dispersion in seconds, the reference id as an IPv4 address, and reference and transmit times 64 seconds apart; each scrape sends one request of 48 bytes, first byte 0x23, nothing set but the transmit timestamp, which differs between two scrapes and is not near the clock.
-- `TestNTPOffsetAndDelayAreWorkedOutFromTheFourTimestamps`: a request received at t1+10.03s, answered at t1+10.05s and back 100ms after t1 is an offset of 9.99s and a delay of 80ms, and a server 2 seconds behind with a 20ms round trip an offset of -2.01s; a stratum 1 reference id is its ASCII code, or `0x` and its bytes when they are not printable; a reference timestamp of 0 is `reference_time` 0 and an empty `reference_time_rfc3339`.
+- `TestAnNTPCollectorAnswersTheServersReplyAsADocument`: against a stand-in UDP server on 127.0.0.1 five seconds ahead, the document has an offset of about 5, a delay from 0 to 1 second, and the server's version, leap indicator, stratum, precision and poll (exponents and seconds), root delay and dispersion in seconds, the reference id as an IPv4 address, and reference and transmit times 64 seconds apart; each scrape sends one request of 48 bytes, first byte 0x23, nothing set but the transmit timestamp, whose two values in two scrapes are more than a second from each other and from the clock.
+- `TestNTPOffsetAndDelayAreWorkedOutFromTheFourTimestamps`: a request received at t1+10.03s, answered at t1+10.05s and back 100ms after t1 is an offset of 9.99s and a delay of 80ms, and a server 2 seconds behind with a 20ms round trip an offset of -2.01s, and a server of precision -6 that held a 1ms round trip's request 15.6ms a delay of 0; a stratum 1 reference id is its ASCII code, or `0x` and its bytes when they are not printable; a reference timestamp of 0 is `reference_time` 0 and an empty `reference_time_rfc3339`.
 - `TestNTPTimestampsAreReadAcrossTheEndOfAnEra`: 2036-02-07T06:28:16Z is timestamp 0; a timestamp of era 1 is read beside a clock of era 0 and one of era 0 beside a clock of era 1 as the times they are; with the exporter's clock 6 seconds before the end of era 0 and a server 10 seconds ahead, the offset is about 10 and the transmit time 2036-02-07T06:28:20Z.
 - `TestAnNTPReplyThatIsNotTheRequestsIsIgnored`: a datagram with another origin timestamp, which would say the server is 1000 seconds ahead, is passed over for the reply after it; datagrams with another origin timestamp, of mode 3, of version 2, with no transmit timestamp and of 47 bytes are ignored, and the scrape fails at its deadline wrapping `context.DeadlineExceeded` and saying that 2 datagrams were ignored and why the last was; a reply of version 3 is taken.
 - `TestAnNTPServerThatDoesNotKeepTheTimeFailsTheScrape`: Kiss-o'-Death RATE and DENY fail the scrape at once naming the code and its meaning, the code told to the caller; an unknown code is quoted in the error and withheld from the caller; leap indicator 3 and stratum 16 fail as not synchronised, and stratum 99 as no server's, withheld from the caller.
-- `TestAnNTPServerThatDoesNotAnswerFailsAtTheDeadline`: a server that never answers fails the scrape at a 300ms timeout with `no reply from <host:port> before the deadline`, wrapping `context.DeadlineExceeded`, after exactly one request; a closed port fails it at once, reading the reply.
+- `TestAnNTPServerThatDoesNotAnswerFailsAtTheDeadline`: a server that never answers fails the scrape at a 300ms timeout with `no reply from <host:port> before the deadline`, wrapping `context.DeadlineExceeded`, after exactly one request, and a scrape cancelled after 100ms with `before the scrape was cancelled`, wrapping `context.Canceled` and not `context.DeadlineExceeded`; a closed port fails it at once, reading the reply.
 - `TestAnNTPCollectorKeepsToItsTargetLists`: a denied address, one `allowed_targets` does not list, and `localhost` with the loopback networks denied, refused on the address the UDP socket is connected to, are `ErrTargetRefused` with nothing sent; an allowed address is answered.
-- `TestAnNTPCollectorsKeysAndTargetsAreChecked`: `path` and `tls` are refused; an empty target, a scheme, a path, a user, port 0 or a name, a bare IPv6 address with a port and a blank are refused; `host`, `host:port`, `[v6]:port` and an address are labelled `ntp://host:port`, port 123 when left out, in lower case; the method is `QUERY`, the stage `ntp`, an invalid target displayed `<invalid target>`; a debug trace shows `QUERY`, the URL, `Ntp-Version: 4` and the stratum and offset as its outcome.
+- `TestAnNTPCollectorsKeysAndTargetsAreChecked`: `path` and `tls` are refused; an empty target, a scheme, a path, a user, port 0 or a name, a bare IPv6 address with a port and a blank are refused; `host`, `host:port`, `[v6]:port` and an address are labelled `ntp://host:port`, port 123 when left out, in lower case, and `2001:db8::1:123` is that address on port 123; the method is `QUERY`, the stage `ntp`, an invalid target displayed `<invalid target>`; a debug trace shows `QUERY`, the URL, `Ntp-Version: 4` and the stratum and offset as its outcome.
 - `TestAnNTPCollectorProbe`: a probe through the exporter gives a jq collector's `ntp_offset_seconds` of about 3 for a server 3 seconds ahead, `ntp_delay_seconds`, and `ntp_stratum{reference_id="192.0.2.7"} 2`, and the verbose self-metrics label it `ntp://host:port` and `QUERY`.
 - `TestADebugProbeOfAnNTPCollector`: a debug probe shows the request and the document; a probe without a target or with a scheme is answered 400, a target outside `allowed_targets` 403 and counted in `http_exporter_targets_refused_total`; a Kiss-o'-Death RATE is answered 502, `collector clock ntp failed:` naming the server and the code.
 - `TestAnNTPCollectorsLabelValuesAndAPythonTransform`: `param_<name>` fills an ntp collector's label values, its default when left out, and a python transform reads the document as data.

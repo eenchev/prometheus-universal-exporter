@@ -1768,7 +1768,7 @@
                 "type": "string"
               },
               "document": {
-                "description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, connect_seconds, tls_seconds, greeting_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape. See docs/TCP.md#the-exchange-as-a-document.",
+                "description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, connect_seconds, tls_seconds, greeting_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document.",
                 "type": "boolean"
               },
               "driver": {
@@ -3004,7 +3004,7 @@
                 ]
               },
               "send": {
-                "description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md.",
+                "description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md.",
                 "type": [
                   "string",
                   "number",

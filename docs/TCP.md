@@ -178,6 +178,15 @@ is held to the same characters, checked when the collector loads. A probe
 parameter that no placeholder of `send` or of a label value names is refused,
 as for every type.
 
+A `send` that its placeholders leave empty, `"{{param_cmd:}}"` with no
+`param_cmd` on the probe, is refused too, answered `400` naming the
+parameters before the connection is made: `request.send is empty once
+param_cmd is filled in, ...`. Writing nothing would turn the scrape into a
+read of what the server says first, which a server waiting for a command
+ends only at the deadline, while the collector says it sends. A static
+target that leaves it empty is refused at load. Give the placeholder a
+default that is not empty, or write the command's fixed part around it.
+
 ```yaml
   - name: haproxy_proxy
     request:
@@ -255,7 +264,11 @@ The greeting is:
 The pattern is a regular expression in [Go's syntax](https://pkg.go.dev/regexp/syntax)
 (RE2, so no backreference or lookaround), matched against the whole
 greeting as it was read, line ends included: `^` is the start of the
-greeting and, without `(?m)`, `$` its end, after the last line feed.
+greeting and, without `(?m)`, `$` its end, after the last line feed. With
+`(?m)`, `$` matches before a line feed, and so after the `\r` of a line
+ending in `\r\n`, as SMTP, FTP, POP3, IMAP and SSH lines do:
+`(?m)^220 ready$` does not match `220 ready\r\n`. Write `\r?$` to end a
+line either way: `(?m)^220 ready\r?$`.
 `^220[ -]` takes an SMTP greeting on one line and over several; `^220 `
 takes only one on one line. Write it in single quotes, in which YAML keeps
 a `\` as it is. It holds no placeholder, and no probe parameter sets it:
@@ -321,6 +334,15 @@ answer and how long each step took, with no script:
   text, ...`, as a [Redis](REDIS.md) reply does, rather than reaching the
   rules with its bytes replaced. Leave `document` out to read them as they
   came.
+- The document is held to the [response limit](#limits), as the body it
+  is: the greeting and the answer share the limit as they are read, the
+  answer getting what the greeting left, and the document they make, in
+  which JSON writes a control character in six bytes (`\u0001`) and adds
+  its keys and timings, must be within it too. Either past it fails the
+  scrape as a limit exceeded: `the greeting and the answer of host:port are
+  larger together than the response limit ...`, or `the JSON document
+  request.document makes of what host:port said is 2412 bytes, larger than
+  the response limit ...`.
 
 The decoder is `json`, left out or written; any other is refused at load,
 and so is a transform other than `jq`, `yq` and `python`:
@@ -648,7 +670,10 @@ for the rest, as a limit exceeded, which counts in
 `http_exporter_series_limit_exceeded_total`.
 
 The greeting is held to the limit too, on its own: a greeting that grows
-past it fails the scrape when it does.
+past it fails the scrape when it does, and so does one that reaches it
+without having ended, at once, though the server sends nothing more. With
+[`document`](#the-exchange-as-a-document) the greeting and the answer share
+the limit, and the JSON document they make is held to it as well.
 
 The connection, the TLS handshake, the greeting, the write and the read end at the
 probe's deadline, its `timeout` or the scrape's, 30 seconds without one:
@@ -675,7 +700,9 @@ A [debug probe](CONFIGURATION.md#debug-probes) shows in its request section
 the bytes sent, quoted so that a carriage return and a line feed are seen,
 and how many bytes were read and how reading stopped, after the greeting
 step with `greeting` ([Timings as headers](#timings-as-headers));
-its response section shows the answer and its headers:
+its response section shows the answer and its headers, a control character
+in `X-Tcp-Greeting`, which holds what the server greeted with, written as
+`\r` or `\x1b`, so that it does not rewrite the report on a terminal:
 
 ```text
 Requests
@@ -696,6 +723,10 @@ when it only reads.
   together, as Beanstalkd's `stats\r\nquit\r\n`.
 - **Text matched as written.** The terminator is matched as bytes at the end
   of the answer, with no placeholder, and no pattern.
+- **The greeting is the first line.** An SSH server may send lines of its
+  own before its `SSH-2.0-` line (RFC 4253, section 4.2); the greeting read
+  is the first of them, which `^SSH-2\.0-` does not match. Such a server
+  needs a pattern for what it writes first.
 - **One connection per scrape.** No connection is kept between scrapes, so
   each scrape costs a TCP handshake, and a TLS one with TLS.
 - **No UDP, no Unix sockets.** A service reached only over a Unix socket,
@@ -713,5 +744,7 @@ when it only reads.
 | `... the server kept the connection open, ...; without request.terminator ...` | The server does not close after answering: set `terminator`. |
 | `the server closed the connection after 0 bytes, ...` | The server refused what was sent: a ZooKeeper whose `4lw.commands.whitelist` does not name the word answers nothing and closes. |
 | `... the answer of ... is larger than the response limit ...` | Raise `max_response_bytes`, or send a command that answers less. |
+| `request.send is empty once param_<name> is filled in, ...` | The probe gave no value for a placeholder whose default is empty, and nothing else is in `send`: give the parameter, or a default. |
+| `the JSON document request.document makes of what ... said is ... bytes, larger than the response limit ...` | Raise `max_response_bytes`: the document counts the greeting and the answer together, a control character six times. |
 | `request.send: the value of param_<name> holds a carriage return or a line feed ...` | The probe's parameter: a value may not end the line. |
 | `TLS handshake with ...: ... certificate signed by unknown authority` | Name the server's CA in `tls.ca_file`. |

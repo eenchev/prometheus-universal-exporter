@@ -2689,8 +2689,11 @@ types at build time): only a build asked for it carries it. Its keys:
   through its line feed, or, when that line begins with three ASCII digits
   and `-`, every line up to and including the first that begins with the
   same three digits and is not followed by `-`. The greeting MUST be held
-  to the response limit as it arrives, and its read MUST end at the
-  scrape's deadline. The pattern MUST be matched against the whole greeting
+  to the response limit as it arrives, a greeting that has reached the
+  limit without ending failing the scrape as a limit exceeded at once,
+  without waiting for another byte or the deadline, and its read MUST end at the
+  scrape's deadline. The pattern MUST be compiled when the collector loads
+  and not again at each scrape. The pattern MUST be matched against the whole greeting
   as read, line ends included; a greeting that does not match MUST fail
   the scrape without writing `send`, the error naming the target, quoting
   the greeting with `model.Quoted`, so that a probe's caller is told it
@@ -2716,7 +2719,9 @@ types at build time): only a build asked for it carries it. Its keys:
   read, and `duration_seconds`, the exchange from the dial to the end of the
   read. A key of a step not taken MUST be left out, not written `null` or
   `0`. A greeting or an answer that is not UTF-8 MUST fail the scrape,
-  naming which and the target. The decoder MUST be `json`, left out or
+  naming which and the target. The answer MUST be held, as it arrives, to
+  what the greeting left of the response limit, and the JSON document to
+  the limit; either past it MUST fail the scrape as a limit exceeded. The decoder MUST be `json`, left out or
   written, with no warning of a decoder left to each response; any other
   decoder, and a transform other than `jq`, `yq` and `python`, MUST be
   refused at load, naming the document.
@@ -2730,7 +2735,11 @@ types at build time): only a build asked for it carries it. Its keys:
   every one on a line) or add an argument. A default holding such a
   character MUST be refused at load. A probe
   parameter that no placeholder of `send` or of a label value names MUST be
-  refused, the refusal naming `request.send`.
+  refused, the refusal naming `request.send`. A `send` that its
+  placeholders' values and defaults leave empty MUST be refused with `400`
+  before the connection is made, naming its placeholders, and a static
+  target leaving it empty at load; the scrape MUST NOT write nothing in its
+  place.
 - A scrape MUST make one connection, speak TLS over it when a `tls` block is
   written, an empty one (`tls: {}`) as much as one with keys, verifying the
   certificate with the system roots and `ca_file`'s,
@@ -2764,7 +2773,10 @@ types at build time): only a build asked for it carries it. Its keys:
   carriage return and a line feed written `\r` and `\n`, in a `Tcp-Send`
   header, with `greeting` the pattern quoted in a `Tcp-Greeting` header,
   and as its outcome the greeting read, quoted, when there is one, the
-  bytes read and how reading stopped, or the error. The verbose `url` label MUST be `tcp://host:port` or
+  bytes read and how reading stopped, or the error. A report MUST write a
+  control character of a header's value, other than a tab, escaped as Go
+  writes it in a quoted string (`\r`, `\x1b`), and every other character
+  of a value as it is. The verbose `url` label MUST be `tcp://host:port` or
   `tls://host:port`, and `http_method` MUST be `SEND` for a collector with
   `send` and `READ` without.
 - `--dry-run` MUST read the `tls` block's files when the block is set and

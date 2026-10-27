@@ -436,3 +436,37 @@ func TestATCPScrapeIsTraced(t *testing.T) {
 func TestTheOptInRequestKeysAreTCPsOwn(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeTCP)
 }
+
+// A send whose placeholders leave it empty, {{param_cmd:}} with no
+// param_cmd on the probe, is refused before the connection is made, as a
+// missing parameter is, naming it, rather than turned into a read of what
+// the server says first, which ignored the terminator while the method
+// said SEND; with a value it is sent.
+func TestATCPSendThatComesOutEmptyIsRefused(t *testing.T) {
+	sent := make(chan string, 1)
+	server := testutil.NewTCPStub(t, memcached(sent))
+	c := tcpCollector(t, func(c *model.Collector) {
+		c.Request.Own = TCPConfig{Send: "{{param_cmd:}}{{param_end:}}", Terminator: "END\r\n"}
+	})
+	want := "request.send is empty once param_cmd, param_end is filled in, with no value from the probe and an empty default; a tcp collector with send writes it, so give param_cmd a value, or its placeholder a default that is not empty"
+	if err := CheckPathParams(c, RequestOverrides{}); err == nil || err.Error() != want {
+		t.Errorf("the probe's check: %v", err)
+	}
+	if _, err := tcpScrape(t, c, server.Addr, nil); err == nil || err.Error() != want {
+		t.Errorf("the scrape: %v", err)
+	}
+	if n := server.Accepted(); n != 0 {
+		t.Errorf("an empty send connected %d times", n)
+	}
+	params := map[string]string{"param_cmd": "stats"}
+	c = tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "{{param_cmd:}}\r\n", Terminator: "END\r\n"} })
+	if err := CheckPathParams(c, RequestOverrides{Params: params}); err != nil {
+		t.Errorf("with a value: %v", err)
+	}
+	if body, err := tcpScrape(t, c, server.Addr, params); err != nil || body != memcachedStats {
+		t.Errorf("with a value: %q, %v", body, err)
+	}
+	if got := <-sent; got != "stats\r\n" {
+		t.Errorf("sent %q", got)
+	}
+}

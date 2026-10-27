@@ -16,6 +16,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // greeter is a server that speaks first, as SMTP, FTP, POP3, IMAP and SSH
@@ -397,5 +398,108 @@ func TestATCPDocumentRefusesBytesThatAreNotText(t *testing.T) {
 		if err == nil || err.Error() != tc.want+server.Addr+" holds bytes that are not UTF-8 text, which the JSON document of request.document cannot hold as they are; leave request.document out to read them as they came" {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A scrape cancelled while it waits for the greeting of a TLS server that
+// has completed the handshake and says nothing ends with the cancellation;
+// under -race the func the cancellation runs, which ends the connection's
+// reads, sets the deadline of the connection dialed, not of the variable
+// that became the TLS connection, and races with nothing.
+func TestATCPScrapeCancelledAfterTheTLSHandshakeDoesNotRace(t *testing.T) {
+	server := testutil.NewTLSTCPStub(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+	c := tcpCollector(t, func(c *model.Collector) {
+		c.Request.Own, c.Request.TLS.CAFile = TCPConfig{Greeting: "^220 ", Send: "QUIT\r\n"}, server.CAFile
+	})
+	for range 3 {
+		ctx, cancel := context.WithCancel(context.Background())
+		timer := time.AfterFunc(200*time.Millisecond, cancel)
+		start := time.Now()
+		_, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil)
+		timer.Stop()
+		cancel()
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "waiting for the greeting of "+server.Addr) {
+			t.Errorf("cancelled: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("took %s", elapsed)
+		}
+	}
+}
+
+// A greeting that reaches the response limit without a line end fails the
+// scrape at once as a limit exceeded, though the server sends nothing more
+// and keeps the connection open, rather than at the deadline.
+func TestATCPGreetingOfTheLimitWithoutALineEndFailsAtOnce(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	server := testutil.NewTCPStub(t, func(conn net.Conn) {
+		_, _ = io.WriteString(conn, strings.Repeat("x", 1024))
+		<-release
+	})
+	start := time.Now()
+	_, err := greetingScrape(t, server.Addr, "^x", "", func(c *model.Collector) { c.Request.MaxResponseBytes = 1024 })
+	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "the greeting of "+server.Addr+" is larger than the response limit of 1024 bytes") {
+		t.Errorf("a greeting of the limit with no line end: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %s, waiting for the deadline", elapsed)
+	}
+}
+
+// With request.document the greeting and the answer share the response
+// limit, the answer getting what the greeting left, and the document they
+// make is held to it too, a control byte taking six bytes of JSON: a
+// greeting and an answer of 600 bytes each, under a limit of 1024, and an
+// answer of 400 control bytes, which JSON writes in 2400, fail the scrape
+// as a limit exceeded; the same exchanges without document are taken.
+func TestATCPDocumentIsHeldToTheResponseLimit(t *testing.T) {
+	greeting, answer := "220 "+strings.Repeat("g", 594)+"\r\n", strings.Repeat("a", 598)+"\r\n"
+	both := testutil.NewTCPStub(t, greeter(0, greeting, answer, nil))
+	controls := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = io.WriteString(conn, strings.Repeat("\x01", 400)) })
+	for name, tc := range map[string]struct {
+		target string
+		own    TCPConfig
+		want   string
+	}{
+		"a greeting and an answer": {both.Addr, TCPConfig{Greeting: "^220 ", Send: "QUIT\r\n"}, "the greeting and the answer of " + both.Addr + " are larger together than the response limit of 1024 bytes"},
+		"control bytes":            {controls.Addr, TCPConfig{}, "the JSON document request.document makes of what " + controls.Addr + " said is 2"},
+	} {
+		for _, document := range []bool{false, true} {
+			own := tc.own
+			own.Document = document
+			c := tcpCollector(t, func(c *model.Collector) { c.Request.Own, c.Request.MaxResponseBytes = own, 1024 })
+			resp, err := FetchCollector(context.Background(), tc.target, c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+			switch {
+			case !document && err != nil:
+				t.Errorf("%s, without document: %v", name, err)
+			case document && (!errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "than the response limit of 1024 bytes")):
+				t.Errorf("%s, with document: %v, want %q", name, err, tc.want)
+			case document && resp != nil:
+				t.Errorf("%s: a document of %d bytes was taken", name, len(resp.Body))
+			}
+		}
+	}
+}
+
+// request.greeting is compiled when the collector loads, not at each
+// scrape: a scrape against a pattern of 55 KB allocates about what one
+// against a pattern of a few bytes does, where compiling the long one
+// takes tens of thousands of allocations.
+func TestATCPGreetingIsCompiledOnce(t *testing.T) {
+	server := testutil.NewTCPStub(t, greeter(0, "220 ready\r\n", "", nil))
+	long := "^(?:220 ready|" + strings.Repeat("abcdefghij|", 5000) + "zz)"
+	allocations := func(pattern string) float64 {
+		c := tcpCollector(t, func(c *model.Collector) { c.Request.Own = TCPConfig{Greeting: pattern} })
+		allocations, _ := alloctest.Allocations(5, func() {
+			if _, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+		return allocations
+	}
+	short, longer := allocations("^220 "), allocations(long)
+	if longer > short+1000 {
+		t.Errorf("a scrape against the long pattern made %.0f allocations, against the short %.0f: the pattern is compiled at each scrape", longer, short)
 	}
 }

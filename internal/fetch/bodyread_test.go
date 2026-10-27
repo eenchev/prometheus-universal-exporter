@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -380,5 +381,20 @@ func TestAShorterBodyDoesNotKeepTheLastOnesBuffer(t *testing.T) {
 	body, err = readHintedBody(bytes.NewReader(bodyBytes()[:900]), 10<<20, &hint)
 	if err != nil || len(body) != 900 || cap(body) != int(nextBodySizeHint(1000, 10<<20))+1 {
 		t.Errorf("900 bytes after 1000: %d bytes in a buffer of %d, err=%v", len(body), cap(body), err)
+	}
+}
+
+// An empty body leaves no hint: it says nothing of the size of the next
+// answer, and a hint of it would size the buffer of answers that have no
+// body.
+func TestAnEmptyBodyLeavesTheHintAsItWas(t *testing.T) {
+	var hint atomic.Int64
+	body, err := readHintedBody(strings.NewReader(""), 1<<20, &hint)
+	if err != nil || len(body) != 0 || hint.Load() != 0 {
+		t.Errorf("body %q, err %v, hint %d after an empty body, want no hint", body, err, hint.Load())
+	}
+	hint.Store(4096)
+	if _, err := readHintedBody(strings.NewReader(""), 1<<20, &hint); err != nil || hint.Load() != 4096 {
+		t.Errorf("err %v, hint %d after an empty body, want the hint kept", err, hint.Load())
 	}
 }

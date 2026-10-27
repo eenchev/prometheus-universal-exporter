@@ -145,7 +145,10 @@ func readHintedBody(r io.Reader, limit int64, hint *atomic.Int64) ([]byte, error
 	if err != nil || int64(len(body)) > limit {
 		return body, err
 	}
-	hint.Store(nextBodySizeHint(len(body), limit))
+	// An empty body says nothing of the size of the next.
+	if len(body) > 0 {
+		hint.Store(nextBodySizeHint(len(body), limit))
+	}
 	if cap(body) > 2*len(body)+4096 {
 		body = slices.Clone(body)
 	}

@@ -6940,7 +6940,9 @@ the bound and one shorter MUST be the bytes that came. The hints MUST take a
 bounded amount of memory whatever targets are probed, MUST NOT make a first
 buffer of more than 4 MiB or the bound, and an answer much shorter than its
 buffer MUST NOT keep the buffer: the response, which the cache may hold,
-holds little more than its body.
+holds little more than its body. A `HEAD` answer and one whose
+`Content-Length` is 0 have no body, and MUST be read without the hint; an
+empty body MUST leave the hint as it was.
 
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
@@ -28868,6 +28870,92 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheGzipLevelIsPublishedWithVerboseSelfMetricsOnly`: `http_exporter_answer_gzip_level` is the default `1`, or `0`, `6` or `9` as set, as a gauge with verbose self-metrics, and absent without.
 - `TestTheStrictOpenMetricsParserReadsTheAnswerBytes`: in OpenMetrics the counters are the families `http_exporter_answer_bytes` and `http_exporter_answer_sent_bytes` with `_total` and `_created` samples for every endpoint, and the strict parser of prometheus_client reads them and the gauge.
 - `TestOnlyTheAnswerOfATripThatCarriedOnChanged`, `TestFollowingAReloadWorkedOutAheadDoesWhatItDid`, `TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics` and `TestAChainedExporterReadsTheSelfMetricsWithCreatedSamples` compare reads of the self-metrics without the bytes of their own answers, which grow with each read, and the reload sequences without any answer bytes, which the length of a duration changes.
+
+## 34.230 STARTTLS for tlscert, a collector's own proxy, and answers without a body read without the size hint
+
+- `TestATLSCertCollectorBeginsTLSWithSTARTTLS`: against STARTTLS stand-ins on 127.0.0.1 (`testutil.NewStartTLSStub`), a `tlscert` collector with `starttls: smtp`, greeted over two `220` lines, sends `EHLO [127.0.0.1]` and, its `250` answer listing `STARTTLS`, `STARTTLS`; `imap` sends `a1 STARTTLS`, answered after an untagged line; `pop3` sends `STLS`; `ftp` sends `AUTH TLS`; each then makes the handshake, nothing sent over TLS, and the document has the stand-in's certificate, `verified` true against its CA, `TLS 1.3`, a chain and `starttls` naming the protocol; the label is `tls://`; without `starttls` the document's `starttls` is `""`.
+- `TestATLSCertSTARTTLSTargetDefaultsToTheProtocolsPort`: a target without a port is labelled and dialed at 25 for `smtp`, 143 for `imap`, 110 for `pop3`, 21 for `ftp` and 443 without `starttls`, a bracketed IPv6 address too; `mail.example.test:587` keeps 587.
+- `TestATLSCertSTARTTLSThatIsNotBegunFailsTheScrape`: SMTP without `STARTTLS` in its answer to EHLO, SMTP's `454`, IMAP's `NO`, POP3's `-ERR`, FTP's `534`, an SMTP `554` greeting, `HTTP/1.1 400` to EHLO and an SSH banner where `imap` is asked for each fail the scrape naming the step and quoting the server's words, which `model.CallerText` withholds; the stand-in sees nothing after the last command and no handshake.
+- `TestATLSCertSTARTTLSAnswersAreBounded`: a server closing instead of answering STLS fails saying so; one silent after EHLO, and one that never greets, fail at a 300ms deadline with the deadline's error, naming the STARTTLS answer or the greeting as `request.starttls` expects it, within 3s; a greeting of 200 `220-` lines past `limits.max_response_bytes` (1,024) fails as a limit exceeded saying to raise `limits.max_response_bytes`; a POP3 server writing `+OK forged\r\n` after its `+OK` fails with "wrote 12 bytes after it said to begin TLS and before the handshake".
+- `TestATLSCertSTARTTLSIsTraced`: a debug trace of a POP3 STARTTLS handshake has `HANDSHAKE`, `Tls-Starttls: pop3`, the url `tls://` and the outcome `greeted with "+OK Dovecot ready.\r\n"; sent "STLS\r\n", answered "+OK Begin TLS negotiation now.\r\n"; TLS 1.3, 1 certificate, verified`; a `-ERR` refusal is traced as the step's error.
+- `TestATLSCertSTARTTLSIsCheckedAtLoad`: `starttls: ldap`, `SMTP` and `starttls` on a `tlscert` collector are refused naming the four protocols and the type; `imap` with a `tls` block of every key but `insecure_skip_verify` loads.
+- `TestATLSCertSTARTTLSThroughTheExporter`: through `/probe`, a `tlscert` collector with `starttls: smtp` and the stand-in's CA answers `tls_cert_expires_in_days`, `tls_cert_verified 1` and `tls_cert_starttls_smtp 1` from jq rules, the stand-in reading only `EHLO [127.0.0.1]` and `STARTTLS` in plaintext; a stand-in answering `454` is answered 502 in the `tls` stage with the reply withheld from the caller and in the log; a debug probe's report shows the outcome with each step and `Tls-Starttls: smtp`; a static target setting `request.starttls` is refused as an unknown key of a static target's request.
+- `TestTLSCertStartTLSDocumentationExamples`: the STARTTLS examples of docs/TLSCERT.md, `smtp_certificate`, `imap_certificate` and `pop3_certificate`, load as written and against SMTP, IMAP and POP3 STARTTLS stand-ins answer their days left and expiring 0, SMTP's verified 0 for a certificate no system root signed, without failing the scrape.
+- The `tcp` STARTTLS tests (§ 34.228) pass unchanged in what they check, `starttls` now set as a key of the common part (`model.RequestConfig.StartTLS`) rather than of `TCPConfig`, in the opt-in build, a `tcp`-only build (`select_request_types,request_type_tcp`) and alongside a `tlscert`-only build (`select_request_types,request_type_tlscert`), each of which builds, vets and lints with `internal/fetch/starttls.go` under `!select_request_types || request_type_tcp || request_type_tlscert`.
+- An `http` collector's `request.proxy_url` carries its requests in place of
+  the environment's proxy, which is asked nothing: an `http` target's request
+  whole, with the `proxy_basic_auth_file` credentials as
+  `Proxy-Authorization`, and an `https` target's through a `CONNECT` tunnel,
+  TLS end to end with the target
+  (TestACollectorsProxyCarriesItsRequestsInPlaceOfTheEnvironments).
+- `proxy_url: direct` reaches the target without the proxy the environment
+  names, a name only the proxy would resolve failing to resolve here, while a
+  collector without `proxy_url` goes through the environment's
+  (TestProxyURLDirectReachesTheTargetPastTheEnvironmentsProxy).
+- Collectors with different proxies, or one proxy with different
+  credentials, share no connection pool, each request reaching its own
+  collector's proxy with its own credentials
+  (TestCollectorsWithDifferentProxiesShareNoConnection).
+- A login goes through the collector's proxy, as its request does
+  (TestALoginGoesThroughTheCollectorsProxy).
+- Behind a collector's proxy, `allowed_targets` and `denied_targets` apply to
+  the target — a denied name, a name resolving in a denied network, an
+  address in one, the metadata address, a name not allowed — and the proxy is
+  asked nothing for a refused one; the proxy's own loopback address is not
+  held to them (TestTheTargetPolicyAppliesToTheTargetBehindACollectorsProxy).
+- A probe's caller is told a failure at the collector's proxy without the
+  proxy's words in refusing the tunnel, its address when unreachable, or its
+  name when it does not resolve; the error keeps them
+  (TestTheCallerIsNotToldOfTheCollectorsProxy), and the transport errors'
+  withholding covers a `proxyconnect` whole and a `ProxyRefusedError`
+  (TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller).
+- An `https://` proxy is greeted over TLS verified against the proxy's
+  roots, without the client certificate, CA and server name of the
+  collector's `tls`, which the target is shown through the tunnel
+  (TestAnHTTPSProxyIsGreetedWithoutTheTargetsTLSSettings).
+- A `socks5://` proxy is asked to connect to the target by name, with the
+  credentials' files' username and password
+  (TestASOCKS5ProxyConnectsToTheTargetByName).
+- `proxy_url` is refused at load with credentials, an unknown or no scheme,
+  no host, a path or query, a port out of range, a placeholder or `DIRECT`,
+  without quoting a secret written in it; credentials' files without a proxy,
+  beside `direct`, or with a path missing are refused; `""`, `direct`,
+  `http`, `https`, `socks5`, `socks5h` and an IPv6 host are taken
+  (TestAProxyURLIsCheckedWhenItLoads).
+- A proxy's credentials are read from their files at every request, a
+  rotated password reaching the proxy at the next one, and appear in no
+  error, a refusal's or a missing file's
+  (TestAProxysCredentialsAreReadFromFilesAndNeverShown).
+- A `graphite` collector's `proxy_url` carries its render requests
+  (TestAGraphiteCollectorsProxyCarriesItsRequests).
+- `defaults` gives the `http` collectors of its file their `proxy_url` and
+  `proxy_basic_auth_file`, a `dns` collector neither; one that writes
+  `proxy_url: direct` leaves the credentials out, and credentials with no
+  proxy to send them to, written or given, are refused
+  (TestDefaultsGiveTheCollectorsTheirProxy).
+- A `proxy_url` in `defaults` no collector could take is refused once,
+  naming the block; one with credentials in a collector is refused naming the
+  collector without the password; a `dns` collector's is refused
+  (TestAProxyURLIsRefusedWhenTheConfigurationLoads).
+- The configuration's schema has `request.proxy_url` of a collector and of
+  `defaults`, described as `http` and `graphite`'s, whose pattern takes what
+  the exporter takes and refuses credentials, a path, a query, a placeholder
+  and another scheme, and `proxy_basic_auth_file`, requiring both files
+  (TestTheSchemasHaveTheProxy).
+- End to end, a `/probe` of a collector with `proxy_url` is answered with
+  what its proxy fetched, the environment's proxy asked nothing, and a
+  refused tunnel answers the caller without the proxy's words or address,
+  which the log has (TestAProbeGoesThroughTheCollectorsProxy).
+- The defaults' refusal of a key it cannot set lists `request.proxy_url` and
+  `request.proxy_basic_auth_file` among the keys it sets
+  (TestDefaultsRefuseTheKeysTheyCannotSet).
+- `TestAnAnswerIsReadWholeWithOrWithoutALength`: a `HEAD` answer is read
+  into no buffer of the size the hint of its collector and target holds,
+  set to 2,048 bytes before it: the race detector's run in CI shuffled the
+  tests so that an empty answer's hint, of the same slot, made a `HEAD`
+  answer's buffer 513 bytes.
+- `TestAnEmptyBodyLeavesTheHintAsItWas`: an empty body leaves no hint, and
+  keeps one there was.
 
 # 35. Documentation requirements
 

@@ -133,6 +133,13 @@ func TestAnAnswerIsReadWholeWithOrWithoutALength(t *testing.T) {
 			// on a busy machine.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
+			if test.method == http.MethodHead {
+				// The slot of this collector and target may hold the size
+				// of another's answer, of this test or of another sharing
+				// the slot: it must not size the buffer of an answer that
+				// has no body.
+				bodySizeHintOf(c.Name, test.target).Store(2048)
+			}
 			response, err := FetchCollector(ctx, test.target, c, RequestOverrides{}, nil)
 			if test.wantErr != "" {
 				if err == nil || err.Error() != test.wantErr || errors.Is(err, model.ErrLimitExceeded) != test.overflow {

@@ -988,9 +988,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		var body []byte
 		var readErr error
-		if declared > 0 {
+		switch {
+		case declared > 0:
 			body, readErr = readBody(resp.Body, limit, declared)
-		} else {
+		case method == http.MethodHead || resp.ContentLength == 0:
+			// An answer that has no body, or says it has none, is read
+			// without the hint of the last answer's size: a buffer of that
+			// size would be made for nothing.
+			body, readErr = readUnsizedBody(resp.Body, limit)
+		default:
 			// Nothing says how long the body is, so the last answer of the
 			// same collector and target does.
 			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))

@@ -133,7 +133,11 @@ type promOptions struct {
 //     time.
 //   - The text of a label's name, and of its value, is the previous line's
 //     where it is the same (promParser.previous), as the names nearly always
-//     are and the values often.
+//     are and the values often; where it is not, it is put in a chunk of
+//     text that many series share, one allocation for all of them
+//     (promParser.keepText). The map of a series' labels is its own: it is
+//     what the series is handed on with (model.Metric.Labels), and two
+//     allocations a series is what it costs.
 //   - Series are held in one slice in the order they were read
 //     (promParser.series), sized from the number of lines when every series
 //     is kept, and are put in the families' order at the end only when they
@@ -286,6 +290,11 @@ type promParser struct {
 	// names, and often some of the same values, and takes these strings
 	// rather than making its own.
 	previous []promLabelText
+	// text holds the text of the label names and values the series made
+	// have that the series before them did not: each is a part of the
+	// string the builder holds, so that a chunk of them costs one
+	// allocation, where each cost one of its own (promParser.keepText).
+	text strings.Builder
 	// sampleName, sampleFamily and sampleRole are the name of the sample
 	// read last and what family found it to be, which the next sample has
 	// too when it has the same name, as within a family it has. No comment
@@ -789,9 +798,38 @@ func (p *promParser) keep(f *promFamily) (*promSeries, error) {
 	return &p.series[len(p.series)-1], nil
 }
 
+// promTextChunk is the size of the first chunk of label text a parse
+// allocates (promParser.keepText); each next one is twice the one before, up
+// to promTextChunkMost, so a small exposition takes little and a large one
+// few allocations.
+const (
+	promTextChunk     = 1 << 10
+	promTextChunkMost = 64 << 10
+)
+
+// keepText is b as a string a series keeps: a part of the chunk of text
+// p.text holds, which is only ever appended to, so that the strings taken
+// from it before stay as they were. A chunk without room for b is left to
+// the strings taken from it, and the next one is made.
+//
+// The series of an exposition are kept together, and let go of together, so
+// a chunk holds on to no text a kept series does not have: only the text of
+// kept series is put in it.
+func (p *promParser) keepText(b []byte) string {
+	if p.text.Cap()-p.text.Len() < len(b) {
+		size := min(max(2*p.text.Cap(), promTextChunk), promTextChunkMost)
+		p.text = strings.Builder{}
+		p.text.Grow(max(size, len(b)))
+	}
+	start := p.text.Len()
+	p.text.Write(b)
+	return p.text.String()[start:]
+}
+
 // labelMap makes p.labels the label set of a series: a map of the size it
 // has, filled once. A name or a value that the series made before this one
-// had in the same place is that series' string.
+// had in the same place is that series' string, and the others are made in
+// the chunk of text of the series (keepText).
 func (p *promParser) labelMap() map[string]string {
 	labels := make(map[string]string, len(p.labels))
 	for len(p.previous) < len(p.labels) {
@@ -802,10 +840,10 @@ func (p *promParser) labelMap() map[string]string {
 		// Neither comparison makes a string: the bytes are compared in
 		// place.
 		if before.name != string(l.name) {
-			before.name = string(l.name)
+			before.name = p.keepText(l.name)
 		}
 		if before.value != string(l.value) {
-			before.value = string(l.value)
+			before.value = p.keepText(l.value)
 		}
 		labels[before.name] = before.value
 	}

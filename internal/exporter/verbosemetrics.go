@@ -26,6 +26,9 @@ import (
 //     not, so the pool's status can be read and alerted on without knowing
 //     which collectors use it.
 //
+// Besides, without a collector label, the trips waiting for a slot and
+// http_exporter_answer_gzip_level, --web.gzip-level (answermetrics.go).
+//
 // Both are bounded: fixed buckets per collector, and fixed sets of states,
 // stop reasons and run outcomes. The histogram is only recorded while verbose
 // self-metrics are on; the worker counters are kept regardless, since the pool
@@ -112,6 +115,7 @@ const (
 	pythonPoolRunsHelp          = "Python script runs in the execution pool, across all collectors, by outcome: ok, script_error, timeout, deadline, output_limit or failed."
 	pythonPoolWaitingHelp       = "Python script runs waiting for a worker, because --python.max-workers workers are busy or starting."
 	tripsWaitingHelp            = "Static target scrapes waiting in line for a trip slot, because their collector is at max_concurrent_probes or the exporter at --probe.max-concurrent."
+	answerGzipLevelHelp         = "--web.gzip-level: the gzip level of the answers of /probe, the self-metrics and the static targets, 1 to 9, or 0 for answers sent uncompressed."
 )
 
 // pythonPoolMetrics builds the pool-wide Python families.
@@ -218,5 +222,8 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 	// The pool's own counts are kept for the life of the process, whatever a
 	// reload does: they count since the exporter started.
 	out = append(out, countingSince(pythonPoolMetrics(), exporterStart())...)
-	return append(out, model.Metric{Name: "http_exporter_trips_waiting", Help: tripsWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.trips.waitingCount())})
+	return append(out,
+		model.Metric{Name: "http_exporter_trips_waiting", Help: tripsWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.trips.waitingCount())},
+		s.answerGzipLevelMetric(),
+	)
 }

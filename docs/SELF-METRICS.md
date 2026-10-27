@@ -56,6 +56,8 @@ configured:
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. A rejected reload keeps the previous collectors at `1`; it shows in `http_exporter_config_last_reload_successful`. |
 | `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
 | `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
+| `http_exporter_answer_bytes_total` | counter | Without a `collector` label, labelled `endpoint`: `probe`, `self_metrics` or `static_targets`, each series from zero whether or not its endpoint has answered: the bytes of that endpoint's answers as the exporter wrote them, before [compression](ENDPOINTS.md). See [Answer sizes](#answer-sizes). |
+| `http_exporter_answer_sent_bytes_total` | counter | Without a `collector` label, labelled `endpoint` as above: the bytes of those answers written on to the client, after compression; the same as `http_exporter_answer_bytes_total` for an answer sent uncompressed. |
 | `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule with a name has its series from zero, a [`python` rule](PYTHON.md#what-a-rule-of-a-python-collector-is-for) too, whose series stays `0` since it makes no series to fail; a `prometheus` rule without a name has none: no series is exported with an empty `metric`, and what such a rule did not find moves only `http_exporter_missing_keys_total`. A [derived entry](CONFIGURATION.md#derived-series) has its series too, under its name, counting the scrapes whose series of an operand were a histogram or a summary. Rules that export one metric name share its series, which counts the failures of all of them, while the [log](LOGGING.md) tells them apart. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
 A failure rate, for example:
@@ -424,6 +426,43 @@ fetches a target holds a trip slot of the collector it fetches through while
 it runs, as a [debug probe](CONFIGURATION.md#debug-probes) does, which
 `http_exporter_probes_in_flight` and `http_exporter_trips_in_flight` show.
 
+## Answer sizes
+
+The answers of `/probe`, the self-metrics path and the static targets path are
+gzipped for a client that accepts it, at `--web.gzip-level`
+([Endpoints](ENDPOINTS.md)). Two counters, labelled `endpoint`, add up their
+bytes, before and after compression:
+
+```text
+http_exporter_answer_bytes_total{endpoint="probe"} 1.2741984e+07
+http_exporter_answer_bytes_total{endpoint="self_metrics"} 7.15392e+06
+http_exporter_answer_bytes_total{endpoint="static_targets"} 0
+http_exporter_answer_sent_bytes_total{endpoint="probe"} 1.402386e+06
+http_exporter_answer_sent_bytes_total{endpoint="self_metrics"} 913408
+http_exporter_answer_sent_bytes_total{endpoint="static_targets"} 0
+```
+
+Every answer is counted, an error or a refusal as much as an exposition, and
+what is counted is what was written: when a client goes away in the middle
+of an answer, the bytes written until then. An answer sent uncompressed —
+at `--web.gzip-level=0`, to a client that does not accept gzip, to a `HEAD`,
+whose body `net/http` then leaves out, or a `204` or `304` — adds the same to
+both. A compressed answer adds gzip's own header and trailer to the bytes
+sent, so one with a status and no body adds a few bytes sent and none
+written. An answer is counted when it is done, so the self-metrics
+show the bytes of their own answers from the next one on. All three series of
+each counter are there from the start, at `0`, also without static targets,
+so a rate can be taken from the first scrape.
+
+What compression saves, by endpoint:
+
+```promql
+1 - rate(http_exporter_answer_sent_bytes_total[5m]) / rate(http_exporter_answer_bytes_total[5m])
+```
+
+With [verbose self-metrics](#answer-compression) the level they were
+compressed at is published too.
+
 ## Resource metrics
 
 The exporter can publish the familiar `go_` and `process_` series describing its
@@ -646,6 +685,15 @@ start being skipped for it:
 ```promql
 min_over_time(http_exporter_trips_waiting[10m]) > 0
 ```
+
+### Answer compression
+
+Verbose mode also publishes `--web.gzip-level`, without a label, next to the
+[answer sizes](#answer-sizes) it explains:
+
+| Metric | Meaning |
+|---|---|
+| `http_exporter_answer_gzip_level` | The gzip level of the answers of `/probe`, the self-metrics path and the static targets path: `1`, the fastest, to `9`, the smallest, or `0` for answers sent uncompressed whatever the client accepts. |
 
 ### Scrape-time histograms
 

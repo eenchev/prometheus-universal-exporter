@@ -64,6 +64,9 @@ type Server struct {
 	// compression gzips the answers of /probe, the self-metrics and the
 	// static targets at --web.gzip-level (middleware.go).
 	compression *answerCompression
+	// answers counts the bytes of those answers, before and after
+	// compression (answermetrics.go).
+	answers answerCounters
 	// defaultProbeTimeout bounds a probe without a scrape timeout
 	// (scrapetimeout.go).
 	defaultProbeTimeout time.Duration
@@ -283,10 +286,11 @@ func (s *Server) Handler() http.Handler {
 	// site makes a browser send (crosssite.go), with Basic Auth on or off.
 	protected := func(handler http.HandlerFunc) http.HandlerFunc { return sameOriginOnly(s.basicAuthMiddleware(handler)) }
 	// The answers Prometheus scrapes are gzipped when it asks (middleware.go).
-	mux.HandleFunc(s.selfMetricsEndpoint(), s.compression.wrap(protected(s.metricsHandler)))
-	mux.HandleFunc(s.staticTargetsEndpoint(), s.compression.wrap(protected(s.staticTargetsHandler)))
+	// Their bytes are counted there too, before and after compression.
+	mux.HandleFunc(s.selfMetricsEndpoint(), s.compression.wrap(&s.answers[answerSelfMetrics], protected(s.metricsHandler)))
+	mux.HandleFunc(s.staticTargetsEndpoint(), s.compression.wrap(&s.answers[answerStaticTargets], protected(s.staticTargetsHandler)))
 	mux.HandleFunc(s.staticTargetsStatusEndpoint(), protected(s.staticTargetsStatusHandler))
-	mux.HandleFunc("/probe", s.compression.wrap(protected(s.probeHandler)))
+	mux.HandleFunc("/probe", s.compression.wrap(&s.answers[answerProbe], protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	// Only / itself: any other unknown path is still a 404.
 	mux.HandleFunc("GET /{$}", protected(s.landingHandler))

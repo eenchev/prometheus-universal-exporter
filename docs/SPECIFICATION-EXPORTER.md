@@ -7367,6 +7367,8 @@ http_exporter_trips_in_flight
 http_exporter_trips_max_concurrent
 http_exporter_static_targets_scrape_seconds_total
 http_exporter_probes_seconds_total
+http_exporter_answer_bytes_total
+http_exporter_answer_sent_bytes_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -7474,6 +7476,24 @@ per collector with no per-request series, MUST exist for every collector,
 that failed without contacting their target because the collector was
 backing off from it, and the targets it keeps its trips from now (§ 42.13c).
 A debug run MUST NOT be counted in either.
+`http_exporter_answer_bytes_total` and
+`http_exporter_answer_sent_bytes_total`, counters, MUST be exporter-wide,
+with no `collector` label, labelled `endpoint` with `probe`, `self_metrics`
+and `static_targets`, the endpoints whose answers are compressed (§ 23), a
+series of each for every endpoint from 0 from the exporter's start, with or
+without static targets, and its created time the exporter's start. The
+first MUST count the bytes the endpoint's handler wrote, before
+compression, and the second those written on to the client, after it, gzip's
+header and trailer included; an answer sent uncompressed — at
+`--web.gzip-level` 0, to a client that does not accept gzip, to `HEAD`, or a
+`204` or `304` — MUST add the same to both. Every answer of the endpoints
+MUST be counted, errors and refusals included, and a write that fails or is
+cut short MUST count what the writer it was written to took. They MUST be
+counted in the middleware that compresses the answers, with no lock taken
+for a write, and an answer added to them once, when it is done, so that an
+answer of the self-metrics never holds its own bytes and the next answer
+holds them exactly. They MUST be exported over OTLP as every other
+self-metric.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -7768,7 +7788,11 @@ http_exporter_python_pool_worker_stops_total          counter   {reason}
 http_exporter_python_pool_runs_total                  counter   {outcome}
 http_exporter_python_pool_runs_waiting                gauge
 http_exporter_trips_waiting                           gauge
+http_exporter_answer_gzip_level                       gauge
 ```
+
+`http_exporter_answer_gzip_level` MUST be `--web.gzip-level`, from `0` to
+`9`, without a label, and MUST NOT be published while verbose mode is off.
 
 `http_exporter_trips_waiting` MUST be the static target scrapes waiting for a
 trip slot, because their collector is at `max_concurrent_probes` or the
@@ -8036,7 +8060,9 @@ whatever the request accepts, without `Content-Encoding` and without
 `Vary: Accept-Encoding`, since the answer then does not vary with it. Any
 other value MUST be refused as a malformed command line, with exit status 2,
 at startup and with `--dry-run`. The level MUST NOT change how OTLP exports
-are compressed (`otlp.compression`).
+are compressed (`otlp.compression`). The bytes of these answers, before and after
+compression, MUST be counted by endpoint in the self-metrics (§ 22,
+`http_exporter_answer_bytes_total`).
 
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
@@ -28799,6 +28825,13 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestJQRulesOverTheSameItemsMakeRoomForTheirSeriesOnce`: a jq collector with two rules over `.items[]` of 2,000 items allocates no more bytes a series than one rule alone, give or take a twentieth (185 against 211; 252 when the second rule made the room again and copied the first's series into it).
 - `TestCheckingAProbesParametersAllocatesNothing`: checking a probe's `target`, `collector` and a monitor's own parameter allocates nothing (4 allocations when a list of every type's parameters was made for each check).
 - `TestAParameterOfATypeRegisteredLaterIsKnown`: a parameter only a type registered after the first check takes is refused for a collector of another type while that type is registered, and ignored once it is taken out.
+- `TestAnswerBytesCountTheAnswerBeforeAndAfterCompression`: a probe answered plain, to `gzip, deflate, br`, to `gzip;q=0`, to `HEAD`, refused `400` compressed and refused `405` adds to `http_exporter_answer_bytes_total{endpoint="probe"}` the bytes of the plain answer and to `http_exporter_answer_sent_bytes_total{endpoint="probe"}` the bytes the client received, the same for an uncompressed answer, and moves no other endpoint's series.
+- `TestAnswerBytesAtGzipLevelZeroAreTheBytesSent`: at `--web.gzip-level` 0 a probe answered to `gzip` adds its length to both counters.
+- `TestTheSelfMetricsAndStaticTargetsCountTheirOwnAnswers`: the first answer of the self-metrics holds `0` for its own endpoint, and the third holds exactly the bytes of the first two, written and sent, the second compressed; a compressed answer of the static targets path adds to `endpoint="static_targets"` alone.
+- `TestAnswerBytesArePresentFromTheStart`: without verbose mode and without static targets, both families have their HELP, `counter` TYPE and a series at `0` for `probe`, `self_metrics` and `static_targets`, and `http_exporter_answer_gzip_level` is absent.
+- `TestTheGzipLevelIsPublishedWithVerboseSelfMetricsOnly`: `http_exporter_answer_gzip_level` is the default `1`, or `0`, `6` or `9` as set, as a gauge with verbose self-metrics, and absent without.
+- `TestTheStrictOpenMetricsParserReadsTheAnswerBytes`: in OpenMetrics the counters are the families `http_exporter_answer_bytes` and `http_exporter_answer_sent_bytes` with `_total` and `_created` samples for every endpoint, and the strict parser of prometheus_client reads them and the gauge.
+- `TestOnlyTheAnswerOfATripThatCarriedOnChanged`, `TestFollowingAReloadWorkedOutAheadDoesWhatItDid`, `TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics` and `TestAChainedExporterReadsTheSelfMetricsWithCreatedSamples` compare reads of the self-metrics without the bytes of their own answers, which grow with each read, and the reload sequences without any answer bytes, which the length of a duration changes.
 
 # 35. Documentation requirements
 

@@ -54,7 +54,7 @@ func gunzip(t *testing.T, body []byte) string {
 // A handler that writes without a Content-Type gets it sniffed from the plain
 // bytes, not from the compressed ones; a 204 is passed on without a body.
 func TestGzipWriterSniffsAndPassesBodylessAnswers(t *testing.T) {
-	handler := newAnswerCompression(DefaultGzipLevel).wrap(func(w http.ResponseWriter, _ *http.Request) {
+	handler := newAnswerCompression(DefaultGzipLevel).wrap(&answerCounter{}, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("<html><body>hi</body></html>"))
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -67,7 +67,7 @@ func TestGzipWriterSniffsAndPassesBodylessAnswers(t *testing.T) {
 	if gunzip(t, recorder.Body.Bytes()) != "<html><body>hi</body></html>" {
 		t.Error("the body did not round-trip")
 	}
-	empty := newAnswerCompression(DefaultGzipLevel).wrap(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	empty := newAnswerCompression(DefaultGzipLevel).wrap(&answerCounter{}, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	recorder = httptest.NewRecorder()
 	empty(recorder, request)
 	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 || recorder.Header().Get("Content-Encoding") != "" {
@@ -89,7 +89,7 @@ func variedExposition() string {
 // zippedAt answers plain through the compression of one --web.gzip-level, to
 // a client that accepts gzip.
 func zippedAt(level int, plain string) *httptest.ResponseRecorder {
-	handler := newAnswerCompression(level).wrap(func(w http.ResponseWriter, _ *http.Request) {
+	handler := newAnswerCompression(level).wrap(&answerCounter{}, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = io.WriteString(w, plain)
 	})
@@ -137,7 +137,7 @@ func TestAPooledGzipWriterKeepsItsLevel(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/probe", nil)
 		request.Header.Set("Accept-Encoding", "gzip")
-		compression.wrap(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, plain) })(recorder, request)
+		compression.wrap(&answerCounter{}, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, plain) })(recorder, request)
 		return recorder.Body.Len()
 	}
 	if first, second := answer(), answer(); first != second {

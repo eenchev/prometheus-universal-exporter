@@ -617,7 +617,7 @@ func renderTrip(result *probeResult) renderedTrip {
 				request.Header.Set("Accept-Encoding", encoding)
 			}
 			recorder := httptest.NewRecorder()
-			newAnswerCompression(DefaultGzipLevel).wrap(result.writeTo)(recorder, request)
+			newAnswerCompression(DefaultGzipLevel).wrap(&answerCounter{}, result.writeTo)(recorder, request)
 			out.answers[format.name+"/"+encoding] = scrapedAnswer{status: recorder.Code, header: recorder.Header(), body: recorder.Body.String()}
 		}
 	}
@@ -793,14 +793,16 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 }
 
 // sameCounters reports whether two self-metrics expositions hold the same
-// counters with the same values: the series ending in _total.
+// counters with the same values: the series ending in _total, but for the
+// bytes of the self-metrics' own answers, which differ with every value of
+// time in the answers read before.
 func sameCounters(a, b string) bool {
 	counters := func(exposition string) []string {
 		var out []string
 		samples, _ := sampleLines(exposition)
 		for _, sample := range samples {
 			name, _, _ := strings.Cut(sample, "{")
-			if strings.HasSuffix(name, "_total") {
+			if strings.HasSuffix(name, "_total") && !countsTheSelfMetricsAnswers(sample) {
 				out = append(out, sample)
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -115,6 +116,24 @@ type gzipResponseWriter struct {
 	// bodyless is an answer that may not have a body, 204 or 304, which is
 	// passed on as it is.
 	bodyless bool
+	// written counts what the handler wrote, and sent what went on to the
+	// client, the compressed bytes gz writes through sent included.
+	written int64
+	sent    sentBytes
+}
+
+// sentBytes counts what is written through it to the client. It is a field
+// of gzipResponseWriter, which hands gz its address, so counting what gzip
+// writes allocates nothing more.
+type sentBytes struct {
+	w io.Writer
+	n int64
+}
+
+func (s *sentBytes) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	s.n += int64(n)
+	return n, err
 }
 
 func (w *gzipResponseWriter) WriteHeader(code int) {
@@ -140,33 +159,69 @@ func (w *gzipResponseWriter) Write(p []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	if w.bodyless {
-		return w.ResponseWriter.Write(p)
+		n, err := w.sent.Write(p)
+		w.written += int64(n)
+		return n, err
 	}
-	return w.gz.Write(p)
+	n, err := w.gz.Write(p)
+	w.written += int64(n)
+	return n, err
 }
+
+// countingResponseWriter counts what a handler writes to an answer sent as
+// it is.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	n int64
+}
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+// Unwrap lets http.ResponseController reach the connection through this
+// writer.
+func (w *countingResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // wrap gzips a handler's answer for a client that accepts gzip. At level 0
 // every answer is sent as it is, which every client accepts, Prometheus
 // included; it does not vary with Accept-Encoding, and does not say it does.
-func (c *answerCompression) wrap(next http.HandlerFunc) http.HandlerFunc {
+//
+// It counts every answer in counter, compressed or not, error and refusal
+// alike: what the handler wrote, and what was written on to the client. The
+// two are counted in the writer the answer has to itself, and added to
+// counter once the answer is done, gzip's last bytes included, so a write
+// takes no lock and costs no atomic operation; and the self-metrics, which
+// are rendered before they are written, show their own answer in the next
+// one.
+func (c *answerCompression) wrap(counter *answerCounter, next http.HandlerFunc) http.HandlerFunc {
+	plain := func(w http.ResponseWriter, r *http.Request) {
+		cw := &countingResponseWriter{ResponseWriter: w}
+		defer func() { counter.add(cw.n, cw.n) }()
+		next(cw, r)
+	}
 	if c.level == 0 {
-		return next
+		return plain
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		if r.Method == http.MethodHead || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
-			next(w, r)
+			plain(w, r)
 			return
 		}
 		gz := c.writers.Get().(*gzip.Writer)
-		gz.Reset(w)
 		cw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+		cw.sent.w = w
+		gz.Reset(&cw.sent)
 		defer func() {
 			if cw.wroteHeader && !cw.bodyless {
 				_ = gz.Close()
 			}
 			gz.Reset(nil)
 			c.writers.Put(gz)
+			counter.add(cw.written, cw.sent.n)
 		}()
 		next(cw, r)
 	}

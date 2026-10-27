@@ -148,7 +148,8 @@ func TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics(t *testi
 		answers := map[string]answer{}
 		for _, accept := range accepts {
 			contentType, body := answerOf(t, server, "/self-metrics", accept)
-			answers[accept] = answer{contentType, body}
+			// The bytes of the self-metrics' answers grow with each read.
+			answers[accept] = answer{contentType, withoutTheSelfMetricsAnswers(body)}
 		}
 		return answers
 	}
@@ -861,7 +862,9 @@ func TestAChainedExporterReadsTheSelfMetricsWithCreatedSamples(t *testing.T) {
 	outer.logger = testutil.QuietLogger(t)
 	probe := func() string {
 		_, body := answerOf(t, outer, probePath("chained", upstream.URL+"/self-metrics", ""), "")
-		return body
+		// The bytes of the inner exporter's self-metrics answers grow with
+		// each read.
+		return withoutTheSelfMetricsAnswers(body)
 	}
 	on := probe()
 	setCreatedTimestamps(inner, false)

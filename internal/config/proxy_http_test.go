@@ -37,8 +37,8 @@ func TestDefaultsGiveTheCollectorsTheirProxy(t *testing.T) {
 		t.Errorf("names request = %+v, want no proxy", names.Request)
 	}
 	inside := collectorNamed(t, c, "inside")
-	if inside.Request.ProxyURL != model.ProxyDirect || inside.Request.ProxyBasicAuthFile != nil {
-		t.Errorf("inside request = %+v, want direct, without the credentials meant for the proxy", inside.Request)
+	if inside.Request.ProxyURL != model.ProxyDirect || inside.Request.ProxyBasicAuthFile != nil || slices.Contains(inside.FromDefaults, "request.proxy_basic_auth_file") {
+		t.Errorf("inside request = %+v, took %q; want direct, without the credentials meant for the proxy", inside.Request, inside.FromDefaults)
 	}
 	// Credentials the collector writes itself with no proxy to send them
 	// to are refused, and so are the defaults' when its proxy is the
@@ -101,14 +101,55 @@ func TestTheSchemasHaveTheProxy(t *testing.T) {
 		t.Errorf("proxy_basic_auth_file: %v", files)
 	}
 	pattern := regexp.MustCompile(fetch.ProxyURLPattern)
-	for _, value := range []string{"", model.ProxyDirect, "http://proxy.example:3128", "https://proxy.example", "socks5://10.0.0.5:1080", "socks5h://proxy.example:1080/", "http://[fd00::5]:3128"} {
+	for _, value := range []string{"", model.ProxyDirect, "http://proxy.example:3128", "https://proxy.example", "socks5://10.0.0.5:1080", "socks5h://proxy.example:1080/", "http://[fd00::5]:3128", "HTTP://proxy.example:3128", "Socks5H://proxy.example:1080"} {
 		if !pattern.MatchString(value) {
 			t.Errorf("the pattern refuses %q", value)
 		}
 	}
-	for _, value := range []string{"DIRECT", "ftp://proxy.example", "proxy.example:3128", "http://user:pw@proxy.example", "http://proxy.example/path", "http://proxy.example?x=1", "http://{{param_p}}:1"} {
+	for _, value := range []string{"DIRECT", "ftp://proxy.example", "FTP://proxy.example", "proxy.example:3128", "http://user:pw@proxy.example", "http://proxy.example/path", "http://proxy.example?x=1", "http://{{param_p}}:1"} {
 		if pattern.MatchString(value) {
 			t.Errorf("the pattern takes %q", value)
 		}
+	}
+}
+
+// The credentials of a defaults block that names the proxy are for that
+// proxy alone: a collector naming a proxy of its own takes neither, and
+// --dry-run (Collector.FromDefaults) does not list them as taken; given
+// without a proxy, they are for the collectors that name their own. Taken
+// by no collector, they are refused, saying why.
+func TestDefaultsProxyCredentialsGoOnlyToTheDefaultsProxy(t *testing.T) {
+	own := func(name, proxyURL string) string {
+		return "  - name: " + name + "\n    request: {type: http, proxy_url: '" + proxyURL + "'}\n    transform: {type: jq}\n    metrics: [{name: v, expression: .v}]\n"
+	}
+	files := "    proxy_basic_auth_file: {username: /run/secrets/proxy-user, password: /run/secrets/proxy-password}\n"
+	c, err := Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request:\n    proxy_url: http://proxy.corp.example:3128\n"+files+"collectors:\n"+
+		defaultsCollector("web", "http")+own("partner", "socks5://partner-proxy.example:1080")+own("other", "https://other-proxy.example:3128")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web := collectorNamed(t, c, "web"); web.Request.ProxyBasicAuthFile == nil {
+		t.Errorf("web request = %+v, want the defaults' credentials", web.Request)
+	}
+	for _, name := range []string{"partner", "other"} {
+		x := collectorNamed(t, c, name)
+		if x.Request.ProxyBasicAuthFile != nil || len(x.FromDefaults) != 0 {
+			t.Errorf("%s request = %+v, took %q; want its own proxy without the defaults' credentials", name, x.Request, x.FromDefaults)
+		}
+	}
+	c, err = Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request:\n"+files+"collectors:\n"+own("partner", "socks5://partner-proxy.example:1080")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partner := collectorNamed(t, c, "partner"); partner.Request.ProxyBasicAuthFile == nil || !slices.Equal(partner.FromDefaults, []string{"request.proxy_basic_auth_file"}) {
+		t.Errorf("partner request = %+v, took %q; want the credentials given without a proxy", partner.Request, partner.FromDefaults)
+	}
+	_, err = Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request:\n    proxy_url: http://proxy.corp.example:3128\n"+files+"collectors:\n"+own("partner", "socks5://partner-proxy.example:1080")))
+	if err == nil || !strings.Contains(err.Error(), "defaults.request.proxy_basic_auth_file applies to no collector of the file: each collector it would apply to sets request.proxy_basic_auth_file itself, or names a request.proxy_url of its own, and the credentials are for defaults.request.proxy_url alone") {
+		t.Errorf("err = %v", err)
+	}
+	_, err = Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request:\n"+files+"collectors:\n"+own("inside", "direct")))
+	if err == nil || !strings.Contains(err.Error(), "defaults.request.proxy_basic_auth_file applies to no collector of the file: each collector it would apply to sets request.proxy_basic_auth_file itself, or goes direct with request.proxy_url: direct") {
+		t.Errorf("err = %v", err)
 	}
 }

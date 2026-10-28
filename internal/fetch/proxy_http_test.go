@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -469,7 +470,7 @@ func TestAProxyURLIsCheckedWhenItLoads(t *testing.T) {
 			t.Errorf("%s: the refusal %q quotes the secret", name, err)
 		}
 	}
-	for _, accepted := range []string{"", model.ProxyDirect, "http://proxy.example:3128", "https://proxy.example", "socks5://10.0.0.5:1080", "socks5h://proxy.example:1080", "http://[fd00::5]:3128/"} {
+	for _, accepted := range []string{"", model.ProxyDirect, "http://proxy.example:3128", "https://proxy.example", "socks5://10.0.0.5:1080", "socks5h://proxy.example:1080", "http://[fd00::5]:3128/", "HTTP://proxy.example:3128", "Socks5H://proxy.example:1080"} {
 		collector := testutil.Collector("api", "text")
 		collector.Request.ProxyURL = accepted
 		if err := ValidateRequest(&collector); err != nil {
@@ -510,5 +511,64 @@ func TestAProxysCredentialsAreReadFromFilesAndNeverShown(t *testing.T) {
 	_, err = FetchCollector(context.Background(), "https://api.example/", c, RequestOverrides{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "reading request.proxy_basic_auth_file password file") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A proxy's credential file that cannot be read fails the request at once,
+// as a basic_auth_file that cannot be read does: a retry would read it again
+// after the backoff, to fail the same way.
+func TestAProxysUnreadableCredentialsAreNotRetried(t *testing.T) {
+	proxyEnvironment(t)
+	unresolvable(t, nil)
+	proxy := newTestProxy(t)
+	c := proxiedCollector(t, "api", proxy.URL)
+	c.Request.ProxyBasicAuthFile = proxyCredentials(t, "scraper", "s3cret")
+	c.Request.Retry.Attempts = 3
+	c.Request.Retry.Backoff = model.Duration(time.Minute)
+	if err := ValidateRequest(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(c.Request.ProxyBasicAuthFile.Password); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := FetchCollector(ctx, "http://metrics.partner.example:8080/status", c, RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "reading request.proxy_basic_auth_file password file") || strings.Contains(err.Error(), "cut short") {
+		t.Fatalf("err = %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the request took %s, want it to fail at once without waiting out the retries' backoff", took)
+	}
+	if asked, _ := proxy.seen(); len(asked) != 0 {
+		t.Fatalf("the proxy was asked %q", asked)
+	}
+}
+
+// A SOCKS proxy's failure, its address and what its handshake said, is
+// withheld from a probe's caller whole, as a proxyconnect failure is; the log
+// has it.
+func TestASOCKSProxysFailureIsWithheldFromTheCaller(t *testing.T) {
+	proxyEnvironment(t)
+	socks, _ := socks5Proxy(t)
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := closed.Addr().(*net.TCPAddr).Port
+	_ = closed.Close()
+	c := proxiedCollector(t, "api", "socks5://"+socks)
+	c.Request.ProxyBasicAuthFile = proxyCredentials(t, "scraper", "s3cret")
+	if err := ValidateRequest(c); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FetchCollector(context.Background(), "http://localhost:"+strconv.Itoa(port)+"/status", c, RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "socks connect tcp "+socks+"->localhost:") {
+		t.Fatalf("err = %v, want the SOCKS proxy's failure", err)
+	}
+	told := model.CallerText(err)
+	if !strings.Contains(told, "socks connect tcp: "+model.WithheldMark) || strings.Contains(told, socks) || strings.Contains(told, "refused") {
+		t.Fatalf("the caller is told %q", told)
 	}
 }

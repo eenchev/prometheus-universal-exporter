@@ -543,8 +543,17 @@ the keys of it they do not set themselves:
   `request.denied_targets`, `request.proxy_url`,
   `request.proxy_basic_auth_file`, `limits`, `error_handling`,
   `failure_backoff` and `cache`, each of the kind a collector's takes. A
-  collector that writes `proxy_url: direct` MUST leave out the
-  `proxy_basic_auth_file` the block gives it; one that writes it itself
+  collector that writes a `proxy_url` of its own MUST leave out the
+  `proxy_basic_auth_file` the block gives it when the block sets
+  `proxy_url` too, whatever proxy it names or `direct`: those credentials
+  are for the block's proxy alone, and MUST NOT be sent to another. Given
+  without a `proxy_url`, the block's credentials MUST go to the collectors
+  that name their own proxies, and a collector that writes `proxy_url:
+  direct` MUST leave them out. A collector leaving the credentials out MUST
+  NOT list `request.proxy_basic_auth_file` under `--dry-run`'s
+  `details.collector_defaults`, and credentials no collector takes MUST be
+  refused as a key that applies to no collector, saying that each collector
+  names its own proxy or goes direct. One that writes the credentials itself
   beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
@@ -6883,7 +6892,10 @@ the caller of any request type's failed fetch, read from the errors' types
 as the failure log reads them (§ 25): the address a connection was made
 from (`*net.OpError`'s `Source`), the whole of what a connection to a proxy
 failed with (a `proxyconnect` error: the proxy's address, the name it is
-reached by, its certificate), what a proxy said in refusing a tunnel (§
+reached by, its certificate), the whole of a SOCKS proxy's failure (a
+`socks connect` error: the proxy's address, written where the source's
+would be, and what its handshake said, told as `socks connect tcp:
+[withheld; in the exporter's log]`), what a proxy said in refusing a tunnel (§
 42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
@@ -31867,7 +31879,10 @@ or path written in it. Credentials for the proxy MUST come from
 `request.proxy_basic_auth_file`, `username` and `password` files, both
 required, read at every request and sent as `Proxy-Authorization` or as the
 SOCKS5 username and password; the files without a `proxy_url` to send them
-to MUST be refused. The TLS connection to an `https://` proxy MUST be
+to MUST be refused. A credential file that cannot be read, or is empty,
+MUST fail the request at once, without its retries, as an unreadable
+`basic_auth_file` does. The scheme MUST be taken in any case
+(`HTTP://proxy:3128`), by the exporter and the schemas' pattern alike. The TLS connection to an `https://` proxy MUST be
 verified against the system's roots, with the proxy's host as the server
 name and no client certificate: the collector's `tls` block MUST apply to
 the target alone, through the tunnel. The proxy and its credentials' files

@@ -70,13 +70,23 @@ func transportProxy(settings TransportSettings) (func(*http.Request) (*url.URL, 
 		if auth.Username != "" || auth.Password != "" {
 			username, password, err := readProxyCredentials(auth)
 			if err != nil {
-				return nil, err
+				return nil, &proxyCredentialsError{err}
 			}
 			through.User = url.UserPassword(username, password)
 		}
 		return &through, nil
 	}, u, nil
 }
+
+// proxyCredentialsError is a failure to read the proxy's credentials, which
+// Go's transport returns as the request's own: the files are read again by
+// a retry, which would wait out the backoff only to fail as the first
+// attempt did, so the request ends at once (fetcher.go), as one whose
+// basic_auth_file cannot be read does before it is sent.
+type proxyCredentialsError struct{ err error }
+
+func (e *proxyCredentialsError) Error() string { return e.err.Error() }
+func (e *proxyCredentialsError) Unwrap() error { return e.err }
 
 // readProxyCredentials reads the username and the password of
 // request.proxy_basic_auth_file. What they hold is never shown.
@@ -114,9 +124,11 @@ func CheckProxy(proxyURL string, files *model.ProxyBasicAuthFile) error {
 
 // ProxyURLPattern is what request.proxy_url may be, for the configuration's
 // JSON Schema: left out, direct, or a proxy's scheme, host and port, with
-// no credentials and nothing after the port. What else it has to be is the
-// exporter's to refuse.
-const ProxyURLPattern = `^$|^direct$|^(https?|socks5h?)://[^/?#@{}]+/?$`
+// no credentials and nothing after the port. The scheme is of any case, as
+// the exporter reads it (url.Parse lowers it); it is spelled in classes
+// rather than with (?i), which JSON Schema's ECMA-262 patterns do not have.
+// What else it has to be is the exporter's to refuse.
+const ProxyURLPattern = `^$|^direct$|^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://[^/?#@{}]+/?$`
 
 // proxySchemes are the schemes request.proxy_url may have: those Go's
 // transport speaks to a proxy.

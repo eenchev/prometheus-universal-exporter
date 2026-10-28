@@ -66,6 +66,15 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 				}
 			}
 		}
+		// The block's proxy credentials are for a proxy: a collector that
+		// names its own proxy, or goes direct, takes none of them when the
+		// block names the proxy they are for, which would send them to a
+		// proxy they were not meant for. Credentials given without a proxy
+		// are for the collectors that name their own, and one that goes
+		// direct has no proxy to send them to.
+		if slices.Contains(written, "request.proxy_url") && (x.Request.ProxyURL == model.ProxyDirect || slices.Contains(defaults.Keys, "request.proxy_url")) {
+			written = append(written, "request.proxy_basic_auth_file")
+		}
 		x.FromDefaults = defaults.ApplyTo(x, written, applies)
 		for _, key := range defaults.Keys {
 			taken[key] = taken[key] || slices.Contains(x.FromDefaults, key)
@@ -90,6 +99,12 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 			how := "sets " + key + " itself"
 			if key == "failure_backoff" || strings.HasPrefix(key, "failure_backoff.") {
 				how += ", or turns the backoff off"
+			}
+			if key == "request.proxy_basic_auth_file" {
+				how += ", or goes direct with request.proxy_url: " + model.ProxyDirect
+				if slices.Contains(defaults.Keys, "request.proxy_url") {
+					how = "sets " + key + " itself, or names a request.proxy_url of its own, and the credentials are for defaults.request.proxy_url alone"
+				}
 			}
 			errs = append(errs, fmt.Errorf("defaults.%s applies to no collector of the file: each collector it would apply to %s; remove it from defaults", key, how))
 			continue

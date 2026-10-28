@@ -543,8 +543,17 @@ the keys of it they do not set themselves:
   `request.denied_targets`, `request.proxy_url`,
   `request.proxy_basic_auth_file`, `limits`, `error_handling`,
   `failure_backoff` and `cache`, each of the kind a collector's takes. A
-  collector that writes `proxy_url: direct` MUST leave out the
-  `proxy_basic_auth_file` the block gives it; one that writes it itself
+  collector that writes a `proxy_url` of its own MUST leave out the
+  `proxy_basic_auth_file` the block gives it when the block sets
+  `proxy_url` too, whatever proxy it names or `direct`: those credentials
+  are for the block's proxy alone, and MUST NOT be sent to another. Given
+  without a `proxy_url`, the block's credentials MUST go to the collectors
+  that name their own proxies, and a collector that writes `proxy_url:
+  direct` MUST leave them out. A collector leaving the credentials out MUST
+  NOT list `request.proxy_basic_auth_file` under `--dry-run`'s
+  `details.collector_defaults`, and credentials no collector takes MUST be
+  refused as a key that applies to no collector, saying that each collector
+  names its own proxy or goes direct. One that writes the credentials itself
   beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
@@ -2329,8 +2338,10 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
   (`pop3`), then write only the protocol's request for TLS, `EHLO` naming
   the client by the connection's local address as an address literal and,
   when its `250` answer lists `STARTTLS`, `STARTTLS`, answered `220`;
-  `a1 STARTTLS`, answered `a1 OK`; `STLS`, answered `+OK`; `AUTH TLS`,
-  answered `234`. The greeting and each answer MUST be held to
+  `a1 STARTTLS`, answered `a1 OK`, the tag in any case; `STLS`, answered
+  `+OK`; `AUTH TLS`, answered `234`, after the `120` replies an FTP server
+  may greet with before its `220` (`tcp`, below). The greeting and each
+  answer MUST be held to
   `limits.max_response_bytes`, a reply past it failing as a limit exceeded
   that names that key, and with the dialogue's reads and writes to the
   scrape's deadline and cancellation. A greeting that does not begin so, a
@@ -2349,7 +2360,8 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
   `starttls`, the protocol as `Tls-Starttls`, with the version, the number
   of certificates and whether the chain verified, or the error, as its
   outcome, which with `starttls` MUST begin with the greeting and each
-  command sent and the server's answer, quoted. The verbose `url` label MUST be
+  command sent and the server's answer, quoted, before the handshake's
+  outcome or its error. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
 
 #### `ntp`
@@ -2786,13 +2798,20 @@ types at build time): only a build asked for it carries it. Its keys:
   whether `greeting` is set or not, on the plaintext connection, and MUST
   fail without writing anything when it does not begin with `220` (`smtp`,
   `ftp`), `* OK` in any case (`imap`) or `+OK` (`pop3`), matching
-  `greeting` against it too when that is set. It MUST then write only the
+  `greeting` against it too when that is set. For `ftp` the `120` replies a
+  server may say before its `220` (RFC 959), of one line or several, MUST
+  be read past, held to the limit with the greeting and to the deadline:
+  the greeting checked, matched against `greeting` and held by the answer
+  is the reply after them, and the debug report MUST show them before it.
+  It MUST then write only the
   protocol's request for TLS: for `smtp`, `EHLO` naming the client by the
   connection's local address as an address literal (`[192.0.2.7]`,
   `[IPv6:2001:db8::7]`), its answer read as a greeting is and required to
   be `250` and to list `STARTTLS` on a line after its first, in any case,
   then `STARTTLS`, answered `220`; for `imap`, `a1 STARTTLS`, its answer
-  the lines up to the first beginning `a1 `, which MUST be `a1 OK`; for
+  the lines up to the first beginning `a1 ` in any case, which MUST be `a1
+  OK`, the tag in any case: a server that echoes the tag as `A1` MUST NOT
+  be left waiting on until the deadline; for
   `pop3`, `STLS`, answered `+OK`; for `ftp`, `AUTH TLS`, answered `234`.
   Each answer MUST be held to the response limit, the deadline and
   cancellation as the greeting is. A server that does not list `STARTTLS`,
@@ -2861,7 +2880,9 @@ types at build time): only a build asked for it carries it. Its keys:
   and as its outcome the greeting read, quoted, when there is one, with
   `starttls` each command of the request for TLS and the server's answer,
   quoted, and the TLS version begun, the
-  bytes read and how reading stopped, or the error. A report MUST write a
+  bytes read and how reading stopped, or the error, which, when the
+  handshake after the request for TLS fails, MUST follow the greeting and
+  the commands and answers as a success's outcome does. A report MUST write a
   control character of a header's value, other than a tab, escaped as Go
   writes it in a quoted string (`\r`, `\x1b`), and every other character
   of a value as it is. The verbose `url` label MUST be `tcp://host:port` or
@@ -6883,7 +6904,10 @@ the caller of any request type's failed fetch, read from the errors' types
 as the failure log reads them (§ 25): the address a connection was made
 from (`*net.OpError`'s `Source`), the whole of what a connection to a proxy
 failed with (a `proxyconnect` error: the proxy's address, the name it is
-reached by, its certificate), what a proxy said in refusing a tunnel (§
+reached by, its certificate), the whole of a SOCKS proxy's failure (a
+`socks connect` error: the proxy's address, written where the source's
+would be, and what its handshake said, told as `socks connect tcp:
+[withheld; in the exporter's log]`), what a proxy said in refusing a tunnel (§
 42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
@@ -28957,6 +28981,22 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnEmptyBodyLeavesTheHintAsItWas`: an empty body leaves no hint, and
   keeps one there was.
 
+## 34.231 Fixes to the per-collector proxy and to STARTTLS for tlscert
+
+- `TestDefaultsProxyCredentialsGoOnlyToTheDefaultsProxy` (config): with `defaults.request` setting `proxy_url` and `proxy_basic_auth_file`, an `http` collector without its own proxy takes both, while collectors writing `proxy_url: socks5://...` and `https://...` take neither credentials nor anything else (`FromDefaults` empty, so `--dry-run` lists nothing); credentials in `defaults` without a `proxy_url` go to a collector naming its own socks5 proxy, listed as taken; credentials no collector takes are refused as `defaults.request.proxy_basic_auth_file applies to no collector of the file`, saying each collector names a `request.proxy_url` of its own and the credentials are for `defaults.request.proxy_url` alone, or, without a proxy in the block, that it goes direct.
+- `TestDefaultsGiveTheCollectorsTheirProxy` (config): a collector writing `proxy_url: direct` leaves the defaults' credentials out and does not list `request.proxy_basic_auth_file` among the keys it took.
+- `TestTheSchemasHaveTheProxy` (config): the pattern of `proxy_url` takes `HTTP://proxy.example:3128` and `Socks5H://proxy.example:1080`, and refuses `FTP://proxy.example`.
+- `TestSchemaAndExporterAgreeOnKeysWrittenEmpty` (repository): the schema and the exporter both accept `proxy_url: HTTP://proxy.example:3128` and both refuse `FTP://proxy.example`.
+- `TestAProxyURLIsCheckedWhenItLoads` (fetch): `HTTP://proxy.example:3128` and `Socks5H://proxy.example:1080` load.
+- `TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller` (fetch): a `socks connect` error, of a refused username and password and of a reset read from the proxy, is told the caller as `socks connect tcp: [withheld; in the exporter's log]`, with neither the proxy's address nor its words, the error itself unchanged.
+- `TestASOCKSProxysFailureIsWithheldFromTheCaller` (fetch): through a SOCKS5 stand-in asked for a closed port, the error has `socks connect tcp <proxy>->localhost:<port>` and the caller is told `socks connect tcp: [withheld; in the exporter's log]`, without the proxy's address or `refused`.
+- `TestAProxysUnreadableCredentialsAreNotRetried` (fetch): a collector with `retry.attempts: 3` and a one-minute backoff whose proxy password file is missing fails at once, naming the file, without a wait cut short, and the proxy is asked nothing.
+- `TestATLSCertSTARTTLSIsTraced`: a POP3 server that says `+OK` to `STLS` and then breaks the handshake is traced as `greeted with "+OK ready\r\n"; sent "STLS\r\n", answered "+OK go ahead\r\n"; error: TLS handshake with ...`.
+- `TestATCPSTARTTLSIsTraced`: the same for a `tcp` collector, the outcome beginning with the greeting and the step before `error: TLS handshake with`.
+- `TestATLSCertIMAPSTARTTLSTakesTheTagInAnyCase`: an IMAP server answering `A1 OK` to `a1 STARTTLS` is handshaken with within 3s, the document verified; `A1 NO not here` fails as a refusal, not `a1 OK`.
+- `TestATLSCertFTPSTARTTLSWaitsThroughA120`: an FTP server greeting with `120` in one line, in several replies, or before a `220` of several lines is asked `AUTH TLS` and handshaken with, the debug outcome showing all it said; `120` followed by `421` fails as a greeting that does not begin with `220`, quoting the `421`; a hundred `120` lines past `limits.max_response_bytes` (1,024) fail as a limit exceeded; an SMTP server greeting `120` is refused.
+- `TestATCPFTPSTARTTLSWaitsThroughA120`: a `tcp` collector with `starttls: ftp` and `greeting: "^220 "` reads past a `120` line, matches the `220` alone, answers it as the body and `X-Tcp-Greeting`, and traces `greeted with "120 ready in 1 minute\r\n220 ready\r\n", which matched request.greeting; ...`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31867,7 +31907,10 @@ or path written in it. Credentials for the proxy MUST come from
 `request.proxy_basic_auth_file`, `username` and `password` files, both
 required, read at every request and sent as `Proxy-Authorization` or as the
 SOCKS5 username and password; the files without a `proxy_url` to send them
-to MUST be refused. The TLS connection to an `https://` proxy MUST be
+to MUST be refused. A credential file that cannot be read, or is empty,
+MUST fail the request at once, without its retries, as an unreadable
+`basic_auth_file` does. The scheme MUST be taken in any case
+(`HTTP://proxy:3128`), by the exporter and the schemas' pattern alike. The TLS connection to an `https://` proxy MUST be
 verified against the system's roots, with the proxy's host as the server
 name and no client certificate: the collector's `tls` block MUST apply to
 the target alone, through the tunnel. The proxy and its credentials' files

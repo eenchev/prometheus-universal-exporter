@@ -43,6 +43,16 @@ func TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller(t *testing.T) {
 			kept: "proxy-7.corp",
 			told: `Get "https://db.example/": the proxy refused the tunnel to db.example:443: ` + model.WithheldMark,
 		},
+		"a SOCKS proxy that refused the credentials": {
+			err:  &url.Error{Op: "Get", URL: "https://api.example/", Err: &net.OpError{Op: "socks connect", Net: "tcp", Source: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 1080}, Addr: &net.TCPAddr{IP: net.IPv4(10, 1, 2, 3), Port: 443}, Err: errors.New("username/password authentication failed")}},
+			kept: "authentication failed",
+			told: `Get "https://api.example/": socks connect tcp: ` + model.WithheldMark,
+		},
+		"a SOCKS proxy that could not be reached": {
+			err:  &url.Error{Op: "Get", URL: "https://api.example/", Err: &net.OpError{Op: "socks connect", Net: "tcp", Source: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 1080}, Addr: &net.TCPAddr{IP: net.IPv4(10, 1, 2, 3), Port: 443}, Err: &net.OpError{Op: "read", Net: "tcp", Source: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 7), Port: 51234}, Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 1080}, Err: syscall.ECONNRESET}}},
+			kept: "10.0.0.5:1080",
+			told: `Get "https://api.example/": socks connect tcp: ` + model.WithheldMark,
+		},
 		"a lookup's name server": {
 			err:  &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Name: "db.example", Server: "10.96.0.10:53", Err: "read udp 10.0.0.7:41234->10.96.0.10:53: i/o timeout", IsTimeout: true}},
 			kept: "on 10.96.0.10:53",

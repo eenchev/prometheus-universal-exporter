@@ -12,7 +12,8 @@ import (
 // network as Go's packages write them: the address and port a connection was
 // made from (`read tcp 10.0.0.7:51234->10.1.2.3:443`), the proxy a request
 // went through (`proxyconnect tcp: dial tcp 10.0.0.5:3128`, everything a
-// connection to it failed with, and a proxy's words in refusing a tunnel,
+// connection to it failed with, a SOCKS proxy's failure, `socks connect tcp
+// 10.0.0.5:1080->...`, whole, and a proxy's words in refusing a tunnel,
 // ProxyRefusedError), the name
 // server a lookup asked (`lookup db on 10.96.0.10:53`), and, in the text of
 // a resolver's exchange or a gRPC status, the same source address. Those are
@@ -71,6 +72,15 @@ func appendTransportParts(parts []string, e error) []string {
 	case *net.OpError:
 		if e == nil {
 			break
+		}
+		// A SOCKS proxy's failure (socks connect) is written with the
+		// proxy's address where the source would be, and the handshake's
+		// own words after it: the whole of it is of the proxy, withheld as
+		// a proxyconnect failure is below, and, should the text have been
+		// rewritten past matching, the proxy's address at least, by the
+		// source's rule.
+		if strings.HasPrefix(e.Op, "socks ") {
+			add(e.Error(), e.Op+" "+e.Net+": "+model.WithheldMark)
 		}
 		if e.Source != nil {
 			// As (*net.OpError).Error writes it, as sameFetchFailure reads it.

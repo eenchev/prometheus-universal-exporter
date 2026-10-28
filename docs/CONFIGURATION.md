@@ -3002,7 +3002,8 @@ has the whole of it. What is withheld from the answer:
   ([LDAP](LDAP.md)), and the addresses of the exporter's side of the
   network — the address and port a connection was made from (`read tcp
   [withheld; in the exporter's log]->10.1.2.3:443`), the proxy a request
-  went through, the name server a lookup asked. The address the connection
+  went through, with all a connection to it or a SOCKS proxy's handshake
+  failed with, the name server a lookup asked. The address the connection
   went to stays: the caller named it.
 
 An error over the 2,000 bytes every failure is cut to is cut after what the
@@ -3927,9 +3928,13 @@ collectors:
   `request.proxy_basic_auth_file`, `limits`, `error_handling`,
   `failure_backoff` and `cache`, each as a collector writes it: settings that
   are alike for collectors of different request types and decoders, or, for
-  the proxy, of where the exporter runs. An `http` collector that writes
-  `proxy_url: direct` leaves out the `proxy_basic_auth_file` the block gives,
-  which is for the proxy of the others. Any other key, of a
+  the proxy, of where the exporter runs. The `proxy_basic_auth_file` of a
+  block that also sets `proxy_url` is for that proxy alone: a collector that
+  writes a `proxy_url` of its own, another proxy or `direct`, leaves it out.
+  Without a `proxy_url` in the block, the credentials are for the collectors
+  that name their own proxies, and one that writes `proxy_url: direct`
+  leaves them out ([A collector's own
+  proxy](REQUESTS.md#a-collectors-own-proxy)). Any other key, of a
   collector (`metrics`, `request.path`, `request.type`, a key of one request
   type's own) or of nothing, is refused when the configuration loads, naming
   the key and its line, and so is a value of the wrong kind.

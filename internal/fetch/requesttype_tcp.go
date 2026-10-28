@@ -404,7 +404,7 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	traceRequest(ctx, tcpMethod(c, overrides), label, traced, "", false)
 	x, err := tcpExchange(ctx, address, cfg, send, c)
 	if err != nil {
-		traceOutcome(ctx, "error: "+err.Error())
+		traceOutcome(ctx, x.begun()+"error: "+err.Error())
 		return nil, err
 	}
 	traceOutcome(ctx, x.outcome())
@@ -437,6 +437,9 @@ type tcpExchanged struct {
 	body     []byte
 	how      string
 	greeting []byte
+	// before are the 120 replies an FTP server said before its greeting,
+	// for the debug report alone (readStartTLSGreeting).
+	before []byte
 	// matched is whether request.greeting checked the greeting.
 	matched bool
 	// answered is false when nothing was read after the greeting, which is
@@ -553,17 +556,37 @@ func (x *tcpExchanged) outcome() string {
 	if x.greeting == nil {
 		return fmt.Sprintf("read %d bytes, %s", len(x.body), x.how)
 	}
-	greeted := "greeted with " + tcpShown(string(x.greeting))
-	if x.matched {
-		greeted += ", which matched request.greeting"
-	}
+	greeted := x.greeted()
 	if x.starttls != "" {
-		greeted += "; " + startTLSShown(x.steps) + "; began " + tls.VersionName(x.version)
+		greeted += "; began " + tls.VersionName(x.version)
 	}
 	if x.answered {
 		return fmt.Sprintf("%s; read %d bytes, %s", greeted, len(x.body), x.how)
 	}
 	return greeted + "; nothing sent, the greeting is the answer"
+}
+
+// greeted is how a debug report tells the greeting, and the request for TLS
+// that followed it.
+func (x *tcpExchanged) greeted() string {
+	greeted := "greeted with " + tcpShown(string(x.before)+string(x.greeting))
+	if x.matched {
+		greeted += ", which matched request.greeting"
+	}
+	if x.starttls != "" {
+		greeted += "; " + startTLSShown(x.steps)
+	}
+	return greeted
+}
+
+// begun is what a debug report tells before the error of an exchange that
+// failed: the greeting and the request for TLS, when the handshake after
+// STARTTLS failed, as tlscert's report does; "" otherwise, x being nil.
+func (x *tcpExchanged) begun() string {
+	if x == nil || x.greeting == nil {
+		return ""
+	}
+	return x.greeted() + "; "
 }
 
 // tcpSeconds writes a duration as a number of seconds, as Prometheus's
@@ -635,11 +658,11 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	var shared int64
 	if r.Greeting != "" || c.Request.StartTLS != "" {
 		began = time.Now()
-		greeting, err := tcpReadGreeting(ctx, reader, address, limit, c)
+		before, greeting, err := tcpReadGreeting(ctx, reader, address, limit, c)
 		if err != nil {
 			return nil, err
 		}
-		x.greet, x.greeting = time.Since(began), greeting
+		x.greet, x.before, x.greeting = time.Since(began), before, greeting
 		if r.Greeting != "" {
 			pattern, err := tcpGreetingPattern(r.Greeting)
 			if err != nil {
@@ -664,7 +687,8 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 			}
 			x.upgrade = time.Since(began)
 			if err := handshake(); err != nil {
-				return nil, err
+				// What was said before it, for the debug report.
+				return x, err
 			}
 			reader = bufio.NewReader(conn)
 		}
@@ -690,14 +714,17 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	return x, nil
 }
 
-// tcpReadGreeting reads the greeting (readGreeting), its failures naming
-// the key that expects it, request.greeting, or else request.starttls.
-func tcpReadGreeting(ctx context.Context, reader *bufio.Reader, address tcpAddress, limit int64, c *model.Collector) ([]byte, error) {
+// tcpReadGreeting reads the greeting (readStartTLSGreeting), its failures
+// naming the key that expects it, request.greeting, or else
+// request.starttls. With starttls: ftp, the 120 replies an FTP server may
+// say before its 220 are before, and the greeting, which request.greeting
+// is matched against and the answer and the document hold, is the 220.
+func tcpReadGreeting(ctx context.Context, reader *bufio.Reader, address tcpAddress, limit int64, c *model.Collector) (before, greeting []byte, err error) {
 	key := "request.greeting"
 	if tcpRequest(c).Greeting == "" {
 		key = "request.starttls"
 	}
-	return readGreeting(ctx, reader, address.hostPort, limit, tcpLimitKeys, key)
+	return readStartTLSGreeting(ctx, reader, c.Request.StartTLS, address.hostPort, limit, tcpLimitKeys, key)
 }
 
 // tcpLimitKeys are the keys that set a tcp collector's response limit.

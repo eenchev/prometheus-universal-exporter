@@ -112,7 +112,7 @@ same key and values:
 | `starttls` | Port of a target without one | The greeting must begin | Sent before TLS | The server's yes |
 | --- | --- | --- | --- | --- |
 | `smtp` | 25 | `220` | `EHLO [address]`, then `STARTTLS` once the answer, `250`, lists it | `220` |
-| `imap` | 143 | `* OK` | `a1 STARTTLS` | `a1 OK`, after any untagged lines |
+| `imap` | 143 | `* OK` | `a1 STARTTLS` | `a1 OK`, the tag in any case, after any untagged lines |
 | `pop3` | 110 | `+OK` | `STLS` | `+OK` |
 | `ftp` | 21 | `220` | `AUTH TLS` | `234` |
 
@@ -123,11 +123,19 @@ same key and values:
 - The greeting is read over several lines for SMTP and FTP, and must begin
   as the table says: anything else, an SMTP server's `554`, or an IMAP
   server's `* PREAUTH`, which has no `STARTTLS` to offer, fails the scrape
-  before anything is sent.
+  before anything is sent. An FTP server may first say when it will be
+  ready, `120`, in one reply or several, as RFC 959 allows: those are read
+  past, held to the limit and the deadline with the greeting, and the
+  greeting is the `220` after them. A debug probe's report shows them.
 - An SMTP client names itself in `EHLO`; the exporter gives its own address
   on the connection, `[10.1.2.3]` or `[IPv6:2001:db8::7]`, as RFC 5321 has
   a client without a name the server can look up do. The answer must be
-  `250` and list `STARTTLS` on one of its lines, in any case.
+  `250` and list `STARTTLS` on one of the lines after the first, which
+  names the server, in any case.
+- IMAP tags are case-sensitive, but a server that answers `A1 OK` for `a1`
+  has answered the command: the tag is matched in any case, rather than the
+  answer being taken for an untagged line and the scrape waiting for
+  another until its deadline.
 - Nothing but the commands of the table is written, and nothing at all over
   TLS: once the handshake is over the connection is closed, without `QUIT`.
 - A server that does not list `STARTTLS`, refuses it — SMTP's `454`, IMAP's
@@ -339,7 +347,7 @@ Requests
 
 With `starttls` the section names the protocol in `Tls-Starttls`, and its
 outcome shows the greeting and each command and answer, quoted, before the
-handshake's:
+handshake's, or before its error when the handshake after them fails:
 
 ```text
 Requests

@@ -964,8 +964,11 @@ A proxy that refuses to tunnel to an `https` target fails the request with
 `the proxy refused the tunnel to api.example:443: 403 Forbidden`. A probe's
 caller is told it without the proxy's words, and is told nothing of a
 connection to the proxy that failed — its address, its name, its
-certificate — beyond `proxyconnect tcp: [withheld; in the exporter's log]`:
-the proxy is where the exporter runs, not what the caller asked for. The log
+certificate — beyond `proxyconnect tcp: [withheld; in the exporter's log]`,
+nor of a SOCKS proxy's failure — its address and what its handshake said,
+such as `username/password authentication failed` — beyond `socks connect
+tcp: [withheld; in the exporter's log]`: the proxy is where the exporter
+runs, not what the caller asked for. The log
 and a debug report have the whole error. A plain `http` target's request is
 sent to the proxy whole, so what the proxy answers it with, a `407` or a
 `502` of its own, is the answer, as from the target.
@@ -1013,7 +1016,9 @@ collectors:
   sent as `Proxy-Authorization` (`http` and `https`) or as the SOCKS
   username and password. A `proxy_url` with credentials in it is refused when
   the configuration loads, without quoting them, and so are credentials
-  without a `proxy_url` to send them to.
+  without a `proxy_url` to send them to. A credential file that cannot be
+  read, or is empty, fails the request at once, without its retries, as a
+  [`basic_auth_file`](AUTHENTICATION.md) does.
 - **Target lists** apply to the target, as behind the environment's proxy:
   its name, and the addresses the exporter looks it up to ([Restricting
   targets](#restricting-targets)). The proxy's own address is the
@@ -1024,8 +1029,34 @@ collectors:
   a static target: a target behind another proxy is a collector of its own.
   A file's [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file)
   may give its `http` and `graphite` collectors their proxy and its
-  credentials' files; one of them that writes `proxy_url: direct` leaves the
-  credentials out.
+  credentials' files. The credentials of a `defaults` block that names the
+  proxy are for that proxy alone: a collector that writes a `proxy_url` of
+  its own — another proxy, or `direct` — does not take them, and writes its
+  own credentials if its proxy asks for some, as `partner_api` below does;
+  `--dry-run` does not list them among the keys it took. Credentials in
+  `defaults` without a `proxy_url` are for the collectors that name their
+  own proxies, and every one of them that does takes them; one that goes
+  `direct` does not. Credentials no collector takes are refused, as any key
+  of `defaults` is that applies to no collector.
+
+  ```yaml
+  defaults:
+    request:
+      proxy_url: http://proxy.corp.example:3128
+      proxy_basic_auth_file:          # for proxy.corp.example alone
+        username: /run/secrets/corp-proxy/username
+        password: /run/secrets/corp-proxy/password
+  collectors:
+    - name: billing                   # through proxy.corp.example, with its credentials
+      request: {type: http}
+    - name: partner_api               # its own proxy, and its own credentials for it
+      request:
+        type: http
+        proxy_url: http://egress.partner.example:3128
+        proxy_basic_auth_file:
+          username: /run/secrets/egress/username
+          password: /run/secrets/egress/password
+  ```
 
 ## Retries
 

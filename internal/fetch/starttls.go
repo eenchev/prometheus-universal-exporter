@@ -256,29 +256,36 @@ func (d *startTLSDialogue) imap() error {
 }
 
 // readTagged reads an IMAP server's lines until the one that begins with
-// tag, held to limit together.
+// tag, held to limit together. The tag is matched in any case: tags are
+// case-sensitive (RFC 3501, section 2.2.1), but a server that echoes a1 as
+// A1 has still answered the command, and reading its answer as an untagged
+// line would wait for another until the deadline.
 func readTagged(tag string) func(*bufio.Reader, int64) ([]byte, error) {
 	return func(reader *bufio.Reader, limit int64) ([]byte, error) {
 		var reply []byte
 		for {
 			line, err := readReply(reader, limit-int64(len(reply)))
 			reply = append(reply, line...)
-			if err != nil || bytes.HasPrefix(line, []byte(tag)) {
+			if err != nil || hasPrefixFold(line, tag) {
 				return reply, err
 			}
 		}
 	}
 }
 
-// imapTagged says whether an IMAP reply's last line, the tagged one, is tag
-// and status: "a1 OK Begin TLS negotiation now".
+// imapTagged says whether an IMAP reply's last line, the tagged one, is tag,
+// in any case as readTagged reads it, and status: "a1 OK Begin TLS
+// negotiation now".
 func imapTagged(reply []byte, tag, status string) bool {
 	last := reply[:len(reply)-1]
 	if i := bytes.LastIndexByte(last, '\n'); i >= 0 {
 		last = last[i+1:]
 	}
-	rest, found := bytes.CutPrefix(last, []byte(tag))
-	return found && hasPrefixFold(rest, status) && (len(rest) == len(status) || rest[len(status)] == ' ' || rest[len(status)] == '\r')
+	if !hasPrefixFold(last, tag) {
+		return false
+	}
+	rest := last[len(tag):]
+	return hasPrefixFold(rest, status) && (len(rest) == len(status) || rest[len(status)] == ' ' || rest[len(status)] == '\r')
 }
 
 // expect sends command and reads the server's answer with read, which must
@@ -375,15 +382,33 @@ func startTLSShown(steps []startTLSStep) string {
 	return b.String()
 }
 
+// readStartTLSGreeting reads the greeting of a server of protocol
+// (readGreeting). An FTP server may say first when it will be ready, 120
+// "Service ready in nnn minutes", a reply of one line or several, before
+// its 220 (RFC 959, sections 4.2 and 5.4): those replies are read and
+// returned apart, in before, and the greeting is the reply after them,
+// which startTLSGreeted and a tcp collector's request.greeting check. All
+// of it is held to limit together, and to the connection's deadline.
+func readStartTLSGreeting(ctx context.Context, reader *bufio.Reader, protocol, hostPort string, limit int64, limitKeys, key string) (before, greeting []byte, err error) {
+	for {
+		greeting, err = readGreeting(ctx, reader, hostPort, limit, int64(len(before)), limitKeys, key)
+		if err != nil || protocol != startTLSFTP || replyCode(greeting) != "120" {
+			return before, greeting, err
+		}
+		before = append(before, greeting...)
+	}
+}
+
 // readGreeting reads what a server says first, before anything is sent,
 // as readReply reads a reply: its first line, or, after a line beginning
 // with three digits and a '-', every line up to the one beginning with the
-// same digits and no '-'. The greeting is held to limit, which an error
-// says to raise by limitKeys, and ends at the connection's deadline: a
-// server that writes no line end, or never ends its continuation, fails
-// the scrape. Its failures name key, the key that expects a greeting.
-func readGreeting(ctx context.Context, reader *bufio.Reader, hostPort string, limit int64, limitKeys, key string) ([]byte, error) {
-	greeting, err := readReply(reader, limit)
+// same digits and no '-'. The greeting is held to limit, less the used
+// bytes the server said before it, which an error says to raise by
+// limitKeys, and ends at the connection's deadline: a server that writes
+// no line end, or never ends its continuation, fails the scrape. Its
+// failures name key, the key that expects a greeting.
+func readGreeting(ctx context.Context, reader *bufio.Reader, hostPort string, limit, used int64, limitKeys, key string) ([]byte, error) {
+	greeting, err := readReply(reader, limit-used)
 	switch {
 	case err == nil:
 		return greeting, nil

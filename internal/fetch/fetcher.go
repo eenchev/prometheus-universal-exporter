@@ -960,9 +960,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// A refused target is refused again on every attempt, and so
 			// is a redirect that would send the body, or show the client
 			// certificate, to a host that is not trusted, and one the rate
-			// limit would delay past the deadline.
+			// limit would delay past the deadline, and the proxy's
+			// credentials that could not be read.
 			var redirectRefused *redirectRefusedError
-			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) && !errors.Is(err, errRateLimitRefused) {
+			var proxyCredentials *proxyCredentialsError
+			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) && !errors.Is(err, errRateLimitRefused) && !errors.As(err, &proxyCredentials) {
 				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
 					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}

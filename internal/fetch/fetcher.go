@@ -748,7 +748,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// TLS and HTTP/2 settings (transport.go), so a static target with a tls
 	// block of its own has a pool of its own, and no connection made with
 	// one client certificate carries a request that is to present another.
-	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, followRedirects, 0)
+	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, c), followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -988,9 +988,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		var body []byte
 		var readErr error
-		if declared > 0 {
+		switch {
+		case declared > 0:
 			body, readErr = readBody(resp.Body, limit, declared)
-		} else {
+		case method == http.MethodHead || resp.ContentLength == 0:
+			// An answer that has no body, or says it has none, is read
+			// without the hint of the last answer's size: a buffer of that
+			// size would be made for nothing.
+			body, readErr = readUnsizedBody(resp.Body, limit)
+		default:
 			// Nothing says how long the body is, so the last answer of the
 			// same collector and target does.
 			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))

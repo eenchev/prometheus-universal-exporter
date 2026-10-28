@@ -246,6 +246,11 @@ type RequestConfig struct {
 	KeepaliveCountMax  *int      `yaml:"keepalive_count_max"`
 	IdleTimeout        *Duration `yaml:"idle_timeout"`
 	MaxOpenConnections int       `yaml:"max_open_connections"`
+	// StartTLS belongs to the types that begin TLS on a plaintext
+	// connection, tcp and tlscert: the protocol, one of StartTLSProtocols,
+	// whose own request for TLS is spoken after the server's greeting,
+	// none when empty (fetch/starttls.go).
+	StartTLS string `yaml:"starttls"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML
@@ -257,6 +262,15 @@ type RequestConfig struct {
 	// not asked faster than it can answer (fetch/ratelimit.go). Left out
 	// of a collector written as YAML when unset.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
+	// ProxyURL belongs to the http and graphite types: the proxy every
+	// request of the collector, its login's included, goes through in
+	// place of the one the environment names, or ProxyDirect for none;
+	// "" leaves the environment's in force (fetch/proxy.go).
+	// ProxyBasicAuthFile is the files of the credentials sent to that
+	// proxy, which its URL may not carry. Both are left out of a collector
+	// written as YAML when unset.
+	ProxyURL           string              `yaml:"proxy_url,omitempty"`
+	ProxyBasicAuthFile *ProxyBasicAuthFile `yaml:"proxy_basic_auth_file,omitempty"`
 
 	// Own holds the keys only the collector's request type takes, read
 	// into the struct its registration declares (fetch.RequestType.Config;
@@ -406,6 +420,13 @@ const (
 // PaginationTypes are the values of request.pagination.type.
 var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCursor, PaginationPage, PaginationOffset}
 
+// StartTLSProtocols are the values of request.starttls, in the order an
+// error lists them. They are here rather than beside the dialogue that
+// speaks them (fetch/starttls.go) because the configuration schema, which
+// is the same in every build, names them in a build without either type
+// that takes the key.
+var StartTLSProtocols = []string{"smtp", "imap", "pop3", "ftp"}
+
 // RetryConfig is request.retry: how often a failed request is tried again,
 // and how long to wait before each attempt.
 type RetryConfig struct {
@@ -444,6 +465,19 @@ type BasicAuthFile struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 }
+
+// ProxyBasicAuthFile is request.proxy_basic_auth_file: the paths of files
+// holding the username and the password a collector's request.proxy_url is
+// sent, read on every request so a rotated secret is picked up. Its JSON
+// names are its keys', for --dry-run.
+type ProxyBasicAuthFile struct {
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
+}
+
+// ProxyDirect is the request.proxy_url that sends a collector's requests to
+// their targets directly, whatever proxy the environment names.
+const ProxyDirect = "direct"
 
 // TLSConfig is a tls block: the CA to verify the server with, a client
 // certificate and key, and whether verification is skipped.

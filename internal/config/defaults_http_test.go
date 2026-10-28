@@ -171,7 +171,7 @@ func TestDefaultsApplyToTheCollectorsOfTheirFileAlone(t *testing.T) {
 func TestDefaultsRefuseTheKeysTheyCannotSet(t *testing.T) {
 	collectors := "collectors:\n" + defaultsCollector("a", "http")
 	for name, tc := range map[string]struct{ defaults, want string }{
-		"a collector key":         {"defaults:\n  metrics: []\n", `line 2: defaults cannot set metrics; defaults set the keys of request.tls, request.retry, request.max_response_bytes, request.allowed_targets, request.denied_targets, limits, error_handling, failure_backoff and cache`},
+		"a collector key":         {"defaults:\n  metrics: []\n", `line 2: defaults cannot set metrics; defaults set the keys of request.tls, request.retry, request.max_response_bytes, request.allowed_targets, request.denied_targets, request.proxy_url, request.proxy_basic_auth_file, limits, error_handling, failure_backoff and cache`},
 		"an unknown key":          {"defaults:\n  limitz: {}\n", `line 2: unknown key "limitz" in defaults; defaults set the keys of`},
 		"a request key":           {"defaults:\n  request: {path: /x}\n", "line 2: defaults cannot set request.path;"},
 		"the request type":        {"defaults:\n  request:\n    type: http\n", "line 3: defaults cannot set request.type;"},

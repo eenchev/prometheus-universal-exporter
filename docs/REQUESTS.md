@@ -900,7 +900,9 @@ with `allowed_targets`, and deny `169.254.169.254` at the proxy.
 
 Whether a
 request goes through a proxy is decided as the connection pool sending it
-decides, from the environment as it read it. A `grpc` collector does the same:
+decides, from the collector's [`proxy_url`](#a-collectors-own-proxy), or from
+the environment as it read it. The proxy's own address is the
+configuration's, and is not checked against the lists. A `grpc` collector does the same:
 its connections are checked as they are made, and one refused is reported as
 the refusal, answered `403`, as for `http`, rather than as the `UNAVAILABLE`
 gRPC makes of it. A refused request is not retried.
@@ -918,7 +920,8 @@ Connections to targets are kept and reused, so an HTTPS target pays for one TLS
 handshake rather than one per scrape. Every collector and scrape with the same
 TLS settings — the whole `tls` block: `ca_file`, `cert_file`, `key_file`,
 `insecure_skip_verify` and `server_name` — the same `enable_http2` and the same
-`allowed_targets` and `denied_targets` shares one connection pool; a scrape
+`allowed_targets` and `denied_targets`, and the same
+[proxy](#a-collectors-own-proxy) and proxy credentials, shares one connection pool; a scrape
 overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
 settings, and so does a static target with a `tls` block of its own, so no
 connection made with one client certificate carries a request that is to
@@ -948,13 +951,81 @@ NO_PROXY=.svc,.cluster.local,10.0.0.0/8 \
 ```
 
 A proxy URL may carry credentials, `http://user:password@proxy:3128`, sent as
-`Proxy-Authorization`. There is no proxy setting in the configuration: the
-environment applies to the whole exporter, and is read once, when the exporter
-first connects. In Kubernetes, set the variables through the chart's `env`,
+`Proxy-Authorization`. The environment applies to the whole exporter, and is
+read once, when the exporter first connects; an `http` or `graphite`
+collector may name a proxy of its own instead ([below](#a-collectors-own-proxy)).
+In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
 affected, and neither are `sshfile`, `sql`, `redis`, `tcp`, `ldap` and `sshexec` collectors, which
 connect to their hosts directly; `s3file` collectors go through the proxy, by the AWS
 SDK's own client, which reads the same variables.
+
+A proxy that refuses to tunnel to an `https` target fails the request with
+`the proxy refused the tunnel to api.example:443: 403 Forbidden`. A probe's
+caller is told it without the proxy's words, and is told nothing of a
+connection to the proxy that failed — its address, its name, its
+certificate — beyond `proxyconnect tcp: [withheld; in the exporter's log]`:
+the proxy is where the exporter runs, not what the caller asked for. The log
+and a debug report have the whole error. A plain `http` target's request is
+sent to the proxy whole, so what the proxy answers it with, a `407` or a
+`502` of its own, is the answer, as from the target.
+
+### A collector's own proxy
+
+An `http` or `graphite` collector can name the proxy its requests go
+through, in place of the environment's — a partner API reached through a
+proxy in its own network, while everything else goes direct or through the
+usual one — or go direct although the environment names a proxy:
+
+```yaml
+collectors:
+  - name: partner_api
+    request:
+      type: http
+      proxy_url: http://egress.partner.example:3128
+      proxy_basic_auth_file:
+        username: /run/secrets/egress/username
+        password: /run/secrets/egress/password
+  - name: in_cluster
+    request:
+      type: http
+      proxy_url: direct     # no proxy, whatever HTTPS_PROXY says
+```
+
+- **`proxy_url`** is `http://host:port`, `https://host:port` or
+  `socks5://host:port` (`socks5h://` alike), and nothing else: no path, no
+  query, no credentials, no placeholder. `direct` reaches the targets without
+  a proxy. Left out, the environment's proxy applies, as above.
+- **Everything the collector sends goes through it**: its requests, their
+  retries, pages and followed redirects, and its [login](AUTHENTICATION.md#logging-in-to-a-target).
+  There is no `NO_PROXY` of a collector: `localhost` goes through it too.
+- **`http://`** is asked in plain text: an `http` target's request whole, an
+  `https` target's through a `CONNECT` tunnel, with TLS end to end with the
+  target and its [TLS settings](#tls) unchanged. **`https://`** is the same over
+  TLS to the proxy, verified against the system's roots — on Linux those
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` name, when set — without a client
+  certificate: the
+  collector's `tls` block is the target's, and its client certificate,
+  CA and `server_name` are not used with the proxy. **`socks5://`** is asked
+  to connect to the target by name, which the proxy resolves.
+- **Credentials** come from files, `proxy_basic_auth_file`, its `username` and
+  `password`, read at every request so a rotated Secret is picked up, and
+  sent as `Proxy-Authorization` (`http` and `https`) or as the SOCKS
+  username and password. A `proxy_url` with credentials in it is refused when
+  the configuration loads, without quoting them, and so are credentials
+  without a `proxy_url` to send them to.
+- **Target lists** apply to the target, as behind the environment's proxy:
+  its name, and the addresses the exporter looks it up to ([Restricting
+  targets](#restricting-targets)). The proxy's own address is the
+  configuration's, and is not held to `allowed_targets` and `denied_targets`.
+- **Connections.** Collectors with different proxies, or different
+  credentials for one, never share a connection ([Connections](#connections)).
+- **Configuration only.** No probe parameter sets the proxy, and neither does
+  a static target: a target behind another proxy is a collector of its own.
+  A file's [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file)
+  may give its `http` and `graphite` collectors their proxy and its
+  credentials' files; one of them that writes `proxy_url: direct` leaves the
+  credentials out.
 
 ## Retries
 

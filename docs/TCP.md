@@ -603,6 +603,11 @@ The timings gain the request's: `starttls_seconds` in the
 the end of the greeting until the server said yes, beside `tls_seconds`,
 the handshake's; the document's `starttls` names the protocol.
 
+To watch the certificate such a server presents, its expiry and whether
+it verifies, rather than to speak to it over TLS, the
+[`tlscert`](TLSCERT.md#starttls) type of the default build takes the same
+`starttls`, with the same values and dialogue.
+
 SMTP submission, port 587, checked through `QUIT` over TLS:
 
 ```yaml

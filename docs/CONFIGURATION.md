@@ -2537,6 +2537,8 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
+| `proxy_url` | the environment's | The proxy every request of the collector, its login's included, goes through instead of the one `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` name: `http://host:port`, `https://host:port` or `socks5://host:port`, without credentials; `direct` for none. See [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy). |
+| `proxy_basic_auth_file` | none | With `proxy_url`: the files the `username` and the `password` sent to the proxy are read from, at every request. |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -2548,8 +2550,9 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` and
-`rate_limit` — and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+`allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
+`rate_limit`, `proxy_url` and `proxy_basic_auth_file` — and `method` and
+`body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
 For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
 so is `descriptors`, where its message types come from — `reflection`,
@@ -2581,8 +2584,9 @@ system's by default, and `transport` `udp` or `tcp`; `allowed_targets` and
 its table is in [DNS](DNS.md#a-collector).
 
 For `tlscert`, no key is required: `tls` sets the roots, a client
-certificate and the name verified, and `allowed_targets` and
-`denied_targets` apply as for `http`. The decoder is `json`; its table is in
+certificate and the name verified, `starttls`, `smtp`, `imap`, `pop3` or
+`ftp`, begins TLS after the greeting as that protocol asks for it, as for
+`tcp`, and `allowed_targets` and `denied_targets` apply as for `http`. The decoder is `json`; its table is in
 [TLS certificates](TLSCERT.md#a-collector).
 
 For `ntp`, no key is required, and the type has none of its own:
@@ -3919,9 +3923,13 @@ collectors:
 
 - **The keys.** `defaults` sets the keys of `request.tls`, `request.retry`,
   `request.max_response_bytes`, `request.allowed_targets`,
-  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff`
-  and `cache`, each as a collector writes it: settings that are alike for
-  collectors of different request types and decoders. Any other key, of a
+  `request.denied_targets`, `request.proxy_url`,
+  `request.proxy_basic_auth_file`, `limits`, `error_handling`,
+  `failure_backoff` and `cache`, each as a collector writes it: settings that
+  are alike for collectors of different request types and decoders, or, for
+  the proxy, of where the exporter runs. An `http` collector that writes
+  `proxy_url: direct` leaves out the `proxy_basic_auth_file` the block gives,
+  which is for the proxy of the others. Any other key, of a
   collector (`metrics`, `request.path`, `request.type`, a key of one request
   type's own) or of nothing, is refused when the configuration loads, naming
   the key and its line, and so is a value of the wrong kind.

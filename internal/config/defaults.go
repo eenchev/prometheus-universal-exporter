@@ -208,6 +208,11 @@ func checkDefaults(d *model.CollectorDefaults) error {
 	if d.Request.Retry.Backoff < 0 {
 		errs = append(errs, errors.New(`collector "" request.retry.backoff must not be negative`))
 	}
+	// A proxy_basic_auth_file may stand without a proxy_url here, for
+	// collectors that name their own proxies.
+	if err := fetch.CheckProxy(d.Request.ProxyURL, d.Request.ProxyBasicAuthFile); err != nil {
+		errs = append(errs, fmt.Errorf(`collector "" %w`, err))
+	}
 	var problems []error
 	for _, err := range errs {
 		if err != nil {

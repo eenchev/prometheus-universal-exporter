@@ -540,8 +540,12 @@ the keys of it they do not set themselves:
 
 - `defaults` MUST take exactly the keys of `request.tls`, `request.retry`,
   `request.max_response_bytes`, `request.allowed_targets`,
-  `request.denied_targets`, `limits`, `error_handling`, `failure_backoff` and
-  `cache`, each of the kind a collector's takes. Any other key — of a
+  `request.denied_targets`, `request.proxy_url`,
+  `request.proxy_basic_auth_file`, `limits`, `error_handling`,
+  `failure_backoff` and `cache`, each of the kind a collector's takes. A
+  collector that writes `proxy_url: direct` MUST leave out the
+  `proxy_basic_auth_file` the block gives it; one that writes it itself
+  beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
   startup, by `--dry-run` and on reload, naming the key and its line, and the
@@ -1000,6 +1004,8 @@ and the source MUST list the opt-in types.
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
+| `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
+| `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -1008,6 +1014,8 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
+Neither a probe parameter nor a static target MAY set `proxy_url` or
+`proxy_basic_auth_file`.
 
 ##### Pagination
 
@@ -1376,7 +1384,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -2267,17 +2275,20 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
 
 A `tlscert` collector makes a TLS handshake with the probe's `target` and
 hands the certificates the server presented to the transforms as a JSON
-document. Nothing MUST be sent over the connection, which MUST be closed
-after the handshake. Its keys are `tls` and `allowed_targets` /
+document. Nothing MUST be sent over TLS, and nothing in plaintext but the
+request for TLS of `starttls`; the connection MUST be closed after the
+handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
 `denied_targets`:
 
 | Key | Default | Rule |
 | --- | --- | --- |
 | `tls` | none | `http`'s block, read by the same code: `ca_file` adds roots to the system's, `cert_file` and `key_file` (both or neither, refused at load otherwise) a client certificate, `server_name` the name sent as SNI and verified, the target's host when unset. `insecure_skip_verify` true MUST be refused at load, and by the schema (§ 24.3). The files MUST be read at every handshake, and by `--dry-run`, which MUST warn of one a handshake would fail on. |
+| `starttls` | none | `tcp`'s key, one key of the common part with one meaning: `smtp`, `imap`, `pop3` or `ftp`, exactly, anything else refused at load naming the four; the configuration's alone, which no static target or probe MAY set. |
 | `allowed_targets`, `denied_targets` | none | As for `http`: the host's name before the connection, and the address the connection is made to. |
 
 - A target MUST be `host`, `host:port` or `[v6]:port`, port 443 when left
-  out; a scheme, path, query or user and a port outside 1–65535 MUST be
+  out, or with `starttls` the port registered for the protocol: 25 for
+  `smtp`, 143 for `imap`, 110 for `pop3`, 21 for `ftp`; a scheme, path, query or user and a port outside 1–65535 MUST be
   refused, a probe's with `400` before anything is dialed and a static
   target's at load. A probe MUST take `timeout` and `param_<name>`
   parameters, and a static target's request block `timeout`.
@@ -2290,7 +2301,7 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   fails and a deadline that comes first MUST fail the scrape in the `tls`
   stage, naming `host:port`.
 - The answer MUST be a JSON document of `host`, `port`, `server_name`,
-  `tls_version` and `cipher_suite` as the handshake settled them,
+  `starttls` (the protocol, `""` without it), `tls_version` and `cipher_suite` as the handshake settled them,
   `verified`, `verify_error`, `duration_seconds`, the first certificate's
   `not_after` and `seconds_until_expiry`, `chain` (`length`,
   `earliest_not_after`, `seconds_until_earliest_expiry`, `earliest_from`)
@@ -2311,14 +2322,34 @@ after the handshake. Its keys are `tls` and `allowed_targets` /
   `seconds_until_earliest_expiry` MUST be `earliest_not_after` less the
   time of the scrape. `verified`, `verify_error` and `certificates` MUST be
   of the presented chain either way.
-- STARTTLS is not supported: the handshake MUST start at the connection's
-  first byte.
+- Without `starttls` the handshake MUST start at the connection's first
+  byte. With it the scrape MUST speak the request for TLS `tcp`'s
+  `starttls` speaks (`tcp`, below), by the same code: read the greeting, which
+  MUST begin `220` (`smtp`, `ftp`), `* OK` in any case (`imap`) or `+OK`
+  (`pop3`), then write only the protocol's request for TLS, `EHLO` naming
+  the client by the connection's local address as an address literal and,
+  when its `250` answer lists `STARTTLS`, `STARTTLS`, answered `220`;
+  `a1 STARTTLS`, answered `a1 OK`; `STLS`, answered `+OK`; `AUTH TLS`,
+  answered `234`. The greeting and each answer MUST be held to
+  `limits.max_response_bytes`, a reply past it failing as a limit exceeded
+  that names that key, and with the dialogue's reads and writes to the
+  scrape's deadline and cancellation. A greeting that does not begin so, a
+  server that does not list `STARTTLS`, answers otherwise, closes the
+  connection or writes any byte after its yes before the handshake MUST
+  fail the scrape in the `tls` stage, naming the step and, where the
+  server answered, quoting it with `model.Quoted`, so a probe's caller is
+  told it withheld (§ 19.4); the scrape MUST NOT go on without TLS. The
+  handshake and the document MUST then be those without `starttls`, the
+  document's `starttls` naming the protocol; nothing the server said
+  before TLS MAY be in the document.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `HANDSHAKE`, `tls://host:port`,
-  the name sent as SNI and whether a client certificate is presented, with
-  the version, the number of certificates and whether the chain verified,
-  or the error, as its outcome. The verbose `url` label MUST be
+  the name sent as SNI, whether a client certificate is presented and, with
+  `starttls`, the protocol as `Tls-Starttls`, with the version, the number
+  of certificates and whether the chain verified, or the error, as its
+  outcome, which with `starttls` MUST begin with the greeting and each
+  command sent and the server's answer, quoted. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
 
 #### `ntp`
@@ -2775,7 +2806,8 @@ types at build time): only a build asked for it carries it. Its keys:
   the system roots for the target's host, and `send` written and the answer
   read over TLS; without `send` the scrape MUST end after the handshake,
   the greeting being the answer. No static target or probe MAY set
-  `starttls`.
+  `starttls`. `starttls` is a key of the common part, which `tlscert` takes
+  too with the same values and dialogue (`tlscert`, above).
 - A placeholder of `send` MUST be filled from the probe's parameter, or its
   default, written as it is. A value MUST hold only ASCII letters, digits
   and `. _ - : / @ + = , %`; a value holding any other character, a blank,
@@ -6849,8 +6881,10 @@ failure withholds: a successful probe answers them.
 The addresses of the exporter's side of the network MUST be withheld from
 the caller of any request type's failed fetch, read from the errors' types
 as the failure log reads them (§ 25): the address a connection was made
-from (`*net.OpError`'s `Source`), the proxy a `proxyconnect` dialed, the
-name server a lookup asked (`*net.DNSError`'s `Server`), and the source
+from (`*net.OpError`'s `Source`), the whole of what a connection to a proxy
+failed with (a `proxyconnect` error: the proxy's address, the name it is
+reached by, its certificate), what a proxy said in refusing a tunnel (§
+42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
 of the one it wraps, as the redaction of URLs does, MUST tell the caller
@@ -6906,7 +6940,9 @@ the bound and one shorter MUST be the bytes that came. The hints MUST take a
 bounded amount of memory whatever targets are probed, MUST NOT make a first
 buffer of more than 4 MiB or the bound, and an answer much shorter than its
 buffer MUST NOT keep the buffer: the response, which the cache may hold,
-holds little more than its body.
+holds little more than its body. A `HEAD` answer and one whose
+`Content-Length` is 0 have no body, and MUST be read without the hint; an
+empty body MUST leave the hint as it was.
 
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
@@ -9459,8 +9495,10 @@ whether or not a proxy is in between.
   against the address each connection is made to, without a lookup of the
   exporter's own before it, so a name is resolved once per connection and one
   that resolves elsewhere between lookups is still refused. For a target
-  reached through a proxy, the connection is the proxy's and MUST NOT be
-  checked as the target's; the exporter MUST resolve the target's name itself
+  reached through a proxy, the environment's or the collector's
+  `request.proxy_url`, the connection is the proxy's and MUST NOT be
+  checked as the target's, nor the proxy's address held to the lists, which
+  the configuration names; the exporter MUST resolve the target's name itself
   before the request and check those addresses. When that lookup fails, the
   request MUST go on to the proxy, which resolves the name, unless the
   collector's own lists hold an address or a network, in which case it MUST
@@ -28833,6 +28871,92 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheStrictOpenMetricsParserReadsTheAnswerBytes`: in OpenMetrics the counters are the families `http_exporter_answer_bytes` and `http_exporter_answer_sent_bytes` with `_total` and `_created` samples for every endpoint, and the strict parser of prometheus_client reads them and the gauge.
 - `TestOnlyTheAnswerOfATripThatCarriedOnChanged`, `TestFollowingAReloadWorkedOutAheadDoesWhatItDid`, `TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics` and `TestAChainedExporterReadsTheSelfMetricsWithCreatedSamples` compare reads of the self-metrics without the bytes of their own answers, which grow with each read, and the reload sequences without any answer bytes, which the length of a duration changes.
 
+## 34.230 STARTTLS for tlscert, a collector's own proxy, and answers without a body read without the size hint
+
+- `TestATLSCertCollectorBeginsTLSWithSTARTTLS`: against STARTTLS stand-ins on 127.0.0.1 (`testutil.NewStartTLSStub`), a `tlscert` collector with `starttls: smtp`, greeted over two `220` lines, sends `EHLO [127.0.0.1]` and, its `250` answer listing `STARTTLS`, `STARTTLS`; `imap` sends `a1 STARTTLS`, answered after an untagged line; `pop3` sends `STLS`; `ftp` sends `AUTH TLS`; each then makes the handshake, nothing sent over TLS, and the document has the stand-in's certificate, `verified` true against its CA, `TLS 1.3`, a chain and `starttls` naming the protocol; the label is `tls://`; without `starttls` the document's `starttls` is `""`.
+- `TestATLSCertSTARTTLSTargetDefaultsToTheProtocolsPort`: a target without a port is labelled and dialed at 25 for `smtp`, 143 for `imap`, 110 for `pop3`, 21 for `ftp` and 443 without `starttls`, a bracketed IPv6 address too; `mail.example.test:587` keeps 587.
+- `TestATLSCertSTARTTLSThatIsNotBegunFailsTheScrape`: SMTP without `STARTTLS` in its answer to EHLO, SMTP's `454`, IMAP's `NO`, POP3's `-ERR`, FTP's `534`, an SMTP `554` greeting, `HTTP/1.1 400` to EHLO and an SSH banner where `imap` is asked for each fail the scrape naming the step and quoting the server's words, which `model.CallerText` withholds; the stand-in sees nothing after the last command and no handshake.
+- `TestATLSCertSTARTTLSAnswersAreBounded`: a server closing instead of answering STLS fails saying so; one silent after EHLO, and one that never greets, fail at a 300ms deadline with the deadline's error, naming the STARTTLS answer or the greeting as `request.starttls` expects it, within 3s; a greeting of 200 `220-` lines past `limits.max_response_bytes` (1,024) fails as a limit exceeded saying to raise `limits.max_response_bytes`; a POP3 server writing `+OK forged\r\n` after its `+OK` fails with "wrote 12 bytes after it said to begin TLS and before the handshake".
+- `TestATLSCertSTARTTLSIsTraced`: a debug trace of a POP3 STARTTLS handshake has `HANDSHAKE`, `Tls-Starttls: pop3`, the url `tls://` and the outcome `greeted with "+OK Dovecot ready.\r\n"; sent "STLS\r\n", answered "+OK Begin TLS negotiation now.\r\n"; TLS 1.3, 1 certificate, verified`; a `-ERR` refusal is traced as the step's error.
+- `TestATLSCertSTARTTLSIsCheckedAtLoad`: `starttls: ldap`, `SMTP` and `starttls` on a `tlscert` collector are refused naming the four protocols and the type; `imap` with a `tls` block of every key but `insecure_skip_verify` loads.
+- `TestATLSCertSTARTTLSThroughTheExporter`: through `/probe`, a `tlscert` collector with `starttls: smtp` and the stand-in's CA answers `tls_cert_expires_in_days`, `tls_cert_verified 1` and `tls_cert_starttls_smtp 1` from jq rules, the stand-in reading only `EHLO [127.0.0.1]` and `STARTTLS` in plaintext; a stand-in answering `454` is answered 502 in the `tls` stage with the reply withheld from the caller and in the log; a debug probe's report shows the outcome with each step and `Tls-Starttls: smtp`; a static target setting `request.starttls` is refused as an unknown key of a static target's request.
+- `TestTLSCertStartTLSDocumentationExamples`: the STARTTLS examples of docs/TLSCERT.md, `smtp_certificate`, `imap_certificate` and `pop3_certificate`, load as written and against SMTP, IMAP and POP3 STARTTLS stand-ins answer their days left and expiring 0, SMTP's verified 0 for a certificate no system root signed, without failing the scrape.
+- The `tcp` STARTTLS tests (§ 34.228) pass unchanged in what they check, `starttls` now set as a key of the common part (`model.RequestConfig.StartTLS`) rather than of `TCPConfig`, in the opt-in build, a `tcp`-only build (`select_request_types,request_type_tcp`) and alongside a `tlscert`-only build (`select_request_types,request_type_tlscert`), each of which builds, vets and lints with `internal/fetch/starttls.go` under `!select_request_types || request_type_tcp || request_type_tlscert`.
+- An `http` collector's `request.proxy_url` carries its requests in place of
+  the environment's proxy, which is asked nothing: an `http` target's request
+  whole, with the `proxy_basic_auth_file` credentials as
+  `Proxy-Authorization`, and an `https` target's through a `CONNECT` tunnel,
+  TLS end to end with the target
+  (TestACollectorsProxyCarriesItsRequestsInPlaceOfTheEnvironments).
+- `proxy_url: direct` reaches the target without the proxy the environment
+  names, a name only the proxy would resolve failing to resolve here, while a
+  collector without `proxy_url` goes through the environment's
+  (TestProxyURLDirectReachesTheTargetPastTheEnvironmentsProxy).
+- Collectors with different proxies, or one proxy with different
+  credentials, share no connection pool, each request reaching its own
+  collector's proxy with its own credentials
+  (TestCollectorsWithDifferentProxiesShareNoConnection).
+- A login goes through the collector's proxy, as its request does
+  (TestALoginGoesThroughTheCollectorsProxy).
+- Behind a collector's proxy, `allowed_targets` and `denied_targets` apply to
+  the target — a denied name, a name resolving in a denied network, an
+  address in one, the metadata address, a name not allowed — and the proxy is
+  asked nothing for a refused one; the proxy's own loopback address is not
+  held to them (TestTheTargetPolicyAppliesToTheTargetBehindACollectorsProxy).
+- A probe's caller is told a failure at the collector's proxy without the
+  proxy's words in refusing the tunnel, its address when unreachable, or its
+  name when it does not resolve; the error keeps them
+  (TestTheCallerIsNotToldOfTheCollectorsProxy), and the transport errors'
+  withholding covers a `proxyconnect` whole and a `ProxyRefusedError`
+  (TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller).
+- An `https://` proxy is greeted over TLS verified against the proxy's
+  roots, without the client certificate, CA and server name of the
+  collector's `tls`, which the target is shown through the tunnel
+  (TestAnHTTPSProxyIsGreetedWithoutTheTargetsTLSSettings).
+- A `socks5://` proxy is asked to connect to the target by name, with the
+  credentials' files' username and password
+  (TestASOCKS5ProxyConnectsToTheTargetByName).
+- `proxy_url` is refused at load with credentials, an unknown or no scheme,
+  no host, a path or query, a port out of range, a placeholder or `DIRECT`,
+  without quoting a secret written in it; credentials' files without a proxy,
+  beside `direct`, or with a path missing are refused; `""`, `direct`,
+  `http`, `https`, `socks5`, `socks5h` and an IPv6 host are taken
+  (TestAProxyURLIsCheckedWhenItLoads).
+- A proxy's credentials are read from their files at every request, a
+  rotated password reaching the proxy at the next one, and appear in no
+  error, a refusal's or a missing file's
+  (TestAProxysCredentialsAreReadFromFilesAndNeverShown).
+- A `graphite` collector's `proxy_url` carries its render requests
+  (TestAGraphiteCollectorsProxyCarriesItsRequests).
+- `defaults` gives the `http` collectors of its file their `proxy_url` and
+  `proxy_basic_auth_file`, a `dns` collector neither; one that writes
+  `proxy_url: direct` leaves the credentials out, and credentials with no
+  proxy to send them to, written or given, are refused
+  (TestDefaultsGiveTheCollectorsTheirProxy).
+- A `proxy_url` in `defaults` no collector could take is refused once,
+  naming the block; one with credentials in a collector is refused naming the
+  collector without the password; a `dns` collector's is refused
+  (TestAProxyURLIsRefusedWhenTheConfigurationLoads).
+- The configuration's schema has `request.proxy_url` of a collector and of
+  `defaults`, described as `http` and `graphite`'s, whose pattern takes what
+  the exporter takes and refuses credentials, a path, a query, a placeholder
+  and another scheme, and `proxy_basic_auth_file`, requiring both files
+  (TestTheSchemasHaveTheProxy).
+- End to end, a `/probe` of a collector with `proxy_url` is answered with
+  what its proxy fetched, the environment's proxy asked nothing, and a
+  refused tunnel answers the caller without the proxy's words or address,
+  which the log has (TestAProbeGoesThroughTheCollectorsProxy).
+- The defaults' refusal of a key it cannot set lists `request.proxy_url` and
+  `request.proxy_basic_auth_file` among the keys it sets
+  (TestDefaultsRefuseTheKeysTheyCannotSet).
+- `TestAnAnswerIsReadWholeWithOrWithoutALength`: a `HEAD` answer is read
+  into no buffer of the size the hint of its collector and target holds,
+  set to 2,048 bytes before it: the race detector's run in CI shuffled the
+  tests so that an empty answer's hint, of the same slot, made a `HEAD`
+  answer's buffer 513 bytes.
+- `TestAnEmptyBodyLeavesTheHintAsItWas`: an empty body leaves no hint, and
+  keeps one there was.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31707,8 +31831,8 @@ The Helm chart MUST expose both as list-valued `params` entries on each
 Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
-`server_name`, a static target's own `tls` block being its set — and HTTP/2
-choice, shared by every collector and scrape that uses the same set, rather
+`server_name`, a static target's own `tls` block being its set — HTTP/2
+choice and proxy (`request.proxy_url` and its credentials' files, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
 closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
@@ -31729,8 +31853,30 @@ lower-case spellings, as Go's `golang.org/x/net/http/httpproxy` interprets
 them; requests to localhost and loopback addresses MUST go direct. This MUST
 apply to target requests and OTLP exports alike. The environment MUST be read
 when a transport is built rather than once per process, so a test can set it.
-There MUST NOT be a proxy setting in the configuration: the proxy belongs to
-where the exporter runs, not to a collector.
+An `http` or `graphite` collector MAY name its own proxy, `request.proxy_url`,
+which MUST then carry every request of the collector — its retries, pages,
+followed redirects and login included, `localhost` too — in place of the
+environment's; `direct` MUST send them to their targets without a proxy,
+whatever the environment names, and leaving the key out MUST leave the
+environment's in force. `proxy_url` MUST be `http://`, `https://`,
+`socks5://` or `socks5h://` with a host and an optional port from 1 to 65535,
+and nothing else; a path, a query, a fragment, a placeholder, an unknown
+scheme and userinfo MUST be refused when the configuration loads, the
+refusal naming the URL by its scheme and host alone, never the credentials
+or path written in it. Credentials for the proxy MUST come from
+`request.proxy_basic_auth_file`, `username` and `password` files, both
+required, read at every request and sent as `Proxy-Authorization` or as the
+SOCKS5 username and password; the files without a `proxy_url` to send them
+to MUST be refused. The TLS connection to an `https://` proxy MUST be
+verified against the system's roots, with the proxy's host as the server
+name and no client certificate: the collector's `tls` block MUST apply to
+the target alone, through the tunnel. The proxy and its credentials' files
+MUST be part of the pool's settings, so collectors with different proxies or
+credentials never share a connection. The proxy is configuration: no probe
+parameter and no static target MAY set it. A `CONNECT` the proxy answers
+other than `200` MUST fail as the proxy's refusal, naming the target and the
+proxy's status (`the proxy refused the tunnel to api.example:443: 403
+Forbidden`), the environment's proxy and a collector's alike.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

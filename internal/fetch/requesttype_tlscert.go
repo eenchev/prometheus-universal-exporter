@@ -3,6 +3,7 @@
 package fetch
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -36,6 +37,16 @@ import (
 // handshake is the scrape: nothing is sent over the connection, which is
 // closed when the handshake is over.
 //
+// A server that starts in plaintext and turns to TLS when asked, a mail or
+// FTP server, is read with starttls: smtp, imap, pop3 or ftp. The greeting
+// is read and the protocol's request for TLS spoken (startTLS, which tcp
+// speaks too), and the handshake is made once the server has said yes;
+// the target's port is then the protocol's own when it is left out, 25,
+// 143, 110 or 21 (tlsCertStartTLSPorts). What the server said before TLS is
+// in the debug report and in an error, quoted and withheld from a probe's
+// caller, and never in the document, which says only which protocol began
+// TLS.
+//
 // A chain that does not verify does not fail the scrape: the expiry of a
 // certificate nobody trusts is still worth knowing, and why it is not
 // trusted is in the document, verified false and the error's text beside
@@ -51,7 +62,7 @@ import (
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeTLSCert,
-		Fields:       []string{"tls", "allowed_targets", "denied_targets"},
+		Fields:       []string{"tls", "starttls", "allowed_targets", "denied_targets"},
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Requester:    tlsCertRequester{},
@@ -80,14 +91,14 @@ func (tlsCertRequester) Fetch(ctx context.Context, target string, c *model.Colle
 }
 
 // CheckTarget checks a tlscert collector's target.
-func (tlsCertRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseTLSCertTarget(target)
+func (tlsCertRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
+	_, err := parseTLSCertTarget(target, c.Request.StartTLS)
 	return err
 }
 
 // Label is the url label of a tlscert request.
-func (tlsCertRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseTLSCertTarget(target)
+func (tlsCertRequester) Label(target string, c *model.Collector, _ RequestOverrides) (string, error) {
+	address, err := parseTLSCertTarget(target, c.Request.StartTLS)
 	if err != nil {
 		return "", err
 	}
@@ -108,6 +119,18 @@ const tlsCertMethod = "HANDSHAKE"
 // tlsCertDefaultPort is the port of a target that names none.
 const tlsCertDefaultPort = "443"
 
+// tlsCertStartTLSPorts are the ports of a target that names none with
+// request.starttls: each the port registered under the protocol's own name,
+// where its servers begin TLS with STARTTLS. SMTP's is 25, where a domain's
+// mail is delivered, rather than 587, where a user's client submits it: a
+// mail server's certificate is the one others deliver to it with; the
+// submission port is written as :587.
+var tlsCertStartTLSPorts = map[string]string{startTLSSMTP: "25", startTLSIMAP: "143", startTLSPOP3: "110", startTLSFTP: "21"}
+
+// tlsCertLimitKeys is the key that sets the bound of what a server says
+// before TLS: tlscert reads no body, so takes no request.max_response_bytes.
+const tlsCertLimitKeys = "limits.max_response_bytes"
+
 // tlsCertTimeout bounds a handshake with no deadline of its own.
 const tlsCertTimeout = 30 * time.Second
 
@@ -124,7 +147,7 @@ func validateTLSCertRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q request.tls.server_name %q: %w", x.Name, t.ServerName, err)
 		}
 	}
-	return nil
+	return validateStartTLS(x.Name, RequestTypeTLSCert, x.Request.StartTLS)
 }
 
 // tlsCertAddress is a target as a handshake reaches it: host as the policy
@@ -135,8 +158,9 @@ type tlsCertAddress struct {
 }
 
 // parseTLSCertTarget reads a target: host, host:port or [v6]:port, port 443
-// when it names none. Nothing else may come with it.
-func parseTLSCertTarget(raw string) (tlsCertAddress, error) {
+// when it names none, or, with starttls, the protocol's own port. Nothing
+// else may come with it.
+func parseTLSCertTarget(raw, starttls string) (tlsCertAddress, error) {
 	target := strings.TrimSpace(raw)
 	if strings.Contains(target, "://") {
 		return tlsCertAddress{}, fmt.Errorf("target %q has a scheme; a tlscert target is host or host:port, such as example.com:443", raw)
@@ -145,6 +169,9 @@ func parseTLSCertTarget(raw string) (tlsCertAddress, error) {
 		return tlsCertAddress{}, fmt.Errorf("target %q has a path, query or user in it; a tlscert target is only the host and its port", raw)
 	}
 	host, port := target, tlsCertDefaultPort
+	if p, ok := tlsCertStartTLSPorts[starttls]; ok {
+		port = p
+	}
 	if h, p, err := net.SplitHostPort(target); err == nil {
 		host, port = h, p
 	} else if strings.HasPrefix(target, "[") && strings.HasSuffix(target, "]") {
@@ -169,7 +196,7 @@ func parseTLSCertTarget(raw string) (tlsCertAddress, error) {
 // tlsCertDisplay renders a target for logs and labels: as written, since it
 // holds no credentials, when it is one at all.
 func tlsCertDisplay(target string) string {
-	if _, err := parseTLSCertTarget(target); err != nil {
+	if _, err := parseTLSCertTarget(target, ""); err != nil {
 		return "<invalid target>"
 	}
 	return strings.TrimSpace(target)
@@ -180,6 +207,9 @@ type tlsCertDocument struct {
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
 	ServerName string `json:"server_name"`
+	// StartTLS is the protocol whose request began TLS, "" for a server
+	// that spoke TLS from the start.
+	StartTLS   string `json:"starttls"`
 	TLSVersion string `json:"tls_version"`
 	Cipher     string `json:"cipher_suite"`
 	Verified   bool   `json:"verified"`
@@ -247,7 +277,7 @@ var tlsCertNow = time.Now
 // fetchTLSCert makes a scrape's handshake and answers the chain as JSON.
 func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
-	address, err := parseTLSCertTarget(target)
+	address, err := parseTLSCertTarget(target, c.Request.StartTLS)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +316,11 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	if c.Request.TLS.CertFile != "" {
 		clientCertificate = "yes"
 	}
-	traceRequest(ctx, tlsCertMethod, "tls://"+address.hostPort, http.Header{"Tls-Server-Name": {serverName}, "Tls-Client-Certificate": {clientCertificate}}, "", false)
+	traced := http.Header{"Tls-Server-Name": {serverName}, "Tls-Client-Certificate": {clientCertificate}}
+	if protocol := c.Request.StartTLS; protocol != "" {
+		traced.Set("Tls-Starttls", protocol)
+	}
+	traceRequest(ctx, tlsCertMethod, "tls://"+address.hostPort, traced, "", false)
 	dialer := &net.Dialer{}
 	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
 	if err != nil {
@@ -295,6 +329,14 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		}
 		traceOutcome(ctx, "error: "+err.Error())
 		return nil, err
+	}
+	began := ""
+	if c.Request.StartTLS != "" {
+		if began, err = tlsCertStartTLS(ctx, conn, address, c); err != nil {
+			_ = conn.Close()
+			traceOutcome(ctx, "error: "+err.Error())
+			return nil, err
+		}
 	}
 	tlsConn := tls.Client(conn, cfg)
 	defer func() { _ = tlsConn.Close() }()
@@ -306,7 +348,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	state := tlsConn.ConnectionState()
 	now := tlsCertNow()
 	doc := tlsCertDocument{
-		Host: address.host, Port: address.port, ServerName: serverName,
+		Host: address.host, Port: address.port, ServerName: serverName, StartTLS: c.Request.StartTLS,
 		TLSVersion: tls.VersionName(state.Version), Cipher: tls.CipherSuiteName(state.CipherSuite),
 		Certificates: make([]tlsCertificate, 0, len(state.PeerCertificates)),
 	}
@@ -343,7 +385,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	if !doc.Verified {
 		outcome = doc.TLSVersion + ", " + presented + ", not verified: " + doc.VerifyError
 	}
-	traceOutcome(ctx, outcome)
+	traceOutcome(ctx, began+outcome)
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
 		NoStatus:   true,
@@ -353,6 +395,41 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		Collector:  c.Name,
 		Duration:   time.Since(start),
 	}, nil
+}
+
+// tlsCertStartTLS asks the server conn reaches to begin TLS as
+// request.starttls's protocol does (startTLS): it reads the greeting, which
+// must be the protocol's ready one, and speaks the protocol's request for
+// TLS, returning how the debug report tells it, the greeting and each
+// command and answer quoted, for the handshake's outcome to follow. The
+// reads and writes end at the scrape's deadline, or when it is cancelled;
+// the handshake, which the caller makes next, is bounded by the context
+// alone, as one without STARTTLS is.
+func tlsCertStartTLS(ctx context.Context, conn net.Conn, address tlsCertAddress, c *model.Collector) (string, error) {
+	protocol := c.Request.StartTLS
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
+	// The reader is dropped before the handshake: startTLS fails a server
+	// that wrote anything after its yes, so it holds nothing the handshake
+	// would miss.
+	reader := bufio.NewReader(conn)
+	limit := responseLimit(c)
+	greeting, err := readGreeting(ctx, reader, address.hostPort, limit, tlsCertLimitKeys, "request.starttls")
+	if err != nil {
+		return "", err
+	}
+	if err := startTLSGreeted(protocol, address.hostPort, greeting); err != nil {
+		return "", err
+	}
+	steps, err := startTLS(ctx, conn, reader, protocol, address.hostPort, conn.LocalAddr(), limit, tlsCertLimitKeys)
+	if err != nil {
+		return "", err
+	}
+	stop()
+	_ = conn.SetDeadline(time.Time{})
+	return "greeted with " + tcpShown(string(greeting)) + "; " + startTLSShown(steps) + "; ", nil
 }
 
 // verifyTLSCertChain verifies the chain the server presented, as a TLS

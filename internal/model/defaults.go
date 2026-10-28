@@ -51,17 +51,23 @@ type DefaultsRequest struct {
 	MaxResponseBytes ByteSize    `yaml:"max_response_bytes"`
 	AllowedTargets   []string    `yaml:"allowed_targets"`
 	DeniedTargets    []string    `yaml:"denied_targets"`
+	// ProxyURL and ProxyBasicAuthFile are taken by the collectors whose
+	// request type takes them, http and graphite: the proxy is where the
+	// exporter runs more than what a collector asks, and a file of
+	// collectors behind one proxy names it once.
+	ProxyURL           string              `yaml:"proxy_url"`
+	ProxyBasicAuthFile *ProxyBasicAuthFile `yaml:"proxy_basic_auth_file"`
 }
 
 // DefaultsKeys are the keys defaults may set, as blocks of a collector and
 // keys of its request block: every key of each.
-var DefaultsKeys = []string{"request.tls", "request.retry", "request.max_response_bytes", "request.allowed_targets", "request.denied_targets", "limits", "error_handling", "failure_backoff", "cache"}
+var DefaultsKeys = []string{"request.tls", "request.retry", "request.max_response_bytes", "request.allowed_targets", "request.denied_targets", "request.proxy_url", "request.proxy_basic_auth_file", "limits", "error_handling", "failure_backoff", "cache"}
 
 // defaultsBlocks are the blocks of a collector defaults may set keys of, and
 // defaultsRequestKeys the keys of its request block.
 var (
 	defaultsBlocks      = []string{"request", "limits", "error_handling", "failure_backoff", "cache"}
-	defaultsRequestKeys = []string{"tls", "retry", "max_response_bytes", "allowed_targets", "denied_targets"}
+	defaultsRequestKeys = []string{"tls", "retry", "max_response_bytes", "allowed_targets", "denied_targets", "proxy_url", "proxy_basic_auth_file"}
 )
 
 // UnmarshalYAML reads a defaults block. A key defaults may not set is
@@ -114,8 +120,11 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 						refuse(inner.Key, "request."+key, known && key != "-")
 						continue
 					}
-					if key == "retry" {
+					switch key {
+					case "retry":
 						problems = append(problems, unknownKeys(inner.Value, reflect.TypeOf(RetryConfig{}), "model.RetryConfig")...)
+					case "proxy_basic_auth_file":
+						problems = append(problems, unknownKeys(inner.Value, reflect.TypeOf(ProxyBasicAuthFile{}), "model.ProxyBasicAuthFile")...)
 					}
 				}
 			}
@@ -209,7 +218,7 @@ func DefaultableKeys(n *yaml.Node) []string {
 					inner("request.tls", field.Value)
 				case "retry":
 					inner("request.retry", field.Value)
-				case "max_response_bytes", "allowed_targets", "denied_targets":
+				case "max_response_bytes", "allowed_targets", "denied_targets", "proxy_url", "proxy_basic_auth_file":
 					if !leftOut(field.Value) {
 						keys = append(keys, "request."+key)
 					}

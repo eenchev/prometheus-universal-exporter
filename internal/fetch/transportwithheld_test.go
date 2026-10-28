@@ -12,7 +12,8 @@ import (
 )
 
 // The addresses of the exporter's side of the network — where a connection
-// was made from, the proxy a request went through, the name server a lookup
+// was made from, the proxy a request went through, with all a connection to
+// it failed with and what it said in refusing a tunnel, the name server a lookup
 // asked, and the source address in a resolver's or a gRPC status's text —
 // are withheld from a probe's caller; the address the connection went to
 // stays, and the error keeps them all.
@@ -30,7 +31,17 @@ func TestTheExportersSideOfTheNetworkIsWithheldFromTheCaller(t *testing.T) {
 		"a proxy that refused": {
 			err:  &url.Error{Op: "Get", URL: "https://db.example/", Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 3128}, Err: syscall.ECONNREFUSED}}},
 			kept: "10.0.0.5:3128",
-			told: `Get "https://db.example/": proxyconnect tcp: dial tcp ` + model.WithheldMark + `: connection refused`,
+			told: `Get "https://db.example/": proxyconnect tcp: ` + model.WithheldMark,
+		},
+		"a proxy whose name did not resolve": {
+			err:  &url.Error{Op: "Get", URL: "https://db.example/", Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Name: "proxy.corp.example", Err: "no such host", IsNotFound: true}}}},
+			kept: "proxy.corp.example",
+			told: `Get "https://db.example/": proxyconnect tcp: ` + model.WithheldMark,
+		},
+		"a proxy that refused the tunnel": {
+			err:  &url.Error{Op: "Get", URL: "https://db.example/", Err: &ProxyRefusedError{Target: "db.example:443", Status: "403 Blocked by policy at proxy-7.corp"}},
+			kept: "proxy-7.corp",
+			told: `Get "https://db.example/": the proxy refused the tunnel to db.example:443: ` + model.WithheldMark,
 		},
 		"a lookup's name server": {
 			err:  &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Name: "db.example", Server: "10.96.0.10:53", Err: "read udp 10.0.0.7:41234->10.96.0.10:53: i/o timeout", IsTimeout: true}},

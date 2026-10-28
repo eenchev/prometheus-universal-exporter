@@ -2806,6 +2806,36 @@
                   "boolean"
                 ]
               },
+              "proxy_basic_auth_file": {
+                "additionalProperties": false,
+                "description": "http and graphite, with proxy_url: the files the username and the password sent to the proxy are read from, at every request, such as a mounted Secret.",
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "type": "object"
+              },
+              "proxy_url": {
+                "description": "http and graphite: the proxy every request of the collector goes through, its login's, redirects' and pages' included, in place of the one HTTP_PROXY, HTTPS_PROXY and NO_PROXY name: http://host:port, https://host:port, over TLS to the proxy, or socks5://host:port, without credentials, which go in proxy_basic_auth_file. direct reaches the targets without a proxy. Left out, the environment's proxy applies. allowed_targets and denied_targets apply to the target, not to the proxy. No probe parameter or static target sets it. See docs/REQUESTS.md#a-collectors-own-proxy.",
+                "pattern": "^$|^direct$|^(https?|socks5h?)://[^/?#@{}]+/?$",
+                "type": "string"
+              },
               "query": {
                 "additionalProperties": {
                   "type": [
@@ -3052,7 +3082,7 @@
                 "type": "boolean"
               },
               "starttls": {
-                "description": "tcp: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. The handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. With no send, terminator may not be set. See docs/TCP.md#starttls.",
+                "description": "tcp and tlscert: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. tcp: the handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake; with no send, terminator may not be set. tlscert: the certificates the handshake presents are the document, as on a TLS port, which names the protocol in starttls, and a target without a port is at the protocol's own, 25, 143, 110 or 21; write :587 for SMTP submission. See docs/TCP.md#starttls and docs/TLSCERT.md#starttls.",
                 "enum": [
                   "smtp",
                   "imap",
@@ -3714,6 +3744,36 @@
                 "integer",
                 "string"
               ]
+            },
+            "proxy_basic_auth_file": {
+              "additionalProperties": false,
+              "description": "http and graphite, with proxy_url: the files the username and the password sent to the proxy are read from, at every request, such as a mounted Secret.",
+              "properties": {
+                "password": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "username": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "required": [
+                "username",
+                "password"
+              ],
+              "type": "object"
+            },
+            "proxy_url": {
+              "description": "http and graphite: the proxy every request of the collector goes through, its login's, redirects' and pages' included, in place of the one HTTP_PROXY, HTTPS_PROXY and NO_PROXY name: http://host:port, https://host:port, over TLS to the proxy, or socks5://host:port, without credentials, which go in proxy_basic_auth_file. direct reaches the targets without a proxy. Left out, the environment's proxy applies. allowed_targets and denied_targets apply to the target, not to the proxy. No probe parameter or static target sets it. See docs/REQUESTS.md#a-collectors-own-proxy.",
+              "pattern": "^$|^direct$|^(https?|socks5h?)://[^/?#@{}]+/?$",
+              "type": "string"
             },
             "retry": {
               "additionalProperties": false,

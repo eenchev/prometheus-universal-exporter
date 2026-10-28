@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -108,6 +109,9 @@ func validateHTTPRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
+	if err := validateProxy(x); err != nil {
+		return err
+	}
 	if HasPathParams(x.Request.Path) {
 		placeholders, err := parsePathParams(x.Request.Path)
 		if err != nil {
@@ -133,6 +137,25 @@ func validateHTTPRequest(x *model.Collector) error {
 		}
 	}
 	return validateRequestTemplates(x)
+}
+
+// validateProxy checks request.proxy_url and request.proxy_basic_auth_file
+// (proxy.go) when the configuration loads.
+// A collector that goes direct ignores the credentials its file's defaults
+// give, which are for the proxy of the file's other collectors; written in
+// the collector itself, they are refused there as anywhere without a proxy.
+func validateProxy(x *model.Collector) error {
+	given := slices.Contains(x.FromDefaults, "request.proxy_basic_auth_file")
+	if x.Request.ProxyBasicAuthFile != nil && x.Request.ProxyURL == model.ProxyDirect && given {
+		x.Request.ProxyBasicAuthFile = nil
+	}
+	if x.Request.ProxyBasicAuthFile != nil && (x.Request.ProxyURL == "" || x.Request.ProxyURL == model.ProxyDirect) {
+		return fmt.Errorf("collector %q request.proxy_basic_auth_file is set without a request.proxy_url to send the credentials to", x.Name)
+	}
+	if err := CheckProxy(x.Request.ProxyURL, x.Request.ProxyBasicAuthFile); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	return nil
 }
 
 // validateRequestTemplates checks the templated fields of an http collector

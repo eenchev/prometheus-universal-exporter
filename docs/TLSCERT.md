@@ -9,11 +9,14 @@ verifies. Use it to know before a certificate expires:
   issued and wherever it is installed;
 - the certificate of a TLS service that speaks no HTTP — an LDAPS or SMTPS
   server, a database or a message broker on its TLS port;
+- the certificate of a mail or FTP server that begins TLS when asked, with
+  [STARTTLS](#starttls), on SMTP's 25 or 587, IMAP's 143, POP3's 110 or
+  FTP's 21;
 - a certificate nobody trusts, such as an internal one, whose expiry matters
   as much.
 
-Nothing is sent over the connection: the handshake is the scrape, and the
-connection is closed when it is over.
+Nothing is sent over TLS: the handshake is the scrape, and the connection
+is closed when it is over.
 
 ## A collector
 
@@ -61,6 +64,7 @@ collectors:
 | `tls.ca_file` | — | Further roots the chain is verified against, besides the system's. |
 | `tls.server_name` | the target's host | The name sent as SNI and the certificate is verified against, when the target is addressed by something else, such as an IP address. |
 | `tls.cert_file`, `tls.key_file` | — | A client certificate, presented to a server that asks for one; both or neither. |
+| `starttls` | — | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on a plaintext connection as that protocol asks for it ([STARTTLS](#starttls)). |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
 
 The `tls` block is the one `http`, `graphite`, `grpc`, `sql`, `redis`, `tcp`, `ldap` and,
@@ -83,17 +87,114 @@ configuration loads. Use `jq`, `yq` or `python`.
 
 ## The target
 
-The target is `host:port`, `host` alone for port 443, an IPv6 address in
-brackets: `www.example.com`, `ldap.example.com:636`, `[2001:db8::1]:8443`.
+The target is `host:port`, `host` alone for port 443, or for the protocol's
+own port with [`starttls`](#starttls), an IPv6 address in brackets:
+`www.example.com`, `ldap.example.com:636`, `[2001:db8::1]:8443`.
 A scheme, a path or a user is refused with `400` before anything is dialed,
 a static target's when it loads.
 
-The handshake is plain TLS from its first byte. A server that starts in
-plain text and turns to TLS on a command — SMTP, IMAP or POP3 with
-STARTTLS, PostgreSQL — is not read: scrape the port where it speaks TLS at
-once, such as 465, 993 or 995, where it has one. The exporter offers TLS 1.2
-and 1.3, as it does to every target; a server that speaks only an older
-version fails the handshake.
+Without `starttls` the handshake is TLS from its first byte; with it, it
+follows the protocol's request for TLS ([STARTTLS](#starttls)). A server
+that turns to TLS in a way of its own, as PostgreSQL does, is not read:
+scrape the port where it speaks TLS at once, where it has one. The exporter
+offers TLS 1.2 and 1.3, as it does to every target; a server that speaks
+only an older version fails the handshake.
+
+## STARTTLS
+
+SMTP, IMAP, POP3 and FTP servers start in plaintext and begin TLS when the
+client asks. `starttls` names the protocol: the scrape reads the greeting,
+asks for TLS in the protocol's words, makes the handshake once the server
+has said yes, and reads the certificates as on a TLS port. It is the
+dialogue the [`tcp` type's `starttls`](TCP.md#starttls) speaks, with the
+same key and values:
+
+| `starttls` | Port of a target without one | The greeting must begin | Sent before TLS | The server's yes |
+| --- | --- | --- | --- | --- |
+| `smtp` | 25 | `220` | `EHLO [address]`, then `STARTTLS` once the answer, `250`, lists it | `220` |
+| `imap` | 143 | `* OK` | `a1 STARTTLS` | `a1 OK`, after any untagged lines |
+| `pop3` | 110 | `+OK` | `STLS` | `+OK` |
+| `ftp` | 21 | `220` | `AUTH TLS` | `234` |
+
+- A target without a port is at the port registered for the protocol, the
+  table's. SMTP's is 25, where other servers deliver a domain's mail to its
+  MX; write `:587` for submission, where users' clients send theirs, which
+  is often another certificate.
+- The greeting is read over several lines for SMTP and FTP, and must begin
+  as the table says: anything else, an SMTP server's `554`, or an IMAP
+  server's `* PREAUTH`, which has no `STARTTLS` to offer, fails the scrape
+  before anything is sent.
+- An SMTP client names itself in `EHLO`; the exporter gives its own address
+  on the connection, `[10.1.2.3]` or `[IPv6:2001:db8::7]`, as RFC 5321 has
+  a client without a name the server can look up do. The answer must be
+  `250` and list `STARTTLS` on one of its lines, in any case.
+- Nothing but the commands of the table is written, and nothing at all over
+  TLS: once the handshake is over the connection is closed, without `QUIT`.
+- A server that does not list `STARTTLS`, refuses it — SMTP's `454`, IMAP's
+  `NO`, POP3's `-ERR`, FTP's `534` — or answers anything else fails the
+  scrape in the `tls` stage, naming the step and quoting the server's
+  answer, which a probe's caller is told
+  [withheld](CONFIGURATION.md#what-a-failed-probes-caller-is-told), and the
+  log and a debug probe's report show. The scrape never goes on in
+  plaintext, and a server that writes more after its yes, before the
+  handshake, fails it, since those bytes came in plaintext, where anything
+  on the way could have written them.
+- The greeting and each answer are held to `limits.max_response_bytes` and
+  the scrape's deadline, which bounds the handshake too.
+- The handshake is the one without `starttls`: the `tls` block's settings,
+  `server_name` or the target's host, and a chain that does not verify
+  reported, not refused. The label is `tls://host:port`, and the
+  document's `starttls` names the protocol.
+- `starttls` is the collector's alone: no static target or probe sets it.
+
+The certificates of a mail server: its MX on 25 and its submission port,
+587, through one collector, IMAP on 143 and POP3 on 110, each with the days
+left and an alert-ready flag for one that expires within 14 days:
+
+```yaml
+  - name: smtp_certificate
+    request:
+      type: tlscert
+      starttls: smtp
+    transform:
+      type: jq
+    metrics:
+      - name: smtp_certificate_days_left
+        expression: .seconds_until_expiry / 86400 | floor
+      - name: smtp_certificate_expiring
+        expression: if .seconds_until_expiry < 14 * 86400 then 1 else 0 end
+      - name: smtp_certificate_verified
+        expression: if .verified then 1 else 0 end
+  - name: imap_certificate
+    request:
+      type: tlscert
+      starttls: imap
+    transform:
+      type: jq
+    metrics:
+      - name: imap_certificate_days_left
+        expression: .seconds_until_expiry / 86400 | floor
+      - name: imap_certificate_expiring
+        expression: if .seconds_until_expiry < 14 * 86400 then 1 else 0 end
+  - name: pop3_certificate
+    request:
+      type: tlscert
+      starttls: pop3
+    transform:
+      type: jq
+    metrics:
+      - name: pop3_certificate_days_left
+        expression: .seconds_until_expiry / 86400 | floor
+      - name: pop3_certificate_expiring
+        expression: if .seconds_until_expiry < 14 * 86400 then 1 else 0 end
+```
+
+```text
+/probe?collector=smtp_certificate&target=mx.example.com
+/probe?collector=smtp_certificate&target=mail.example.com:587
+/probe?collector=imap_certificate&target=mail.example.com
+/probe?collector=pop3_certificate&target=mail.example.com
+```
 
 ## The document
 
@@ -102,6 +203,7 @@ version fails the handshake.
   "host": "www.example.com",
   "port": 443,
   "server_name": "www.example.com",
+  "starttls": "",
   "tls_version": "TLS 1.3",
   "cipher_suite": "TLS_AES_128_GCM_SHA256",
   "verified": true,
@@ -163,7 +265,11 @@ version fails the handshake.
   expired or is not yet valid: ...`, `x509: certificate is valid for
   a.example.com, not b.example.com`.
 - `tls_version` and `cipher_suite` are what the handshake settled on.
-- `duration_seconds` is how long the connection and the handshake took.
+- `starttls` is the protocol whose request began TLS, `smtp`, `imap`,
+  `pop3` or `ftp`, and `""` without [`starttls`](#starttls). Nothing the
+  server said before TLS is in the document.
+- `duration_seconds` is how long the connection and the handshake took,
+  and with `starttls` the greeting and the request for TLS before it.
 
 **A chain that does not verify does not fail the scrape.** The expiry of a
 certificate nobody trusts is still worth knowing, so the document is
@@ -171,7 +277,8 @@ answered with `verified` false and the reason. What fails the scrape, in the
 `tls` stage, is a handshake that does not happen: nothing listening, a
 server that does not answer within the deadline, one that speaks no TLS, or
 one that refuses the handshake, as one that requires a client certificate
-the collector does not have may.
+the collector does not have may; with `starttls`, a server that does not
+begin TLS ([STARTTLS](#starttls)).
 
 ## Examples
 
@@ -196,7 +303,8 @@ flag for one that expires within 14 days:
 
 ## Static targets
 
-A static target names `host:port`, and may set `timeout`:
+A static target names `host:port`, and may set `timeout`; `starttls` is
+the collector's:
 
 ```yaml
 interval: 1h
@@ -210,7 +318,9 @@ targets:
 
 A failed handshake is reported in the `tls` stage and follows
 `error_handling.on_fetch_error`, naming the server:
-`TLS handshake with www.example.com:443: ...`. A host the target lists
+`TLS handshake with www.example.com:443: ...`, or, with `starttls`, the
+step that failed, such as `the server mx.example.com:25 did not begin TLS:
+it answered STARTTLS with "454 4.7.0 TLS not available\r\n", not 220`. A host the target lists
 refuse counts in `http_exporter_targets_refused_total`, answered `403`.
 Transforms see no status (`$status` is `null`, Python's
 `response.status_code` `None`) and the header
@@ -225,6 +335,18 @@ Requests
   1. HANDSHAKE tls://www.example.com:443 -> TLS 1.3, 2 certificates, verified in 31ms
      Tls-Client-Certificate: no
      Tls-Server-Name: www.example.com
+```
+
+With `starttls` the section names the protocol in `Tls-Starttls`, and its
+outcome shows the greeting and each command and answer, quoted, before the
+handshake's:
+
+```text
+Requests
+  1. HANDSHAKE tls://mail.example.com:110 -> greeted with "+OK Dovecot ready.\r\n"; sent "STLS\r\n", answered "+OK Begin TLS negotiation now.\r\n"; TLS 1.3, 2 certificates, verified in 45ms
+     Tls-Client-Certificate: no
+     Tls-Server-Name: mail.example.com
+     Tls-Starttls: pop3
 ```
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)

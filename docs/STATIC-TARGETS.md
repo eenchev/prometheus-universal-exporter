@@ -110,6 +110,9 @@ one the collector's other targets share there. Its requests take their turns
 under the configuration's [`rate_limits`](REQUESTS.md#rate-limits-per-host)
 as well, as every collector's do. It changes no answer, so it
 is no part of the cache key.
+A target cannot set a [`proxy_url`](REQUESTS.md#a-collectors-own-proxy):
+its requests go through its collector's proxy, and a target behind another
+proxy is scraped by a collector of its own.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the

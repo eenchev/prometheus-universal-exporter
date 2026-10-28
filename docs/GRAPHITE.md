@@ -62,7 +62,7 @@ is its host:
 | `until` | `now` | The end of the window. |
 | `path` | `/render` | Joined onto the target, for a Graphite served under a prefix or behind a proxy such as Grafana's. |
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
-| `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers`, `rate_limit` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
+| `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md), [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy) for `proxy_url` and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
 
 The probe's target is the Graphite server, and a query it carries is sent as
 written, before `query` and the type's own parameters — except a pair of it

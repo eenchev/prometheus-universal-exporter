@@ -553,7 +553,7 @@ asks for TLS, makes the handshake and only then writes `send`, over TLS:
 | `starttls` | The greeting must begin | Sent before TLS | The server's yes |
 | --- | --- | --- | --- |
 | `smtp` | `220` | `EHLO [address]`, then `STARTTLS` once the answer, `250`, lists it | `220` |
-| `imap` | `* OK` | `a1 STARTTLS` | `a1 OK`, after any untagged lines |
+| `imap` | `* OK` | `a1 STARTTLS` | `a1 OK`, the tag in any case, after any untagged lines |
 | `pop3` | `+OK` | `STLS` | `+OK` |
 | `ftp` | `220` | `AUTH TLS` | `234` |
 
@@ -562,14 +562,25 @@ asks for TLS, makes the handshake and only then writes `send`, over TLS:
   and must begin as the table says: anything else, an SMTP server's `554`,
   or an IMAP server's `* PREAUTH`, which has no `STARTTLS` to offer, fails
   the scrape before anything is sent. `greeting`, when set, is matched
-  against it too.
+  against it too. An FTP server may first say when it will be ready,
+  `120`, in one reply or several, as RFC 959 allows: with `starttls: ftp`
+  those are read past, held to the limit and the deadline with the
+  greeting, and the greeting — what must begin `220`, what `greeting` is
+  matched against, and what the answer and its `greeting` hold — is the
+  `220` after them. A debug probe's report shows them. Without `starttls`
+  nothing is read past: the first reply is the greeting.
 - An SMTP client names itself in `EHLO`; the exporter gives its own address
   on the connection, `[10.1.2.3]` or `[IPv6:2001:db8::7]`, as RFC 5321 has
   a client without a name the server can look up do, which a pod's or a
   machine's host name is not. The answer must be `250` and list `STARTTLS`
-  on one of its lines, in any case. IMAP's capabilities are not asked for:
+  on one of the lines after the first, which names the server, in any
+  case. IMAP's capabilities are not asked for:
   a server without `STARTTLS` answers `NO` or `BAD`, which fails the scrape
-  as plainly, with one command less in plaintext.
+  as plainly, with one command less in plaintext. IMAP tags are
+  case-sensitive, but a server that answers `A1 OK` for `a1` has answered
+  the command: the tag is matched in any case, rather than the answer being
+  taken for an untagged line and the scrape waiting for another until its
+  deadline.
 - The handshake takes the `tls` block's settings, `ca_file`, a client
   certificate, `server_name`, `insecure_skip_verify`, as TLS from the start
   does ([TLS](#tls)); without a block it verifies the server against the
@@ -679,7 +690,7 @@ collector smtp_submission tcp failed: the server mx.example.com:587 did not begi
 
 and a debug probe's report names the protocol as `Tcp-Starttls` and shows
 each command sent and the server's answer, quoted, after the greeting, and
-the TLS version begun:
+the TLS version begun, or, when the handshake after them fails, its error:
 
 ```text
 Requests

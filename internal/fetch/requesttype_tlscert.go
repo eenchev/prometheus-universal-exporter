@@ -342,7 +342,9 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	defer func() { _ = tlsConn.Close() }()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err)
-		traceOutcome(ctx, "error: "+err.Error())
+		// After STARTTLS the report tells the dialogue that led to the
+		// handshake, as it does before a handshake that succeeds.
+		traceOutcome(ctx, began+"error: "+err.Error())
 		return nil, err
 	}
 	state := tlsConn.ConnectionState()
@@ -416,7 +418,7 @@ func tlsCertStartTLS(ctx context.Context, conn net.Conn, address tlsCertAddress,
 	// would miss.
 	reader := bufio.NewReader(conn)
 	limit := responseLimit(c)
-	greeting, err := readGreeting(ctx, reader, address.hostPort, limit, tlsCertLimitKeys, "request.starttls")
+	before, greeting, err := readStartTLSGreeting(ctx, reader, protocol, address.hostPort, limit, tlsCertLimitKeys, "request.starttls")
 	if err != nil {
 		return "", err
 	}
@@ -429,7 +431,7 @@ func tlsCertStartTLS(ctx context.Context, conn net.Conn, address tlsCertAddress,
 	}
 	stop()
 	_ = conn.SetDeadline(time.Time{})
-	return "greeted with " + tcpShown(string(greeting)) + "; " + startTLSShown(steps) + "; ", nil
+	return "greeted with " + tcpShown(string(before)+string(greeting)) + "; " + startTLSShown(steps) + "; ", nil
 }
 
 // verifyTLSCertChain verifies the chain the server presented, as a TLS

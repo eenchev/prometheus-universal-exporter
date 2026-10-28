@@ -259,6 +259,20 @@ func TestATLSCertSTARTTLSIsTraced(t *testing.T) {
 	}
 	if r := trace.Requests(); len(r) != 1 || r[0].Outcome != `error: the server `+refusing.Addr+` did not begin TLS: it answered STLS with "-ERR no\r\n", not +OK` {
 		t.Errorf("traced %+v", r)
+	} // A handshake that fails after the server said yes follows the
+	// dialogue, as one that succeeds does.
+	failing := testutil.NewStartTLSStub(t, func(conn net.Conn, _ func() (net.Conn, error)) {
+		_, _ = io.WriteString(conn, "+OK ready\r\n")
+		_, _ = testutil.ReadUntil(conn, "\n")
+		_, _ = io.WriteString(conn, "+OK go ahead\r\n")
+		_, _ = conn.Read(make([]byte, 1))
+	})
+	ctx, trace = WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, failing.Addr, certStartTLSCollector(t, "pop3", failing.CAFile), RequestOverrides{Timeout: 5 * time.Second}, nil); err == nil {
+		t.Fatal("a failed handshake was taken")
+	}
+	if r := trace.Requests(); len(r) != 1 || !strings.HasPrefix(r[0].Outcome, `greeted with "+OK ready\r\n"; sent "STLS\r\n", answered "+OK go ahead\r\n"; error: TLS handshake with `+failing.Addr+`: `) {
+		t.Errorf("traced %+v", r)
 	}
 }
 
@@ -273,4 +287,74 @@ func TestATLSCertSTARTTLSIsCheckedAtLoad(t *testing.T) {
 		}
 	}
 	tlsCertCollector(t, model.TLSConfig{CAFile: "/ca.pem", CertFile: "/c.pem", KeyFile: "/k.pem", ServerName: "mail.example.com"}, func(c *model.Collector) { c.Request.StartTLS = "imap" })
+}
+
+// An IMAP server that answers the tag in another case, A1 for a1, has
+// answered the STARTTLS: the tag is matched in any case, rather than the
+// answer being read as an untagged line and the scrape waiting for the
+// tagged one until its deadline.
+func TestATLSCertIMAPSTARTTLSTakesTheTagInAnyCase(t *testing.T) {
+	seen := make(chan string, 1)
+	server := testutil.NewStartTLSStub(t, certStartTLSServer("* OK ready\r\n", []string{"* CAPABILITY IMAP4rev1 STARTTLS\r\nA1 OK Begin TLS negotiation now.\r\n"}, true, seen))
+	start := time.Now()
+	doc, err := handshakeDoc(t, certStartTLSCollector(t, "imap", server.CAFile), server.Addr)
+	if err != nil || !doc.Verified || doc.StartTLS != "imap" {
+		t.Fatalf("%+v, %v", doc, err)
+	}
+	if got := <-seen; got != "a1 STARTTLS\r\n|TLS" {
+		t.Errorf("the server saw %q", got)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("took %s", took)
+	}
+	refusing := testutil.NewStartTLSStub(t, certStartTLSServer("* OK ready\r\n", []string{"A1 NO not here\r\n"}, false, nil))
+	if _, err := handshakeDoc(t, certStartTLSCollector(t, "imap", refusing.CAFile), refusing.Addr); err == nil || !strings.Contains(err.Error(), `answered STARTTLS with "A1 NO not here\r\n", not a1 OK`) {
+		t.Errorf("a refusal tagged A1: %v", err)
+	}
+}
+
+// An FTP server may say when it will be ready, 120, in one line or several,
+// before its 220 greeting (RFC 959): STARTTLS goes on after the 220, the
+// debug report showing all the server said; the 120 replies count against
+// the limit with the greeting, and a 120 followed by anything but 220 is
+// refused as a greeting that is not 220.
+func TestATLSCertFTPSTARTTLSWaitsThroughA120(t *testing.T) {
+	for name, greeting := range map[string]string{
+		"one line":                      "120 ready in 1 minute\r\n220 ProFTPD ready\r\n",
+		"several":                       "120-the archive is busy\r\n120 ready in 1 minute\r\n120 ready now\r\n220 ProFTPD ready\r\n",
+		"before a 220 of several lines": "120 ready in 1 minute\r\n220-Welcome\r\n220 ready\r\n",
+	} {
+		seen := make(chan string, 1)
+		server := testutil.NewStartTLSStub(t, certStartTLSServer(greeting, []string{"234 AUTH TLS successful\r\n"}, true, seen))
+		ctx, trace := WithRequestTrace(context.Background())
+		if _, err := FetchCollector(ctx, server.Addr, certStartTLSCollector(t, "ftp", server.CAFile), RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if got := <-seen; got != "AUTH TLS\r\n|TLS" {
+			t.Errorf("%s: the server saw %q", name, got)
+		}
+		if r := trace.Requests(); len(r) != 1 || !strings.HasPrefix(r[0].Outcome, "greeted with "+tcpShown(greeting)+`; sent "AUTH TLS\r\n"`) {
+			t.Errorf("%s: traced %+v", name, r)
+		}
+	}
+	closing := testutil.NewStartTLSStub(t, certStartTLSServer("120 ready in 1 minute\r\n421 too many users\r\n", nil, false, nil))
+	if _, err := handshakeDoc(t, certStartTLSCollector(t, "ftp", closing.CAFile), closing.Addr); err == nil || !strings.Contains(err.Error(), `the greeting of `+closing.Addr+`, "421 too many users\r\n", does not begin with 220`) {
+		t.Errorf("a 421 after the 120: %v", err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	busy := testutil.NewStartTLSStub(t, func(conn net.Conn, _ func() (net.Conn, error)) {
+		_, _ = io.WriteString(conn, strings.Repeat("120 ready in 1 minute\r\n", 100))
+		<-release
+	})
+	_, err := handshakeDoc(t, certStartTLSCollector(t, "ftp", busy.CAFile, func(c *model.Collector) { c.Limits.MaxResponseBytes = 1024 }), busy.Addr)
+	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "the greeting of "+busy.Addr+" is larger than the response limit of 1024 bytes; raise limits.max_response_bytes") {
+		t.Errorf("120 replies past the limit: %v", err)
+	}
+	// SMTP has no 120: a mail server greeting so is refused.
+	mail := testutil.NewStartTLSStub(t, certStartTLSServer("120 wait\r\n220 ready\r\n", nil, false, nil))
+	if _, err := handshakeDoc(t, certStartTLSCollector(t, "smtp", mail.CAFile), mail.Addr); err == nil || !strings.Contains(err.Error(), `"120 wait\r\n", does not begin with 220`) {
+		t.Errorf("an SMTP 120: %v", err)
+	}
 }

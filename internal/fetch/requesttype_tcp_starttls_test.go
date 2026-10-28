@@ -308,6 +308,20 @@ func TestATCPSTARTTLSIsTraced(t *testing.T) {
 	want := `greeted with "+OK Dovecot ready.\r\n"; sent "STLS\r\n", answered "+OK Begin TLS negotiation now.\r\n"; began TLS 1.3; read 9 bytes, the server closed the connection`
 	if len(r) != 1 || r[0].Header.Get("Tcp-Starttls") != "pop3" || r[0].URL != "tls://"+server.Addr || r[0].Outcome != want {
 		t.Errorf("traced %+v\nwant %s", r, want)
+	} // A handshake that fails after the server said yes follows the
+	// dialogue, as tlscert's does.
+	failing := testutil.NewStartTLSStub(t, func(conn net.Conn, _ func() (net.Conn, error)) {
+		_, _ = io.WriteString(conn, "+OK ready\r\n")
+		_, _ = testutil.ReadUntil(conn, "\n")
+		_, _ = io.WriteString(conn, "+OK go ahead\r\n")
+		_, _ = conn.Read(make([]byte, 1))
+	})
+	ctx, trace = WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, failing.Addr, startTLSCollector(t, "pop3", "QUIT\r\n", failing.CAFile), RequestOverrides{Timeout: 5 * time.Second}, nil); err == nil {
+		t.Fatal("a failed handshake was taken")
+	}
+	if r := trace.Requests(); len(r) != 1 || !strings.HasPrefix(r[0].Outcome, `greeted with "+OK ready\r\n"; sent "STLS\r\n", answered "+OK go ahead\r\n"; error: TLS handshake with `+failing.Addr+`: `) {
+		t.Errorf("traced %+v", r)
 	}
 }
 
@@ -335,4 +349,33 @@ func TestATCPSTARTTLSIsCheckedAtLoad(t *testing.T) {
 		c.Request.TLS = model.TLSConfig{CAFile: "/ca.pem", CertFile: "/c.pem", KeyFile: "/k.pem", ServerName: "mail.example.com"}
 	})
 	tcpCollector(t, func(c *model.Collector) { c.Request.StartTLS = "ftp" })
+}
+
+// With starttls: ftp, the 120 replies an FTP server may say before its 220
+// are read past (readStartTLSGreeting): request.greeting is matched against
+// the 220 greeting alone, which is also the greeting the answer holds, and
+// the debug report shows all the server said.
+func TestATCPFTPSTARTTLSWaitsThroughA120(t *testing.T) {
+	seen := make(chan string, 1)
+	server := testutil.NewStartTLSStub(t, startTLSServer("120 ready in 1 minute\r\n220 ready\r\n", []string{"234 AUTH TLS successful\r\n"}, true, "", seen))
+	c := startTLSCollector(t, "ftp", "", server.CAFile, func(c *model.Collector) {
+		own := tcpRequest(c)
+		own.Greeting = "^220 "
+		c.Request.Own = own
+	})
+	ctx, trace := WithRequestTrace(context.Background())
+	resp, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-seen; got != "AUTH TLS\r\n|TLS|closed" {
+		t.Errorf("the server saw %q", got)
+	}
+	if string(resp.Body) != "220 ready\r\n" || resp.Headers.Get("X-Tcp-Greeting") != "220 ready" {
+		t.Errorf("body %q, headers %v", resp.Body, resp.Headers)
+	}
+	want := `greeted with "120 ready in 1 minute\r\n220 ready\r\n", which matched request.greeting; sent "AUTH TLS\r\n", answered "234 AUTH TLS successful\r\n"; began TLS 1.3; nothing sent, the greeting is the answer`
+	if r := trace.Requests(); len(r) != 1 || r[0].Outcome != want {
+		t.Errorf("traced %+v\nwant %s", r, want)
+	}
 }

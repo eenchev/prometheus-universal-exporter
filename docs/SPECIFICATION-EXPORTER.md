@@ -30419,6 +30419,25 @@ not republish an unchanged chart.
 Release tags MUST be namespaced by what they release: `exporter/<name>-vX.Y.Z`
 for the exporter and `chart/<chart-name>-X.Y.Z` for the chart.
 
+Each GitHub Release's description MUST be its section of `CHANGELOG.md` at the
+repository root, never notes generated from the merged pull requests. Its
+sections MUST be headed `## Unreleased`, which MUST come first and exactly
+once, `## exporter X.Y.Z` or `## chart X.Y.Z`, each component's versions
+strictly descending. Every section MUST begin with the subsection
+`### What changed for you`, holding at least one line: what someone upgrading
+has to do or will notice, such as a renamed or removed key or value, a changed
+default or a changed metric, or "Nothing; you can upgrade without changes.";
+the only other subsections MUST be `### New` and `### Fixed`, in that order.
+Every pull request that changes what a user sees MUST add its lines to
+`## Unreleased`, and a release MUST move the lines it ships into its own
+section. `tools/release-notes.sh <exporter|chart> <version>` MUST print the
+section's text without its heading and MUST fail, naming the section, when it
+is missing or does not begin with `### What changed for you` and a line under
+it. Both release workflows MUST run it before they build or check anything
+but the tag, and MUST pass what it prints to `gh release` with `--notes-file`.
+`CHANGELOG.md` MUST have a section for the chart version `Chart.yaml`
+declares and one for the exporter release its `appVersion` names.
+
 Each release workflow MUST be triggered by every tag under its namespace, not
 only by well-formed ones, and MUST fail when the tag does not match the required
 format. A workflow triggered only by the strict pattern would leave a malformed
@@ -30445,7 +30464,8 @@ MUST:
   the `-ldflags` the Dockerfile links the image's with, the version and the
   revision from the same values, so `--version` reports the same for an
   archive's binary as for the image's;
-- create a GitHub Release containing the software archives and a file of
+- create a GitHub Release, described by the version's section of
+  `CHANGELOG.md`, containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
@@ -30476,7 +30496,8 @@ MUST:
   failure at any step MUST leave `latest` and `MAJOR.MINOR` unmoved unless
   the Release is published, and no Release published without its image. A
   rerun MUST succeed where the Release already exists, draft or published,
-  by replacing its assets rather than creating it again.
+  by replacing its assets and setting its description again
+  (`gh release edit --notes-file`) rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins

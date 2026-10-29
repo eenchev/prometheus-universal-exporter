@@ -16,7 +16,26 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
-- Nothing; you can upgrade without changes.
+- The JSON schemas refuse more of what the exporter refuses, so an editor now
+  marks it: durations and sizes under the exporter's least (`script_timeout`
+  under 1ms, `max_script_memory` under 32MiB, intervals under 1s, a zero
+  `failure_backoff` duration), a client certificate without its key or a key
+  without its certificate, two credentials in one request, a pagination key of
+  another paging type, `grpc` descriptor files beside the wrong source, and a
+  `python` transform without a `script`.
+- `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
+  pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
+  points to `starttls` and its protocols.
+
+### Fixed
+
+- The problems of a one-line block (`defaults: {...}`, a collector's
+  `request`, `otlp`, `web.basic_auth`) are said in the order of the keys on
+  the line.
+- An answer sent uncompressed no longer allocates for the answer-size
+  counters.
+- GitHub Releases are described from `CHANGELOG.md` instead of a list of pull
+  requests.
 
 ## exporter 1.8.0
 

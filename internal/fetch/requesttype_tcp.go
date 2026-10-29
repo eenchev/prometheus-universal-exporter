@@ -117,6 +117,10 @@ func init() {
 		Requester:    tcpRequester{},
 		TargetHint:   func(*model.Collector) string { return "host:port" },
 		Templates:    tcpTemplates,
+		// start_tls is ldap's StartTLS, a boolean: this type's names the
+		// protocol that asks for TLS.
+		KeyAdvice: map[string]string{"start_tls": "a tcp collector begins TLS on its plaintext connection with starttls, which names the protocol that asks for it: smtp, imap, pop3 or ftp"},
+
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.send or its label values")
 		},

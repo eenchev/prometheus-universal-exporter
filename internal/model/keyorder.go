@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -109,4 +110,138 @@ func fieldByKey(v reflect.Value, key string) (reflect.Value, bool) {
 		}
 	}
 	return reflect.Value{}, false
+}
+
+// placedDecodeProblems are the messages of decoding n into a value of type
+// t, each placed at the key, or the entry of a list, whose value it is
+// about, so that problems sort in the order of the file (keyProblem) where
+// the decoder says only a line: on one line, `limits: {bogus: 1,
+// max_metrics: x}` has a key refused before a value of the wrong kind,
+// which the decoder said at the line alone and which sorted by the place of
+// the mapping around both came first. The messages are those of decoding n
+// whole, which is what decides; decoding it again piece by piece
+// (decodedPieces) tells where each is, and one no piece gives is placed at
+// at, n's key, or on the line it names where that is another.
+func placedDecodeProblems(n *yaml.Node, t reflect.Type, at keyAt) []keyProblem {
+	messages := errorMessages(n.Decode(reflect.New(t).Interface()))
+	if len(messages) == 0 {
+		return nil
+	}
+	problems, _ := placeMessages(messages, decodedPieces(n, t, at), at)
+	return problems
+}
+
+// decodedPieces are the messages of decoding n into a value of type t
+// entry by entry, as far down as t is a struct, a list or a map that the
+// decoder reads field by field and n a mapping or a list, each placed at
+// the key or the entry of a list whose value it is about; a type that
+// decodes itself, and a value of any other kind, is decoded whole and its
+// messages placed at at, or on the line a message names where that is
+// another. A key t has no field for is passed over: it is an unknown key,
+// which unknownKeys places.
+func decodedPieces(n *yaml.Node, t reflect.Type, at keyAt) []keyProblem {
+	var problems []keyProblem
+	visiting := map[*yaml.Node]bool{}
+	var walk func(n *yaml.Node, t reflect.Type, at keyAt)
+	walk = func(n *yaml.Node, t reflect.Type, at keyAt) {
+		n = resolveAlias(n)
+		// A node that holds itself is refused by the decoder, decoding it
+		// whole.
+		if n == nil || visiting[n] {
+			return
+		}
+		visiting[n] = true
+		defer delete(visiting, n)
+		elem := t
+		for elem.Kind() == reflect.Pointer {
+			elem = elem.Elem()
+		}
+		plain := !reflect.PointerTo(elem).Implements(unmarshalerType) && elem != nodeType
+		switch {
+		case plain && elem.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
+			for _, entry := range DecodedEntries(n) {
+				if field, ok := fieldTypeByKey(elem, KeyName(entry.Key)); ok {
+					walk(entry.Value, field, keyAt{"", entry.Key.Line, entry.Key.Column})
+				}
+			}
+			return
+		case plain && elem.Kind() == reflect.Slice && n.Kind == yaml.SequenceNode:
+			for _, item := range n.Content {
+				walk(item, elem.Elem(), keyAt{"", item.Line, item.Column})
+			}
+			return
+		case plain && elem.Kind() == reflect.Map && n.Kind == yaml.MappingNode:
+			for _, entry := range DecodedEntries(n) {
+				walk(entry.Value, elem.Elem(), keyAt{"", entry.Key.Line, entry.Key.Column})
+			}
+			return
+		}
+		for _, message := range errorMessages(n.Decode(reflect.New(t).Interface())) {
+			problems = append(problems, placedAt(at, message))
+		}
+	}
+	walk(n, t, at)
+	return problems
+}
+
+// placedAt is a message placed at a key, or on the line it names, at its
+// start, where that is another than the key's.
+func placedAt(at keyAt, message string) keyProblem {
+	if named, ok := messageLine(message); ok && named != at.line {
+		return keyProblem{named, 0, message}
+	}
+	return keyProblem{at.line, at.column, message}
+}
+
+// placeMessages places each of the decoder's messages where the first
+// piece (decodedPieces) of the same text not yet taken is, or at at when
+// none is, and says of each which piece it was placed at, -1 for none.
+// Every message is placed once and no other is added, so decoding piece by
+// piece, which may see what decoding whole did not reach, changes no
+// message, only where it is said.
+func placeMessages(messages []string, pieces []keyProblem, at keyAt) ([]keyProblem, []int) {
+	taken := make([]bool, len(pieces))
+	problems := make([]keyProblem, 0, len(messages))
+	from := make([]int, 0, len(messages))
+	for _, message := range messages {
+		place, piece := placedAt(at, message), -1
+		for i := range pieces {
+			if !taken[i] && pieces[i].message == message {
+				taken[i], place, piece = true, pieces[i], i
+				break
+			}
+		}
+		problems = append(problems, place)
+		from = append(from, piece)
+	}
+	return problems, from
+}
+
+// fieldTypeByKey is the type of the field of a struct type that holds a
+// key.
+func fieldTypeByKey(t reflect.Type, key string) (reflect.Type, bool) {
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); name == key && t.Field(i).IsExported() {
+			return t.Field(i).Type, true
+		}
+	}
+	return nil, false
+}
+
+// sortProblems sorts problems in the order of the file, by line and then
+// by column, those at one place keeping the order they were found in.
+func sortProblems(problems []keyProblem) {
+	slices.SortStableFunc(problems, func(a, b keyProblem) int {
+		return cmp.Or(cmp.Compare(a.line, b.line), cmp.Compare(a.column, b.column))
+	})
+}
+
+// messageLine is the line a decoder's message names at its start.
+func messageLine(message string) (int, bool) {
+	m := linePrefix.FindStringSubmatch(message)
+	if m == nil {
+		return 0, false
+	}
+	line, err := strconv.Atoi(m[1])
+	return line, err == nil
 }

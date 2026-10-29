@@ -353,6 +353,9 @@ func TestOnlyAValueOfAnotherKindIsRefusedAnew(t *testing.T) {
 				var want string
 				allowed, held := textOnly[site.path]
 				switch word := strings.Trim(way.written, `"`); {
+				// A key the request type does not take is refused for
+				// that, whatever its value is.
+				case site.foreign:
 				case site.of.Kind() == reflect.String && held && way.reads != "" && len(allowed) > 0:
 					want = fmt.Sprintf("line %d: %s is written %s, which YAML reads as %s, not as text; write one of %s", line, site.named, way.written, way.reads, strings.Join(allowed, ", "))
 				case site.of.Kind() == reflect.String && held && way.reads != "":

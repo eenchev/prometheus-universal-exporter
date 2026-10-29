@@ -73,6 +73,10 @@ func init() {
 		},
 		SchemaRule: tlsCertSchemaRule,
 		Stage:      "tls",
+		// start_tls is ldap's StartTLS, a boolean: this type's names the
+		// protocol that asks for TLS.
+		KeyAdvice: map[string]string{"start_tls": "a tlscert collector begins TLS on its plaintext connection with starttls, which names the protocol that asks for it: smtp, imap, pop3 or ftp"},
+
 		CheckFiles: checkTLSCertFiles,
 	})
 }

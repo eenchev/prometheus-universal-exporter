@@ -3095,7 +3095,13 @@ asked for it carries it. Its keys:
   `start_tls` MUST make it send StartTLS before the bind, either verifying
   the certificate against `tls.server_name` or the target's host; a
   refused StartTLS MUST fail the scrape. `ldap://` with a written `tls`
-  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
+  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused.
+  `starttls`, the protocol `tcp` and `tlscert` begin TLS in, MUST be refused
+  in an `ldap` collector, however it is written, as a key the type does not
+  take with the type's own key named after it: `an ldap collector asks for
+  StartTLS on its plaintext connection with its own key, start_tls: true`;
+  and `start_tls` in a `tcp` or a `tlscert` collector MUST be refused naming
+  `starttls` and its four protocols. The
   target lists MUST be applied to the host before the connection and to the
   address connected to, as `http`'s are, a refused one answered `403`,
   counted in `http_exporter_targets_refused_total`, and never connected to.
@@ -5641,8 +5647,8 @@ typical script.
   exporter measuring a line as the constant counts it. The loader holds the
   least and the worker and the pool MUST NOT: a worker MUST run under
   whatever limit it is given, cutting a script's error to it (above). The
-  schemas MUST refuse a number from 1 to 37 at the key and take 0, and what
-  they cannot tell of a size written as text stays the loader's (§ 24.3).
+  schemas MUST refuse a number from 1 to 37 at the key and take 0, and a
+  size written as text that comes to that many bytes (§ 24.3).
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
@@ -8852,10 +8858,24 @@ expected (`a duration such as 30s`, `a whole number`, `a list of values`,
 mapping belongs, and the message reaches the log and the reload status; the
 line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
-rather than only the first, in the order of the file within a block; the
+rather than only the first, in the order of the file within a block, and on
+one line by the column of the key, or the entry of a list, each is about: a
+value of the wrong kind, which the YAML decoder says with its line alone,
+MUST be placed at its own key, not where the block around it begins, so that
+on a line such as `defaults: {bogus: 1, limits: {max_metrics: x}}` the
+unknown key comes first, in the defaults block, a collector's `request`
+block and a block an `enabled` key switches on alike, and loading the same
+file again MUST give the same order; the
 exception is an unknown key of a collector's `request` block that a key its
 type does not take comes before, which MUST be left to be refused once that
-key is gone, so that the error names the first in the file (§ 5.1). A YAML syntax error is reported as the YAML
+key is gone, so that the error names the first in the file (§ 5.1). A key
+of a collector's `request` block that its type does not take MUST be refused
+as such whatever its value: a value of the wrong kind for the type that
+takes it, `starttls: true` in an `ldap` collector or `start_tls: smtp` in a
+`tlscert` one, MUST NOT be refused for its kind before it, neither by the
+decoder's word nor by the words of what text YAML read as a boolean or a
+number, which would tell the values of another type's key; a mistake of
+another key that is on the same line MUST still be said. A YAML syntax error is reported as the YAML
 parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
@@ -8999,12 +9019,28 @@ number and that is not written `0` — `0.0`, `00`, `0x0`, `0e0` — reaches a
 schema as the number 0, which it takes, while the exporter reads what is
 written and MUST refuse it as no duration; the test MUST hold both to that
 by name too, and the documentation MUST say it. These two MUST be the only
-differences in how a duration is written. What else a schema cannot
-tell MUST be said in the
-key's description and stay the exporter's to refuse: the least
-`otlp.interval`, 1s, since a duration is a string to a schema and a disabled
-block may hold any; the least `limits.script_timeout`, 1ms, a duration too;
-and the range of a size. A key of any other whole number
+differences in how a duration is written. A duration key with a least MUST
+be held to it by the schemas as far as the digits of a duration of one part
+tell it, by a `not` of the text of one number and one unit whose number is
+under the least divided by the unit, generated from the constant the loader
+checks against: `limits.script_timeout` 1ms, `request.keepalive_interval`
+1s, an `sql` collector's and target's `connections.keepalive.interval` 1s,
+the static target file's `interval` and a target's `interval` 1s,
+`otlp.interval` 1s in a block that is switched on, the allocator's
+`refresh_interval` 1s, and `failure_backoff`'s `initial`, `max` and
+`min_budget`, which MUST be more than zero. Where zero is the key's default,
+zero and a part that comes to no whole nanosecond (`0.5ns`) MUST stay taken;
+where it is not, the schemas MUST refuse zero however it is written, the
+number 0 and `-0s` and `0s0m` too, as the exporter does. A duration of
+several parts under the least, such as `400us400us`, whose parts a pattern
+cannot add up, and that `failure_backoff.max` is not shorter than `initial`,
+MUST stay the exporter's to refuse, and the documentation of the schemas
+MUST say so. A test MUST check the generated patterns against the
+exporter's reading of numbers around each least in every unit, and the test
+of the two verdicts MUST hold both to a duration under the least of each
+such key. What else a schema cannot tell MUST be said in the key's
+description and stay the exporter's to refuse: the range of a size. A key of
+any other whole number
 takes a number written with a point or an exponent as the whole number it
 equals, to the exporter as to a schema (§ 24.2): the range of the key's
 integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
@@ -9034,12 +9070,34 @@ refused by both and `0` and `38` taken by both, which the test of the two
 verdicts MUST show. So MUST the least of `request.max_response_bytes` and
 `limits.max_response_bytes`, 1KiB (§ 20), from the constant the loader
 checks against: `1`, `1e1` and `1023` refused by both, `0` and `1024` taken
-by both. The other two sizes MUST stay described as every size is. A size
-written as text — in quotes, or with a unit, such as `"26"`,
-`20B` or `0.01KiB` — is text of the pattern of a size to a schema, which
-cannot tell how many bytes it comes to: that such a size is under the least
-MUST stay the exporter's to refuse, MUST be said in the key's description
-and in the documentation of the schemas, and the test MUST hold both to it.
+by both. So MUST the least of `limits.max_script_memory`, 32MiB, and of
+`otlp.batch_max_bytes`, 64KiB, in a block that is switched on. A size
+written as text — in quotes, or with a unit, such as `"26"`, `20B`,
+`0.01KiB` or `16MiB` — MUST be held to the least of such a key by a `not` of
+the text of a number, with a unit or without, that comes to at least a byte
+and under the least, read from its digits, so that it is refused by both;
+one that comes to no byte, such as `0.5B`, is the zero, and the default, to
+both. The test of the two verdicts MUST hold both to it. The other sizes
+MUST stay described as every size is.
+
+A `tls` block MUST be held by the schemas to a client certificate with its
+key or neither, `""` being a file left out, as the exporter refuses one of
+the two alone when the configuration loads: a collector's `request.tls` and
+`request.login.tls`, a static target's, and `otlp.tls` in a block that is
+switched on. A collector takes a file its file's `defaults` write, so a
+collector MUST be held to the file of the two the defaults do not write, and
+the `defaults` block to neither; of defaults that write one and a collector
+that writes neither, the exporter alone MUST refuse it. A request's
+credentials MUST be held by the schemas to what the exporter refuses of
+them, a collector's and a static target's: `bearer_token` beside
+`bearer_token_file`, `basic_auth` beside `basic_auth_file`, a Basic
+credential beside a bearer token, and a `basic_auth_file` without both its
+files written with something other than blanks. So MUST an `http`
+collector's `pagination` keys of another way of paging (§ 5.1, Pagination), a `grpc`
+collector's descriptor files beside another source of `descriptors`, or
+that source without its files, and a `python` transform without a `script`.
+A test MUST put documents of each through the committed schemas and the
+exporter and require one verdict of both.
 
 The names of `request.headers`, a collector's and a static target's, and of
 `otlp.headers` in a block that is switched on, MUST be held by the schemas to

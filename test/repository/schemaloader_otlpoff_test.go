@@ -35,10 +35,12 @@ var otlpKeys = map[string]struct {
 		checked: []otlpValue{{`{"bad name": x}`, ""}, {`{Accept-Encoding: br}`, ""}, {`{a: "x\ny"}`, "otlp.headers a has the control character"}},
 		noValue: []string{"[a]", "{a: [b]}", "x"},
 	},
-	"timeout":  {checked: []otlpValue{{"-5s", ""}, {"-1ns", ""}}, noValue: []string{"soon", "30", "[5s]"}},
-	"interval": {checked: []otlpValue{{"-1s", ""}, {"500ms", "otlp.interval 500ms is under the least, 1s"}}, noValue: []string{"soon", "30", "[5s]"}},
+	"timeout": {checked: []otlpValue{{"-5s", ""}, {"-1ns", ""}}, noValue: []string{"soon", "30", "[5s]"}},
+	// An interval of one part under the least is refused by both, and one
+	// of several parts, whose sum a schema cannot tell, by the exporter.
+	"interval": {checked: []otlpValue{{"-1s", ""}, {"500ms", ""}, {"0.5s", ""}, {"400ms400ms", "otlp.interval 800ms is under the least, 1s"}}, noValue: []string{"soon", "30", "[5s]"}},
 	"tls": {
-		checked: []otlpValue{{"{cert_file: /nonexistent/client.pem}", "otlp.tls sets only one of cert_file and key_file"}, {"{ca_file: /nonexistent/ca.pem}", "otlp.tls cannot be used"}},
+		checked: []otlpValue{{"{cert_file: /nonexistent/client.pem}", ""}, {"{key_file: /nonexistent/client.key}", ""}, {"{ca_file: /nonexistent/ca.pem}", "otlp.tls cannot be used"}},
 		noValue: []string{"x", "{insecure_skip_verify: maybe}", "{unknown: 1}", "{ca_file: [a]}"},
 	},
 	"service_name": {noValue: []string{"[a]", "{a: b}"}},
@@ -51,9 +53,10 @@ var otlpKeys = map[string]struct {
 	"max_pending_points":     {checked: []otlpValue{{"-1", ""}, {"-100000", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}, {"1001", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"batch_max_size":         {checked: []otlpValue{{"-1", ""}, {"-8192", ""}}, noValue: []string{"1.5", "many", "[1]"}},
-	// A size written as text is the exporter's alone to hold to the least.
+	// A size written as text is held to the least by both, as one
+	// written as a number is.
 	"batch_max_bytes": {
-		checked: []otlpValue{{"1", ""}, {"65535", ""}, {"1KiB", "otlp.batch_max_bytes is 1024 bytes, under the least, 64KiB"}, {`"65535"`, "otlp.batch_max_bytes is 65535 bytes, under the least, 64KiB"}},
+		checked: []otlpValue{{"1", ""}, {"65535", ""}, {"1KiB", ""}, {`"65535"`, ""}, {"63.9KiB", ""}, {"0.06MB", ""}},
 		noValue: []string{"-1", "1.5", "lots", "[1]"},
 	},
 }

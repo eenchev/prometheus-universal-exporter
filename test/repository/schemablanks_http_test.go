@@ -103,7 +103,7 @@ func blanksKeys() []blanksKey {
 		{key: "collectors[].transform.rename_labels{}", document: jqCollector, at: transform, setting: transform + "      rename_labels: {%s: site}\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].transform.rename_labels.*", document: jqCollector, at: transform, setting: transform + "      rename_labels: {l: %s}\n", blanks: loaderRefuses("to invalid label name"), empty: loaderRefuses("to invalid label name")},
 		{key: "collectors[].transform.pre_script", document: jqCollector, at: transform, setting: transform + "      pre_script: %s\n", blanks: bothTake, empty: bothTake},
-		{key: "collectors[].transform.script", of: "of a python transform", document: pythonCollector, at: "      script: metric('up', 1)\n", setting: "      script: %s\n", blanks: loaderRefuses("Python transform requires a script"), empty: loaderRefuses("Python transform requires a script")},
+		{key: "collectors[].transform.script", of: "of a python transform", document: pythonCollector, at: "      script: metric('up', 1)\n", setting: "      script: %s\n", blanks: bothRefuse("Python transform requires a script"), empty: bothRefuse("Python transform requires a script")},
 		{key: "collectors[].transform.script", of: "of a jq transform", document: jqCollector, at: transform, setting: transform + "      script: %s\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].transform.type", document: jqCollector, at: transform, setting: "      type: %s\n", blanks: bothRefuse("has no transform.type"), empty: bothRefuse("has no transform.type")},
 		{key: "collectors[].decoder.type", document: jqCollector, at: collector, setting: "    decoder:\n      type: %s\n", blanks: schemaRefuses, empty: bothTake},

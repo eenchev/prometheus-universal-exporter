@@ -89,7 +89,7 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 	if problems := schemaProblems(t, static, entry(source)); len(problems) > 0 {
 		t.Fatalf("the base entry is refused: %v", problems)
 	}
-	for _, dns := range []string{"{names: [_metrics._tcp.example.com], server: 10.0.0.53}", "{names: [a.example], type: SRV}", "{names: [a.example], type: A, port: 9100, refresh_interval: 1m, timeout: 5s}"} {
+	for _, dns := range []string{"{names: [_metrics._tcp.example.com], server: 10.0.0.53}", "{names: [a.example], type: SRV}", "{names: [a.example], type: A, port: 9100, refresh_interval: 1m, timeout: 5s}", "{names: [a.example], refresh_interval: 1s}", "{names: [a.example], refresh_interval: 0s}"} {
 		if problems := schemaProblems(t, static, entry("    discovery:\n      - dns_sd: "+dns+"\n")); len(problems) > 0 {
 			t.Errorf("the dns_sd source %s is refused: %v", dns, problems)
 		}
@@ -125,6 +125,10 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 		"a bad source name":           entry("    discovery:\n      - name: -a\n        file_sd: {files: [sd.json]}\n"),
 		"a negative max_targets":      entry("    discovery:\n      - file_sd: {files: [sd.json]}\n        max_targets: -1\n"),
 		"a bad refresh_interval":      entry("    discovery:\n      - file_sd: {files: [sd.json], refresh_interval: often}\n"),
+		"a short refresh_interval":    entry("    discovery:\n      - file_sd: {files: [sd.json], refresh_interval: 500ms}\n"),
+		"a short http_sd refresh":     entry("    discovery:\n      - http_sd: {url: 'https://x/', refresh_interval: 0.5s}\n"),
+		"a short kubernetes refresh":  entry("    discovery:\n      - kubernetes: {port: m, refresh_interval: 999ms}\n"),
+		"a short dns_sd refresh":      entry("    discovery:\n      - dns_sd: {names: [a.example], refresh_interval: 100ms}\n"),
 		"dns_sd without names":        entry("    discovery:\n      - dns_sd: {names: []}\n"),
 		"a dns_sd name twice":         entry("    discovery:\n      - dns_sd: {names: [a.example, a.example]}\n"),
 		"a dns_sd name with a port":   entry("    discovery:\n      - dns_sd: {names: ['a.example:53']}\n"),

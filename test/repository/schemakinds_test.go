@@ -200,6 +200,14 @@ func TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes(t *testing.T) {
 				{"True", !boolean, "a boolean"}, {"false", !boolean, "a boolean"},
 				{strconv.FormatFloat(among, 'f', -1, 64), !number, "a number"},
 			}
+			// A duration that must be more than zero takes no number at
+			// all, the one number of a duration, 0, being a value it
+			// refuses, as the exporter does, for what it is, not for its
+			// kind (fetch.SchemaLeastDuration): the tables of the keys
+			// hold it to that.
+			if not, ok := node["not"].(map[string]any); ok && number && len(validateAgainstSchema(not, among)) == 0 {
+				ways = ways[:2]
+			}
 			switch {
 			case text && !number && !boolean:
 				textOnly++

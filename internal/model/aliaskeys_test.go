@@ -320,6 +320,19 @@ func errorText(err error) string {
 	return err.Error()
 }
 
+// problemsText is the problems of a decoding error, each once in the order
+// of their text: a switched block says its problems in the order of the file
+// (placedDecodeProblems), where it said the unknown keys before the values
+// of the wrong kind, which the check of its keys is not about.
+func problemsText(err error) string {
+	messages := errorMessages(err)
+	if len(messages) == 0 {
+		return errorText(err)
+	}
+	slices.Sort(messages)
+	return strings.Join(messages, "\n")
+}
+
 // hasAliasKey reports whether any mapping in n has a key that is an alias.
 func hasAliasKey(n *yaml.Node, seen map[*yaml.Node]bool) bool {
 	if n == nil || seen[n] {
@@ -369,11 +382,11 @@ func sameAsItWas(t *testing.T, where string, n *yaml.Node, seen map[*yaml.Node]b
 		}
 	}
 	var otlpNow, otlpWas plainOTLP
-	if now, was := errorText(decodeSwitchedBlock(n, &otlpNow, "model.OTLPConfig", "otlp")), errorText(decodeSwitchedBlockAsItWas(n, &otlpWas, "model.OTLPConfig", "otlp")); now != was || !reflect.DeepEqual(otlpNow, otlpWas) {
+	if now, was := problemsText(decodeSwitchedBlock(n, &otlpNow, "model.OTLPConfig", "otlp")), problemsText(decodeSwitchedBlockAsItWas(n, &otlpWas, "model.OTLPConfig", "otlp")); now != was || !reflect.DeepEqual(otlpNow, otlpWas) {
 		t.Fatalf("%s: line %d: otlp is %q %+v, and was %q %+v", where, n.Line, now, otlpNow, was, otlpWas)
 	}
 	var authNow, authWas plainAuth
-	if now, was := errorText(decodeSwitchedBlock(n, &authNow, "model.ExporterBasicAuth", "web.basic_auth")), errorText(decodeSwitchedBlockAsItWas(n, &authWas, "model.ExporterBasicAuth", "web.basic_auth")); now != was || !reflect.DeepEqual(authNow, authWas) {
+	if now, was := problemsText(decodeSwitchedBlock(n, &authNow, "model.ExporterBasicAuth", "web.basic_auth")), problemsText(decodeSwitchedBlockAsItWas(n, &authWas, "model.ExporterBasicAuth", "web.basic_auth")); now != was || !reflect.DeepEqual(authNow, authWas) {
 		t.Fatalf("%s: line %d: basic_auth is %q %+v, and was %q %+v", where, n.Line, now, authNow, was, authWas)
 	}
 	var request TargetRequestConfig

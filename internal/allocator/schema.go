@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -168,6 +169,8 @@ func discoverySchemaRules() map[string]map[string]any {
 		return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
 	}
 	labelPattern := labelName.String()
+	// A refresh_interval is at least minDiscoveryRefresh, or 0, the default.
+	refreshLeast := fetch.SchemaLeastDuration(minDiscoveryRefresh, true)
 	return map[string]map[string]any{
 		"[]": {
 			"oneOf": []any{
@@ -191,10 +194,10 @@ func discoverySchemaRules() map[string]map[string]any {
 			"pattern":     `\.(` + config.Caseless("json") + "|" + config.Caseless("yml") + "|" + config.Caseless("yaml") + `)$`,
 			"description": "Ends in .json, .yml or .yaml, which tells how its files are read.",
 		},
-		"[].file_sd.refresh_interval":  {"description": "How often the files are read again, at least 1s. Defaults to 1m."},
+		"[].file_sd.refresh_interval":  {"not": refreshLeast, "description": "How often the files are read again, at least 1s. Defaults to 1m."},
 		"[].http_sd":                   {"required": []string{"url"}, "description": "A URL asked for target groups as Prometheus's HTTP service discovery asks it."},
 		"[].http_sd.url":               {"pattern": "^" + config.Caseless("http") + "[sS]?://[^/?#@]+([/?#]|$)", "description": "An absolute http or https URL, without credentials."},
-		"[].http_sd.refresh_interval":  {"description": "How often the URL is asked, at least 1s. Defaults to 1m."},
+		"[].http_sd.refresh_interval":  {"not": refreshLeast, "description": "How often the URL is asked, at least 1s. Defaults to 1m."},
 		"[].http_sd.timeout":           {"description": "How long a request may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 		"[].http_sd.bearer_token_file": {"description": "A file holding a token sent as Authorization: Bearer, read again at every refresh. Relative to the directory of the file that names it."},
 		"[].http_sd.tls": {"allOf": []any{
@@ -220,7 +223,7 @@ func discoverySchemaRules() map[string]map[string]any {
 		},
 		"[].kubernetes.include_not_ready": {"description": "Take the endpoints that are not ready too."},
 		"[].kubernetes.address_type":      {"enum": []string{"IPv4", "IPv6", "any"}, "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family."},
-		"[].kubernetes.refresh_interval":  {"description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
+		"[].kubernetes.refresh_interval":  {"not": refreshLeast, "description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
 		"[].kubernetes.timeout":           {"description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 		"[].dns_sd": {
 			"required":    []string{"names"},
@@ -234,7 +237,7 @@ func discoverySchemaRules() map[string]map[string]any {
 		"[].dns_sd.type":             {"enum": config.OptionalEnum([]string{"SRV", "A", "AAAA"}), "description": "The record type asked for: SRV, the default, A or AAAA."},
 		"[].dns_sd.port":             {"minimum": 1, "maximum": 65535, "description": "The port of the targets of an A or AAAA source, required for those and refused for SRV, whose records carry their own."},
 		"[].dns_sd.server":           {"description": "A DNS server, host or host:port (port 53 by default), asked instead of the system's nameservers."},
-		"[].dns_sd.refresh_interval": {"description": "How often the names are looked up, at least 1s. Defaults to 30s."},
+		"[].dns_sd.refresh_interval": {"not": refreshLeast, "description": "How often the names are looked up, at least 1s. Defaults to 30s."},
 		"[].dns_sd.timeout":          {"description": "How long the lookups of all the names may take together, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 	}
 }

@@ -119,6 +119,13 @@
                       "description": "How often the names are looked up, at least 1s. Defaults to 30s.",
                       "maximum": 0,
                       "minimum": 0,
+                      "not": {
+                        "not": {
+                          "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                        },
+                        "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                        "type": "string"
+                      },
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                       "type": [
                         "string",
@@ -182,6 +189,13 @@
                       "description": "How often the files are read again, at least 1s. Defaults to 1m.",
                       "maximum": 0,
                       "minimum": 0,
+                      "not": {
+                        "not": {
+                          "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                        },
+                        "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                        "type": "string"
+                      },
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                       "type": [
                         "string",
@@ -210,6 +224,13 @@
                       "description": "How often the URL is asked, at least 1s. Defaults to 1m.",
                       "maximum": 0,
                       "minimum": 0,
+                      "not": {
+                        "not": {
+                          "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                        },
+                        "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                        "type": "string"
+                      },
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                       "type": [
                         "string",
@@ -401,6 +422,13 @@
                       "description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s.",
                       "maximum": 0,
                       "minimum": 0,
+                      "not": {
+                        "not": {
+                          "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                        },
+                        "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                        "type": "string"
+                      },
                       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                       "type": [
                         "string",
@@ -472,6 +500,13 @@
             "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
             "maximum": 0,
             "minimum": 0,
+            "not": {
+              "not": {
+                "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+              },
+              "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+              "type": "string"
+            },
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
             "type": [
               "string",
@@ -545,6 +580,90 @@
           "request": {
             "additionalProperties": false,
             "description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe.",
+            "not": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "properties": {
+                        "bearer_token": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "bearer_token_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token_file"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "basic_auth",
+                    "basic_auth_file"
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "basic_auth"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "basic_auth_file"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "bearer_token": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "bearer_token_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token_file"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
             "properties": {
               "accept_codes": {
                 "description": "grpc: replaces the collector's request.accept_codes for this target.",
@@ -593,6 +712,39 @@
               },
               "basic_auth_file": {
                 "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "password": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "username": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ],
+                "description": "http, graphite and grpc: the files of the target's own Basic credential, both required. Not with basic_auth or a bearer token.",
                 "properties": {
                   "password": {
                     "type": [
@@ -609,6 +761,10 @@
                     ]
                   }
                 },
+                "required": [
+                  "username",
+                  "password"
+                ],
                 "type": "object"
               },
               "bearer_token": {
@@ -688,6 +844,13 @@
                         "description": "sql: how often a connection to this target is checked; at least 1s, 0 for none.",
                         "maximum": 0,
                         "minimum": 0,
+                        "not": {
+                          "not": {
+                            "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                          },
+                          "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                          "type": "string"
+                        },
                         "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                         "type": [
                           "string",
@@ -1218,6 +1381,60 @@
                   },
                   "tls": {
                     "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        }
+                      }
+                    ],
                     "description": "The login's own tls settings, for a login server whose certificate the collector's request.tls does not verify; left out, request.tls. Never what a probe or a static target changes of request.tls.",
                     "properties": {
                       "ca_file": {
@@ -1659,6 +1876,21 @@
       "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s.",
       "maximum": 0,
       "minimum": 0,
+      "not": {
+        "anyOf": [
+          {
+            "const": 0
+          },
+          {
+            "pattern": "^[-+]?(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+)$",
+            "type": "string"
+          },
+          {
+            "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+            "type": "string"
+          }
+        ]
+      },
       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
       "type": [
         "string",
@@ -1688,6 +1920,13 @@
             "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
             "maximum": 0,
             "minimum": 0,
+            "not": {
+              "not": {
+                "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+              },
+              "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+              "type": "string"
+            },
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
             "type": [
               "string",
@@ -1761,6 +2000,90 @@
           "request": {
             "additionalProperties": false,
             "description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe.",
+            "not": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "properties": {
+                        "bearer_token": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "bearer_token_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token_file"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "basic_auth",
+                    "basic_auth_file"
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "basic_auth"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "basic_auth_file"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "bearer_token": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "bearer_token_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token_file"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
             "properties": {
               "accept_codes": {
                 "description": "grpc: replaces the collector's request.accept_codes for this target.",
@@ -1809,6 +2132,39 @@
               },
               "basic_auth_file": {
                 "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "password": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "username": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ],
+                "description": "http, graphite and grpc: the files of the target's own Basic credential, both required. Not with basic_auth or a bearer token.",
                 "properties": {
                   "password": {
                     "type": [
@@ -1825,6 +2181,10 @@
                     ]
                   }
                 },
+                "required": [
+                  "username",
+                  "password"
+                ],
                 "type": "object"
               },
               "bearer_token": {
@@ -1904,6 +2264,13 @@
                         "description": "sql: how often a connection to this target is checked; at least 1s, 0 for none.",
                         "maximum": 0,
                         "minimum": 0,
+                        "not": {
+                          "not": {
+                            "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                          },
+                          "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                          "type": "string"
+                        },
                         "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                         "type": [
                           "string",
@@ -2434,6 +2801,60 @@
                   },
                   "tls": {
                     "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        }
+                      }
+                    ],
                     "description": "The login's own tls settings, for a login server whose certificate the collector's request.tls does not verify; left out, request.tls. Never what a probe or a static target changes of request.tls.",
                     "properties": {
                       "ca_file": {

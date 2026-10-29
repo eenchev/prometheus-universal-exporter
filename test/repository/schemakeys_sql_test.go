@@ -58,6 +58,10 @@ func sqlSchemaKeys() []schemaKey {
 			connections(file, prefix+"max_lifetime", indent+"max_lifetime: %s\n", "2h", "never"),
 			connections(file, prefix+"keepalive.interval", indent+"keepalive:\n"+indent+"  interval: %s\n", "10s", "often"),
 		)
+		// An interval of one part under the least, 1s, is refused by both.
+		least := connections(file, prefix+"keepalive.interval", indent+"keepalive:\n"+indent+"  interval: %s\n", "1s", "500ms")
+		least.of, least.duration, least.invalidWas = "under its least", false, taken
+		rows = append(rows, least)
 		// The check beside an interval, so that the block is there written
 		// "" or left out, and loads as the same either way.
 		check := schemaKey{key: prefix + "keepalive.check", document: strings.Replace(sqlCollector, request, "      connections:\n        keepalive:\n          interval: 30s\n          # check\n", 1), at: "          # check\n", setting: "          check: %s\n", valid: "ping", invalid: "icmp", absent: true, empty: true, emptyWas: refused}

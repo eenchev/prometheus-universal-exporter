@@ -2539,6 +2539,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
 | `proxy_url` | the environment's | The proxy every request of the collector, its login's included, goes through instead of the one `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` name: `http://host:port`, `https://host:port` or `socks5://host:port`, without credentials; `direct` for none. See [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy). |
 | `proxy_basic_auth_file` | none | With `proxy_url`: the files the `username` and the `password` sent to the proxy are read from, at every request. |
+| `unix_socket` | none | The absolute path of a Unix domain socket every request of the collector, its login's included, is sent over in place of a TCP connection to the URL's host, as `curl --unix-socket` does, such as `/var/run/docker.sock`; the URL's host is still the `Host` header and its path and query the request's. Not with `proxy_url`; no probe parameter, static target or `defaults` sets it. See [Over a Unix socket](REQUESTS.md#over-a-unix-socket). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -3007,8 +3008,9 @@ has the whole of it. What is withheld from the answer:
   network — the address and port a connection was made from (`read tcp
   [withheld; in the exporter's log]->10.1.2.3:443`), the proxy a request
   went through, with all a connection to it or a SOCKS proxy's handshake
-  failed with, the name server a lookup asked. The address the connection
-  went to stays: the caller named it.
+  failed with, the name server a lookup asked, the path of the
+  [Unix socket](REQUESTS.md#over-a-unix-socket) a request went to. The
+  address the connection went to stays: the caller named it.
 
 An error over the 2,000 bytes every failure is cut to is cut after what the
 caller may be told is taken from it, so nothing withheld reaches the answer
@@ -3970,7 +3972,9 @@ collectors:
   Without a `proxy_url` in the block, the credentials are for the collectors
   that name their own proxies, and one that writes `proxy_url: direct`
   leaves them out ([A collector's own
-  proxy](REQUESTS.md#a-collectors-own-proxy)). Any other key, of a
+  proxy](REQUESTS.md#a-collectors-own-proxy)). A collector that sends its
+  requests to a [`unix_socket`](REQUESTS.md#over-a-unix-socket) takes
+  neither. Any other key, of a
   collector (`metrics`, `request.path`, `request.type`, a key of one request
   type's own) or of nothing, is refused when the configuration loads, naming
   the key and its line, and so is a value of the wrong kind.

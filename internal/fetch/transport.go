@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -43,7 +44,9 @@ import (
 // https ones, and NO_PROXY for the hosts, domains and networks to reach
 // directly. The lower-case spellings work too. Requests to localhost and
 // loopback addresses always go direct. The environment is read when a
-// transport is built, which in practice is once, at the first request.
+// transport is built, which in practice is once, at the first request. An
+// http collector that sends its requests to a Unix socket uses no proxy at
+// all (unixsocket.go).
 
 const (
 	transportIdleTTL         = 5 * time.Minute
@@ -126,6 +129,11 @@ type TransportSettings struct {
 	// request meant for another.
 	proxy     string
 	proxyAuth model.ProxyBasicAuthFile
+	// socket is the http collector's request.unix_socket, "" for none
+	// (unixsocket.go): every connection of the pool is made to it, so a
+	// connection to one socket must not carry a request meant for another,
+	// or for a host reached over TCP.
+	socket string
 }
 
 type cachedTransport struct {
@@ -169,9 +177,22 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 	if err != nil {
 		return nil, err
 	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	dialTo := dialer.DialContext
+	if settings.socket != "" {
+		// Every connection goes to the socket, whatever host and port the
+		// URL names, and never through a proxy, the environment's
+		// included (unixsocket.go). The address the transport asks for
+		// stays the URL's, which the policy checked.
+		socket := settings.socket
+		proxy, proxyURL = nil, nil
+		dialTo = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		}
+	}
 	// Every connection is checked against the allowed_targets and
 	// denied_targets of the request that made it (targetpolicy.go).
-	dial := policyDialer((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext)
+	dial := policyDialer(dialTo)
 	transport := &http.Transport{
 		Proxy:               proxy,
 		TLSClientConfig:     tlsCfg,

@@ -553,7 +553,10 @@ the keys of it they do not set themselves:
   NOT list `request.proxy_basic_auth_file` under `--dry-run`'s
   `details.collector_defaults`, and credentials no collector takes MUST be
   refused as a key that applies to no collector, saying that each collector
-  names its own proxy or goes direct. One that writes the credentials itself
+  names its own proxy or goes direct. A collector with a `request.unix_socket`
+  (§ 42.15b) MUST take neither `proxy_url` nor `proxy_basic_auth_file` from
+  the block, and a block's proxy key that only such collectors would take
+  MUST be refused as one that applies to no collector, saying so. One that writes the credentials itself
   beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
@@ -1016,6 +1019,7 @@ and the source MUST list the opt-in types.
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 | `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
 | `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
+| `unix_socket` | none | The absolute path of the Unix domain socket every request of the collector is sent over in place of a TCP connection to the URL's host (§ 42.15b). The `http` type's alone. |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -1025,7 +1029,8 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 Neither a probe parameter nor a static target MAY set `proxy_url` or
-`proxy_basic_auth_file`.
+`proxy_basic_auth_file`, nor `unix_socket`, which `defaults` MUST NOT set
+either.
 
 ##### Pagination
 
@@ -6916,7 +6921,8 @@ reached by, its certificate), the whole of a SOCKS proxy's failure (a
 `socks connect` error: the proxy's address, written where the source's
 would be, and what its handshake said, told as `socks connect tcp:
 [withheld; in the exporter's log]`), what a proxy said in refusing a tunnel (§
-42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
+42.15b), the path of the Unix socket a request went to (a `*net.OpError` of a
+`unix` network's `Addr`, § 42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
 of the one it wraps, as the redaction of URLs does, MUST tell the caller
@@ -9608,7 +9614,13 @@ whether or not a proxy is in between.
   collector's own lists hold an address or a network, in which case it MUST
   fail with an error naming the lists and the failed lookup; the name rules
   MUST apply either way, and a name `allowed_targets` does not match, when it
-  holds names only, MUST be refused. The same holds for `grpc`. The
+  holds names only, MUST be refused. The same holds for `grpc`. For an
+  `http` collector with a `request.unix_socket` (§ 42.15b) no connection is
+  made to an address of the host: the name rules and, for a host written as
+  an address, the address rules MUST apply before the request and on every
+  redirect, the name MUST NOT be looked up, and a name `allowed_targets`
+  does not match by name MUST be refused, whatever networks the list holds.
+  The
   documentation MUST say what this leaves unchecked: the address a proxy
   resolves a name to, the cloud metadata addresses included. Whether a request goes
   through a proxy MUST be decided by the proxy function of the transport that
@@ -29104,6 +29116,69 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheReleaseNotesScriptReadsTheChangelog`: the script, run on the repository's `CHANGELOG.md`, prints the notes of the chart version `Chart.yaml` declares and of the exporter release its `appVersion` names, each beginning with `### What changed for you`.
 - `TestTheReleaseWorkflowsDescribeTheReleaseFromTheChangelog`: neither `release.yml` nor `release-chart.yml` contains `--generate-notes`; each runs `tools/release-notes.sh` for its own component and the tag's version into `$RUNNER_TEMP/release-notes.md` before `go test ./...` or `helm lint`, and its `gh release create` passes `--notes-file "$RUNNER_TEMP/release-notes.md"`; in `release.yml` the rerun branch follows `gh release upload` with `gh release edit --notes-file`.
 
+## 34.233 Words taken as the schemas write them, every problem of a block, pagination size 0, Accept-Encoding read in place, and Unix sockets
+
+- `TestAcceptsGzipSaysWhatSplittingTheHeaderSaid` and `FuzzAcceptsGzipSaysWhatSplittingTheHeaderSaid`: `Accept-Encoding` read where it lies says of some 60,000 headers of one, two and three parts — `gzip`, `x-gzip`, `*`, `identity` and others in any case, with blanks, empty parts, qualities of zero, of numbers written in other ways and of no number, parameters that are not `q`, and letters that lower-case or fold to ASCII ones — and of every fuzzed header what splitting it into its parts said.
+- `TestReadingAcceptEncodingAllocatesNothing`: reading an `Accept-Encoding` of several codings and parameters, in upper case, with `*`, `identity` and qualities, allocates nothing; splitting it allocated on every request.
+- `TestCountingAnAnswerSentAsItIsAllocatesNothing`: at level 1, to a client whose `Accept-Encoding` names four codings and gzip with `q=0`, the answer allocates no more than the handler and the `Vary` header; with the header split it allocated twice more.
+- `TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType`: `size: 0` beside `offset`, with `start: 0` too, and beside `page`, `link` and `cursor` is taken by both, the schema having refused it under its minimum of 1; `size: -1` is refused by both.
+- `TestPaginationValidation`: a negative `size` is refused saying 0, as the key left out, moves the offset on by the items each page holds.
+- `TestEveryProblemOfABlockThatChecksItsOwnKeysIsSaid`: a collector's one-line `cache` of two unknown keys and three values of the wrong kind, a `cache` over five lines, a one-line `request.tls` and `failure_backoff` of two unknown keys and two or three such values, the defaults' `cache`, `failure_backoff` and `request.tls` together, and a static target's `request` of two unknown keys and two such values each say every problem in the order of the file, and then the unknown key of the collector or target after them; a `cache: 5m` and a `failure_backoff: true` are said with that unknown key; each block stopped at its first unknown key, and the cache's and the backoff's ended the reading of the file.
+- `TestTheRepositorysYAMLFilesGiveTheKeyChecksWhatTheyGave` and `TestGeneratedDocumentsWithoutAnAliasKeyGiveTheKeyChecksWhatTheyGave`: a cache block and a static target's request give the problems the check before keys were read through `KeyName` gives, each of them now, compared without their order.
+- `TestSchemaAndExporterAgreeOnTheSpellingOfAKeysWords`: `request.type` written `HTTP`, `Http`, `' http'` and `'http '`, `transform.type` `JQ`, `Jq` and `' jq'`, `decoder.type` `JSON`, `Auto`, `' json'` and `'auto '`, each of the three `error_handling` policies `LOG`, `Fail`, `IGNORE`, `' log'` and `'log '`, the defaults' `on_fetch_error` `LOG` and `' log'`, a rule's `error_mode` `FAIL`, `Log` and `' ignore '`, `request.pagination.type` `PAGE`, `Page` and `' page'`, `response.graphite.value` `MAX`, `Last` and `' max'`, `invalid_lines` `SKIP`, `Fail` and `'skip '`, and `request.method` `Get`, `pOST`, `' GET'` and `'get '` are refused by both, where the exporter took each; the same keys in lower case, and `request.method` `GET`, `get`, `POST`, `post`, `HEAD` and `head`, are taken by both.
+- `TestSchemaAndExporterAgreeOnTheSpellingOfAStaticTargetsMethod`: a static target's `method` of `GET`, `get`, `POST` and `post` is taken by both, the schema having refused it in lower case, and `Get`, `pOST`, `' GET'` and `'get '` are refused by both, where the exporter took them.
+- `TestSchemaAndExporterAgreeOnTheSpellingOfDescriptors`: in a build with `grpc`, `request.descriptors` written `REFLECTION`, `Reflection`, `' reflection'` and `'reflection '` is refused by both, where the exporter took it, and `reflection` is taken by both.
+- `TestSchemaAndExporterOnKeysWrittenAsBlanks`: `transform.type` and `decoder.type` written as blanks are refused by both as an unknown transform and decoder; the exporter took a decoder of blanks as the default, which the schema alone refused.
+- `TestRequestTypeIsTakenAsWritten`: `HTTP`, ` Http `, `http ` and `Http` are refused saying a type is written in lower case and without blanks around it, `http`; `SOAP` is refused as unsupported, listing the types.
+- `TestErrorPolicyVocabulary`: `LOG`, `Fail`, ` log ` and `ignore` followed by a tab, at each of the three `error_handling` policies and a rule's `error_mode`, are refused naming fail, log and ignore, in lower case.
+- `TestGraphiteDecoderSettings`: `response.graphite.value` written `MAX` or ` max `, and `invalid_lines` written `Skip` or `skip `, are refused naming the values taken; `max` and `skip` are taken.
+- `TestPaginationValidation`: `request.pagination.type` written ` Offset `, `OFFSET` or `offset ` is refused naming the five types, in lower case.
+- `TestTheFilesStampedBeforeTheValidationAreTheValidatedConfigurations` and `TestReadFilesTakesTheTypeAsItIsWritten`: a `grpc` collector whose `request.type` is written `GRPC` or `' grpc '`, or whose `descriptors` is written `PROTO` or `' proto '`, is refused at load, and a type so written has no files stamped or read before the validation; written in lower case, the files are those of the validated configuration.
+- An `http` collector with `request.unix_socket` sends its request over the
+  socket, a real Unix socket server in a temporary directory, with the URL's
+  host and port as `Host`, the URL's path joined with `request.path`, the
+  target's query and `request.query`, `request.headers` and its basic
+  credentials; the host is not looked up and the environment's proxy is
+  asked nothing (`TestARequestGoesOverTheCollectorsUnixSocket`).
+- An `https` URL is asked over the socket with TLS, the URL's host being the
+  server name and the certificate verified by `tls.ca_file`, and a
+  certificate for another name is refused
+  (`TestAnHTTPSRequestGoesOverTheUnixSocketWithTLS`).
+- Two collectors with different sockets each reach their own over two
+  rounds, and a collector without a socket gets a pool of its own: three
+  pools; the test fails when the socket is left out of the pool's key
+  (`TestCollectorsWithDifferentUnixSocketsShareNoConnection`).
+- A collector's login goes over its socket, with the login URL's host as
+  `Host`, before its request (`TestALoginGoesOverTheCollectorsUnixSocket`).
+- Over a socket, a denied name, an address in a denied network and the cloud
+  metadata address are refused, and so are a name `allowed_targets` does not
+  list and a name when the list holds networks only, the socket asked
+  nothing; an allowed name, an allowed address, a name with only denied
+  networks, which is not looked up, and no lists reach it
+  (`TestTheTargetPolicyAppliesToTheHostOverAUnixSocket`).
+- A socket that does not exist fails the request with its path in the error
+  the log has, and the probe's caller is told it withheld, with the host it
+  named (`TestTheCallerIsNotToldTheUnixSocketsPath`).
+- `request.unix_socket` of nothing but blanks, relative, with a placeholder,
+  with a line break, or beside `proxy_url` (`direct` included) or proxy
+  credentials is refused by the validation, and `""` and absolute paths
+  pass (`TestAUnixSocketIsCheckedWhenItLoads`).
+- A probe's `unix_socket` parameter changes nothing: the request goes to the
+  configured socket and the one the parameter names is asked nothing
+  (`TestAProbeCannotChooseTheUnixSocket`).
+- Loading a configuration refuses `unix_socket` of blanks, relative, beside
+  `proxy_url`, on a `dns` collector and in `defaults.request`, and keeps an
+  absolute one (`TestAUnixSocketIsRefusedWhenTheConfigurationLoads`).
+- A collector with a socket takes neither `proxy_url` nor
+  `proxy_basic_auth_file` from its file's `defaults`, which another collector
+  takes, and a defaults proxy only such a collector would take is refused,
+  saying it sends its requests to its socket
+  (`TestACollectorOnAUnixSocketTakesNoProxyFromTheDefaults`).
+- The schema and the exporter agree on `collectors[].request.unix_socket`:
+  left out, `""`, an absolute path taken, a relative path and blanks refused
+  (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty` rows in
+  `test/repository/schemakeys_http_test.go`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -32000,7 +32075,8 @@ Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
 `server_name`, a static target's own `tls` block being its set — HTTP/2
-choice and proxy (`request.proxy_url` and its credentials' files, below), shared by every collector and scrape that uses the same set, rather
+choice, proxy (`request.proxy_url` and its credentials' files, below) and
+Unix socket (`request.unix_socket`, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
 closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
@@ -32048,6 +32124,27 @@ parameter and no static target MAY set it. A `CONNECT` the proxy answers
 other than `200` MUST fail as the proxy's refusal, naming the target and the
 proxy's status (`the proxy refused the tunnel to api.example:443: 403
 Forbidden`), the environment's proxy and a collector's alike.
+
+An `http` collector MAY name a Unix domain socket, `request.unix_socket`,
+over which every request of the collector — its retries, pages, followed
+redirects and login included, whatever host each names — MUST then be sent in
+place of a TCP connection to the URL's host, as `curl --unix-socket` sends
+it. The URL's host MUST still be the `Host` header and, for an `https` URL,
+the TLS server name, the handshake being made over the socket with the
+collector's `tls` block; its path and query MUST be the request's as without
+the socket. The host MUST NOT be looked up or dialed. No proxy, the
+environment's included, MUST apply to such a collector. The socket MUST be
+an absolute path; one of nothing but blanks, a relative one, one with a
+placeholder or a control character, and one beside `proxy_url` or
+`proxy_basic_auth_file` MUST be refused when the configuration loads, and
+`""` MUST be the key left out, by the exporter and the schema alike. The
+socket MUST be part of the pool's settings, so collectors with different
+sockets never share a connection, and none shares one with a collector
+that dials TCP. The socket is configuration: no probe parameter, no static
+target and no `defaults` block MAY set it, and its path MUST NOT be held to
+`allowed_targets` and `denied_targets` (§ 26.1). A failure to reach it MUST
+name its path in the exporter's log, and the path MUST be withheld from a
+probe's caller (§ 25).
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

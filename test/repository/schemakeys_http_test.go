@@ -217,6 +217,10 @@ func httpSchemaKeys() []schemaKey {
 		// by, and take "", the environment's proxy, as the key left out.
 		{key: "collectors[].request.proxy_url", document: jqCollector, at: request, setting: "      proxy_url: %s\n", valid: "http://proxy.example:3128", invalid: "ftp://proxy.example", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.proxy_url", of: "with its scheme in capitals", document: jqCollector, at: request, setting: "      proxy_url: %s\n", valid: "HTTP://proxy.example:3128", invalid: "FTP://proxy.example", absent: true, empty: true, emptyWas: refused},
+		// A collector's Unix socket: both refuse a relative path, and take
+		// "" as the key left out.
+		{key: "collectors[].request.unix_socket", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/var/run/docker.sock", invalid: "var/run/docker.sock", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.unix_socket", of: "of nothing but blanks", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/run/php/php-fpm.sock", invalid: `"  "`, absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
 		// An entry of include or exclude is a regular expression: both
 		// refuse the empty one, which matches every name, and one of

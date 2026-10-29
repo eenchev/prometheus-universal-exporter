@@ -658,7 +658,7 @@ func TestDryRunTakesAStatusWrittenAsANumberOfAnySpelling(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 	out := runCheckCLI(t, "--config.file="+accepting("503.5"))
-	if result := out.result(t, "config"); out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "tolerant" request.accept_status entry "503.5" is not an HTTP status from 100 to 599 or a class such as 2xx`) {
+	if result := out.result(t, "config"); out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "tolerant" request.accept_status entry "503.5" is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx`) {
 		t.Fatalf("accept_status: [503.5]: exit=%d config=%+v", out.code, result)
 	}
 }

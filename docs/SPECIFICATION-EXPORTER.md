@@ -1013,7 +1013,7 @@ and the source MUST list the opt-in types.
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
-| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
+| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
@@ -8989,7 +8989,10 @@ or lower case; any other spelling MUST be refused at load naming the values
 taken. A key whose values the exporter matches in any case, as a standard or
 its own documentation has them — `request.driver`, `request.record_type`, a
 header name, an `allowed_schemes` entry, a gRPC status code of
-`retry.codes` — MUST be taken in any case by the schemas too.
+`retry.codes` or `accept_codes` — MUST be taken in any case by the schemas
+too, and the schemas MUST refuse what the exporter refuses there: a gRPC
+status code's entry that names no code, or `OK`, MUST be refused by the
+schemas' pattern as by the load.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads free text, since YAML reads `expression: 1`
@@ -13464,8 +13467,8 @@ Tests MUST show:
   apart or together, the targets in force name a collector the configuration
   in force has; a file reloaded alone keeps the other of the pair, and
   without a target file the pair is the configuration alone.
-- A static target's `accept_status` is trimmed and written in lower case,
-  and a `grpc` target's `accept_codes` and `retry.codes` in upper case, when
+- A static target's `accept_status` is written in lower case, a class such
+  as `5XX` becoming `5xx`, and a `grpc` target's `accept_codes` and `retry.codes` in upper case, when
   the file is validated on its own; the check against the configuration
   leaves a file not written so exactly as it is, and still refuses an entry
   that is no status or code.
@@ -23403,13 +23406,15 @@ Found by the review of these, and fixed:
   collector file and the static target file, and a probe of a collector and
   a scrape of a static target decode a 503 answer with it; `'-503'` and
   `'0700'` are refused naming the entry as written; a static target's
-  statuses merged in with `<<` are read as written out.
+  statuses merged in with `<<` are read as written out. (§ 34.235 replaced this: such quoted text is now refused, as the
+  schemas refuse it.)
 - `normalizeAcceptStatus` and `NormalizeTargetRequest` write a status with a
   sign or leading zeros by its digits alone, which `AcceptedStatus` then
   accepts; over 20,000 generated lists (4,000 under the race detector) of
   digits, signs, blanks, points, letters and classes they take, refuse and
   write every other entry as the code before, kept as the oracle, and stop
-  at the entry refused.
+  at the entry refused. (§ 34.235 replaced this test with one whose oracle is the
+  schemas' pattern.)
 - A rule's label and a `transform.labels` key of 201 bytes load when
   `transform.rename_labels` renames them or `transform.remove_labels`
   removes them, and the probe serves the renamed label (`n{short="v"} 1`) or

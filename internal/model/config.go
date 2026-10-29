@@ -428,6 +428,17 @@ var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCurs
 // that takes the key.
 var StartTLSProtocols = []string{"smtp", "imap", "pop3", "ftp"}
 
+// GRPCCodeNames are the gRPC status codes by number, as a configuration
+// names them in request.retry.codes and accept_codes, in any case. They
+// are here, apart from the grpc request type, for the schemas of every
+// build to name them.
+var GRPCCodeNames = []string{
+	"OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED",
+	"NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED",
+	"FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED",
+	"INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED",
+}
+
 // RetryConfig is request.retry: how often a failed request is tried again,
 // and how long to wait before each attempt.
 type RetryConfig struct {

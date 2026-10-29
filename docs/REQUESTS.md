@@ -1335,8 +1335,9 @@ Listing statuses replaces the default, so write `2xx` to keep the successful
 ones. A status written as a number is the status YAML reads it as, however it
 is written: `503.0`, `5.03e2`, `0x1F7`, `+503` and `0503` are all 503, as they
 are to the [schema](CONFIGURATION.md#editor-support). In quotes it is text,
-the digits of a status or a class: `"503"`, and `"0503"` and `"+503"`, which
-are 503 too though the schema flags them, while `"503.0"` is refused, and so are a number
+held to what the schema takes: a status's three digits, `"503"`, or a class,
+`"5xx"` or `"5XX"`. Text with a sign, leading zeros or blanks, `"+503"`,
+`"0503"` or `" 503 "`, is refused, as `"503.0"` is, and so are a number
 with a fraction, such as `503.5`, and one outside 100 to 599, such as `6e2`,
 naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries), and an entry of `retry.statuses` that is accepted whole is refused. jq and yq rules read the
 status as `$status` and the headers as `$headers`, an object of lower-case

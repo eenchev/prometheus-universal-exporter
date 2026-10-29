@@ -1350,34 +1350,33 @@ func validateAcceptStatus(c *model.Collector) error {
 
 // normalizeAcceptStatus writes each entry as AcceptedStatus compares it
 // (canonicalStatus), in place, and refuses one that is not a status from 100
-// to 599 or a class such as 2xx.
+// to 599 written with its three digits or a class such as 2xx: what the
+// schemas' pattern takes, ^[1-5][xX][xX]$|^[1-5][0-9][0-9]$, and no more. A
+// status written as a number in YAML reaches it as its three digits
+// (wholeNumberText in internal/config), however YAML wrote the number; text
+// with a sign, leading zeros or blanks, "+503", "0503" or " 503 ", which
+// the schemas refuse, is refused, so that a file the exporter takes is one
+// an editor's schema check takes too.
 func normalizeAcceptStatus(entries []string) error {
 	for i, raw := range entries {
 		entry := canonicalStatus(raw)
 		entries[i] = entry
-		if len(entry) == 3 && entry[1:] == "xx" && entry[0] >= '1' && entry[0] <= '5' {
+		if len(entry) == 3 && entry[0] >= '1' && entry[0] <= '5' && (entry[1:] == "xx" || isDigit(entry[1]) && isDigit(entry[2])) {
 			continue
 		}
-		if code, err := strconv.Atoi(entry); err == nil && code >= 100 && code <= 599 {
-			continue
-		}
-		return fmt.Errorf("entry %q is not an HTTP status from 100 to 599 or a class such as 2xx", raw)
+		return fmt.Errorf("entry %q is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx", raw)
 	}
 	return nil
 }
 
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
 // canonicalStatus is an entry of request.accept_status as AcceptedStatus
-// compares it with a status: in lower case without the blanks around it,
-// and, where it is a status written with a sign or leading zeros, "+503" or
-// "0503", which the load takes as the status it reads, as the status is
-// written, 503, so that it matches the status it was taken for. Any other
-// entry is left as it is, for the load to refuse in its own words.
+// compares it with a status: a class in lower case, 5xx for 5XX, which the
+// schemas take in either case. Any other entry is left as it is, for the
+// load to take or refuse.
 func canonicalStatus(raw string) string {
-	entry := strings.ToLower(strings.TrimSpace(raw))
-	if code, err := strconv.Atoi(entry); err == nil && code >= 100 && code <= 599 {
-		return strconv.Itoa(code)
-	}
-	return entry
+	return strings.ToLower(raw)
 }
 
 // AcceptedStatus says whether a response with status is decoded: one of

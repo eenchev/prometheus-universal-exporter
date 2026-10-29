@@ -3642,10 +3642,10 @@ refuses however small, though a schema, handed the floating-point number,
 takes `1.00000000000000000001` for 1. An entry of `request.accept_status`,
 and one of `request.retry.statuses`, is a status written as a number or as text: a number is the status it is
 however it is written — `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and
-`0503` are 503 — to both; text is text, the digits of a status or a class,
-so `"503.0"` is refused by both. In quotes, digits with a sign or leading
-zeros, `"0503"` or `"+503"`, are the status they read as to the exporter, and
-text that is no status to an editor, which flags them. The few more spellings the exporter's
+`0503` are 503 — to both; text is text, a status's three digits or a class
+such as `2xx` or `5XX`, as the schemas' pattern has it, so `"503.0"`,
+`"0503"`, `"+503"` and `" 503 "` are refused by both, the exporter naming
+the form an entry takes. The few more spellings the exporter's
 reader takes for a number, `5_03` and `0b111110111` among them, are 503 to
 the exporter, and text that is no status to an editor, which reads YAML 1.2.
 

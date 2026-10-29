@@ -33,6 +33,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   one otherwise is refused, naming the words taken: write them in lower case.
   The static target file's schema now takes a `method` in lower case, as the
   exporter does.
+- An entry of `accept_status` or `retry.statuses` written in quotes is taken
+  only as the schemas take it: a status's three digits (`"503"`) or a class
+  (`"5xx"`). Text with a sign, leading zeros or blanks, such as `"+503"`,
+  `"0503"` or `" 503 "`, is refused when the configuration loads; write
+  `503`. An unquoted number is read as before.
+- The schemas refuse an entry of a `grpc` collector's or target's
+  `retry.codes` and `accept_codes` that names no gRPC status code, or `OK`,
+  as the exporter does, so an editor now marks it.
 - `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.

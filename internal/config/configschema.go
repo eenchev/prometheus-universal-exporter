@@ -225,6 +225,11 @@ func durationSchema() map[string]any {
 // is to the exporter the key left out when it is written "": name_escaping:
 // "" is the default, as name_escaping left out is. The schemas say the same
 // in one form each, so that an editor does not flag what the exporter takes:
+// grpcCodePattern is what an entry of retry.codes and accept_codes takes: a
+// gRPC status code's name other than OK, in any case and with blanks around
+// it or not, as the exporter matches it.
+var grpcCodePattern = fetch.SchemaCaselessOneOf(model.GRPCCodeNames[1:]...)
+
 // optionalEnum is the values and "", and optionalPattern the pattern or
 // nothing at all. A key the exporter requires, such as transform.type, has
 // neither: written "", it is as missing as left out, to both.
@@ -629,7 +634,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
 		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
 		"collectors[].request.retry.retry_after":    {"description": "http and graphite: wait what a retried answer's Retry-After header asks for, seconds or an HTTP date, instead of backoff. A value that is neither falls back to backoff; one longer than the probe's time left ends the request at once with that answer. Off by default: the header is not read."},
-		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
+		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string", "pattern": grpcCodePattern}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
 		"collectors[].request.retry.statuses":       {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: the HTTP statuses that are retried, written as accept_status is, such as [404, 503] or [\"5xx\", 429]. Defaults to [408, 425, 429, \"5xx\"]; a list replaces the default, and [] retries no status, while a failed connection is retried still. An entry accept_status accepts whole is refused."},
 		"collectors[].response.graphite.value": {
 			"enum":        optionalEnum(model.GraphiteValues),
@@ -1070,9 +1075,9 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.rate_limit.requests_per_second":  {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0."},
 		"targets[].request.rate_limit.burst":                {"minimum": 1, "description": "How many requests may be sent at once after a pause. 1 when left out."},
 		"targets[].request.accept_status":                   {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: replaces the collector's request.accept_status for this target."},
-		"targets[].request.accept_codes":                    {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.accept_codes for this target."},
+		"targets[].request.accept_codes":                    {"items": map[string]any{"type": "string", "pattern": grpcCodePattern}, "description": "grpc: replaces the collector's request.accept_codes for this target."},
 		"targets[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10."},
-		"targets[].request.retry.codes":                     {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.retry.codes for this target."},
+		"targets[].request.retry.codes":                     {"items": map[string]any{"type": "string", "pattern": grpcCodePattern}, "description": "grpc: replaces the collector's request.retry.codes for this target."},
 		"targets[].request.retry.statuses":                  {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: replaces the collector's request.retry.statuses for this target."},
 		"targets[].request.retry":                           {"description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's."},
 		"targets[].request.retry.retry_after":               {"description": "http and graphite: replaces the collector's request.retry.retry_after for this target."},

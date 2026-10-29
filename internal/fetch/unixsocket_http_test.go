@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -303,6 +305,30 @@ func TestAUnixSocketIsCheckedWhenItLoads(t *testing.T) {
 		if err := ValidateRequest(&collector); err != nil {
 			t.Errorf("%q: %v", accepted, err)
 		}
+	}
+}
+
+// A request.unix_socket longer than the system's socket addresses hold is
+// refused when the configuration loads, naming its length and the limit:
+// it loaded, and every request then failed when it dialed. A path of the
+// limit's length is taken, and one a byte longer is refused; on Linux the
+// limit is 107 bytes, sun_path's 108 less the NUL, and on macOS 103.
+func TestAUnixSocketPathTooLongIsRefusedWhenItLoads(t *testing.T) {
+	want := map[string]int{"linux": 107, "darwin": 103, "freebsd": 103, "netbsd": 103, "openbsd": 103, "dragonfly": 103}
+	if limit, known := want[runtime.GOOS]; known && maxUnixSocketPath != limit {
+		t.Fatalf("the limit on %s is %d, want %d", runtime.GOOS, maxUnixSocketPath, limit)
+	}
+	path := func(n int) string { return "/" + strings.Repeat("s", n-1) }
+	at := testutil.Collector("api", "text")
+	at.Request.Own = HTTPConfig{UnixSocket: path(maxUnixSocketPath)}
+	if err := ValidateRequest(&at); err != nil {
+		t.Fatalf("a path of %d bytes: %v", maxUnixSocketPath, err)
+	}
+	over := testutil.Collector("api", "text")
+	over.Request.Own = HTTPConfig{UnixSocket: path(maxUnixSocketPath + 1)}
+	message := fmt.Sprintf(`collector "api" request.unix_socket is %d bytes long, and a Unix socket's path may be at most %d bytes on %s`, maxUnixSocketPath+1, maxUnixSocketPath, runtime.GOOS)
+	if err := ValidateRequest(&over); err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("a path of %d bytes: %v, want %q", maxUnixSocketPath+1, err, message)
 	}
 }
 

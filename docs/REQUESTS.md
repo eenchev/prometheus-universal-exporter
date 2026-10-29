@@ -1080,7 +1080,12 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
 
 - **`unix_socket`** is the absolute path of the socket. A relative path, one
   of nothing but blanks, one with a placeholder or a control character are
-  refused when the configuration loads; `""` is the key left out. It is the
+  refused when the configuration loads; `""` is the key left out. So is a
+  path longer than the system's socket addresses hold, 107 bytes on Linux
+  and 103 on macOS, which could never be connected to; the message gives its
+  length and the limit. The schema leaves the length to the exporter, since
+  it differs from system to system. Linux's abstract sockets, written with a
+  leading `@`, are not absolute paths and are refused. It is the
   `http` type's alone: another type's collector that sets it is refused, as
   any key of another type is.
 - **The URL keeps its meaning**: its host is the `Host` header, its path and

@@ -32196,7 +32196,12 @@ environment's included, MUST apply to such a collector. The socket MUST be
 an absolute path; one of nothing but blanks, a relative one, one with a
 placeholder or a control character, and one beside `proxy_url` or
 `proxy_basic_auth_file` MUST be refused when the configuration loads, and
-`""` MUST be the key left out, by the exporter and the schema alike. The
+`""` MUST be the key left out, by the exporter and the schema alike. A path
+longer than the `sun_path` of the system the exporter runs on holds, less
+its closing NUL — 107 bytes on Linux, 103 on macOS and the BSDs — MUST be
+refused when the configuration loads, by the exporter alone, with a message
+giving the path's length and the limit; the schema MUST NOT bound the
+length, which no one value would state for every system. The
 socket MUST be part of the pool's settings, so collectors with different
 sockets never share a connection, and none shares one with a collector
 that dials TCP. The socket is configuration: no probe parameter, no static

@@ -60,7 +60,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `request.unix_socket` sends an `http` collector's requests over a Unix
   domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
   socket, as `curl --unix-socket` does; the URL's host is still the `Host`
-  header.
+  header. A path longer than the system allows (107 bytes on Linux, 103 on
+  macOS) is refused when the configuration loads.
 
 ### Fixed
 

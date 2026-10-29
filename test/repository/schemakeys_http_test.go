@@ -4,6 +4,7 @@ package repository
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -427,6 +428,26 @@ func defaultsSchemaKeys(rows []schemaKey, collector, request string) []schemaKey
 // size key takes a whole number of bytes however YAML writes the number.
 func TestSchemaAndExporterAgreeOnKeysWrittenEmpty(t *testing.T) {
 	checkSchemaKeys(t, httpSchemaKeys())
+}
+
+// request.unix_socket is held to the length a socket's path may have on the
+// system the exporter runs on by the exporter alone: 107 bytes on Linux and
+// 103 on macOS and the BSDs, which no one maxLength of the schema could say
+// for both. A path of the limit's length is taken by both, and one a byte
+// longer is past the schema and refused by the exporter, naming its length
+// and the limit; it loaded, and every request failed when it dialed.
+func TestTheExporterAloneHoldsAUnixSocketToTheSystemsLength(t *testing.T) {
+	limit, known := map[string]int{"linux": 107, "darwin": 103, "freebsd": 103, "netbsd": 103, "openbsd": 103, "dragonfly": 103}[runtime.GOOS]
+	if !known {
+		t.Skipf("no known limit on %s", runtime.GOOS)
+	}
+	schema := loadSchema(t)
+	socket := func(n int) string {
+		return strings.Replace(jqCollector, "      # request\n", "      unix_socket: /"+strings.Repeat("s", n-1)+"\n", 1)
+	}
+	agree(t, schema, fmt.Sprintf("unix_socket of %d bytes", limit), socket(limit), true)
+	loadersAlone(t, schema, fmt.Sprintf("unix_socket of %d bytes", limit+1), socket(limit+1),
+		fmt.Sprintf("request.unix_socket is %d bytes long, and a Unix socket's path may be at most %d bytes on %s", limit+1, limit, runtime.GOOS))
 }
 
 // A rule about a key being written goes by the key being written, not by

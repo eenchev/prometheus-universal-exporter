@@ -29195,6 +29195,44 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty` rows in
   `test/repository/schemakeys_http_test.go`).
 
+## 34.234 The exporter's own health check, the image's HEALTHCHECK and the chart's exec probes
+
+- `--healthcheck`, `--healthcheck=ready` and `--healthcheck=health` against a
+  real exporter on 127.0.0.1 that is ready exit 0 with nothing on stdout or
+  stderr, also with a `--config.file` and `--static-targets-file` that do not
+  exist, since the check reads no file.
+- An exporter that is shutting down fails `--healthcheck` with exit 1 and one
+  JSON line naming the URL, status 503 and `not ready: the exporter is
+  shutting down`, and passes `--healthcheck=health`.
+- With nothing listening at the address `--healthcheck` exits 1 with one line
+  whose error says the connection was refused.
+- A server that never answers fails the check with `no answer within` the
+  timeout (shortened by the test).
+- An exporter with `web.basic_auth` on, whose `/collectors` answers 401
+  without credentials, passes `--healthcheck` and `--healthcheck=health`
+  without them.
+- The URL asked is `127.0.0.1` for an empty host, `0.0.0.0` and an
+  IPv4-mapped wildcard, `[::1]` for `[::]`, and the host as written for an
+  address or a name; `:<port>` and `0.0.0.0:<port>` reach a real exporter on
+  127.0.0.1.
+- `--healthcheck=live`, `--healthcheck=/ready` and `--healthcheck health`
+  exit 2, the first two saying the value is not an endpoint, the last naming
+  the unexpected argument.
+- The Dockerfile has a `HEALTHCHECK` in exec form running
+  `/bin/prometheus-universal-exporter --healthcheck` at the
+  `--web.listen-address` of its `CMD`, and that binary is the entrypoint.
+- The chart's probes `GET /health` and `/ready` on the `http` port by
+  default and run nothing; with `healthProbes.mode: exec` both run
+  `/bin/prometheus-universal-exporter --healthcheck=health|ready` with the
+  container's `--web.listen-address` (default, another, `[::]`, and with the
+  allocator, whose own container is not taken), no `httpGet`, and the
+  timings from the values; the exporter's help lists `--healthcheck`.
+- `healthProbes.mode: tcp` is refused by the values schema, and with the
+  schema skipped by the templates with `healthProbes.mode "tcp" must be http
+  or exec`.
+- A server answering `302` to the ready exporter's `/ready` fails the check
+  with status 302: the redirect is not followed.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

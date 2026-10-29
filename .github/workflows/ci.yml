@@ -238,6 +238,10 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
         if: steps.changes.outputs.chart == 'true'
+      - name: Render the health probes as the exporter's own health check
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          helm template test charts/prometheus-universal-exporter --set healthProbes.mode=exec | grep -q -- '--healthcheck=ready'
       - name: Render the shutdown delay and timeout, their grace period and the exporter credential Secret
         if: steps.changes.outputs.chart == 'true'
         run: |

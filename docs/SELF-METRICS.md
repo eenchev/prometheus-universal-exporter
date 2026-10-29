@@ -450,7 +450,10 @@ whose body `net/http` then leaves out, or a `204` or `304` — adds the same to
 both. A compressed answer adds gzip's own header and trailer to the bytes
 sent, so one with a status and no body adds a few bytes sent and none
 written. An answer is counted when it is done, so the self-metrics
-show the bytes of their own answers from the next one on. All three series of
+show the bytes of their own answers from the next one on. Counting costs an
+answer no allocation: the writer that counts an answer sent uncompressed is
+reused from one answer to the next, and a compressed answer is counted in
+the writer that compresses it. All three series of
 each counter are there from the start, at `0`, also without static targets,
 so a rate can be taken from the first scrape.
 

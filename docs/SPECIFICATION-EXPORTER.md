@@ -7558,7 +7558,10 @@ cut short MUST count what the writer it was written to took. They MUST be
 counted in the middleware that compresses the answers, with no lock taken
 for a write, and an answer added to them once, when it is done, so that an
 answer of the self-metrics never holds its own bytes and the next answer
-holds them exactly. They MUST be exported over OTLP as every other
+holds them exactly. Counting an answer sent uncompressed MUST allocate
+nothing: the writer that counts it MUST be reused from answer to answer, not
+made for each, and a test MUST hold an uncompressed answer through the
+middleware to what it allocates without the counting. They MUST be exported over OTLP as every other
 self-metric.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in

@@ -85,12 +85,18 @@ type answerCompression struct {
 	// level is from 1 to 9, or 0 for answers sent as they are.
 	level   int
 	writers sync.Pool
+	// counting are the writers that count the bytes of an answer sent as
+	// it is (countingResponseWriter), pooled too: one made for every such
+	// answer was an allocation of every scrape that compressing nothing
+	// did not otherwise make.
+	counting sync.Pool
 }
 
 // newAnswerCompression makes the compression of --web.gzip-level, which
 // ValidateGzipLevel has accepted.
 func newAnswerCompression(level int) *answerCompression {
 	c := &answerCompression{level: level}
+	c.counting.New = func() any { return new(countingResponseWriter) }
 	c.writers.New = func() any {
 		gz, err := gzip.NewWriterLevel(nil, level)
 		if err != nil {
@@ -169,7 +175,8 @@ func (w *gzipResponseWriter) Write(p []byte) (int, error) {
 }
 
 // countingResponseWriter counts what a handler writes to an answer sent as
-// it is.
+// it is. It is taken from answerCompression.counting for the answer and
+// given back once the answer is counted, the handler having returned.
 type countingResponseWriter struct {
 	http.ResponseWriter
 	n int64
@@ -198,8 +205,15 @@ func (w *countingResponseWriter) Unwrap() http.ResponseWriter { return w.Respons
 // one.
 func (c *answerCompression) wrap(counter *answerCounter, next http.HandlerFunc) http.HandlerFunc {
 	plain := func(w http.ResponseWriter, r *http.Request) {
-		cw := &countingResponseWriter{ResponseWriter: w}
-		defer func() { counter.add(cw.n, cw.n) }()
+		cw := c.counting.Get().(*countingResponseWriter)
+		cw.ResponseWriter, cw.n = w, 0
+		defer func() {
+			counter.add(cw.n, cw.n)
+			// Given back without the answer's writer, which the pool
+			// would otherwise keep alive.
+			*cw = countingResponseWriter{}
+			c.counting.Put(cw)
+		}()
 		next(cw, r)
 	}
 	if c.level == 0 {

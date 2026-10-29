@@ -10112,7 +10112,13 @@ The steps MUST be:
   `rate_limit` with its `burst` filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
-  (§ 42.6a);
+  (§ 42.6a); every collector whose type takes `proxy_url` (`http`,
+  `graphite`) MUST be listed there with how it connects: `unix_socket`, the
+  socket's path, when it sets one, and else `proxy`, the proxy in force —
+  its `proxy_url`, its own or from its file's `defaults`, `direct`, or
+  `environment` when it names none — with `proxy_basic_auth_file`'s paths
+  and never the contents of its files; the environment's proxy settings
+  MUST NOT be printed, since a proxy URL there may hold credentials;
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check; the metric
   lint's findings on the configuration (§ 30.1a) are listed under
@@ -29237,6 +29243,63 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   or exec`.
 - A server answering `302` to the ready exporter's `/ready` fails the check
   with status 302: the redirect is not followed.
+
+## 34.235 Status lists held to the schemas, a Unix socket's length, and how --dry-run says a collector connects
+
+- `normalizeAcceptStatus` refuses `"0503"`, `"+503"`, `" 503 "`, `"503 "`,
+  `"+0200"`, `" 2xx"` and a status with a tab or a line break, naming the
+  entry and the form an entry takes (`written with its three digits, such as
+  503, or a class such as 2xx`), for a collector's `accept_status` and
+  `retry.statuses` and a static target's `accept_status`, and takes `503`,
+  `2XX` and `4xX`, the classes in lower case
+  (`TestAStatusWithASignLeadingZerosOrBlanksIsRefused`).
+- Over 20,000 generated lists (4,000 under the race detector) of digits,
+  signs, blanks, tabs, points, letters and classes, `normalizeAcceptStatus`
+  takes a list exactly when the schemas' pattern takes every entry, writes
+  the entries up to the one refused in lower case, and refuses the first
+  entry the pattern refuses in its words
+  (`TestAnAcceptStatusEntryIsTakenExactlyWhenTheSchemaTakesIt`).
+- Loading the configuration, a collector file and the static target file
+  refuses quoted `'+503'`, `"0503"`, `" 503 "`, `"503 "`, `" +0503 "`,
+  `"+0200"`, `" 2xx"` and `"5xx "` at `request.accept_status`, naming the
+  collector or the target and the entry, and takes `"503"`, `'2XX'` and
+  `"5xX"` (`TestANumberThatIsNoStatusIsRefusedAtRequestAcceptStatus`,
+  `TestAStatusWrittenAsANumberIsTheStatusItIsHoweverItIsWritten`).
+- The schemas and the exporter agree on quoted `accept_status` and
+  `retry.statuses` entries of a collector and a static target: `'503'` and
+  `'4XX'` taken by both, `'+503'`, `'0503'`, `' 503 '` and `'5xx '` refused
+  by both (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty` rows).
+- The schemas and the exporter agree on `grpc` `retry.codes` (a collector's,
+  the defaults' and a static target's) and `accept_codes` (a collector's and
+  a static target's): a code's name in any case and with blanks around it
+  (`UNAVAILABLE`, `' aborted'`, `Data_Loss`, `'not_found '`) taken by both,
+  and `UNAVAILABLY`, `'aborted x'`, `NOT-FOUND`, `NOPE`, `OK`, `ok` and
+  `' OK'` refused by both, where the schemas took any text
+  (`TestSchemaAndExporterAgreeOnGRPCKeysWrittenEmpty` rows;
+  `TestEveryConstrainedKeyOfTheSchemasIsInATable` requires them).
+- `retry.statuses` refuses `" 4xx"`, `"+0503"` and `"0429"` in
+  `accept_status`'s words, and writes `4XX` as `4xx`
+  (`TestRetryStatusesAreCheckedAsAcceptStatusIs`).
+- A `request.unix_socket` of the system's limit, `len(sun_path) - 1` (107
+  bytes on Linux, 103 on macOS and the BSDs, checked against
+  `runtime.GOOS`), is taken, and one a byte longer is refused when the
+  collector is validated with `request.unix_socket is 108 bytes long, and a
+  Unix socket's path may be at most 107 bytes on linux`
+  (`TestAUnixSocketPathTooLongIsRefusedWhenItLoads`).
+- The schema takes such a path and the loader alone refuses it, naming the
+  length and the limit, while one of the limit's length is taken by both
+  (`TestTheExporterAloneHoldsAUnixSocketToTheSystemsLength`).
+- `--dry-run` lists under `request_policies` an `http` collector's
+  `unix_socket` with no `proxy`, `proxy: http://proxy.example:3128` with the
+  paths of its `proxy_basic_auth_file`, `proxy: direct`, `proxy:
+  environment` for an `http` and a `graphite` collector that name none, and
+  the `socks5://` proxy a collector file's `defaults` gives a collector;
+  the contents of the credential files and the `HTTPS_PROXY` the test sets,
+  with its user and password, appear nowhere in the report
+  (`TestDryRunReportsHowACollectorConnects`).
+- A collector that sets no other request policy is listed with `proxy:
+  environment` alone (`TestDryRunReportsRequestPolicies`,
+  `TestDryRunReportsRetryStatuses`, `TestDryRunReportsRetryAfter`).
 
 # 35. Documentation requirements
 

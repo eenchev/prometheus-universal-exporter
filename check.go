@@ -178,10 +178,11 @@ func checkStartup(in checkInputs) checkReport {
 }
 
 // requestPolicy is what a collector's request lets through: the targets it
-// may and may not reach, the statuses it decodes and those it retries, and
-// whether a retry waits as the target's Retry-After asks, as they will be
-// applied, so a list that says less or more than meant shows
-// before it is deployed.
+// may and may not reach, the statuses it decodes and those it retries,
+// whether a retry waits as the target's Retry-After asks, and how it
+// connects, over a Unix socket or through which proxy, as they will be
+// applied, so a list that says less or more than meant, or a proxy taken
+// from where it was not meant to come from, shows before it is deployed.
 type requestPolicy struct {
 	AllowedTargets []string `json:"allowed_targets,omitempty"`
 	DeniedTargets  []string `json:"denied_targets,omitempty"`
@@ -208,6 +209,42 @@ type requestPolicy struct {
 	// RateLimit is request.rate_limit as it will be applied, its burst
 	// filled in: how fast the collector asks each origin of its targets.
 	RateLimit *model.RateLimitConfig `json:"rate_limit,omitempty"`
+	// UnixSocket is an http collector's request.unix_socket, which its
+	// requests are sent over in place of a TCP connection, and in place of
+	// any proxy, so Proxy is left out beside it.
+	UnixSocket string `json:"unix_socket,omitempty"`
+	// Proxy is how a collector whose requests may go through a proxy
+	// reaches its targets (requestProxy): the proxy_url in force, its own
+	// or its file's defaults', direct, or environment.
+	Proxy string `json:"proxy,omitempty"`
+	// ProxyBasicAuthFile is request.proxy_basic_auth_file: the files the
+	// proxy's credentials are read from, never what they hold, as a
+	// login's are shown.
+	ProxyBasicAuthFile *model.ProxyBasicAuthFile `json:"proxy_basic_auth_file,omitempty"`
+}
+
+// proxyFromEnvironment is requestPolicy.Proxy of a collector that names no
+// proxy: its requests go through the proxy HTTP_PROXY or HTTPS_PROXY names,
+// for the target's scheme, but to a host NO_PROXY lists, as the
+// environment says when the exporter starts (fetch's environmentProxy). The
+// environment's values are not shown: a proxy URL there may hold a
+// password, which --dry-run never prints.
+const proxyFromEnvironment = "environment"
+
+// requestProxy is requestPolicy.Proxy of c, which the transport goes by
+// (fetch.transportProxy): "" for a collector whose type takes no proxy or
+// that sends its requests to a Unix socket, proxyFromEnvironment for one
+// that names none, and else its proxy_url, direct or a proxy's URL, which
+// the load holds to a scheme, a host and a port without credentials, so it
+// is shown as written.
+func requestProxy(c *model.Collector, socket string) string {
+	if rt := fetch.RequestTypes[c.Request.Type]; rt == nil || !rt.Takes("proxy_url") || socket != "" {
+		return ""
+	}
+	if c.Request.ProxyURL == "" {
+		return proxyFromEnvironment
+	}
+	return c.Request.ProxyURL
 }
 
 // shownLogin is l as --dry-run shows it (requestPolicy.Login).
@@ -249,7 +286,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 			p.RetryStatuses = &retried
 		}
 		p.RetryAfter = c.Request.Retry.RetryAfter
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil || p.RateLimit != nil {
+		p.UnixSocket, p.Proxy, p.ProxyBasicAuthFile = own.UnixSocket, requestProxy(c, own.UnixSocket), c.Request.ProxyBasicAuthFile
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil || p.RateLimit != nil || p.UnixSocket != "" || p.Proxy != "" {
 			out[c.Name] = p
 		}
 	}

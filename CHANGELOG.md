@@ -62,6 +62,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   socket, as `curl --unix-socket` does; the URL's host is still the `Host`
   header. A path longer than the system allows (107 bytes on Linux, 103 on
   macOS) is refused when the configuration loads.
+- `--dry-run` lists how each `http` and `graphite` collector connects under
+  `request_policies`: its `unix_socket`, or the `proxy` in force — its
+  `proxy_url`, from its own request or its file's `defaults`, `direct`, or
+  `environment` when it follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` —
+  with the paths of `proxy_basic_auth_file`, never the credentials.
 
 ### Fixed
 

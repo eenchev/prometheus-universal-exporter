@@ -1026,6 +1026,12 @@ collectors:
   configuration's, and is not held to `allowed_targets` and `denied_targets`.
 - **Connections.** Collectors with different proxies, or different
   credentials for one, never share a connection ([Connections](#connections)).
+- **`--dry-run`** lists, for each `http` and `graphite` collector, the proxy
+  in force under `request_policies` as `proxy`: its `proxy_url`, its own or
+  its file's `defaults`', `direct`, or `environment` when it names none and
+  follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, with the files of
+  `proxy_basic_auth_file`, never what they hold. What the environment names
+  is not shown, since a proxy URL there may hold a password.
 - **Configuration only.** No probe parameter sets the proxy, and neither does
   a static target: a target behind another proxy is a collector of its own.
   A file's [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file)
@@ -1102,6 +1108,8 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
   `proxy_basic_auth_file` beside `unix_socket` are refused, the environment's
   proxy does not apply, and the collector takes neither from its file's
   [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file).
+  `--dry-run` lists the collector under `request_policies` with its
+  `unix_socket`, and no `proxy`.
 - **Configuration only.** No probe parameter sets the socket, and neither does
   a static target or `defaults`: whoever can reach `/probe` names the URL,
   whose host only goes into the request, never the file the exporter

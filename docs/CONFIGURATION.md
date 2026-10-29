@@ -5883,6 +5883,14 @@ where it was not meant to go, shows before it is deployed. A login is shown
 with the files its secrets are read from, never what they hold, and a field
 or endpoint parameter whose name reads as a credential's without its value
 ([Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target)).
+Every `http` and `graphite` collector is listed there too with how it
+connects: `unix_socket`, the socket it sends its requests over, or `proxy`,
+the proxy in force — its `proxy_url`, its own or its file's `defaults`',
+`direct`, or `environment` for one that names none and so follows
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` — with
+`proxy_basic_auth_file`'s files, never what they hold, and never what the
+environment names, which may hold a password
+([A collector's own proxy](REQUESTS.md#a-collectors-own-proxy)).
 
 The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
 target of one, reads when it connects — its private key, passphrase,
@@ -5920,7 +5928,8 @@ The report lists one entry per startup step, in the order startup runs them:
       "check": "config",
       "file": "config.yaml",
       "status": "ok",
-      "details": {"collectors": ["app_json", "legacy_text"], "otlp_enabled": false, "config_expand_env": false}
+      "details": {"collectors": ["app_json", "legacy_text"], "otlp_enabled": false, "config_expand_env": false,
+        "request_policies": {"app_json": {"proxy": "environment"}, "legacy_text": {"proxy": "environment"}}}
     },
     {
       "check": "python_scripts",

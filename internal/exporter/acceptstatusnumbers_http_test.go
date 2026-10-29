@@ -36,7 +36,7 @@ func TestAStatusWrittenAsANumberIsTheStatusARequestAccepts(t *testing.T) {
 	}
 	for written, accepted := range map[string]bool{
 		"503": true, "503.0": true, "5.03e2": true, "0x1F7": true, "0o767": true, "5_03": true, "+503": true, "0503": true,
-		`"503"`: true,
+		`"503"`:  true,
 		"5.04e2": false, "0x1F8": false, "200.0": false, "5_04": false,
 	} {
 		cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", collector(written)))

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"cmp"
 	"reflect"
 
 	"gopkg.in/yaml.v3"
@@ -191,13 +192,17 @@ type TargetOTLPConfig struct {
 func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain TargetRequestConfig
 	// Node.Decode does not refuse unknown keys the way the file's decoder
-	// does, so they are checked here, or a misspelt key would be ignored.
-	if err := checkKnownKeys(n, reflect.TypeOf(plain{}), "model.TargetRequestConfig"); err != nil {
-		return err
+	// does, so they are checked here, or a misspelt key would be ignored;
+	// the values are decoded all the same, so a value of the wrong kind is
+	// said beside them, in the order of the file (decodeBlock).
+	n = resolveAlias(n)
+	if n.Kind != yaml.MappingNode {
+		return notAMapping(n, "model.TargetRequestConfig")
 	}
 	var out plain
-	if err := n.Decode(&out); err != nil {
-		return err
+	problems, err := decodeBlock(n, &out, unknownKeys(n, reflect.TypeOf(out), "model.TargetRequestConfig"))
+	if err != nil || len(problems) > 0 {
+		return cmp.Or(err, keyProblemsError(problems))
 	}
 	*t = TargetRequestConfig(out)
 	for _, entry := range MappingEntries(n) {

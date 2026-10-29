@@ -8862,8 +8862,12 @@ mapping belongs, and the message reaches the log and the reload status; the
 line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
 rather than only the first, in the order of the file within a block, and on
-one line by the column of the key, or the entry of a list, each is about: a
-value of the wrong kind, which the YAML decoder says with its line alone,
+one line by the column of the key, or the entry of a list, each is about. A
+block that checks its own keys — `cache`, `failure_backoff`, `request.tls`
+and a static target's `request` — MUST say every unknown key and every value
+of the wrong kind it holds, not stop at its first unknown key, and neither it
+nor a `cache` or `failure_backoff` written as one value MUST end the reading
+of the rest of the file. A value of the wrong kind, which the YAML decoder says with its line alone,
 MUST be placed at its own key, not where the block around it begins, so that
 on a line such as `defaults: {bogus: 1, limits: {max_metrics: x}}` the
 unknown key comes first, in the defaults block, a collector's `request`

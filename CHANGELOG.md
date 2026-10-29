@@ -34,6 +34,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   the line.
 - An answer sent uncompressed no longer allocates for the answer-size
   counters.
+- A `cache`, `failure_backoff` or `request.tls` block, and a static target's
+  `request`, say every unknown key and value of the wrong kind they hold, not
+  only their first unknown key; a mistake in a `cache` or `failure_backoff`
+  no longer hides the problems in the rest of the file.
 - The schemas take `request.pagination.size: 0`, which the exporter reads
   as `size` left out: the offset moves on by the items each page held.
 - Reading a scraper's `Accept-Encoding` header no longer allocates on every

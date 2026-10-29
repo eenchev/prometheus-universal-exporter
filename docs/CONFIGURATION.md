@@ -3502,7 +3502,10 @@ line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; w
 The errors come in the order of the file, and on one line, as in a block
 written `{...}`, in the order of the keys they are about: `defaults:
 {bogus: 1, limits: {max_metrics: x}}` says the unknown key first and the
-value that is no whole number after it, every time the file is loaded.
+value that is no whole number after it, every time the file is loaded. A
+block is read to its end: `cache: {bogus: 1, ttl: fast, revalidate: maybe}`
+says all three of its problems, and what the rest of the file has wrong
+after them.
 
 Every unknown key is refused, a static target's `request` block
 included, since a misspelt key would otherwise be ignored without a word.

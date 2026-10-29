@@ -27,6 +27,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.
 
+### New
+
+- `request.unix_socket` sends an `http` collector's requests over a Unix
+  domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
+  socket, as `curl --unix-socket` does; the URL's host is still the `Host`
+  header.
+
 ### Fixed
 
 - The problems of a one-line block (`defaults: {...}`, a collector's

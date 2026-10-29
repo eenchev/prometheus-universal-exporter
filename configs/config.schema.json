@@ -3890,6 +3890,11 @@
                 ],
                 "type": "string"
               },
+              "unix_socket": {
+                "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket.",
+                "pattern": "^$|^/",
+                "type": "string"
+              },
               "until": {
                 "description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it.",
                 "type": [

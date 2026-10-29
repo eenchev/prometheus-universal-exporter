@@ -553,7 +553,10 @@ the keys of it they do not set themselves:
   NOT list `request.proxy_basic_auth_file` under `--dry-run`'s
   `details.collector_defaults`, and credentials no collector takes MUST be
   refused as a key that applies to no collector, saying that each collector
-  names its own proxy or goes direct. One that writes the credentials itself
+  names its own proxy or goes direct. A collector with a `request.unix_socket`
+  (§ 42.15b) MUST take neither `proxy_url` nor `proxy_basic_auth_file` from
+  the block, and a block's proxy key that only such collectors would take
+  MUST be refused as one that applies to no collector, saying so. One that writes the credentials itself
   beside `direct` MUST be refused. Any other key — of a
   collector, of a request type's own, `request.type`, or of nothing — and a
   value of the wrong kind MUST be refused when the configuration loads, at
@@ -1015,6 +1018,7 @@ and the source MUST list the opt-in types.
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 | `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
 | `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
+| `unix_socket` | none | The absolute path of the Unix domain socket every request of the collector is sent over in place of a TCP connection to the URL's host (§ 42.15b). The `http` type's alone. |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -1024,7 +1028,8 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 Neither a probe parameter nor a static target MAY set `proxy_url` or
-`proxy_basic_auth_file`.
+`proxy_basic_auth_file`, nor `unix_socket`, which `defaults` MUST NOT set
+either.
 
 ##### Pagination
 
@@ -6914,7 +6919,8 @@ reached by, its certificate), the whole of a SOCKS proxy's failure (a
 `socks connect` error: the proxy's address, written where the source's
 would be, and what its handshake said, told as `socks connect tcp:
 [withheld; in the exporter's log]`), what a proxy said in refusing a tunnel (§
-42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
+42.15b), the path of the Unix socket a request went to (a `*net.OpError` of a
+`unix` network's `Addr`, § 42.15b), the name server a lookup asked (`*net.DNSError`'s `Server`), and the source
 address in a resolver's exchange or a gRPC status as those write it. The
 address the connection went to MUST stay. An error that rewrites the text
 of the one it wraps, as the redaction of URLs does, MUST tell the caller
@@ -9589,7 +9595,13 @@ whether or not a proxy is in between.
   collector's own lists hold an address or a network, in which case it MUST
   fail with an error naming the lists and the failed lookup; the name rules
   MUST apply either way, and a name `allowed_targets` does not match, when it
-  holds names only, MUST be refused. The same holds for `grpc`. The
+  holds names only, MUST be refused. The same holds for `grpc`. For an
+  `http` collector with a `request.unix_socket` (§ 42.15b) no connection is
+  made to an address of the host: the name rules and, for a host written as
+  an address, the address rules MUST apply before the request and on every
+  redirect, the name MUST NOT be looked up, and a name `allowed_targets`
+  does not match by name MUST be refused, whatever networks the list holds.
+  The
   documentation MUST say what this leaves unchecked: the address a proxy
   resolves a name to, the cloud metadata addresses included. Whether a request goes
   through a proxy MUST be decided by the proxy function of the transport that
@@ -31982,7 +31994,8 @@ Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
 `server_name`, a static target's own `tls` block being its set — HTTP/2
-choice and proxy (`request.proxy_url` and its credentials' files, below), shared by every collector and scrape that uses the same set, rather
+choice, proxy (`request.proxy_url` and its credentials' files, below) and
+Unix socket (`request.unix_socket`, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
 closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
@@ -32030,6 +32043,27 @@ parameter and no static target MAY set it. A `CONNECT` the proxy answers
 other than `200` MUST fail as the proxy's refusal, naming the target and the
 proxy's status (`the proxy refused the tunnel to api.example:443: 403
 Forbidden`), the environment's proxy and a collector's alike.
+
+An `http` collector MAY name a Unix domain socket, `request.unix_socket`,
+over which every request of the collector — its retries, pages, followed
+redirects and login included, whatever host each names — MUST then be sent in
+place of a TCP connection to the URL's host, as `curl --unix-socket` sends
+it. The URL's host MUST still be the `Host` header and, for an `https` URL,
+the TLS server name, the handshake being made over the socket with the
+collector's `tls` block; its path and query MUST be the request's as without
+the socket. The host MUST NOT be looked up or dialed. No proxy, the
+environment's included, MUST apply to such a collector. The socket MUST be
+an absolute path; one of nothing but blanks, a relative one, one with a
+placeholder or a control character, and one beside `proxy_url` or
+`proxy_basic_auth_file` MUST be refused when the configuration loads, and
+`""` MUST be the key left out, by the exporter and the schema alike. The
+socket MUST be part of the pool's settings, so collectors with different
+sockets never share a connection, and none shares one with a collector
+that dials TCP. The socket is configuration: no probe parameter, no static
+target and no `defaults` block MAY set it, and its path MUST NOT be held to
+`allowed_targets` and `denied_targets` (§ 26.1). A failure to reach it MUST
+name its path in the exporter's log, and the path MUST be withheld from a
+probe's caller (§ 25).
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

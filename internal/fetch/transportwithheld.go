@@ -18,10 +18,11 @@ import (
 // server a lookup asked (`lookup db on 10.96.0.10:53`), and, in the text of
 // a resolver's exchange or a gRPC status, the same source address. Those are
 // the operator's: the pod's address, the proxy's and the cluster's resolver
-// are no part of what a probe's caller asked for. So the error is marked as
-// the operator's (model.WithOperatorDetail), and the caller is told it with
-// each of them withheld (model.WithheldMark); the address the connection
-// went to, which the caller named, stays. The log, a debug report and, with
+// are no part of what a probe's caller asked for, and neither is the path of
+// the Unix socket a request went to (`dial unix /var/run/docker.sock`). So
+// the error is marked as the operator's (model.WithOperatorDetail), and the
+// caller is told it with each of them withheld (model.WithheldMark); the
+// address the connection went to, which the caller named, stays. The log, a debug report and, with
 // --web.debug=full, the status page have the whole text.
 //
 // The addresses are read from the errors' types, as sameFetchFailure reads
@@ -89,6 +90,12 @@ func appendTransportParts(parts []string, e error) []string {
 			} else {
 				add(" "+source+": ", " "+model.WithheldMark+": ")
 			}
+		}
+		// A Unix socket's path is a file of the exporter's side, the
+		// collector's request.unix_socket (unixsocket.go), which the
+		// caller never named: the URL's host was all it gave.
+		if strings.HasPrefix(e.Net, "unix") && e.Addr != nil {
+			add(e.Addr.String(), model.WithheldMark)
 		}
 		// Everything a connection to the proxy failed with is of the
 		// proxy: its address, the name it is reached by in a failed

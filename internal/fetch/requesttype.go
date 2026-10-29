@@ -339,13 +339,17 @@ func CollectorLogins(requestType, collector string) (made, failed uint64) {
 	return 0, 0
 }
 
-// RequestPolicy is what a collector's request lets through, and how it
-// pages, that only some request types have (RequestType.Policy): the gRPC
-// status codes, other than OK, whose calls are answers, and the pagination
-// of a paginated answer, its defaults filled in once validated.
+// RequestPolicy is what a collector's request lets through, how it pages
+// and where it is sent, that only some request types have
+// (RequestType.Policy): the gRPC status codes, other than OK, whose calls
+// are answers, the pagination of a paginated answer, its defaults filled in
+// once validated, and the Unix socket an http collector's requests go to.
 type RequestPolicy struct {
 	AcceptCodes []string
 	Pagination  *model.PaginationConfig
+	// UnixSocket is the http type's request.unix_socket, the socket every
+	// request of the collector is sent over (unixsocket.go), "" for none.
+	UnixSocket string
 }
 
 // CollectorPolicy is what the request of c lets through that only its type

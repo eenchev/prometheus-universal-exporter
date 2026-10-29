@@ -41,6 +41,7 @@
   "--config.collector-file-schema" "would make the exporter print the collector file schema and exit, so the pod would never serve; run it as a separate command instead"
   "--static-targets-file-schema" "would make the exporter print the static target file schema and exit, so the pod would never serve; run it as a separate command instead"
   "--version" "would make the exporter print its version and exit, so the pod would never serve; the version is in the http_exporter_build_info self-metric"
+  "--healthcheck" "would make the exporter run its health check and exit, so the pod would never serve; set healthProbes.mode to exec for probes that run it"
   "--help" "would make the exporter print its usage and exit, so the pod would never serve"
   "--h" "would make the exporter print its usage and exit, so the pod would never serve" -}}
 {{- range $arg := .Values.extraArgs -}}
@@ -1082,13 +1083,23 @@ true
 {{- $text -}}
 {{- end -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.healthProbesMode" -}}
+{{- /* How the kubelet runs the liveness and readiness probes: http, a GET on
+       the http port, or exec, the exporter's --healthcheck in the container.
+       Checked here as well as by the values schema, which helm can skip. */ -}}
+{{- $mode := (.Values.healthProbes | default dict).mode | default "http" | toString -}}
+{{- if not (has $mode (list "http" "exec")) -}}
+{{- fail (printf "healthProbes.mode %q must be http or exec" $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.validateProbe" -}}
 {{- /* A probe's settings must not replace the check itself: the chart owns
        the path and port. (list name probe) */ -}}
 {{- $name := index . 0 -}}
 {{- range $key := list "httpGet" "exec" "tcpSocket" "grpc" -}}
 {{- if hasKey (index $ 1 | default dict) $key -}}
-{{- fail (printf "%s.%s is set by the chart, which checks /health and /ready on the http port; set only timings such as timeoutSeconds and failureThreshold" $name $key) -}}
+{{- fail (printf "%s.%s is set by the chart, which checks /health and /ready, on the http port or with healthProbes.mode exec; set only timings such as timeoutSeconds and failureThreshold" $name $key) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

@@ -147,6 +147,13 @@ numeric user, 65532, since Kubernetes can verify `runAsNonRoot` only for a
 numeric user.
 
 The chart MUST configure liveness/readiness probes using the exporter health endpoints: liveness on `/health` and readiness on `/ready`, which reports a shutdown and, when `otlp.unready_after_failures` asks for it, failing OTLP exports, but not a rejected reload (SPECIFICATION-EXPORTER.md § 23).
+`healthProbes.mode` MUST say how: `http`, the default, MUST render `httpGet`
+probes on the `http` port; `exec` MUST render `exec` probes running
+`/bin/prometheus-universal-exporter` with `--healthcheck=health` for
+liveness and `--healthcheck=ready` for readiness (SPECIFICATION-EXPORTER.md
+§ 30) and the same `--web.listen-address` as the container's arguments, and
+no `httpGet`. Any other mode MUST fail rendering, refused by the values
+schema and, with it skipped, by the templates.
 Their timings MUST come from the `livenessProbe` and `readinessProbe` values,
 defaulting to `periodSeconds: 10`, `timeoutSeconds: 3` and a `failureThreshold`
 of 5 for liveness and 3 for readiness, so a pod busy with a burst of probes is
@@ -739,8 +746,8 @@ bare word is read as a positional argument and ignored, so it would fail by
 doing nothing. So MUST every one-shot flag, which prints something and exits so
 that a pod started with it would restart for ever instead of serving:
 `--dry-run` (SPECIFICATION-EXPORTER.md § 30), `--config.schema`,
-`--config.collector-file-schema`, `--static-targets-file-schema`, `--version`
-and `--help`.
+`--config.collector-file-schema`, `--static-targets-file-schema`, `--version`,
+`--healthcheck` and `--help`.
 
 ### 33.10b Values schema
 

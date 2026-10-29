@@ -37,5 +37,6 @@ in [Running it](ALLOCATOR.md#running-it) on its page.
 | `--allocator.advertise` | first address, listen port | `host:port` Prometheus is sent to for this exporter's probes: the listen address's host, or else the host's first address that is not a loopback one, with the listen port. |
 | `--allocator.token-file` | none | File holding the bearer token sent to the allocator, read again for every request. |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](CONFIGURATION.md#dry-run). |
+| `--healthcheck` | off | Ask the exporter at `--web.listen-address` whether it is ready (`GET /ready`), or with `--healthcheck=health` whether it is alive (`GET /health`), and exit `0` on `200` or `1` otherwise, within 5 seconds, without starting or reading the configuration; for a container health check. See [Health checks](CONFIGURATION.md#health-checks). |
 
 A flag takes its value as `--name=value`. An argument that is not a flag is refused with exit status `2`, at a start and with `--dry-run` alike, naming the argument: after `--config.watch true`, every flag that follows `true` would otherwise be left unread without a word.

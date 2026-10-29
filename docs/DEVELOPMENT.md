@@ -68,7 +68,8 @@ says how a release moves the lines into a section of its own.
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`), its
-allocator mode (`allocator.go`) and the `--dry-run` report (`check.go`), with
+allocator mode (`allocator.go`), the `--dry-run` report (`check.go`) and
+`--healthcheck` (`healthcheck.go`), with
 the tests of the command line itself
 (`cli_test.go`, `shutdown_test.go`); the target allocator's command line is
 `cmd/pue-allocator`, with its own, and `tools/depupdate` is the command that

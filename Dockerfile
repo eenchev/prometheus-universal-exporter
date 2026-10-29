@@ -92,6 +92,13 @@ USER 65532:65532
 
 EXPOSE 8080
 
+# The container's health is the exporter's readiness, asked by the exporter
+# itself (--healthcheck), since the image has no curl or wget. It asks the
+# listen address CMD gives; a container run with another one, or as the
+# allocator (--entrypoint /bin/pue-allocator), sets its own health command or
+# none. Kubernetes ignores HEALTHCHECK and runs the chart's probes instead.
+HEALTHCHECK CMD ["/bin/prometheus-universal-exporter", "--healthcheck", "--web.listen-address=:8080"]
+
 ENTRYPOINT ["/bin/prometheus-universal-exporter"]
 
 CMD ["--config.file=/etc/prometheus-universal-exporter/config.yaml", "--web.listen-address=:8080"]

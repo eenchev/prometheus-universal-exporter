@@ -36,9 +36,19 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.
+- The image declares a `HEALTHCHECK`, so Docker shows the container
+  `healthy` while the exporter is ready. A container started with another
+  `--web.listen-address` needs `--health-cmd` with it, and the target
+  allocator run from the image needs `--no-healthcheck`.
 
 ### New
 
+- `--healthcheck` asks a running exporter whether it is ready (`/ready`), or
+  with `--healthcheck=health` alive (`/health`), and exits 0 or 1, for a
+  container health check in an image without `curl`.
+- The chart's `healthProbes.mode: exec` runs the liveness and readiness
+  probes as the exporter's `--healthcheck` in the container instead of HTTP
+  GETs from the kubelet.
 - `request.unix_socket` sends an `http` collector's requests over a Unix
   domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
   socket, as `curl --unix-socket` does; the URL's host is still the `Host`

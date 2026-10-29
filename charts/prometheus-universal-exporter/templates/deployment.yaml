@@ -213,13 +213,27 @@ spec:
             - name: http
               containerPort: {{ include "prometheus-universal-exporter.containerPort" . }}
               protocol: TCP
+          {{- /* In exec mode the exporter asks itself, at the listen address
+                 its args give, so the check and the listener cannot drift
+                 apart. */}}
+          {{- $healthProbes := include "prometheus-universal-exporter.healthProbesMode" . }}
           livenessProbe:
+            {{- if eq $healthProbes "exec" }}
+            exec:
+              command: ["/bin/prometheus-universal-exporter", "--healthcheck=health", {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}]
+            {{- else }}
             httpGet: {path: /health, port: http}
+            {{- end }}
             {{- with .Values.livenessProbe }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           readinessProbe:
+            {{- if eq $healthProbes "exec" }}
+            exec:
+              command: ["/bin/prometheus-universal-exporter", "--healthcheck=ready", {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}]
+            {{- else }}
             httpGet: {path: /ready, port: http}
+            {{- end }}
             {{- with .Values.readinessProbe }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

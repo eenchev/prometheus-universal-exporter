@@ -8087,7 +8087,7 @@ Recommended behavior:
   follow the browser's light or dark preference.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
-  serves requests.
+  serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
 - `/ready`: the exporter should be sent probes. It MUST answer `503`, with OTLP
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
@@ -10032,6 +10032,22 @@ a failure: the target did not fail, so it MUST NOT be reported down, and its
 last result stands.
 
 `--version` prints the build information of § 22.0d and exits 0.
+
+`--healthcheck` is a container health check for an image without `curl` or
+`wget`. It MUST send one `GET /ready`, or with `--healthcheck=health` one
+`GET /health`, to the exporter at `--web.listen-address`, and exit 0 when it
+answers `200` and 1 otherwise: another status, a redirect, which it MUST NOT
+follow, a refused connection, or no answer within 5 seconds. On failure it
+MUST write one JSON line to stderr naming the URL and the status with the
+answer's body on one line, or the error. A listen address with an empty host
+or an IPv4 wildcard MUST be asked on `127.0.0.1`, the IPv6 wildcard on `::1`,
+and any other host as written. It MUST NOT bind the listen address, read the
+configuration or static target files, start any loop, or send credentials,
+since § 23's endpoints are never authenticated, and MUST NOT use a proxy from
+the environment. A value other than `ready` or `health` MUST be a
+command-line error, exit 2; the other flags MUST be checked as at a start, so
+a container's own arguments can be given with it. The image MUST declare a
+`HEALTHCHECK` running it, in exec form, at the listen address of its `CMD`.
 
 `--config.schema` prints the configuration file's JSON Schema and exits, and
 `--config.collector-file-schema` the schema of a collector file (§ 24.3).

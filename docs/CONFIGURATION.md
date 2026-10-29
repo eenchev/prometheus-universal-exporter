@@ -5691,6 +5691,40 @@ takes a pod out of its Service while its OTLP endpoint fails, which also stops
 Prometheus probing through it; set it only where OTLP delivery is the pod's
 job.
 
+### Health checks
+
+The image has no `curl` or `wget`, so the exporter asks itself:
+`--healthcheck` sends one `GET /ready` to the exporter listening at
+`--web.listen-address` and exits `0` when it answers `200`, and `1`
+otherwise, logging one JSON line to stderr saying why: the status and
+`/ready`'s reasons, or the error of a connection that failed.
+`--healthcheck=health` asks `/health` instead, for a liveness check, which
+stays `200` while the exporter is not ready.
+
+```sh
+prometheus-universal-exporter --healthcheck --web.listen-address=:8080
+prometheus-universal-exporter --healthcheck=health --web.listen-address=:8080
+```
+
+A listen address with no host, or with `0.0.0.0`, is asked on `127.0.0.1`,
+and `[::]` on `[::1]`; a name or a particular address is asked as it is.
+The check gives up after 5 seconds. It starts no server, reads no file and
+loads no configuration, so it takes a few milliseconds. The other flags are
+checked as at a start, so the container's own arguments can be given with
+it, but only the listen address is used. It sends no credentials, since
+`/health` and `/ready` never ask for them, with `web.basic_auth` on too, and
+ignores `HTTP_PROXY`.
+
+The image's `HEALTHCHECK` runs `--healthcheck` at `:8080`, the address its
+`CMD` gives, so `docker ps` shows the container `healthy` while the exporter
+is ready. A container started with another `--web.listen-address` needs a
+health command of its own, such as `docker run --health-cmd
+'/bin/prometheus-universal-exporter --healthcheck --web.listen-address=:9115'`,
+and one running the [target allocator](ALLOCATOR.md#running-it) from the image
+needs `--no-healthcheck`. Kubernetes ignores `HEALTHCHECK`; the Helm chart's
+probes GET the endpoints, or run the check with
+[`healthProbes.mode: exec`](../charts/prometheus-universal-exporter/README.md#probes).
+
 ## Shutting down
 
 On `SIGTERM` or `SIGINT` the exporter first waits `--web.shutdown-delay`, 0 by

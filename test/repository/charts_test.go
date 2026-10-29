@@ -342,8 +342,8 @@ func TestTheProbesTimingsAreValues(t *testing.T) {
 	}
 	deployment := readChartFile(t, "templates/deployment.yaml")
 	for _, want := range []string{
-		"httpGet: {path: /health, port: http}\n            {{- with .Values.livenessProbe }}",
-		"httpGet: {path: /ready, port: http}\n            {{- with .Values.readinessProbe }}",
+		"httpGet: {path: /health, port: http}\n            {{- end }}\n            {{- with .Values.livenessProbe }}",
+		"httpGet: {path: /ready, port: http}\n            {{- end }}\n            {{- with .Values.readinessProbe }}",
 		`"prometheus-universal-exporter.validateProbe" (list "livenessProbe" .Values.livenessProbe)`,
 		`"prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe)`,
 	} {

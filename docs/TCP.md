@@ -699,6 +699,10 @@ Requests
      Tcp-Starttls: smtp
 ```
 
+`start_tls: true`, [`ldap`](LDAP.md#tls)'s StartTLS, is not a `tcp` key:
+written in a `tcp` or a `tlscert` collector it is refused with
+`starttls` and its protocols named instead.
+
 ## Examples
 
 [`examples/tcp/`](../examples/tcp/config.yaml) holds complete collectors for

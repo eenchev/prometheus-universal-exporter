@@ -304,6 +304,12 @@ type RequestType struct {
 	// the type's own, beyond the body, header and query values every type
 	// may hold (requestTemplates). Unset, it has none.
 	Templates func(c *model.Collector, overrides RequestOverrides) []templateField
+	// KeyAdvice says, of a key of another type that a collector of this
+	// type sets, which of the type's own keys does what the collector meant
+	// it for, said after the refusal: ldap's start_tls for the starttls of
+	// tcp and tlscert, which names a protocol ldap does not speak. Unset,
+	// the refusal says nothing more.
+	KeyAdvice map[string]string
 }
 
 // Takes reports whether the type accepts the request key.
@@ -586,6 +592,9 @@ func ValidateRequest(c *model.Collector) error {
 	retryKeys := retryKeysSet(reflect.ValueOf(c.Request.Retry))
 	for _, key := range model.InFileOrder(append(setKeys(reflect.ValueOf(c.Request), "type"), c.Request.Foreign...), c.Request.Order) {
 		if !rt.Takes(key) {
+			if advice := rt.KeyAdvice[key]; advice != "" {
+				return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q; %s", c.Name, key, rt.Name, advice)
+			}
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
 		if key == "retry" && slices.Contains(c.Request.Order, key) {

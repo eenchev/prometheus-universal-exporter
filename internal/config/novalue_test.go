@@ -123,6 +123,10 @@ type noValueSite struct {
 	// written there calls it (TestOnlyAValueOfAnotherKindIsRefusedAnew).
 	of          reflect.Type
 	path, named string
+	// foreign marks a key of a request block that the block's type does
+	// not take, whose value is held to no kind: the key is refused for
+	// that, whatever its value (keysOfAnotherType).
+	foreign bool
 }
 
 // The kinds of place a value is written at.
@@ -185,6 +189,14 @@ func eachNoValueSite(doc *yaml.Node, t reflect.Type, visit func(noValueSite)) {
 		}
 		switch {
 		case t.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
+			var foreign func(key string) bool
+			if t == reflect.TypeOf(model.RequestConfig{}) {
+				foreign = keysOfAnotherType(n)
+			}
+			mark := func(site noValueSite, name string) noValueSite {
+				site.foreign = foreign != nil && foreign(name)
+				return site
+			}
 			written := map[string]int{}
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				if n.Content[i].Tag == "!!merge" {
@@ -212,21 +224,21 @@ func eachNoValueSite(doc *yaml.Node, t reflect.Type, visit func(noValueSite)) {
 						continue
 					}
 					n.Content[i+1] = here()
-					visit(at(ofKey(name), kind, keyPath, name))
+					visit(mark(at(ofKey(name), kind, keyPath, name), name))
 					n.Content[i+1] = value
 					walk(value, field.Type, name, keyPath)
 					continue
 				}
 				content := n.Content
 				n.Content = append(content[:len(content):len(content)], scalar(name), here())
-				visit(at(ofKey(name), kind, keyPath, name))
+				visit(mark(at(ofKey(name), kind, keyPath, name), name))
 				switch kind.Kind() {
 				case reflect.Slice:
 					n.Content[len(n.Content)-1] = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{here()}}
-					visit(at(ofEntry(name, 0, kind.Elem()), kind.Elem(), keyPath+"[]", name+" entry 1"))
+					visit(mark(at(ofEntry(name, 0, kind.Elem()), kind.Elem(), keyPath+"[]", name+" entry 1"), name))
 				case reflect.Map:
 					n.Content[len(n.Content)-1] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{scalar("zz"), here()}}
-					visit(at(ofValue(name), kind.Elem(), keyPath+".*", name+` key "zz"`))
+					visit(mark(at(ofValue(name), kind.Elem(), keyPath+".*", name+` key "zz"`), name))
 				}
 				n.Content = content
 			}

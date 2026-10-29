@@ -51,6 +51,7 @@ func sshfileSchemaKeys() []schemaKey {
 	withKey := strings.Replace(sshTarget, target, "    request:\n      private_key_file: /k\n"+key, 1)
 	return []schemaKey{
 		{key: "collectors[].request.keepalive_interval", document: sshCollector, at: request, setting: "      keepalive_interval: %s\n", valid: "10s", invalid: "often", absent: true, duration: true},
+		{key: "collectors[].request.keepalive_interval", of: "under its least", document: sshCollector, at: request, setting: "      keepalive_interval: %s\n", valid: "1s", invalid: "500ms", absent: true, invalidWas: taken},
 		{key: "collectors[].request.idle_timeout", document: sshCollector, at: request, setting: "      idle_timeout: %s\n", valid: "1m", invalid: "later", absent: true, duration: true},
 		{key: "collectors[].request.username", document: sshCollector, at: "      username: metrics\n", setting: "      username: %s\n", valid: "metrics", invalid: `"  "`, invalidWas: taken, emptyWas: taken},
 		{key: "collectors[].request.known_hosts_file", document: sshCollector, at: "      known_hosts_file: /etc/exporter/ssh/known_hosts\n", setting: "      known_hosts_file: %s\n", valid: "/k", invalid: `" "`, invalidWas: taken, emptyWas: taken},

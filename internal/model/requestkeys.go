@@ -181,56 +181,108 @@ func (r *RequestConfig) UnmarshalYAML(n *yaml.Node) error {
 		return notAMapping(n, "model.RequestConfig")
 	}
 	layout := currentRequestLayout()
-	var problems []string
-	collect := func(err error) error {
-		var typeErr *yaml.TypeError
-		if errors.As(err, &typeErr) {
-			problems = append(problems, typeErr.Errors...)
-			return nil
-		}
-		return err
-	}
 	// Node.Decode does not refuse unknown keys the way the file's decoder
 	// does, so they are checked here, or a misspelt key would be ignored.
 	unknown := unknownKeys(n, layout.decoded, "model.RequestConfig")
 	decoded := reflect.New(layout.decoded)
-	if err := collect(n.Decode(decoded.Interface())); err != nil {
+	err := n.Decode(decoded.Interface())
+	var typeErr *yaml.TypeError
+	if err != nil && !errors.As(err, &typeErr) {
 		return err
 	}
 	layout.store(decoded.Elem(), r)
-	r.Order = keyOrder(n, decoded.Elem())
+	// A key the block's type does not take is refused for that, whatever
+	// its value, in the validation's words, which may say which key of
+	// the type's own was meant (fetch.RequestType.KeyAdvice): the
+	// decoder's word on its value, start_tls: smtp in a tlscert block
+	// being no boolean to ldap's key, is not said before it, and the key
+	// is kept among those the block sets, so that it is refused.
+	refused := layout.refusedKeys(n, r.Type)
+	var problems []keyProblem
+	var failed []string
+	if typeErr != nil {
+		// Each value is decoded again on its own, so that a message the
+		// decoder gives with its line alone is placed at its key and
+		// sorts among the unknown keys in the order of the file
+		// (placeMessages); a message of a refused key's value is not said.
+		var pieces []keyProblem
+		var keys []string
+		for _, entry := range DecodedEntries(n) {
+			key := KeyName(entry.Key)
+			field, ok := fieldTypeByKey(layout.decoded, key)
+			if !ok {
+				continue
+			}
+			for _, piece := range decodedPieces(entry.Value, field, keyAt{"", entry.Key.Line, entry.Key.Column}) {
+				pieces, keys = append(pieces, piece), append(keys, key)
+			}
+		}
+		placed, from := placeMessages(typeErr.Errors, pieces, keyAt{"", n.Line, n.Column})
+		for i, problem := range placed {
+			switch {
+			case from[i] < 0 || !slices.Contains(refused, keys[from[i]]):
+				problems = append(problems, problem)
+			case !slices.Contains(failed, keys[from[i]]):
+				failed = append(failed, keys[from[i]])
+			}
+		}
+	}
+	// A refused key whose value the decoder could not read is still one
+	// the block sets, which a key written "" is not.
+	for _, key := range failed {
+		if !slices.Contains(r.Foreign, key) {
+			r.Foreign = append(r.Foreign, key)
+		}
+	}
+	r.Order = keyOrder(n, decoded.Elem(), failed...)
 	// A key the validation refuses that comes before the unknown ones in
 	// the file is the one the error names, so they are left to be refused
 	// once it is gone.
-	if first, ok := layout.firstRefused(n, decoded.Elem(), r.Type); ok {
+	if first, ok := layout.firstRefused(n, decoded.Elem(), r.Type, failed...); ok {
 		unknown = slices.DeleteFunc(unknown, func(p keyProblem) bool { return !before(p.line, p.column, first) })
 	}
-	messages := make([]string, 0, len(unknown)+len(problems))
-	for _, problem := range unknown {
-		messages = append(messages, problem.message)
-	}
-	problems = append(messages, problems...)
+	problems = append(unknown, problems...)
 	if len(problems) == 0 {
 		return nil
 	}
-	for i := range problems {
+	sortProblems(problems)
+	messages := make([]string, len(problems))
+	for i, problem := range problems {
+		messages[i] = problem.message
 		for made, name := range layout.typeNames {
-			problems[i] = strings.ReplaceAll(problems[i], made, name)
+			messages[i] = strings.ReplaceAll(messages[i], made, name)
 		}
 	}
-	return &yaml.TypeError{Errors: problems}
+	return &yaml.TypeError{Errors: messages}
+}
+
+// refusedKeys are the keys of a request block of requestType, written as
+// n, that the validation refuses as keys the type does not take; none when
+// the build does not have the type.
+func (l *requestLayout) refusedKeys(n *yaml.Node, requestType string) []string {
+	if l.refuses == nil {
+		return nil
+	}
+	requestType = strings.ToLower(strings.TrimSpace(requestType))
+	var refused []string
+	for _, entry := range DecodedEntries(n) {
+		if key := KeyName(entry.Key); key != "type" && l.refuses(requestType, key) {
+			refused = append(refused, key)
+		}
+	}
+	return refused
 }
 
 // firstRefused is the first key in the file, of those a request block of
 // the type sets and of those of each mapping it holds directly, that the
 // validation refuses as one the type does not take (RequestKeys.Refuses);
 // false when there is none, or the build does not have the type.
-func (l *requestLayout) firstRefused(n *yaml.Node, decoded reflect.Value, requestType string) (keyAt, bool) {
+func (l *requestLayout) firstRefused(n *yaml.Node, decoded reflect.Value, requestType string, written ...string) (keyAt, bool) {
 	if l.refuses == nil {
 		return keyAt{}, false
 	}
 	requestType = strings.ToLower(strings.TrimSpace(requestType))
-	for _, key := range blockKeys(n, decoded) {
+	for _, key := range blockKeys(n, decoded, written...) {
 		if key.path != "type" && l.refuses(requestType, key.path) {
 			return key, true
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
@@ -89,10 +90,12 @@ func TestTheCheckOfTheLimitsIsWhatItWasButForAnOutputLimitUnderTheLeast(t *testi
 
 // The schemas of the configuration and of a collector file say the least of
 // limits.max_output_bytes as the loader has it: beside what a size is held
-// to, a number is 0 or at least transform.MinPythonOutputBytes, and its
-// description says the number. The two response limits say theirs,
-// MinResponseBytes, the same way. The other two sizes are described as every
-// size was: a whole number from 0 or text of the pattern, and nothing more.
+// to, a number is 0 or at least transform.MinPythonOutputBytes, text under
+// it is refused (fetch.SchemaLeastSize), and its description says the
+// number. The two response limits say theirs, MinResponseBytes, and
+// limits.max_script_memory its 32MiB, the same way. request.max_total_bytes
+// is described as every size was: a whole number from 0 or text of the
+// pattern, and nothing more.
 func TestTheSchemasHoldAnOutputLimitToTheLeastOfTheLoader(t *testing.T) {
 	size := map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": model.ByteSizePattern}
 	for name, schema := range map[string]map[string]any{"the configuration": configSchema(), "a collector file": collectorFileSchema()} {
@@ -101,19 +104,27 @@ func TestTheSchemasHoldAnOutputLimitToTheLeastOfTheLoader(t *testing.T) {
 		request := collector["request"].(map[string]any)["properties"].(map[string]any)
 		output := limits["max_output_bytes"].(map[string]any)
 		want := map[string]any{"type": size["type"], "minimum": 0, "pattern": model.ByteSizePattern, "description": output["description"],
-			"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": transform.MinPythonOutputBytes}}}
+			"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": int64(transform.MinPythonOutputBytes)}}, "not": fetch.SchemaLeastSize(int64(transform.MinPythonOutputBytes))}
 		if description, _ := output["description"].(string); !reflect.DeepEqual(output, want) || !containsAll(description, "At least 38 bytes", "0, like the key left out, is the default, 1MiB") {
 			t.Errorf("%s: limits.max_output_bytes is described as %v", name, output)
 		}
-		for key, node := range map[string]any{"limits.max_response_bytes": limits["max_response_bytes"], "request.max_response_bytes": request["max_response_bytes"]} {
-			described, _ := node.(map[string]any)
+		for key, least := range map[string]struct {
+			node  any
+			bytes int64
+			says  string
+		}{
+			"limits.max_response_bytes":  {limits["max_response_bytes"], MinResponseBytes, "At least 1KiB"},
+			"request.max_response_bytes": {request["max_response_bytes"], MinResponseBytes, "At least 1KiB"},
+			"limits.max_script_memory":   {limits["max_script_memory"], minScriptMemory, "At least 32MiB"},
+		} {
+			described, _ := least.node.(map[string]any)
 			want := map[string]any{"type": size["type"], "minimum": 0, "pattern": model.ByteSizePattern, "description": described["description"],
-				"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": MinResponseBytes}}}
-			if description, _ := described["description"].(string); !reflect.DeepEqual(described, want) || !containsAll(description, "At least 1KiB", "0, like the key left out, is the default") {
+				"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": least.bytes}}, "not": fetch.SchemaLeastSize(least.bytes)}
+			if description, _ := described["description"].(string); !reflect.DeepEqual(described, want) || !containsAll(description, least.says, "0, ") {
 				t.Errorf("%s: %s is described as %v", name, key, described)
 			}
 		}
-		for key, node := range map[string]any{"limits.max_script_memory": limits["max_script_memory"], "request.max_total_bytes": request["max_total_bytes"]} {
+		for key, node := range map[string]any{"request.max_total_bytes": request["max_total_bytes"]} {
 			described, _ := node.(map[string]any)
 			without := map[string]any{}
 			for keyword, value := range described {

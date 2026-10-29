@@ -190,6 +190,14 @@ opposite things, and so is `ldaps://` with `start_tls`, TLS being begun
 twice. A server that refuses StartTLS fails the scrape, with the server's
 words, before the password is sent.
 
+`starttls`, the key [`tcp`](TCP.md#starttls) and
+[`tlscert`](TLSCERT.md) name a protocol's STARTTLS in, is not an `ldap`
+key: written in an `ldap` collector, as `starttls: true` or as
+`starttls: smtp`, it is refused with the key to write instead, `sets
+request.starttls, which does not apply to request.type "ldap"; an ldap
+collector asks for StartTLS on its plaintext connection with its own key,
+start_tls: true, the handshake taking the tls block's settings`.
+
 ## Searches
 
 `searches` lists the searches a scrape makes, in order, each answered

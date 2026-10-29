@@ -72,6 +72,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The Release's description is the tag's section of CHANGELOG.md
+      # (tools/release-notes.sh), read before anything is built, so a release
+      # whose section is missing, or does not say what upgrading changes for
+      # a user, fails at once rather than after the build.
+      - name: Read the release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: sh tools/release-notes.sh exporter "${TAG#exporter/prometheus-universal-exporter-v}" > "$RUNNER_TEMP/release-notes.md"
+
       # The binaries are built with the Go the image is built with: the
       # Dockerfile's GO_VERSION, a minor that setup-go resolves to its newest
       # patch release, as the golang:<minor>-alpine tag does. go.mod's go
@@ -278,7 +287,8 @@ jobs:
       # Created as a draft with its archives, the checksums and their
       # signature, then published, so the Release never shows without them. On a rerun the Release already exists,
       # draft or published, and gh release create would refuse it: its
-      # assets are replaced instead.
+      # assets are replaced instead, and its description is set again from
+      # CHANGELOG.md, which may have been corrected for the rerun.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -287,8 +297,9 @@ jobs:
           set -eu
           if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt" "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt.sigstore.json" --clobber
+            gh release edit "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
-            gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt" "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt.sigstore.json" --draft --verify-tag --generate-notes --title "Exporter v${VERSION}"
+            gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt" "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt.sigstore.json" --draft --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "Exporter v${VERSION}"
           fi
           gh release edit "${GITHUB_REF_NAME}" --draft=false
 

@@ -220,7 +220,8 @@ type schemaKey struct {
 	validWas was
 	// duration marks a duration key, which is put through the ways a
 	// duration is written too; zero is what the exporter refuses a zero
-	// with in a key that needs more, and empty where zero is taken.
+	// with in a key that needs more, which the schemas refuse too, and
+	// empty where zero is taken.
 	duration bool
 	zero     string
 	// size marks a key that takes a size, which is put through the ways a
@@ -350,10 +351,16 @@ func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[strin
 			if pattern, ok := x["pattern"].(string); ok {
 				x["pattern"] = strings.TrimPrefix(pattern, "^$|")
 			}
+			// A size was held to no least of its own written as text.
+			if x["pattern"] == model.ByteSizePattern {
+				delete(x, "not")
+			}
 			if x["minimum"] == float64(0) && x["maximum"] == float64(0) {
 				x["type"] = "string"
 				delete(x, "minimum")
 				delete(x, "maximum")
+				// A duration was held to no least of its own.
+				delete(x, "not")
 				if description, _ := x["description"].(string); strings.HasPrefix(description, durationDescriptionWas) {
 					x["description"] = durationDescriptionWas
 				}
@@ -390,6 +397,11 @@ func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[strin
 		// key itself was held to.
 		then, _ := schemaNode(t, schema, "otlp")["then"].(map[string]any)
 		switchedOn, _ := then["properties"].(map[string]any)
+		// Nor did a block switched on hold its interval, its batch_max_bytes
+		// written as text and its tls to more than they are held to off.
+		delete(switchedOn["interval"].(map[string]any), "not")
+		delete(switchedOn["batch_max_bytes"].(map[string]any), "not")
+		delete(switchedOn, "tls")
 		for key, keyword := range map[string]string{"compression": "enum", "max_pending_points": "minimum", "unready_after_failures": "minimum"} {
 			rule, held := switchedOn[key].(map[string]any)
 			if !held {
@@ -652,7 +664,14 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 				document := key.written(t, form.written)
 				now, _, _, err := file.check(t, document)
 				notText := err != nil && strings.Contains(err.Error(), "is written "+form.written+", which YAML reads as "+form.kind+", not as text; "+notTextAdvice(built, form.written))
+				// A key of another type than the row's collector's is
+				// refused for that, whatever its value is: told how YAML
+				// read it, it was told the values of a key that does not
+				// apply.
+				name := key.key[strings.LastIndex(key.key, ".")+1:]
+				foreign := err != nil && strings.Contains(err.Error(), "sets request."+name+", which does not apply to request.type")
 				switch {
+				case textOnly && foreign && len(now) != 0 && form.alone == "":
 				case textOnly && (form.alone != "" || len(now) == 0 || !notText):
 					t.Errorf("%s, written %s: want it refused by both, the exporter saying that YAML reads it as %s; the schema says %v, the exporter %v\n%s", name, form.written, form.kind, now, err, document)
 				case textOnly:
@@ -699,10 +718,11 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 				now, old, _, err := file.check(t, document)
 				switch {
 				case form.zero && key.zero != "":
-					// A zero where more is needed is the exporter's to
-					// refuse: how long a duration is, a schema cannot tell.
-					if len(now) != 0 || err == nil || !strings.Contains(err.Error(), key.zero) {
-						t.Errorf("%s: %s: want it past the schema and refused by the exporter with %q; the schema says %v, the exporter %v", name, form.written, key.zero, now, err)
+					// A zero where more is needed is refused by both, the
+					// schemas by the key's not (fetch.SchemaLeastDuration),
+					// where a zero once passed them.
+					if len(now) == 0 || err == nil || !strings.Contains(err.Error(), key.zero) {
+						t.Errorf("%s: %s: want it refused by the schema and by the exporter with %q; the schema says %v, the exporter %v", name, form.written, key.zero, now, err)
 					}
 				case (len(now) == 0) != form.taken || (err == nil) != form.taken:
 					t.Errorf("%s: %s: want accepted %v by both; the schema says %v, the exporter %v", name, form.written, form.taken, now, err)
@@ -713,8 +733,10 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 			}
 			for _, written := range zerosOfAnotherSpelling {
 				now, old, _, err := file.check(t, key.written(t, written))
-				if len(now) != 0 || len(old) == 0 || err == nil || !strings.Contains(err.Error(), "is not a duration") {
-					t.Errorf("%s: %s: want it past the schema, refused by the schema as it was, and refused by the exporter as no duration; the schema says %v, said %v, the exporter %v", name, written, now, old, err)
+				// The number 0 is no value of a key that needs more than
+				// zero, to its schema, however YAML was handed it.
+				if (len(now) != 0) != (key.zero != "") || len(old) == 0 || err == nil || !strings.Contains(err.Error(), "is not a duration") {
+					t.Errorf("%s: %s: want it past the schema but where the key needs more than zero, refused by the schema as it was, and refused by the exporter as no duration; the schema says %v, said %v, the exporter %v", name, written, now, old, err)
 				}
 			}
 		}

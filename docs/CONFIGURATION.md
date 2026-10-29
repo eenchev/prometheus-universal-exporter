@@ -2650,7 +2650,11 @@ check that refuses two keys alike — an ssh collector's negative
 `keepalive_interval` and `idle_timeout`, or its credential files written
 blank or with a placeholder, a kubernetes collector's blank selectors, a
 json login's blank `token` and `expires_in`, a login's keys of the other
-kind — on every load.
+kind — on every load. A key the type does not take is refused for that
+whatever its value: `starttls: true` in an `ldap` collector is not told
+that `true` is no protocol of `tcp`'s, but that the key does not apply,
+with `ldap`'s own `start_tls: true` named; `start_tls` in a `tcp` or a
+`tlscert` collector names `starttls` and its protocols.
 
 <!-- request-types: all -->
 A key that belongs to a different type is an error rather than being ignored,
@@ -3495,6 +3499,11 @@ each error names the line and what was expected there, as in
 line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; write one such as 500ms, 30s or 1m30s
 ```
 
+The errors come in the order of the file, and on one line, as in a block
+written `{...}`, in the order of the keys they are about: `defaults:
+{bogus: 1, limits: {max_metrics: x}}` says the unknown key first and the
+value that is no whole number after it, every time the file is loaded.
+
 Every unknown key is refused, a static target's `request` block
 included, since a misspelt key would otherwise be ignored without a word.
 For the same reason a file holds one YAML document: the configuration, a
@@ -3533,14 +3542,16 @@ allocator's two — are in `configs/` with the examples, and are regenerated wit
 you are running; its `request.type` values are the request types that binary
 was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
-expression compiles, that `otlp.interval` is at least `1s` and
-`limits.script_timeout` at least `1ms` — a duration is
-text to a schema — that a duration is not too long to be held, that a
+expression compiles, that a duration of several parts, such as
+`script_timeout: 400us400us`, is not under its key's least — a schema reads
+the digits of a duration of one part, but cannot add up parts —, that
+`failure_backoff.max` is not shorter than `initial`, that a duration is not
+too long to be held, that a
 [size](#sizes) is under 2^63 bytes, that any other whole number, such as
 `limits.max_metrics`, is one an int64 holds, from -2^63 to 2^63 - 1, that a
-`limits.max_output_bytes` or a `max_response_bytes` written
-in quotes or with a unit is not under [its least](#sizes), that two
-`request.headers` names are not one header in different case, and that no two
+collector given one of `tls.cert_file` and `tls.key_file` by its file's
+[defaults](#defaults-for-the-collectors-of-a-file) is given the other too,
+that two `request.headers` names are not one header in different case, and that no two
 rules of a collector are
 [the same rule](#two-rules-that-are-the-same-rule), nor a `prometheus`
 [name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
@@ -3565,7 +3576,20 @@ another service than `grpc.health.v1.Health` without `descriptors`, a
 `otlp.headers` one in a block switched on, that is no header name or is
 `Accept-Encoding`, a `request.query` name that is empty or holds a control
 character, a `forward_headers` entry that is no header name or one that is
-[never forwarded](AUTHENTICATION.md), and a
+[never forwarded](AUTHENTICATION.md), a duration or a size under its key's
+least, written as a number or as text of one number and a unit, such as
+`limits.script_timeout: 500us`, `limits.max_script_memory: 16MiB`,
+`max_response_bytes: 1kB`, `otlp.interval: 500ms` in a block switched on, a
+static target file's `interval: 0.5s` and `failure_backoff.initial: 0s`, a
+`tls` block with a client certificate and no key or a key and no
+certificate, but for the file a collector takes from its file's `defaults`,
+a request with two credentials, such as `bearer_token` beside
+`bearer_token_file` or `basic_auth` beside a bearer token, a
+`basic_auth_file` without both its files, a `pagination` key of another way
+of paging, such as `next` beside `type: page`, a `grpc` collector's
+`protoset_file`, `proto_files` or `proto_import_paths` beside another source
+of `descriptors`, or that source without its files, a `python` transform
+without a `script`, and a
 negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
@@ -5715,17 +5739,19 @@ The response limits, `request.max_response_bytes` and
 without a unit is a number of bytes, and a limit under a kibibyte is one
 whose unit was left out, `max_response_bytes: 10` for 10 MiB, which would
 fail every scrape. A smaller one fails to load, and the schema flags it, as
-for `limits.max_output_bytes` below, where it is written as a number.
+for `limits.max_output_bytes` below.
 
 `limits.max_output_bytes`, which bounds an answer of a
 [Python worker](PYTHON.md#how-scripts-run) and is 1 MiB when it is left out
 or `0`, is at least 38 bytes when it is set, the answer of a script that
 emits no metric: a smaller one — `26`, `2.6e1`, `"26"`, `26B`, `0.02KiB` —
-fails to load. The schema flags it where it is written as a number, from 1
-to 37 however YAML writes the number. Written as text, in quotes or with a
-unit, a size is to the schema text that reads as a size, and how many bytes
-`20B` or `0.01KiB` comes to it cannot tell: that one is checked when the
-configuration loads.
+fails to load. The schema flags it too: written as a number, from 1 to 37
+however YAML writes the number, and written as text, in quotes or with a
+unit, by the digits of its number, so `20B`, `"26"` and `0.01KiB` are
+flagged, while `0.5B`, which comes to no byte, is `0`, the default, to both.
+`limits.max_script_memory`, at least 32 MiB when it is set, and
+`otlp.batch_max_bytes`, at least 64 KiB in a block switched on, are held to
+their least the same way.
 
 A number of bytes written without quotes is the whole number it equals
 however YAML writes the number: `1e6`, `1E6`, `+1e6` and `1000000.0` are a

@@ -953,7 +953,7 @@ func sqlKeyRules() map[string]map[string]any {
 		"connections.idle_timeout":        {"description": "How long an idle connection is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
 		"connections.max_lifetime":        {"description": "How long a connection is used before it is closed and made again. Defaults to 1h; 0 uses it as long as it works."},
 		"connections.keepalive":           {"description": "How a kept connection is found broken."},
-		"connections.keepalive.interval":  {"description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 checks none."},
+		"connections.keepalive.interval":  {"not": SchemaLeastDuration(sqlMinKeepalive, true), "description": "How often: the TCP keepalive interval, or how often the idle connections are pinged. At least 1s; defaults to 30s; 0 checks none."},
 		"connections.keepalive.check":     {"enum": SchemaOptionalEnum([]string{"tcp", "ping"}), "description": "tcp, the default: TCP keepalives on every connection. ping: every idle connection is pinged every interval."},
 	}
 }

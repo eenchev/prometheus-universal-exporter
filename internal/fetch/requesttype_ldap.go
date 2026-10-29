@@ -141,8 +141,11 @@ func init() {
 		},
 		SchemaRule:         ldapSchemaRule,
 		CheckTargetRequest: checkLDAPTargetRequest,
-		Stage:              "ldap",
-		CheckFiles:         checkLDAPFiles,
+		// starttls names the protocol of tcp's and tlscert's STARTTLS,
+		// which ldap does not speak: its own is a boolean.
+		KeyAdvice:  map[string]string{"starttls": "an ldap collector asks for StartTLS on its plaintext connection with its own key, start_tls: true, the handshake taking the tls block's settings"},
+		Stage:      "ldap",
+		CheckFiles: checkLDAPFiles,
 	})
 	templateEscapers["ldap_dn"] = func(where, name, value string) (string, error) {
 		written, err := ldapEscapeDNValue(value)

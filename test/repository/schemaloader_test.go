@@ -215,14 +215,14 @@ func TestSchemaAndExporterAgreeOnWholeNumbersWrittenWithAPointOrAnExponent(t *te
 
 // limits.max_output_bytes is a size that, when it is set, is at least the 38
 // bytes a Python script that emits no metric answers in
-// (transform.MinPythonOutputBytes), to the exporter and, where the size is written as a number, to the schema,
-// which is handed the number however it is written: 37 and 1 are refused by
-// both, with an exponent and with a fraction of zero too, and 38, and 0,
-// which is the default, are taken by both. A size written as text, in
-// quotes or with a unit, is text of the pattern of a size to a schema,
-// which cannot tell how many bytes it comes to: one that is too small is the
-// exporter's alone to refuse, and one that comes to no byte at all is the
-// default to both.
+// (transform.MinPythonOutputBytes), to the exporter and to the schema, which
+// is handed a number however it is written: 37 and 1 are refused by both,
+// with an exponent and with a fraction of zero too, and 38, and 0, which is
+// the default, are taken by both. A size written as text, in quotes or with
+// a unit, is held to the least by the not of the key's schema
+// (fetch.SchemaLeastSize), which reads its digits: one that is too small is
+// refused by both, as the exporter alone refused it before, and one that
+// comes to no byte at all is the default to both.
 func TestSchemaAndExporterAgreeOnTheLeastOutputLimit(t *testing.T) {
 	schema := loadSchema(t)
 	const least = transform.MinPythonOutputBytes
@@ -249,7 +249,7 @@ func TestSchemaAndExporterAgreeOnTheLeastOutputLimit(t *testing.T) {
 	for written, size := range map[string]int{
 		"'1'": 1, `"26"`: 26, "'37'": 37, "1B": 1, "20B": 20, "26B": 26, "26 b": 26, "37B": 37, "37.9B": 37, "1.5B": 1, "0.01KiB": 10, "0.02KiB": 20, "0.000026MB": 26,
 	} {
-		loadersAlone(t, schema, "max_output_bytes: "+written, limited(written), tooSmall(size))
+		refusedByBoth(t, schema, "max_output_bytes: "+written, limited(written), tooSmall(size))
 	}
 	// What is no size is no output limit either, to both, as it was.
 	for _, written := range []string{"-1", "-38", "37.5", "38.5", "3.75e1", "lots", "'3.8e1'", "'38.0'", "38 bytes", "[38]", "true"} {
@@ -257,9 +257,11 @@ func TestSchemaAndExporterAgreeOnTheLeastOutputLimit(t *testing.T) {
 	}
 }
 
-// otlp.interval is a duration to both, and its least, 1s, is the exporter's
-// to check: a duration is text to a schema. Switched off, the block is kept
-// unchecked by both.
+// otlp.interval is a duration to both, at least 1s once the block is
+// switched on: one of one part under it is refused by both, the schema
+// reading its digits (fetch.SchemaLeastDuration), and one of several parts,
+// whose sum a pattern cannot tell, by the exporter alone. Switched off, the
+// block is kept unchecked by both.
 func TestSchemaAndExporterAgreeOnTheOTLPInterval(t *testing.T) {
 	schema := loadSchema(t)
 	otlp := func(enabled bool, interval string) string {
@@ -268,16 +270,17 @@ func TestSchemaAndExporterAgreeOnTheOTLPInterval(t *testing.T) {
 	for written, accepted := range map[string]bool{"1s": true, "30s": true, "1m": true, "1h30m": true, "1.5s": true, "soon": false, "5": false, "1d": false, "[1s]": false} {
 		agree(t, schema, "otlp.interval: "+written, otlp(true, written), accepted)
 	}
-	for _, written := range []string{"500ms", "999ms", "1ns"} {
-		loadersAlone(t, schema, "otlp.interval: "+written, otlp(true, written), "otlp.interval "+written+" is under the least, 1s")
+	for _, written := range []string{"500ms", "999ms", "1ns", "0.999s", "999999us", "0.01m"} {
+		refusedByBoth(t, schema, "otlp.interval: "+written, otlp(true, written), "otlp.interval ")
 		agree(t, schema, "otlp.interval: "+written+", switched off", otlp(false, written), true)
 	}
+	loadersAlone(t, schema, "otlp.interval: 500ms400ms", otlp(true, "500ms400ms"), "otlp.interval 900ms is under the least, 1s")
 	// A negative interval is refused by both, and kept by both in a block
 	// that is switched off.
 	agree(t, schema, "otlp.interval: -1s", otlp(true, "-1s"), false)
 	agree(t, schema, "otlp.interval: -1s, switched off", otlp(false, "-1s"), true)
-	if description, _ := schema["properties"].(map[string]any)["otlp"].(map[string]any)["properties"].(map[string]any)["interval"].(map[string]any)["description"].(string); !strings.Contains(description, "At least 1s, which the exporter checks when the configuration loads") {
-		t.Errorf("the description of otlp.interval does not say who checks its least: %q", description)
+	if description, _ := schema["properties"].(map[string]any)["otlp"].(map[string]any)["properties"].(map[string]any)["interval"].(map[string]any)["description"].(string); !strings.Contains(description, "At least 1s once the block is switched on") {
+		t.Errorf("the description of otlp.interval does not say its least: %q", description)
 	}
 }
 
@@ -286,8 +289,8 @@ func TestSchemaAndExporterAgreeOnTheOTLPInterval(t *testing.T) {
 // where the size is written as a number, to the schema, however the number
 // is written: 1, 10 and 1023 are refused by both, a limit whose unit was left
 // out, and 1024, 0, which is the default, and every size with a unit past
-// the least are taken by both. A size written as text under the least is the
-// exporter's alone to refuse, as for limits.max_output_bytes.
+// the least are taken by both. A size written as text under the least is
+// refused by both too, as for limits.max_output_bytes.
 func TestSchemaAndExporterAgreeOnTheLeastResponseLimit(t *testing.T) {
 	schema := loadSchema(t)
 	inRequest := func(written string) string {
@@ -306,26 +309,89 @@ func TestSchemaAndExporterAgreeOnTheLeastResponseLimit(t *testing.T) {
 		for written, size := range map[string]int{"1": 1, "10": 10, "1e1": 10, "100": 100, "1023": 1023, "1.023e3": 1023, "+1023": 1023} {
 			refusedByBoth(t, schema, key+": "+written, document(written), tooSmall(size))
 		}
-		for written, size := range map[string]int{"'10'": 10, "10B": 10, "1kB": 1000, "0.5KiB": 512, "1023 B": 1023} {
-			loadersAlone(t, schema, key+": "+written, document(written), tooSmall(size))
+		for written, size := range map[string]int{"'10'": 10, "10B": 10, "1kB": 1000, "0.5KiB": 512, "1023 B": 1023, "0.0009MiB": 943} {
+			refusedByBoth(t, schema, key+": "+written, document(written), tooSmall(size))
 		}
 	}
 }
 
-// limits.script_timeout is a duration to both, and its least, 1ms, is the
-// exporter's to check, as otlp.interval's is: a duration is text to a
-// schema. 0 is the default, to both.
+// limits.script_timeout is a duration to both, at least 1ms: one of one part
+// under it is refused by both, the schema reading its digits
+// (fetch.SchemaLeastDuration), as the exporter alone refused it before, and
+// one of several parts, whose sum a pattern cannot tell, by the exporter
+// alone. 0 is the default, to both, and so is a part that comes to no whole
+// nanosecond, the zero the exporter reads it as.
 func TestSchemaAndExporterAgreeOnTheLeastScriptTimeout(t *testing.T) {
 	schema := loadSchema(t)
-	for written, accepted := range map[string]bool{"0": true, "0s": true, "1ms": true, "1000us": true, "100ms": true, "5s": true, "soon": false, "5": false, "-1ms": false} {
+	for written, accepted := range map[string]bool{"0": true, "0s": true, "0.5ns": true, "1ms": true, "1000us": true, "1000000ns": true, "0.001s": true, "100ms": true, "5s": true, "500us500us": true, "soon": false, "5": false, "-1ms": false} {
 		agree(t, schema, "script_timeout: "+written, limitedCollector("script_timeout", written), accepted)
 	}
-	for written, shown := range map[string]string{"1ns": "1ns", "999us": "999µs", "0.5ms": "500µs", "999999ns": "999.999µs"} {
-		loadersAlone(t, schema, "script_timeout: "+written, limitedCollector("script_timeout", written), `collector "sized" limits.script_timeout is `+shown+`, under the least, 1ms`)
+	for written, shown := range map[string]string{"1ns": "1ns", "999us": "999µs", "999µs": "999µs", "0.5ms": "500µs", "999999ns": "999.999µs", "0.0009s": "900µs", "+0.5ms": "500µs"} {
+		refusedByBoth(t, schema, "script_timeout: "+written, limitedCollector("script_timeout", written), `collector "sized" limits.script_timeout is `+shown+`, under the least, 1ms`)
 	}
-	if description, _ := schemaNodeOf(schema, "collectors", "limits", "script_timeout")["description"].(string); !strings.Contains(description, "At least 1ms, which the exporter checks when the configuration loads") {
-		t.Errorf("the description of limits.script_timeout does not say who checks its least: %q", description)
+	loadersAlone(t, schema, "script_timeout: 400us400us", limitedCollector("script_timeout", "400us400us"), `collector "sized" limits.script_timeout is 800µs, under the least, 1ms`)
+	if description, _ := schemaNodeOf(schema, "collectors", "limits", "script_timeout")["description"].(string); !strings.Contains(description, "At least 1ms") {
+		t.Errorf("the description of limits.script_timeout does not say its least: %q", description)
 	}
+}
+
+// limits.max_script_memory is a size that, when it is set, is at least
+// 32MiB, to the exporter and to the schema: written as a number by the
+// key's minimum, and written as text, in quotes or with a unit, by the not
+// of text under the least (fetch.SchemaLeastSize). The schema took any size
+// for it, so an editor showed as valid a limit the exporter refuses. 0 is no
+// limit, to both, and so is a size that comes to no byte.
+func TestSchemaAndExporterAgreeOnTheLeastScriptMemory(t *testing.T) {
+	schema := loadSchema(t)
+	tooSmall := func(size int) string {
+		return fmt.Sprintf(`collector "sized" limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes`, size)
+	}
+	for _, written := range []string{"0", "0B", "0.5B", "32MiB", "33554432", "'33554432'", "33.554432MB", "32768KiB", "0.03125GiB", "64MiB", "1GiB", "256 MiB"} {
+		agree(t, schema, "max_script_memory: "+written, limitedCollector("max_script_memory", written), true)
+	}
+	for written, size := range map[string]int{
+		"1": 1, "33554431": 33554431, "3.3554431e7": 33554431, "'33554431'": 33554431, "16MiB": 16 << 20, "31.99MiB": 33543946, "32767KiB": 33553408,
+		"33MB": 33000000, "33.554431MB": 33554431, "0.03GiB": 32212254, "1KiB": 1024, "1B": 1, "16 mib": 16 << 20,
+	} {
+		refusedByBoth(t, schema, "max_script_memory: "+written, limitedCollector("max_script_memory", written), tooSmall(size))
+	}
+	for _, written := range []string{"-1", "lots", "1.5", "16 MiBs"} {
+		agree(t, schema, "max_script_memory: "+written, limitedCollector("max_script_memory", written), false)
+	}
+}
+
+// A duration that must be more than zero, failure_backoff's initial, max
+// and min_budget, is refused by both written as zero in any way, and as a
+// part under a nanosecond, which is the zero the exporter reads it as: the
+// schema took them as it takes any duration, and the exporter refused them
+// when the configuration loaded.
+func TestSchemaAndExporterAgreeOnAPositiveDuration(t *testing.T) {
+	schema := loadSchema(t)
+	backoff := func(key, written string) string {
+		return strings.Replace(limitedCollector("max_metrics", "0"), "    limits:\n", "    failure_backoff:\n      "+key+": "+written+"\n    limits:\n", 1)
+	}
+	for key, message := range map[string]string{
+		"initial":    `collector "sized" failure_backoff.initial must be a positive duration`,
+		"max":        `collector "sized" failure_backoff.max 0s must not be shorter than failure_backoff.initial 30s`,
+		"min_budget": `collector "sized" failure_backoff.min_budget must be a positive duration`,
+	} {
+		for _, written := range []string{"0", "'0'", "0s", "-0s", "+0", "0.0m", "0s0ms", "0.5ns", "0.0000000001s"} {
+			refusedByBoth(t, schema, key+": "+written, backoff(key, written), message)
+		}
+	}
+	for _, key := range []string{"initial", "max", "min_budget"} {
+		for _, written := range []string{"30m", "1h"} {
+			agree(t, schema, key+": "+written, backoff(key, written), true)
+		}
+	}
+	for _, key := range []string{"initial", "min_budget"} {
+		for _, written := range []string{"1ns", "0.000000001s"} {
+			agree(t, schema, key+": "+written, backoff(key, written), true)
+		}
+	}
+	// max is no shorter than initial: a relation between two keys, one of
+	// them a default, that is the exporter's alone to check.
+	loadersAlone(t, schema, "max: 1ns", backoff("max", "1ns"), `collector "sized" failure_backoff.max 1ns must not be shorter than failure_backoff.initial 30s`)
 }
 
 // schemaNodeOf is the node of a collector's key in the configuration's
@@ -469,7 +535,10 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	}
 	aSecondOrMore := []string{"1s", "5s", "+5s", "'+1m'", "1h30m", "1.5h", "5.s", "1m0.5s", "+1h0m0s"}
 	zero := []string{"0s", "'0'", "+0s", "-0s", "'+0'", "'-0'", "0h0m", "-0h0m0s", "-0.0s", "-.0s", "-0.m"}
-	underASecond := []string{".5s", "+.5s", "500ms", "0.999s", "1ns", "1us", "1µs", "1μs", "0h0m0.1s"}
+	underASecond := []string{".5s", "+.5s", "500ms", "0.999s", "1ns", "1us", "1µs", "1μs", "0.01m", "999999999ns"}
+	// Of several parts, each under a second, whose sum a pattern cannot
+	// tell.
+	partsUnderASecond := []string{"0h0m0.1s", "500ms400ms"}
 	negative := []string{"-5s", "'-5s'", "-1ns", "-1h30m", "-0h1m", "-.5s", "-1.5h", "-0m0.001s"}
 	notADuration := []string{"5", "'5'", "'-5'", "''", "s", ".s", "+s", "-s", "'-'", "1d", "5 s", "' 5s'", "'5s '", "--5s", "+-5s", "1s1", "5S", "soon", "'0.0'", "'00'", "30", "-5", "1.5", "0.5", "true", "[5s]", "{s: 5}"}
 	// Written negative, and so small that Go rounds them to zero.
@@ -493,11 +562,21 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	}
 	expect(every, notADuration, false, "")
 	expect(slices.Concat(takesZero, zeroIsTheDefault), zero, true, "")
-	expect(takesZero, underASecond, true, "")
-	// How long a duration must be is the exporter's alone to say.
-	expect(zeroIsTheDefault, underASecond, false, "is under the least, 1s")
-	expect(required, underASecond, false, "is under the least, 1s")
-	expect(required, zero, false, "interval is required")
+	expect(takesZero, slices.Concat(underASecond, partsUnderASecond), true, "")
+	// How long a duration of one part is, the schemas read from its digits
+	// (fetch.SchemaLeastDuration), and refuse one under the least, as the
+	// exporter alone did before; of several parts, the exporter alone.
+	expect(slices.Concat(zeroIsTheDefault, required), underASecond, false, "")
+	expect(slices.Concat(zeroIsTheDefault, required), partsUnderASecond, false, "is under the least, 1s")
+	for _, key := range slices.Concat(zeroIsTheDefault, required) {
+		for _, written := range underASecond {
+			if _, err := key.check(t, written); err == nil || !strings.Contains(err.Error(), "is under the least, 1s") {
+				t.Errorf("%s: %s: the exporter refuses it with %v", key.name, written, err)
+			}
+		}
+	}
+	// A required duration written as zero, in any way, is refused by both.
+	expect(required, zero, false, "")
 	// Switched off, a block is kept unchecked: whatever is a duration.
 	expect(switchedOff, slices.Concat(aSecondOrMore, zero, underASecond, negative, negativeUnderANanosecond), true, "")
 	expect(switchedOff, notADuration, false, "")
@@ -506,7 +585,7 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	// beside the text, where they refused it as no text.
 	unquotedZero := []string{"0", "+0", "-0"}
 	expect(slices.Concat(takesZero, zeroIsTheDefault, switchedOff), unquotedZero, true, "")
-	expect(required, unquotedZero, false, "interval is required")
+	expect(required, unquotedZero, false, "")
 
 	// The two disagreements on how a duration is written, each named here
 	// and documented (docs/CONFIGURATION.md, Editor support), and no other.
@@ -518,7 +597,9 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	// And a zero YAML reads as a number that is not written 0: a schema is
 	// handed the number, 0, which it takes, and the exporter reads what is
 	// written, which has no unit and is not 0.
-	expect(slices.Concat(every, switchedOff), zerosOfAnotherSpelling, false, "is not a duration")
+	// Where zero is refused, the schemas refuse the number too.
+	expect(slices.Concat(takesZero, zeroIsTheDefault, switchedOff), zerosOfAnotherSpelling, false, "is not a duration")
+	expect(required, zerosOfAnotherSpelling, false, "")
 }
 
 // A block that enabled switches on — otlp, web.basic_auth — is refused by
@@ -581,5 +662,161 @@ func TestSchemaAndExporterAgreeOnEnabled(t *testing.T) {
 		"basic_auth with two settings": {"web: {basic_auth: {username: admin, password: s3cret}}\n", false},
 	} {
 		agree(t, schema, name, test.block+testutil.MinimalConfig, test.accepted)
+	}
+}
+
+// A tls block holds a client certificate with its key or neither, to the
+// exporter, which refuses one of the two alone when the configuration loads
+// (fetch.CheckClientTLSKeys and the request types' checks), and to the
+// schemas, which took a collector's, a login's and the otlp block's with one
+// of them alone: a static target's alone was held to it. A collector takes
+// one of the two from its file's defaults and writes the other itself, so
+// the schemas hold a collector to the file the defaults do not write, and
+// the defaults block to nothing; of defaults that write one and a collector
+// that writes neither, whether the collector's request type takes tls at all
+// is the exporter's to tell. A switched-off otlp block is kept unchecked.
+func TestSchemaAndExporterAgreeOnAClientCertificateWithoutItsKey(t *testing.T) {
+	schema, collectorFileSchema := loadSchema(t), loadSchemaFile(t, collectorFileSchemaFile)
+	const unpaired = "sets only one of cert_file and key_file; a client certificate needs both"
+	collector := func(defaults, request string) string {
+		document := strings.Replace(limitedCollector("max_metrics", "0"), "    request: {type: http}\n", "    request: {type: http"+request+"}\n", 1)
+		if defaults != "" {
+			document = "defaults: {request: {tls: " + defaults + "}}\n" + document
+		}
+		return document
+	}
+	otlp := func(enabled bool, tls string) string {
+		return fmt.Sprintf("otlp:\n  enabled: %v\n  endpoint: https://collector.invalid:4318/v1/metrics\n  tls: %s\n", enabled, tls) + testutil.MinimalConfig
+	}
+	for name, document := range map[string]string{
+		"a collector's certificate alone":                   collector("", ", tls: {cert_file: /c.pem}"),
+		"a collector's key alone":                           collector("", ", tls: {key_file: /k.pem}"),
+		"a collector's key beside a certificate of nothing": collector("", `, tls: {cert_file: "", key_file: /k.pem}`),
+		"a login's certificate alone":                       collector("", ", login: {type: oauth2, url: /token, client_id: a, client_secret_file: /s, tls: {cert_file: /c.pem}}"),
+		"the otlp block's certificate alone":                otlp(true, "{cert_file: /c.pem}"),
+		"the otlp block's key alone":                        otlp(true, "{key_file: /k.pem}"),
+	} {
+		refusedByBoth(t, schema, name, document, unpaired)
+	}
+	for name, document := range map[string]string{
+		"a collector's certificate and key":            collector("", ", tls: {cert_file: /c.pem, key_file: /k.pem}"),
+		"a collector's certificate of the defaults":    collector("{cert_file: /c.pem}", ", tls: {key_file: /k.pem}"),
+		"a collector's key of the defaults":            collector("{key_file: /k.pem}", ", tls: {cert_file: /c.pem}"),
+		"the defaults' certificate and key":            collector("{cert_file: /c.pem, key_file: /k.pem}", ""),
+		"a switched-off otlp block's certificate":      otlp(false, "{cert_file: /c.pem}"),
+		"a collector's certificate and key of nothing": collector("", `, tls: {cert_file: "", key_file: ""}`),
+	} {
+		agree(t, schema, name, document, true)
+	}
+	// The same file written in the defaults and the collector, and the
+	// other in neither: refused by both, the exporter naming first the
+	// defaults' file no collector takes.
+	agree(t, schema, "a certificate alone in the defaults and the collector", collector("{cert_file: /c.pem, ca_file: /ca.pem}", ", tls: {cert_file: /d.pem}"), false)
+	agree(t, schema, "a key alone in the defaults and the collector", collector("{key_file: /k.pem, server_name: a.example}", ", tls: {key_file: /l.pem}"), false)
+	loadersAlone(t, schema, "a certificate alone in the defaults", collector("{cert_file: /c.pem}", ""), unpaired)
+	// A collector file is held to it as the configuration is.
+	dir := t.TempDir()
+	listing := testutil.WriteIn(t, dir, "config.yaml", "collector_files: [collectors.yaml]\n")
+	for document, accepted := range map[string]bool{
+		collector("", ", tls: {cert_file: /c.pem}"):                                      false,
+		collector("{cert_file: /c.pem}", ", tls: {key_file: /k.pem}"):                    true,
+		collector("{cert_file: /c.pem, ca_file: /ca.pem}", ", tls: {cert_file: /d.pem}"): false,
+		collector("", ", tls: {cert_file: /c.pem, key_file: /k.pem}"):                    true,
+	} {
+		testutil.WriteIn(t, dir, "collectors.yaml", document)
+		_, err := config.Load(listing)
+		if problems := schemaProblems(t, collectorFileSchema, document); (len(problems) == 0) != accepted || (err == nil) != accepted {
+			t.Errorf("a collector file: want accepted %v by both; the schema says %v, the exporter %v\n%s", accepted, problems, err, document)
+		}
+	}
+}
+
+// A key of request.pagination that one way of paging reads is refused
+// beside another, by the exporter (fetch.validatePagination) and by the
+// schema, which took next, param, start and size beside any type: next is
+// of next_url and cursor, param of cursor, page and offset, start of page
+// and offset and size of offset. next and param written "" are left out, to
+// both.
+func TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType(t *testing.T) {
+	schema := loadSchema(t)
+	paged := func(pagination string) string {
+		return "collectors:\n  - name: paged\n    request:\n      type: http\n      pagination: {" + pagination + "}\n    transform: {type: jq}\n    metrics:\n      - name: v\n        expression: .v\n"
+	}
+	for _, pagination := range []string{
+		"type: link, items: .items, next: .next", "type: page, items: .items, param: page, next: .next", "type: offset, items: .items, param: o, next: .n",
+		"type: link, items: .items, param: page", "type: next_url, items: .items, next: .next, param: p",
+		"type: link, items: .items, start: 1", "type: cursor, items: .items, next: .c, param: c, start: 0", "type: next_url, items: .items, next: .n, start: 2",
+		"type: link, items: .items, size: 10", "type: page, items: .items, param: page, size: 10", "type: cursor, items: .items, next: .c, param: c, size: 5",
+	} {
+		agree(t, schema, "pagination: {"+pagination+"}", paged(pagination), false)
+	}
+	for _, pagination := range []string{
+		"type: link, items: .items", `type: link, items: .items, next: "", param: ""`, "type: next_url, items: .items, next: .next",
+		"type: cursor, items: .items, next: .c, param: c", "type: page, items: .items, param: page, start: 0", "type: offset, items: .items, param: o, start: 0, size: 50",
+		`type: page, items: .items, param: page, next: ""`,
+	} {
+		agree(t, schema, "pagination: {"+pagination+"}", paged(pagination), true)
+	}
+}
+
+// A request holds one credential, to the exporter (validateCredentials,
+// validateStaticTargets) and to the schemas, which took a collector's and a
+// static target's with two: bearer_token beside bearer_token_file,
+// basic_auth beside basic_auth_file, and a Basic credential beside a bearer
+// token. A basic_auth_file names both its files, with something other than
+// blanks. A token written "" is no token, to both.
+func TestSchemaAndExporterAgreeOnTwoCredentials(t *testing.T) {
+	schema, targetSchema := loadSchema(t), loadSchemaFile(t, staticTargetsSchemaFile)
+	collector := func(credentials string) string {
+		return strings.Replace(limitedCollector("max_metrics", "0"), "    request: {type: http}\n", "    request: {type: http, "+credentials+"}\n", 1)
+	}
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", collector("bearer_token: t")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := func(credentials string) ([]string, error) {
+		document := "interval: 1m\ntargets:\n  - name: a\n    collector: sized\n    target: http://a.example\n    request: {" + credentials + "}\n"
+		problems := schemaProblems(t, targetSchema, document)
+		file, err := config.LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", document))
+		if err == nil {
+			err = config.ValidateStaticTargets(file)
+		}
+		if err == nil {
+			err = config.ValidateStaticTargetsAgainst(file, cfg)
+		}
+		return problems, err
+	}
+	for credentials, accepted := range map[string]bool{
+		"bearer_token: t, bearer_token_file: /t":                                                false,
+		"basic_auth: {username: u, password: p}, basic_auth_file: {username: /u, password: /p}": false,
+		"basic_auth: {username: u, password: p}, bearer_token: t":                               false,
+		"basic_auth_file: {username: /u, password: /p}, bearer_token_file: /t":                  false,
+		"basic_auth_file: {username: /u}":                                                       false,
+		"basic_auth_file: {password: /p}":                                                       false,
+		"basic_auth_file: {username: ' ', password: /p}":                                        false,
+		"basic_auth_file: {username: /u, password: ''}":                                         false,
+		"bearer_token: t":                                          true,
+		`bearer_token: t, bearer_token_file: ""`:                   true,
+		`basic_auth: {username: u, password: p}, bearer_token: ""`: true,
+		"basic_auth_file: {username: /u, password: /p}":            true,
+	} {
+		agree(t, schema, "a collector's "+credentials, collector(credentials), accepted)
+		if problems, err := target(credentials); (len(problems) == 0) != accepted || (err == nil) != accepted {
+			t.Errorf("a target's %s: want accepted %v by both; the schema says %v, the exporter %v", credentials, accepted, problems, err)
+		}
+	}
+}
+
+// A python transform runs its script, which it requires, to the exporter
+// and to the schema, which took a python collector without one: written ""
+// or blanks alone it is none.
+func TestSchemaAndExporterAgreeOnAPythonTransformWithoutAScript(t *testing.T) {
+	schema := loadSchema(t)
+	for transform, accepted := range map[string]bool{
+		"{type: python}": false, `{type: python, script: ""}`: false, "{type: python, script: '  '}": false,
+		"{type: python, script: \"metric('up', 1)\"}": true,
+	} {
+		document := "collectors:\n  - name: py\n    request: {type: http}\n    transform: " + transform + "\n    metrics:\n      - name: up\n"
+		agree(t, schema, "transform: "+transform, document, accepted)
 	}
 }

@@ -140,8 +140,11 @@ func httpKeyRules() map[string]map[string]any {
 
 // httpPaginationRule is the rule of request.pagination: type and items
 // required, each written with something other than "", next with type
-// next_url and cursor, and param with cursor, page and offset, as the
-// exporter has them (fetch.validatePagination).
+// next_url and cursor and with no other, param with cursor, page and offset
+// and with no other, start with page and offset alone and size with offset
+// alone, as the exporter has them (fetch.validatePagination). The schema
+// took next, param, start and size beside any type, which the exporter
+// refuses as a key of another way of paging.
 func httpPaginationRule() map[string]any {
 	when := func(types ...string) map[string]any {
 		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
@@ -151,8 +154,10 @@ func httpPaginationRule() map[string]any {
 		"allOf": []any{
 			SchemaWrittenKey("type"),
 			SchemaWrittenKey("items"),
-			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": SchemaWrittenKey("next")},
-			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": SchemaWrittenKey("param")},
+			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": SchemaWrittenKey("next"), "else": map[string]any{"not": SchemaWrittenKey("next")}},
+			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": SchemaWrittenKey("param"), "else": map[string]any{"not": SchemaWrittenKey("param")}},
+			map[string]any{"if": when(model.PaginationPage, model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"start"}}}},
+			map[string]any{"if": when(model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"size"}}}},
 		},
 	}
 }

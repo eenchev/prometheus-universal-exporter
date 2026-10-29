@@ -54,6 +54,17 @@ then on `localhost` or `[::1]`, which a browser on this machine can open. An
 IPv6 `HOST` may be given bare or in brackets (`HOST=::1`); an empty `HOST=`
 fails before anything is built.
 
+## Changelog
+
+A pull request that changes what someone running the exporter or installing
+the chart sees adds its lines to `## Unreleased` in
+[`CHANGELOG.md`](../CHANGELOG.md): under `### What changed for you` what an
+upgrade makes them do or notice (a key or value renamed or removed, a default
+changed, a metric renamed), under `### New` and `### Fixed` the rest. The
+section becomes a GitHub Release's description, so its lines are written for
+users; a refactor, a test or a CI change adds none. [Releases](RELEASING.md#release-notes)
+says how a release moves the lines into a section of its own.
+
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`), its

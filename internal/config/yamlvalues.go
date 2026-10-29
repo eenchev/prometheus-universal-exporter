@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -239,6 +240,25 @@ func yamlFieldsOf(t reflect.Type) map[string]int {
 	return known.(map[string]int)
 }
 
+// keysOfAnotherType says, of a request block written as n, whether a key
+// is one its request type does not take: nil when the block names no type
+// this build has, which the validation refuses on its own.
+func keysOfAnotherType(n *yaml.Node) func(key string) bool {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for _, entry := range model.DecodedEntries(n) {
+		value := resolveAlias(entry.Value)
+		if model.KeyName(entry.Key) != "type" || value == nil || value.Kind != yaml.ScalarNode {
+			continue
+		}
+		if rt := fetch.RequestTypes[strings.ToLower(strings.TrimSpace(value.Value))]; rt != nil {
+			return func(key string) bool { return key != "type" && !rt.Takes(key) }
+		}
+	}
+	return nil
+}
+
 // valueProblems walks the document beside the type it is decoded into, as
 // the decoder does: an alias is what it names, a key that is an alias the
 // key it names (model.KeyName), and a merge key supplies the keys of what it
@@ -263,8 +283,10 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 	}
 	readAgain = map[string]bool{}
 	visiting := map[*yaml.Node]bool{}
-	// written counts the values the walk writes into decoded.
-	written := 0
+	// written counts the values the walk writes into decoded, and
+	// foreignDepth is above zero within the value of a request key its
+	// type does not take.
+	written, foreignDepth := 0, 0
 	// at is the place for a message, kinds what its schema says the place
 	// takes, and out the value decoded there, which is not valid where
 	// nothing was.
@@ -288,8 +310,17 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 		}
 		// A request block is walked as it is read, as its common part and
 		// every request type's own keys (model.RequestView), and what the
-		// walk writes into the view is written back into the block.
+		// walk writes into the view is written back into the block. The
+		// value of a key the block's request type does not take is held to
+		// no kind: the key is refused for that, whatever its value
+		// (fetch.ValidateRequest), with the type's own key where one does
+		// what the collector meant (fetch.RequestType.KeyAdvice), and told
+		// of the values of another type's key it would point the wrong
+		// way, as starttls: true in an ldap collector was told tcp's
+		// protocols. A value that is none is refused there as anywhere.
+		var foreign func(key string) bool
 		if t == requestConfigType {
+			foreign = keysOfAnotherType(n)
 			t = model.RequestViewType()
 			if out.IsValid() && out.CanAddr() {
 				request := out.Addr().Interface().(*model.RequestConfig)
@@ -317,6 +348,10 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 				case !ok:
 				case noValue(entry.Value):
 					problems = append(problems, fmt.Sprintf("line %d: %s %s, which YAML reads as no value at all; write its value, or take the key out", entry.Key.Line, name, noValueAfterColon(entry.Value)))
+				case foreign != nil && foreign(name):
+					foreignDepth++
+					walk(entry.Value, t.Field(field).Type, reflect.Value{}, writtenAt{key: name}, nil)
+					foreignDepth--
 				default:
 					var value reflect.Value
 					if out.IsValid() {
@@ -367,6 +402,9 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 				walk(entry.Value, t.Elem(), reflect.Value{}, writtenAt{key: key, mapKey: model.KeyName(entry.Key), inMap: true}, kinds.value())
 			}
 		case reflect.String:
+			if foreignDepth > 0 {
+				return
+			}
 			if n.Kind == yaml.ScalarNode && kinds != nil && kinds.number && out.CanSet() {
 				if text, ok := wholeNumberText(n, kinds.least, kinds.most); ok {
 					out.SetString(text)
@@ -394,7 +432,7 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 			}
 			problems = append(problems, fmt.Sprintf("line %d: %s is written %s, which YAML reads as %s, not as text; %s", n.Line, at, n.Value, reads, advice))
 		case reflect.Bool:
-			if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
+			if foreignDepth > 0 || n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
 				return
 			}
 			if meant, word := yamlBooleanWords[n.Value]; word {
@@ -402,7 +440,7 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 			}
 		case reflect.Int, reflect.Int64:
 			// A duration and a size read themselves, and say what they take.
-			if t == durationType || t == byteSizeType || n.Kind != yaml.ScalarNode || (n.ShortTag() != "!!float" && !pastFloat64(n)) {
+			if foreignDepth > 0 || t == durationType || t == byteSizeType || n.Kind != yaml.ScalarNode || (n.ShortTag() != "!!float" && !pastFloat64(n)) {
 				return
 			}
 			whole, isWhole := model.ReadWholeNumber(n.Value)

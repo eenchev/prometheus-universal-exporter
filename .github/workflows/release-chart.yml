@@ -85,6 +85,15 @@ jobs:
           echo "version=$chart_version" >> "$GITHUB_OUTPUT"
           echo "releasing chart version $chart_version"
 
+      # The Release's description is the version's section of CHANGELOG.md
+      # (tools/release-notes.sh), read before the chart is checked and
+      # packaged, so a release whose section is missing, or does not say what
+      # upgrading changes for a user, fails before anything is pushed.
+      - name: Read the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: sh tools/release-notes.sh chart "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+
       - run: helm lint charts/prometheus-universal-exporter
       - run: helm template test charts/prometheus-universal-exporter
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
@@ -213,4 +222,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/*.tgz --generate-notes --title "Chart ${VERSION}"
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.tgz --notes-file "$RUNNER_TEMP/release-notes.md" --title "Chart ${VERSION}"

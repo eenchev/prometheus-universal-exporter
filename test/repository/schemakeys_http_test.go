@@ -250,7 +250,15 @@ func httpSchemaKeys() []schemaKey {
 		// (TestSchemaAndExporterAgreeOnTheLeastOutputLimit).
 		{key: "collectors[].limits.max_output_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
-		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, numberAlone: "limits.max_script_memory must be 0, for no limit, or at least 32MiB", size: true},
+		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, size: true},
+		// A size under the key's least is refused by both, written as text
+		// too, which the schemas took before they read its digits
+		// (fetch.SchemaLeastSize).
+		{key: "collectors[].limits.max_script_memory", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "32MiB", invalid: "16MiB", absent: true, invalidWas: taken},
+		{key: "collectors[].limits.max_output_bytes", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "38B", invalid: "37B", absent: true, invalidWas: taken},
+		{key: "collectors[].limits.max_response_bytes", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1KiB", invalid: "1kB", absent: true, invalidWas: taken},
+		{key: "collectors[].request.max_response_bytes", of: "under its least", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1KiB", invalid: "1023B", absent: true, invalidWas: taken},
+		{key: "otlp.batch_max_bytes", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  batch_max_bytes: %s\n", valid: "64KiB", invalid: "63KiB", absent: true, invalidWas: taken},
 		{key: "collectors[].request.max_response_bytes", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		{key: "otlp.batch_max_bytes", document: switchedOnOTLP, at: "  # otlp\n", setting: "  batch_max_bytes: %s\n", valid: "4MiB", invalid: "lots", absent: true, size: true},
 		{key: "otlp.batch_max_bytes", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  batch_max_bytes: %s\n", valid: "4MiB", invalid: "lots", absent: true, size: true},
@@ -264,9 +272,14 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].failure_backoff.max", document: jqCollector, at: collector, setting: "    failure_backoff:\n      max: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true, zero: "must not be shorter than failure_backoff.initial 30s"},
 		{key: "collectors[].failure_backoff.min_budget", document: jqCollector, at: collector, setting: "    failure_backoff:\n      min_budget: %s\n", valid: "2s", invalid: "soon", absent: true, duration: true, zero: "failure_backoff.min_budget must be a positive duration"},
 		{key: "collectors[].limits.script_timeout", document: jqCollector, at: collector, setting: "    limits:\n      script_timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		// A duration of one part under the key's least is refused by both,
+		// which the schemas took before they read its digits
+		// (fetch.SchemaLeastDuration).
+		{key: "collectors[].limits.script_timeout", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      script_timeout: %s\n", valid: "1ms", invalid: "500us", absent: true, invalidWas: taken},
 		{key: "collectors[].request.retry.backoff", document: jqCollector, at: request, setting: "      retry:\n        backoff: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.timeout", document: switchedOnOTLP, at: "  # otlp\n", setting: "  timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.interval", document: switchedOnOTLP, at: "  # otlp\n", setting: "  interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.interval", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  interval: %s\n", valid: "1s", invalid: "999ms", absent: true, invalidWas: taken},
 		{key: "otlp.timeout", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.interval", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 
@@ -293,6 +306,8 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken, numberAlone: `has invalid label name "1"`},
 		{key: "interval", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "30s", invalid: "soon", duration: true, zero: "interval is required"},
 		{key: "targets[].interval", file: inTargetFile, document: oneTarget, at: target, setting: "    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "interval", of: "under its least", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "1s", invalid: "500ms", invalidWas: taken},
+		{key: "targets[].interval", of: "under its least", file: inTargetFile, document: oneTarget, at: target, setting: "    interval: %s\n", valid: "1s", invalid: "0.5s", absent: true, invalidWas: taken},
 		{key: "targets[].request.timeout", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "targets[].request.retry.backoff", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        backoff: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 	}

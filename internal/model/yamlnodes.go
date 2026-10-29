@@ -57,22 +57,27 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 	if n.Kind != yaml.MappingNode {
 		return notAMapping(n, name)
 	}
-	var problems []string
-	collect := func(err error) error {
-		var typeErr *yaml.TypeError
-		if errors.As(err, &typeErr) {
-			problems = append(problems, typeErr.Errors...)
-			return nil
-		}
-		return err
-	}
 	// Node.Decode does not refuse unknown keys the way the file's decoder
 	// does, so they are checked here, or a misspelt key would be ignored.
-	if err := collect(checkKnownKeys(n, reflect.TypeOf(out).Elem(), name)); err != nil {
+	placed := unknownKeys(n, reflect.TypeOf(out).Elem(), name)
+	err := n.Decode(out)
+	var typeErr *yaml.TypeError
+	if err != nil && !errors.As(err, &typeErr) {
 		return err
 	}
-	if err := collect(n.Decode(out)); err != nil {
-		return err
+	if typeErr != nil {
+		// Each value is decoded again on its own, so that a message the
+		// decoder gives with its line alone sorts among the unknown keys
+		// in the order of the file (placeMessages).
+		at := keyAt{"", n.Line, n.Column}
+		pieces := decodedPieces(n, reflect.TypeOf(out).Elem(), at)
+		decoded, _ := placeMessages(typeErr.Errors, pieces, at)
+		placed = append(placed, decoded...)
+	}
+	sortProblems(placed)
+	problems := make([]string, 0, len(placed))
+	for _, problem := range placed {
+		problems = append(problems, problem.message)
 	}
 	// The keys and the switch are those the decoder reads (DecodedEntries):
 	// an enabled the block leaves empty is the one it has, whatever a

@@ -1,7 +1,6 @@
 package model
 
 import (
-	"cmp"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -93,12 +92,6 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		problems = append(problems, keyProblem{key.Line, key.Column, fmt.Sprintf("line %d: %s; defaults set the keys of %s", key.Line, why, joinWithAnd(DefaultsKeys))})
 	}
 	seen := map[string]bool{}
-	decoded := func(value *yaml.Node, err error) {
-		for _, message := range errorMessages(err) {
-			seen[message] = true
-			problems = append(problems, placedProblem(value, message))
-		}
-	}
 	var out plain
 	blocks := reflect.ValueOf(&out).Elem()
 	collector := reflect.TypeOf(Collector{})
@@ -133,8 +126,15 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		case "error_handling":
 			problems = append(problems, unknownKeys(entry.Value, reflect.TypeOf(ErrorHandling{}), "model.ErrorHandling")...)
 		}
+		// Each value of the block is decoded on its own, so that a
+		// message the decoder gives with its line alone is placed at its
+		// key (placedDecodeProblems): on a line of several, it is said
+		// where the file has it, not where the block's mapping begins.
 		field, _ := fieldByKey(blocks, block)
-		decoded(entry.Value, entry.Value.Decode(reflect.New(field.Type()).Interface()))
+		for _, problem := range placedDecodeProblems(entry.Value, field.Type(), keyAt{"", entry.Key.Line, entry.Key.Column}) {
+			seen[problem.message] = true
+			problems = append(problems, problem)
+		}
 	}
 	// The block decoded whole is what the collectors take; what it finds
 	// that no block on its own did, a key written twice, is reported too.
@@ -144,9 +144,7 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		}
 	}
 	if len(problems) > 0 {
-		slices.SortStableFunc(problems, func(a, b keyProblem) int {
-			return cmp.Or(cmp.Compare(a.line, b.line), cmp.Compare(a.column, b.column))
-		})
+		sortProblems(problems)
 		messages := make([]string, 0, len(problems))
 		for _, problem := range problems {
 			messages = append(messages, problem.message)

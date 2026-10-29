@@ -3095,7 +3095,13 @@ asked for it carries it. Its keys:
   `start_tls` MUST make it send StartTLS before the bind, either verifying
   the certificate against `tls.server_name` or the target's host; a
   refused StartTLS MUST fail the scrape. `ldap://` with a written `tls`
-  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused. The
+  block and no `start_tls`, and `ldaps://` with `start_tls`, MUST be refused.
+  `starttls`, the protocol `tcp` and `tlscert` begin TLS in, MUST be refused
+  in an `ldap` collector, however it is written, as a key the type does not
+  take with the type's own key named after it: `an ldap collector asks for
+  StartTLS on its plaintext connection with its own key, start_tls: true`;
+  and `start_tls` in a `tcp` or a `tlscert` collector MUST be refused naming
+  `starttls` and its four protocols. The
   target lists MUST be applied to the host before the connection and to the
   address connected to, as `http`'s are, a refused one answered `403`,
   counted in `http_exporter_targets_refused_total`, and never connected to.
@@ -5641,8 +5647,8 @@ typical script.
   exporter measuring a line as the constant counts it. The loader holds the
   least and the worker and the pool MUST NOT: a worker MUST run under
   whatever limit it is given, cutting a script's error to it (above). The
-  schemas MUST refuse a number from 1 to 37 at the key and take 0, and what
-  they cannot tell of a size written as text stays the loader's (§ 24.3).
+  schemas MUST refuse a number from 1 to 37 at the key and take 0, and a
+  size written as text that comes to that many bytes (§ 24.3).
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
@@ -7552,7 +7558,10 @@ cut short MUST count what the writer it was written to took. They MUST be
 counted in the middleware that compresses the answers, with no lock taken
 for a write, and an answer added to them once, when it is done, so that an
 answer of the self-metrics never holds its own bytes and the next answer
-holds them exactly. They MUST be exported over OTLP as every other
+holds them exactly. Counting an answer sent uncompressed MUST allocate
+nothing: the writer that counts it MUST be reused from answer to answer, not
+made for each, and a test MUST hold an uncompressed answer through the
+middleware to what it allocates without the counting. They MUST be exported over OTLP as every other
 self-metric.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
@@ -8852,10 +8861,24 @@ expected (`a duration such as 30s`, `a whole number`, `a list of values`,
 mapping belongs, and the message reaches the log and the reload status; the
 line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
-rather than only the first, in the order of the file within a block; the
+rather than only the first, in the order of the file within a block, and on
+one line by the column of the key, or the entry of a list, each is about: a
+value of the wrong kind, which the YAML decoder says with its line alone,
+MUST be placed at its own key, not where the block around it begins, so that
+on a line such as `defaults: {bogus: 1, limits: {max_metrics: x}}` the
+unknown key comes first, in the defaults block, a collector's `request`
+block and a block an `enabled` key switches on alike, and loading the same
+file again MUST give the same order; the
 exception is an unknown key of a collector's `request` block that a key its
 type does not take comes before, which MUST be left to be refused once that
-key is gone, so that the error names the first in the file (§ 5.1). A YAML syntax error is reported as the YAML
+key is gone, so that the error names the first in the file (§ 5.1). A key
+of a collector's `request` block that its type does not take MUST be refused
+as such whatever its value: a value of the wrong kind for the type that
+takes it, `starttls: true` in an `ldap` collector or `start_tls: smtp` in a
+`tlscert` one, MUST NOT be refused for its kind before it, neither by the
+decoder's word nor by the words of what text YAML read as a boolean or a
+number, which would tell the values of another type's key; a mistake of
+another key that is on the same line MUST still be said. A YAML syntax error is reported as the YAML
 parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
@@ -8999,12 +9022,28 @@ number and that is not written `0` — `0.0`, `00`, `0x0`, `0e0` — reaches a
 schema as the number 0, which it takes, while the exporter reads what is
 written and MUST refuse it as no duration; the test MUST hold both to that
 by name too, and the documentation MUST say it. These two MUST be the only
-differences in how a duration is written. What else a schema cannot
-tell MUST be said in the
-key's description and stay the exporter's to refuse: the least
-`otlp.interval`, 1s, since a duration is a string to a schema and a disabled
-block may hold any; the least `limits.script_timeout`, 1ms, a duration too;
-and the range of a size. A key of any other whole number
+differences in how a duration is written. A duration key with a least MUST
+be held to it by the schemas as far as the digits of a duration of one part
+tell it, by a `not` of the text of one number and one unit whose number is
+under the least divided by the unit, generated from the constant the loader
+checks against: `limits.script_timeout` 1ms, `request.keepalive_interval`
+1s, an `sql` collector's and target's `connections.keepalive.interval` 1s,
+the static target file's `interval` and a target's `interval` 1s,
+`otlp.interval` 1s in a block that is switched on, the allocator's
+`refresh_interval` 1s, and `failure_backoff`'s `initial`, `max` and
+`min_budget`, which MUST be more than zero. Where zero is the key's default,
+zero and a part that comes to no whole nanosecond (`0.5ns`) MUST stay taken;
+where it is not, the schemas MUST refuse zero however it is written, the
+number 0 and `-0s` and `0s0m` too, as the exporter does. A duration of
+several parts under the least, such as `400us400us`, whose parts a pattern
+cannot add up, and that `failure_backoff.max` is not shorter than `initial`,
+MUST stay the exporter's to refuse, and the documentation of the schemas
+MUST say so. A test MUST check the generated patterns against the
+exporter's reading of numbers around each least in every unit, and the test
+of the two verdicts MUST hold both to a duration under the least of each
+such key. What else a schema cannot tell MUST be said in the key's
+description and stay the exporter's to refuse: the range of a size. A key of
+any other whole number
 takes a number written with a point or an exponent as the whole number it
 equals, to the exporter as to a schema (§ 24.2): the range of the key's
 integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
@@ -9034,12 +9073,34 @@ refused by both and `0` and `38` taken by both, which the test of the two
 verdicts MUST show. So MUST the least of `request.max_response_bytes` and
 `limits.max_response_bytes`, 1KiB (§ 20), from the constant the loader
 checks against: `1`, `1e1` and `1023` refused by both, `0` and `1024` taken
-by both. The other two sizes MUST stay described as every size is. A size
-written as text — in quotes, or with a unit, such as `"26"`,
-`20B` or `0.01KiB` — is text of the pattern of a size to a schema, which
-cannot tell how many bytes it comes to: that such a size is under the least
-MUST stay the exporter's to refuse, MUST be said in the key's description
-and in the documentation of the schemas, and the test MUST hold both to it.
+by both. So MUST the least of `limits.max_script_memory`, 32MiB, and of
+`otlp.batch_max_bytes`, 64KiB, in a block that is switched on. A size
+written as text — in quotes, or with a unit, such as `"26"`, `20B`,
+`0.01KiB` or `16MiB` — MUST be held to the least of such a key by a `not` of
+the text of a number, with a unit or without, that comes to at least a byte
+and under the least, read from its digits, so that it is refused by both;
+one that comes to no byte, such as `0.5B`, is the zero, and the default, to
+both. The test of the two verdicts MUST hold both to it. The other sizes
+MUST stay described as every size is.
+
+A `tls` block MUST be held by the schemas to a client certificate with its
+key or neither, `""` being a file left out, as the exporter refuses one of
+the two alone when the configuration loads: a collector's `request.tls` and
+`request.login.tls`, a static target's, and `otlp.tls` in a block that is
+switched on. A collector takes a file its file's `defaults` write, so a
+collector MUST be held to the file of the two the defaults do not write, and
+the `defaults` block to neither; of defaults that write one and a collector
+that writes neither, the exporter alone MUST refuse it. A request's
+credentials MUST be held by the schemas to what the exporter refuses of
+them, a collector's and a static target's: `bearer_token` beside
+`bearer_token_file`, `basic_auth` beside `basic_auth_file`, a Basic
+credential beside a bearer token, and a `basic_auth_file` without both its
+files written with something other than blanks. So MUST an `http`
+collector's `pagination` keys of another way of paging (§ 5.1, Pagination), a `grpc`
+collector's descriptor files beside another source of `descriptors`, or
+that source without its files, and a `python` transform without a `script`.
+A test MUST put documents of each through the committed schemas and the
+exporter and require one verdict of both.
 
 The names of `request.headers`, a collector's and a static target's, and of
 `otlp.headers` in a block that is switched on, MUST be held by the schemas to
@@ -28997,6 +29058,34 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestATLSCertFTPSTARTTLSWaitsThroughA120`: an FTP server greeting with `120` in one line, in several replies, or before a `220` of several lines is asked `AUTH TLS` and handshaken with, the debug outcome showing all it said; `120` followed by `421` fails as a greeting that does not begin with `220`, quoting the `421`; a hundred `120` lines past `limits.max_response_bytes` (1,024) fail as a limit exceeded; an SMTP server greeting `120` is refused.
 - `TestATCPFTPSTARTTLSWaitsThroughA120`: a `tcp` collector with `starttls: ftp` and `greeting: "^220 "` reads past a `120` line, matches the `220` alone, answers it as the body and `X-Tcp-Greeting`, and traces `greeted with "120 ready in 1 minute\r\n220 ready\r\n", which matched request.greeting; ...`.
 
+## 34.232 Schemas held to the exporter, one line's problems in file order, an uncounted allocation, and the changelog
+
+- `TestTheLeastDurationRuleTakesWhatTheExporterReadsAsUnderTheLeast` and `TestTheLeastSizeRuleTakesWhatTheExporterReadsAsUnderTheLeast`: the `not` patterns `fetch.SchemaLeastDuration` and `fetch.SchemaLeastSize` generate, for leasts of 1ns, 1ms and 1s (zero taken and refused) and of 38 bytes, 1KiB, 64KiB and 32MiB, refuse of some 17,000 and 21,000 texts of one number and one unit — numbers around the least divided by every unit, each unit's spellings, with a sign and without — exactly those the exporter reads as under the least (and, where zero is taken, at least a nanosecond or a byte); a text the exporter's floating-point reading rounds across a whole nanosecond or byte is left out; `500us500us` is taken, and `0s0m`, `-0s` and `0` are refused where zero is.
+- `TestSchemaAndExporterAgreeOnTheLeastScriptTimeout`: `limits.script_timeout` of `1ns`, `999us`, `999µs`, `0.5ms`, `999999ns`, `0.0009s` and `+0.5ms` is refused by both the committed schema and the loader, where the schema took each; `0`, `0s`, `0.5ns`, `1ms`, `1000us`, `1000000ns`, `0.001s` and `500us500us` are taken by both; `400us400us` is refused by the loader alone.
+- `TestSchemaAndExporterAgreeOnTheLeastScriptMemory`: `limits.max_script_memory` of `1`, `33554431`, `3.3554431e7`, `'33554431'`, `16MiB`, `31.99MiB`, `32767KiB`, `33MB`, `33.554431MB`, `0.03GiB`, `1KiB`, `1B` and `16 mib` is refused by both, the loader with its message, where the schema took each; `0`, `0B`, `0.5B`, `32MiB`, `33554432`, `33.554432MB`, `32768KiB`, `0.03125GiB` and `256 MiB` are taken by both.
+- `TestSchemaAndExporterAgreeOnAPositiveDuration`: `failure_backoff`'s `initial`, `max` and `min_budget` written `0`, `'0'`, `0s`, `-0s`, `+0`, `0.0m`, `0s0ms`, `0.5ns` and `0.0000000001s` are refused by both; `30m` and `1h` are taken; `max: 1ns`, shorter than the default `initial`, is refused by the loader alone.
+- `TestSchemaAndExporterAgreeOnTheLeastOutputLimit` and `TestSchemaAndExporterAgreeOnTheLeastResponseLimit`: a size written as text under the least — `'1'`, `"26"`, `20B`, `0.01KiB`, `0.000026MB` for `limits.max_output_bytes`, `'10'`, `10B`, `1kB`, `0.5KiB`, `1023 B` and `0.0009MiB` for both `max_response_bytes` — is refused by both, where it was the loader's alone; `TestTheSchemasHoldAnOutputLimitToTheLeastOfTheLoader` finds the `not` of the least, from the loader's constant, at those keys and at `limits.max_script_memory`.
+- `TestSchemaAndExporterAgreeOnTheOTLPInterval` and `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: in a block switched on, `otlp.interval` of `500ms`, `999ms`, `1ns`, `0.999s`, `999999us` and `0.01m`, `otlp.batch_max_bytes` of `1KiB`, `"65535"`, `63.9KiB` and `0.06MB`, and `otlp.tls` with a certificate or a key alone are refused by both; switched off, each is taken by both; `500ms400ms` and `400ms400ms` stay the loader's.
+- `TestSchemaAndExporterAgreeOnDurations`: the static target file's `interval` and a target's `interval` of one part under 1s, and the file's `interval` written as zero in any way, the number 0 and `0.0`, `00` and the like included, are refused by both; of several parts under 1s (`0h0m0.1s`, `500ms400ms`), by the loader alone.
+- The tables of keys: `limits.script_timeout: 500us`, `request.keepalive_interval: 500ms`, an `sql` collector's and target's `connections.keepalive.interval: 500ms`, `otlp.interval: 999ms`, the target file's `interval: 500ms`, a target's `interval: 0.5s`, `limits.max_script_memory: 16MiB`, `limits.max_output_bytes: 37B`, `limits.max_response_bytes: 1kB`, `request.max_response_bytes: 1023B` and `otlp.batch_max_bytes: 63KiB` are refused by both, which the schema as it was took; `failure_backoff`'s three keys and the file's `interval` written as zero in every way, and as a zero YAML reads as a number, are refused by both; `TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses` refuses a `refresh_interval` under 1s of each kind of source and takes `1s` and `0s`.
+- `TestSchemaAndExporterAgreeOnAClientCertificateWithoutItsKey`: a collector's `request.tls` or `request.login.tls` with a certificate alone, a key alone or a key beside `cert_file: ""`, and `otlp.tls` with either alone in a block switched on, are refused by both naming the half certificate; a collector taking the other file from its file's `defaults` is taken by both, as is a pair in `defaults` alone and a switched-off block's certificate; the same file in `defaults` and the collector is refused by both; `defaults` with a certificate alone and a collector without `tls` is refused by the loader alone; a collector file is held to it as the configuration is.
+- `TestSchemaAndExporterAgreeOnTwoCredentials`: a collector's and a static target's `bearer_token` beside `bearer_token_file`, `basic_auth` beside `basic_auth_file`, a Basic credential beside a bearer token, and a `basic_auth_file` without its username or password file or with one blank or `""`, are refused by both; one credential, and a second written `""`, are taken by both.
+- `TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType`: `next` beside `link`, `page` and `offset`, `param` beside `link` and `next_url`, `start` beside `link`, `cursor` and `next_url`, and `size` beside `link`, `page` and `cursor` are refused by both; each key with its own types, and `next` and `param` written `""` beside another, are taken by both.
+- `TestSchemaAndExporterAgreeOnTheFilesOfASourceOfDescriptors`: a `grpc` collector's `protoset_file`, `proto_files` or `proto_import_paths` beside another source of `descriptors`, or beside none for the health service, `protoset` without its file or with one of blanks, and `proto` without `proto_files` are refused by both; `reflection` alone, and with the files written empty, is taken by both.
+- `TestSchemaAndExporterAgreeOnAPythonTransformWithoutAScript`: a `python` transform without `script`, with `script: ""` and with a script of blanks is refused by both; the blanks table says the same of `transform.script`.
+- `TestAnLDAPCollectorsStartTLSIsToldItsOwnKey`: in a build with `ldap`, `starttls` written `true`, `smtp`, `'true'`, `yes` and `1` in an `ldap` collector (its type written `LDAP`) is refused as a key the type does not take, naming `start_tls: true`, and never told the protocols `smtp, imap, pop3, ftp`.
+- `TestATLSCertCollectorsStartTLSIsToldItsOwnKey` and `TestATCPCollectorsStartTLSIsToldItsOwnKey`: `start_tls: true`, and in a `tlscert` collector `start_tls: smtp`, which is no boolean, is refused as a key the type does not take naming `starttls` and its four protocols; `TestAKeyOfAnotherTypeHidesNoOtherKeysMistakeOnItsLine`: on the line of such a key, an `allowed_targets` that is no list is still said.
+- `TestOnlyAValueOfAnotherKindIsRefusedAnew`: at a key of a shipped document's request block that the collector's type does not take, a value of another kind adds no message of its kind, the key being refused for not applying; `TestOnlyAValueThatIsNoneIsRefusedAnew`: a value that is none is refused there as anywhere.
+- `TestTheProblemsOfOneLineAreSaidInTheOrderOfTheFile`: a one-line `defaults` block of six unknown keys and five values of the wrong kind in its `request`, `retry`, `limits` and `error_handling`, a collector's one-line `request` block of three unknown keys and three such values, and a one-line `otlp` block of two unknown keys and three such values, each say every problem in the order of the keys on the line, loaded 200 times with the same text every time; with the decoder's messages placed where the mapping around them began, the unknown keys and the values came out of order.
+- `TestTheRepositorysYAMLFilesGiveTheKeyChecksWhatTheyGave` and `TestGeneratedDocumentsWithoutAnAliasKeyGiveTheKeyChecksWhatTheyGave`: a switched block gives the same problems as before, each once, compared without their order, which is now the file's.
+- `TestCountingAnAnswerSentAsItIsAllocatesNothing`: through the answer middleware at level 0 an uncompressed answer of two writes allocates nothing, and at level 1 to a client without gzip no more than the handler, the `Vary` header and reading `Accept-Encoding` do, while both counters add the answer's bytes; with the counting writer made for every answer it allocated once more at each level.
+- `TestTheChangelogHasOnlyReleaseSectionsInOrder`: `CHANGELOG.md` has `## Unreleased` first and exactly once, and otherwise only `## exporter X.Y.Z` and `## chart X.Y.Z` sections, each component's versions strictly descending; every section begins with `### What changed for you` with a line under it, its only other subsections are `### New` and `### Fixed` in that order, and nothing but the title on the first line is a heading before the first section (§ 42.12).
+- `TestTheChangelogCheckRefusesWhatTheRulesLeaveOut`: the changelog check accepts a well-formed changelog and refuses one without `## Unreleased`, with it twice, with a heading of another shape (`## Chart 1.2.0`, `## chart v1.2.0`), with ascending or repeated versions, with a section beginning with `### New`, with nothing under `### What changed for you`, with another subsection name, with `### Fixed` before `### New`, with text before the first subsection, and with a heading in the introduction.
+- `TestTheChangelogHasTheChartsVersions`: `CHANGELOG.md` has a `## chart <version>` section for `Chart.yaml`'s `version` and a `## exporter <appVersion>` section for its `appVersion`.
+- `TestTheReleaseNotesScriptPrintsTheReleasesSection`: on a temporary changelog, `tools/release-notes.sh exporter|chart <version> <changelog>` prints the section's body without its heading or the next section, exits 1 with nothing printed and a message naming the section for a version without a section and for a section that does not begin with `### What changed for you` or has nothing under it, and exits 2 with a message for a component other than exporter or chart and for a version that is not `MAJOR.MINOR.PATCH`.
+- `TestTheReleaseNotesScriptReadsTheChangelog`: the script, run on the repository's `CHANGELOG.md`, prints the notes of the chart version `Chart.yaml` declares and of the exporter release its `appVersion` names, each beginning with `### What changed for you`.
+- `TestTheReleaseWorkflowsDescribeTheReleaseFromTheChangelog`: neither `release.yml` nor `release-chart.yml` contains `--generate-notes`; each runs `tools/release-notes.sh` for its own component and the tag's version into `$RUNNER_TEMP/release-notes.md` before `go test ./...` or `helm lint`, and its `gh release create` passes `--notes-file "$RUNNER_TEMP/release-notes.md"`; in `release.yml` the rerun branch follows `gh release upload` with `gh release edit --notes-file`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30358,6 +30447,25 @@ not republish an unchanged chart.
 Release tags MUST be namespaced by what they release: `exporter/<name>-vX.Y.Z`
 for the exporter and `chart/<chart-name>-X.Y.Z` for the chart.
 
+Each GitHub Release's description MUST be its section of `CHANGELOG.md` at the
+repository root, never notes generated from the merged pull requests. Its
+sections MUST be headed `## Unreleased`, which MUST come first and exactly
+once, `## exporter X.Y.Z` or `## chart X.Y.Z`, each component's versions
+strictly descending. Every section MUST begin with the subsection
+`### What changed for you`, holding at least one line: what someone upgrading
+has to do or will notice, such as a renamed or removed key or value, a changed
+default or a changed metric, or "Nothing; you can upgrade without changes.";
+the only other subsections MUST be `### New` and `### Fixed`, in that order.
+Every pull request that changes what a user sees MUST add its lines to
+`## Unreleased`, and a release MUST move the lines it ships into its own
+section. `tools/release-notes.sh <exporter|chart> <version>` MUST print the
+section's text without its heading and MUST fail, naming the section, when it
+is missing or does not begin with `### What changed for you` and a line under
+it. Both release workflows MUST run it before they build or check anything
+but the tag, and MUST pass what it prints to `gh release` with `--notes-file`.
+`CHANGELOG.md` MUST have a section for the chart version `Chart.yaml`
+declares and one for the exporter release its `appVersion` names.
+
 Each release workflow MUST be triggered by every tag under its namespace, not
 only by well-formed ones, and MUST fail when the tag does not match the required
 format. A workflow triggered only by the strict pattern would leave a malformed
@@ -30384,7 +30492,8 @@ MUST:
   the `-ldflags` the Dockerfile links the image's with, the version and the
   revision from the same values, so `--version` reports the same for an
   archive's binary as for the image's;
-- create a GitHub Release containing the software archives and a file of
+- create a GitHub Release, described by the version's section of
+  `CHANGELOG.md`, containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
   The release documentation MUST give the check for every platform an archive
@@ -30415,7 +30524,8 @@ MUST:
   failure at any step MUST leave `latest` and `MAJOR.MINOR` unmoved unless
   the Release is published, and no Release published without its image. A
   rerun MUST succeed where the Release already exists, draft or published,
-  by replacing its assets rather than creating it again.
+  by replacing its assets and setting its description again
+  (`gh release edit --notes-file`) rather than creating it again.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins

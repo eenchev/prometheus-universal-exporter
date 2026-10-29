@@ -601,11 +601,29 @@ func checkGRPCFiles(c *model.Collector, t *model.StaticTarget) []string {
 // exporter does (validateGRPCRequest): rpc, written with something other
 // than "", and where its message types come from, descriptors, unless it
 // calls the health service, whose types are built in
-// (validateDescriptorKeys).
+// (validateDescriptorKeys). The files of one source of descriptors go with
+// it alone, as the exporter has them: protoset_file with descriptors:
+// protoset, which requires it, and proto_files and proto_import_paths with
+// descriptors: proto, which requires proto_files. The schema took either
+// beside any source, and a source without its files.
 func grpcSchemaRule() map[string]any {
 	rule := SchemaWrittenKey("rpc")
 	rule["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
 	rule["then"] = SchemaWrittenKey("descriptors")
+	source := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"descriptors": map[string]any{"const": name}}, "required": []string{"descriptors"}}
+	}
+	listed := func(key string) map[string]any {
+		return map[string]any{"properties": map[string]any{key: map[string]any{"minItems": 1}}, "required": []string{key}}
+	}
+	protosetFile := SchemaWrittenKey("protoset_file")
+	protosetFile["properties"].(map[string]any)["protoset_file"].(map[string]any)["not"] = map[string]any{"anyOf": []any{map[string]any{"const": ""}, SchemaOnlyBlanks()}}
+	rule["allOf"] = []any{
+		map[string]any{"if": SchemaWrittenKey("protoset_file"), "then": source(descriptorsProtoset)},
+		map[string]any{"if": map[string]any{"anyOf": []any{listed("proto_files"), listed("proto_import_paths")}}, "then": source(descriptorsProto)},
+		map[string]any{"if": source(descriptorsProtoset), "then": protosetFile},
+		map[string]any{"if": source(descriptorsProto), "then": listed("proto_files")},
+	}
 	return rule
 }
 

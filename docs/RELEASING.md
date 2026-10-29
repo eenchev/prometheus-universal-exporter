@@ -46,6 +46,46 @@ git push origin exporter/prometheus-universal-exporter-v1.0.0
 When CI fails on the commit for a reason of the commit's own, fix it in a new
 commit and tag that one instead.
 
+## Release notes
+
+Each GitHub Release's description is its section of
+[`CHANGELOG.md`](../CHANGELOG.md), not a list of the pull requests merged
+since the last tag: a user upgrading needs to know what to do, and a pull
+request's title rarely says. The exporter's sections are headed
+`## exporter MAJOR.MINOR.PATCH` and the chart's `## chart MAJOR.MINOR.PATCH`,
+each component's newest first, below one `## Unreleased` at the top. Every
+section begins with `### What changed for you`: what someone upgrading has to
+do or will notice — a configuration key or chart value renamed or removed, a
+default changed, a metric renamed, a request refused that was accepted — or
+"Nothing; you can upgrade without changes." when there is nothing. `### New`
+and `### Fixed` follow, each left out when it would be empty; a section has
+no other subsections.
+
+Every pull request adds its lines to `## Unreleased`, under the subsection
+they belong in, replacing the "Nothing" line when it adds the first line to
+`### What changed for you`. Lines are written for the people who run the
+exporter or install the chart: an internal refactor, a test or a CI change
+gets none. A line about the chart alone names the chart value it is about.
+
+Releasing begins with a commit that moves the lines the release ships out of
+`## Unreleased` into a new section for the release, under it:
+`## exporter 1.1.0` takes the exporter's lines, and `## chart 1.1.0` the lines
+about the chart and the exporter release it deploys. Lines the release does
+not ship, the chart's at an exporter release, stay under `## Unreleased`,
+which is left with "Nothing; you can upgrade without changes." when nothing
+stays.
+
+`tools/release-notes.sh exporter|chart VERSION` prints a section's text
+without its heading, and both release workflows run it, once the tag's
+version is known and before they build or check anything, passing what it
+prints to `gh release` with `--notes-file`. It fails, and the release with
+it, when the section is missing or does not begin with
+`### What changed for you` and a line under it, saying which; to release
+then, add the section in a new commit and tag that one. A test reads
+`CHANGELOG.md` and fails on a heading of another shape, versions out of order
+or a subsection of another name, and requires a section for the chart version
+`Chart.yaml` declares and for the exporter release its `appVersion` names.
+
 ## Exporter
 
 An `exporter/prometheus-universal-exporter-vMAJOR.MINOR.PATCH` tag runs
@@ -57,6 +97,10 @@ cross-platform archives and the container image, and then publishes them: the
 image to GHCR and a GitHub Release containing the archives and
 `prometheus-universal-exporter-<version>-sha256sums.txt`, their SHA-256
 checksums:
+
+Move the release's lines from `## Unreleased` into `## exporter 1.0.0` in
+`CHANGELOG.md` ([Release notes](#release-notes)), commit, push, and wait for
+CI; then tag that commit:
 
 ```sh
 git tag -a exporter/prometheus-universal-exporter-v1.0.0 -m "Exporter v1.0.0"
@@ -89,8 +133,8 @@ out in an order that a failure at any step leaves consistent:
    signatures are keyless: their certificates name `release.yml` and the tag
    it ran for, and each is verified before the release goes on.
 4. The GitHub Release is created as a draft with the archives, the
-   checksums file and its bundle, and then published, so it never shows
-   without them.
+   checksums file and its bundle, and its description from `CHANGELOG.md`,
+   and then published, so it never shows without them.
 5. `latest` and `1.0` are moved to the image the version tag names, by its
    digest (`docker buildx imagetools create`), when the release is the newest
    of all or of its line.
@@ -101,8 +145,9 @@ version. Re-running the release repeats every step: the image is built and
 pushed again under the same tag and signed again, the checksums are signed
 again, and the Release, which `gh release create`
 would refuse because it exists, is found with `gh release view` and its
-assets replaced (`gh release upload --clobber`) before it is published, if
-it was left a draft. The tags then move as on the first run. The archives'
+assets replaced (`gh release upload --clobber`) and its description set
+again from `CHANGELOG.md` (`gh release edit --notes-file`) before it is
+published, if it was left a draft. The tags then move as on the first run. The archives'
 binaries are linked with the `-ldflags` the image's are, so `--version`
 reports the release's version and commit whichever a user runs.
 
@@ -158,10 +203,12 @@ Chart tags are namespaced under `chart/`. Bump `version` in
 truth, and `release-chart.yml` refuses to publish a tag that disagrees with it.
 The documented install commands and the chart README's dependency example pin
 the same version, and so does the parent chart the chart checks render
-(`testdata/chart/parent/Chart.yaml`); tests fail until they follow:
+(`testdata/chart/parent/Chart.yaml`); tests fail until they follow, and
+until `CHANGELOG.md` has a `## chart 0.2.0` section with the lines moved from
+`## Unreleased` ([Release notes](#release-notes)):
 
 ```sh
-# after setting version: 0.2.0 in Chart.yaml
+# after setting version: 0.2.0 in Chart.yaml and adding ## chart 0.2.0
 git tag -a chart/prometheus-universal-exporter-0.2.0 -m "Chart 0.2.0"
 git push origin chart/prometheus-universal-exporter-0.2.0
 ```
@@ -174,7 +221,8 @@ exists (`docker buildx imagetools inspect`), packages the chart exactly as
 `oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`, signs it with
 cosign by the digest `helm push` reported — not by the tag, which could be
 moved between the push and the signature — verifies that signature, and
-creates a GitHub Release with the archive. When the image does not exist, the
+creates a GitHub Release with the archive and the version's section of
+`CHANGELOG.md` as its description. When the image does not exist, the
 release fails before anything is pushed, saying to release the exporter first.
 
 To verify a published chart by its digest:
@@ -197,12 +245,16 @@ the chart release checks it and refuses otherwise.
 
 A release of both, say 1.1.0:
 
-1. Tag and push `exporter/prometheus-universal-exporter-v1.1.0`, and wait for
+1. Move the exporter's lines from `## Unreleased` into `## exporter 1.1.0`
+   in `CHANGELOG.md`, commit, push, and wait for CI. Tag and push
+   `exporter/prometheus-universal-exporter-v1.1.0`, and wait for
    `release.yml` to publish the image.
 2. In `Chart.yaml`, set `version` (the chart's own version) and `appVersion:
    "1.1.0"`, and the `artifacthub.io/images` tag to `1.1.0`. Update the
    `--version` in the `helm install` examples of `README.md` and the chart
-   README. Commit, push, and wait for CI.
+   README. Move the chart's lines from `## Unreleased` into
+   `## chart <version>`, which says it deploys exporter 1.1.0. Commit, push,
+   and wait for CI.
 3. Tag and push `chart/prometheus-universal-exporter-<version>`.
 
 Both workflows trigger on every tag in their namespace, not only well-formed

@@ -2,9 +2,12 @@ package config
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -169,7 +172,16 @@ var (
 	durationType   = reflect.TypeOf(model.Duration(0))
 	byteSizeType   = reflect.TypeOf(model.ByteSize(0))
 	metricTypeType = reflect.TypeOf(model.MetricType(""))
+	tlsConfigType  = reflect.TypeOf(model.TLSConfig{})
 )
+
+// unpairedTLSPaths are the tls blocks that are not held to a client
+// certificate with its key (clientCertificatePair) wherever they are: a
+// defaults block's, whose two files a collector may take one of and write
+// the other, a collector's, which is held to it by the file around it
+// (collectorTLSPairRule), and the otlp block's, which holds it to them once
+// it is switched on.
+var unpairedTLSPaths = []string{"defaults.request.tls", "collectors[].request.tls", "otlp.tls"}
 
 // A duration is written as time.ParseDuration reads it: a sequence of decimal
 // numbers with units, each number with a digit before or after its point, or
@@ -178,9 +190,11 @@ var (
 // such as -0s, which is the zero it equals, and a + before any, as the
 // exporter does: an editor then flags timeout: -5s, which the exporter
 // refuses at the load. Whether a duration is long enough, the least interval
-// say, is not a pattern's to tell, nor whether it is too long to be held,
-// 2562048h, which the exporter refuses as no duration (documented with the
-// schemas, docs/CONFIGURATION.md). signedDurationPattern is any duration, the
+// say, a key with a least says by a not of its own (fetch.SchemaLeastDuration),
+// of a duration of one part; whether one of several parts is, or whether a
+// duration is too long to be held, 2562048h, which the exporter refuses as
+// no duration, is not a pattern's to tell (documented with the schemas,
+// docs/CONFIGURATION.md). signedDurationPattern is any duration, the
 // negative ones too: what a block that is switched off holds, unchecked.
 //
 // A pattern is of text, and YAML reads an unquoted 0 as a number. The
@@ -305,15 +319,105 @@ func queryNames() map[string]any {
 }
 
 // leastResponseRule is the rule of request.max_response_bytes and
-// limits.max_response_bytes: beside what every size is held to, one written
-// as a number is 0, the default, or at least config.MinResponseBytes, as the
-// exporter has it, which, as for limits.max_output_bytes (leastOutputRule),
-// the exporter alone checks of a size written as text.
+// limits.max_response_bytes: beside what every size is held to, 0, the
+// default, or at least config.MinResponseBytes, as the exporter has it
+// (leastSizeRule).
 func leastResponseRule(description string) map[string]any {
+	return leastSizeRule(MinResponseBytes, description+" A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range is checked by the exporter when the configuration loads.")
+}
+
+// leastSizeRule is the rule of a size that is 0, the default, or at least
+// least bytes: written as a number, by its minimum, and written as text, in
+// quotes or with a unit, by the not of text under the least
+// (fetch.SchemaLeastSize).
+func leastSizeRule(least int64, description string) map[string]any {
 	return map[string]any{
-		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": MinResponseBytes}},
-		"description": description + " A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": least}},
+		"not":         fetch.SchemaLeastSize(least),
+		"description": description,
 	}
+}
+
+// collectorTLSPairRule is the rule of a file of collectors, the
+// configuration or a collector file, that each collector's request.tls
+// writes a client certificate with its key or neither, but for the file of
+// the two that the file's defaults write: a collector takes that one from
+// them (model.CollectorDefaults.ApplyTo), and writes the other itself. Of a
+// defaults block that writes one of the two and a collector that writes
+// neither, the schema cannot tell whether the collector's request type takes
+// tls, and so the defaults: that is the exporter's to refuse.
+func collectorTLSPairRule() []any {
+	var rules []any
+	for _, pair := range [][2]string{{"cert_file", "key_file"}, {"key_file", "cert_file"}} {
+		written, needed := pair[0], pair[1]
+		inDefaults := map[string]any{"required": []string{"defaults"}, "properties": map[string]any{"defaults": map[string]any{
+			"required": []string{"request"}, "properties": map[string]any{"request": map[string]any{
+				"required": []string{"tls"}, "properties": map[string]any{"tls": writtenKey(needed)},
+			}},
+		}}}
+		rules = append(rules, map[string]any{
+			"if": map[string]any{"not": inDefaults},
+			"then": map[string]any{"properties": map[string]any{"collectors": map[string]any{"items": map[string]any{"properties": map[string]any{"request": map[string]any{"properties": map[string]any{
+				"tls": map[string]any{"if": writtenKey(written), "then": writtenKey(needed)},
+			}}}}}}},
+		})
+	}
+	return rules
+}
+
+// credentialsRule is what the exporter refuses of a request's credentials,
+// a collector's and a static target's (fetch.validateCredentials,
+// validateStaticTargets), that the schemas took: bearer_token beside
+// bearer_token_file, basic_auth beside basic_auth_file, either of those
+// beside a bearer token, and a basic_auth_file without a username or a
+// password file, written with something other than blanks. A token written
+// "" is no token, to both; a basic_auth block is one written at all.
+func credentialsRule() map[string]any {
+	basic := map[string]any{"anyOf": []any{map[string]any{"required": []string{"basic_auth"}}, map[string]any{"required": []string{"basic_auth_file"}}}}
+	bearer := map[string]any{"anyOf": []any{writtenKey("bearer_token"), writtenKey("bearer_token_file")}}
+	return map[string]any{"not": map[string]any{"anyOf": []any{
+		map[string]any{"allOf": []any{writtenKey("bearer_token"), writtenKey("bearer_token_file")}},
+		map[string]any{"required": []string{"basic_auth", "basic_auth_file"}},
+		map[string]any{"allOf": []any{basic, bearer}},
+	}}}
+}
+
+// withCredentialsRule is rule with credentialsRule's beside what it says.
+func withCredentialsRule(rule map[string]any) map[string]any {
+	maps.Copy(rule, credentialsRule())
+	return rule
+}
+
+// basicAuthFileRule is a basic_auth_file block's: both files named, each
+// with something other than blanks. The rule is under allOf, so that the
+// keys keep the types the struct gives them.
+func basicAuthFileRule(description string) map[string]any {
+	named := map[string]any{"not": map[string]any{"anyOf": []any{map[string]any{"const": ""}, onlyBlanks()}}}
+	return map[string]any{
+		"required":    []string{"username", "password"},
+		"allOf":       []any{map[string]any{"properties": map[string]any{"username": named, "password": named}}},
+		"description": description,
+	}
+}
+
+// positiveDuration is what a duration that must be more than zero refuses,
+// under not, such as failure_backoff.initial: zero, written in any way, and
+// one part under a nanosecond, which is the zero the exporter reads it as.
+func positiveDuration() map[string]any {
+	return fetch.SchemaLeastDuration(time.Nanosecond, false)
+}
+
+// clientCertificatePair is the rule of a tls block that the exporter holds
+// to a client certificate with its key or neither (fetch.CheckClientTLSKeys
+// and the request types' checks): cert_file and key_file are both written
+// or neither is, "" being a file left out. A defaults block's is not held to
+// it, since a collector that takes one of the two from it may write the
+// other itself.
+func clientCertificatePair() map[string]any {
+	return map[string]any{"allOf": []any{
+		map[string]any{"if": writtenKey("cert_file"), "then": writtenKey("key_file")},
+		map[string]any{"if": writtenKey("key_file"), "then": writtenKey("cert_file")},
+	}}
 }
 
 // filterEntry is what an entry of transform.include or transform.exclude may
@@ -353,6 +457,9 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 				ownRequestKeys(properties, path, rules)
 			}
 			schema = map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
+			if t == tlsConfigType && !slices.Contains(unpairedTLSPaths, path) {
+				schema["allOf"] = clientCertificatePair()["allOf"]
+			}
 		case reflect.Slice:
 			schema = map[string]any{"type": "array", "items": schemaFor(t.Elem(), path+"[]", rules)}
 		case reflect.Map:
@@ -395,18 +502,11 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 }
 
 // leastOutputRule is the rule of limits.max_output_bytes: beside what every
-// size is held to, one written as a number is 0, the default, or at least the
-// answer of a Python script that emits no metric
-// (transform.MinPythonOutputBytes), as the exporter has it. minimum is of numbers alone, so text passes the
-// second alternative and stays held by the pattern of a size: how many bytes
-// a size written in quotes or with a unit comes to, 20B or 0.01KiB, no
-// pattern short of a wall of one can tell, and that such a size is too small
-// is the exporter's alone to say.
+// size is held to, 0, the default, or at least the answer of a Python script
+// that emits no metric (transform.MinPythonOutputBytes), as the exporter has
+// it (leastSizeRule).
 func leastOutputRule() map[string]any {
-	return map[string]any{
-		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": transform.MinPythonOutputBytes}},
-		"description": "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least " + strconv.Itoa(transform.MinPythonOutputBytes) + " bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
-	}
+	return leastSizeRule(int64(transform.MinPythonOutputBytes), "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least "+strconv.Itoa(transform.MinPythonOutputBytes)+" bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range is checked by the exporter when the configuration loads.")
 }
 
 // enabledSwitchRule is the rule of a block that does nothing until its
@@ -474,6 +574,7 @@ func collectorSchemaRules() map[string]map[string]any {
 				map[string]any{"required": []string{"collectors"}, "properties": map[string]any{"collectors": map[string]any{"minItems": 1}}},
 				map[string]any{"required": []string{"collector_files"}, "properties": map[string]any{"collector_files": map[string]any{"minItems": 1}}},
 			},
+			"allOf":       collectorTLSPairRule(),
 			"description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
 		},
 		"collectors":               {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
@@ -503,9 +604,9 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].failure_backoff":              {"description": "Stop contacting a target that keeps failing: after `after` consecutive failed scrapes its probes and static target scrapes fail at once, as a failed fetch, for `initial`, the wait doubling with each further failure up to `max`. Left out, or with enabled false, every scrape contacts the target. See docs/CONFIGURATION.md#backing-off-from-failing-targets."},
 		"collectors[].failure_backoff.enabled":      {"description": "false turns the backoff off, the one the file's defaults give the collector included: every scrape contacts the target, as without the block. Defaults to true. The other keys written beside false are checked all the same."},
 		"collectors[].failure_backoff.after":        {"minimum": 1, "description": "How many consecutive failed scrapes of a target start the backoff. At least 1; defaults to 3."},
-		"collectors[].failure_backoff.initial":      {"description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
-		"collectors[].failure_backoff.max":          {"description": "The longest wait, which doubling stops at. Not shorter than initial; defaults to 10m, or initial when that is longer."},
-		"collectors[].failure_backoff.min_budget":   {"description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
+		"collectors[].failure_backoff.initial":      {"not": positiveDuration(), "description": "The first wait, after the scrape that starts the backoff. A positive duration; defaults to 30s."},
+		"collectors[].failure_backoff.max":          {"not": positiveDuration(), "description": "The longest wait, which doubling stops at. A positive duration, not shorter than initial, which the exporter checks when the configuration loads; defaults to 10m, or initial when that is longer."},
+		"collectors[].failure_backoff.min_budget":   {"not": positiveDuration(), "description": "The least budget a scrape that timed out must have had for its timeout to count as a failure. A probe's budget comes from its caller's scrape timeout, so one asking for less time than the target needs cannot back the target off for everyone; other failures count whatever the budget. A positive duration; defaults to 1s."},
 		"collectors[].request":                      requestSchemaRule(),
 		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
 		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. sshfile: the file on the host, relative to request.root. s3file: the object, relative to request.root, its key the two joined. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
@@ -519,7 +620,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].request.password_file":        {"not": onlyBlanks(), "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape."},
 		"collectors[].request.passphrase_file":      {"not": onlyBlanks(), "description": "sshfile and sshexec, with private_key_file: the file of the passphrase an encrypted private key is decrypted with."},
 		"collectors[].request.known_hosts_file":     {"not": onlyBlanks(), "description": "sshfile and sshexec, required: the known_hosts file the host's key is verified against, as ssh-keyscan writes its lines; hashed lines and [host]:port are read. The key is always verified. See docs/SSHFILE.md#host-keys."},
-		"collectors[].request.keepalive_interval":   {"description": "sshfile and sshexec: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s, which the exporter checks when the configuration loads; defaults to 30s; 0 sends none."},
+		"collectors[].request.keepalive_interval":   {"not": fetch.SchemaLeastDuration(time.Second, true), "description": "sshfile and sshexec: how often a keepalive is sent on the connection kept to a host, and how long each is given to be answered. At least 1s; defaults to 30s; 0 sends none."},
 		"collectors[].request.keepalive_count_max":  {"minimum": 1, "description": "sshfile and sshexec: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3."},
 		"collectors[].request.idle_timeout":         {"description": "sshfile and sshexec: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured."},
 		"collectors[].request.max_open_connections": {"minimum": 0, "description": "sshfile and sshexec: the most SSH connections the collector holds open at once, across its hosts; its connections are then its own, shared with no other collector. A scrape that needs another at the limit closes the one used longest ago that no read or command holds, or waits within its deadline for one to be free. Defaults to 0, no limit. See docs/SSHFILE.md#persistent-connections."},
@@ -616,14 +717,15 @@ func collectorSchemaRules() map[string]map[string]any {
 			"maxItems":    model.MaxHistogramBuckets,
 			"description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most " + strconv.Itoa(model.MaxHistogramBuckets) + "; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
 		},
-		"collectors[].limits.max_script_memory":    {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
+		"collectors[].limits.max_script_memory":    leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
 		"collectors[].limits.max_output_bytes":     leastOutputRule(),
-		"collectors[].limits.script_timeout":       {"description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms, which the exporter checks when the configuration loads; defaults to 100ms."},
+		"collectors[].limits.script_timeout":       {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
 		"collectors[].limits.max_response_bytes":   leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
 		"collectors[].request.max_response_bytes":  leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
 		"collectors[].request.headers":             {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
 		"collectors[].request.forward_headers":     {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
 		"collectors[].request.forward_headers[]":   forwardHeaderEntry(),
+		"collectors[].request.basic_auth_file":     basicAuthFileRule("http, graphite and grpc: the files the username and the password of the Basic credential are read from, at every request, such as a mounted Secret. Both are required. Not with basic_auth or a bearer token."),
 		"collectors[].request.basic_auth.username": {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
 		"collectors[].request.query":               {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
 		"otlp.headers":                             {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
@@ -638,7 +740,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].response.charset":            {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
 		"otlp.max_pending_points":                  {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
 		"otlp.batch_max_size":                      {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
-		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB, which the exporter checks of a size written as text, in quotes or with a unit, when the configuration loads; 0, like the key left out, is the default, 4MiB."},
+		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB once the block is switched on; 0, like the key left out, is the default, 4MiB."},
 		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000."},
 		"otlp.probe_attributes":                    {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":     {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
@@ -650,10 +752,10 @@ func collectorSchemaRules() map[string]map[string]any {
 		// signed one, and otlpSchemaRule refuses a negative one of a block
 		// that is switched on.
 		"otlp.timeout": {"pattern": signedDurationPattern, "description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
-		// The least interval is checked when the configuration loads
-		// (validateOTLP): a duration is text to a schema, which cannot tell
-		// 500ms from 5s, and a disabled block may hold any.
-		"otlp.interval": {"pattern": signedDurationPattern, "description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s."},
+		// A disabled block may hold any interval, and otlpSchemaRule holds
+		// the interval of a block that is switched on to its least, 1s, as
+		// validateOTLP does.
+		"otlp.interval": {"pattern": signedDurationPattern, "description": "How often the points waiting are exported. At least 1s once the block is switched on; defaults to 30s."},
 		// What a followed redirect carries (fetch/redirecttrust.go). An entry
 		// of the list is what parseTrustedHost takes, as far as a pattern can
 		// say it: "*", a name or a glob of one, with a final dot or without,
@@ -691,11 +793,11 @@ func collectorSchemaRules() map[string]map[string]any {
 // negative, whose compression is then one of its values, whose
 // max_pending_points, unready_after_failures and batch_max_size are then not
 // negative, whose unready_after_failures is then at most its most, whose
-// batch_max_bytes, written as a number, is then 0 or at least its least, and
-// whose headers' names are then header names
-// (headerNames), as the exporter checks them then (validateOTLP); a size
-// written as text the exporter alone holds to its least, as it does
-// limits.max_output_bytes (leastOutputRule). Switched off, the block is
+// interval is then at least 1s, whose batch_max_bytes is then 0 or at least
+// its least (leastSizeRule), whose tls is then a client certificate with its
+// key or neither (clientCertificatePair), and whose headers' names are then
+// header names (headerNames), as the exporter checks them then
+// (validateOTLP). Switched off, the block is
 // kept unchecked by both: the keys' own pattern takes any duration, and the
 // keys themselves any compression and any whole number. Compression was
 // held to its values whatever the switch said, and the two numbers to zero
@@ -724,14 +826,18 @@ func otlpSchemaRule() map[string]any {
 	rule := enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md.")
 	notNegative := map[string]any{"pattern": durationPattern}
 	fromZero := map[string]any{"minimum": 0}
+	batchBytes := leastSizeRule(model.MinOTLPBatchMaxBytes, "")
+	delete(batchBytes, "description")
 	rule["if"] = map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}}
 	rule["then"] = map[string]any{"properties": map[string]any{
-		"timeout": notNegative, "interval": notNegative,
+		"timeout":            notNegative,
+		"interval":           map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
 		"compression":        map[string]any{"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone})},
 		"max_pending_points": fromZero, "batch_max_size": fromZero,
 		"unready_after_failures": map[string]any{"minimum": 0, "maximum": model.MaxOTLPUnreadyAfterFailures},
-		"batch_max_bytes":        map[string]any{"anyOf": []any{map[string]any{"const": 0}, map[string]any{"minimum": model.MinOTLPBatchMaxBytes}}},
+		"batch_max_bytes":        batchBytes,
 		"headers":                map[string]any{"propertyNames": headerNames()},
+		"tls":                    clientCertificatePair(),
 	}}
 	return rule
 }
@@ -833,6 +939,9 @@ func collectorSchemaRule() map[string]any {
 		"then":        rules(writtenKey("name")),
 		"allOf": []any{
 			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
+			// A python transform runs its script, which it requires,
+			// written with something other than blanks (normalizeFormats).
+			map[string]any{"if": transformIs("python"), "then": map[string]any{"properties": map[string]any{"transform": map[string]any{"required": []string{"script"}, "properties": map[string]any{"script": map[string]any{"not": map[string]any{"anyOf": []any{map[string]any{"const": ""}, onlyBlanks()}}}}}}}},
 			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": map[string]any{"properties": map[string]any{"derived": map[string]any{"items": classicNames}}}},
@@ -883,7 +992,7 @@ func labelSchemaRule() map[string]any {
 // rule of its own beyond its keys (fetch.RequestType.SchemaRule), that rule
 // when the type is chosen.
 func requestSchemaRule() map[string]any {
-	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file, docs/KUBERNETES.md for kubernetes, docs/REDIS.md for redis, docs/TCP.md for tcp and docs/LDAP.md for ldap."}
+	rule := withCredentialsRule(map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite, docs/GRPC.md for grpc, docs/SSHFILE.md for sshfile, docs/SQL.md for sql, docs/DNS.md for dns, docs/TLSCERT.md for tlscert, docs/S3FILE.md for s3file, docs/KUBERNETES.md for kubernetes, docs/REDIS.md for redis, docs/TCP.md for tcp and docs/LDAP.md for ldap."})
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
 		if rt := fetch.RequestTypes[name]; rt.SchemaRule != nil {
@@ -906,14 +1015,14 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"required":    []string{"interval", "targets"},
 			"description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
 		},
-		"interval":            {"description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s."},
+		"interval":            {"not": fetch.SchemaLeastDuration(time.Second, false), "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s."},
 		"concurrency":         {"minimum": 0, "description": "How many targets are scraped at once. A target due while all are busy waits for a slot within its interval, and is skipped if none frees. Omit or 0 for the default, 8."},
 		"targets":             {"minItems": 1, "description": "The targets. Each is scraped on its own interval with one collector of the configuration."},
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
 		"targets[].name":      {"pattern": optionalPattern(targetNameRE.String()), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"minLength": 1, "description": "The collector of the configuration that scrapes this target."},
 		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one, the host, host:port or ssh://host:port for an sshfile one, the bucket or s3://bucket for an s3file one, the database server, host or host:port, for a sql one, or the account identifier for a snowflake one, the name to resolve, or for PTR the address, for a dns one, or host, host:port or [v6]:port for a tlscert one, or host, host:port, [v6]:port or a redis:// or rediss:// URL of one for a redis one, host:port or [v6]:port, the port required, for a tcp one, or host, host:port, [v6]:port or an ldap:// or ldaps:// URL of one for an ldap one. A kubernetes collector takes none: leave it out."},
-		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
+		"targets[].interval":  {"not": fetch.SchemaLeastDuration(time.Second, true), "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
 			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder.",
@@ -923,7 +1032,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
 		"targets[].export_via_otlp":             {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
-		"targets[].request":                     {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
+		"targets[].request":                     withCredentialsRule(map[string]any{"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."}),
 		"targets[].request.method":              {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
 		"targets[].request.path":                {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.timeout":             {"description": "How long a scrape of this target may take. At most the target's interval."},
@@ -933,16 +1042,11 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.message":             {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.headers":             {"propertyNames": headerNames(), "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
 		"targets[].request.metadata":            {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.basic_auth_file":     basicAuthFileRule("http, graphite and grpc: the files of the target's own Basic credential, both required. Not with basic_auth or a bearer token."),
 		"targets[].request.basic_auth.username": {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
 		"targets[].request.username":            {"not": blanksOrPlaceholder(), "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written."},
 		"targets[].request.bind_dn":             {"not": blanksOrPlaceholder(), "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires."},
 		"targets[].request.tls": {
-			// A client certificate is both files or neither, "" being a
-			// file left out, as the exporter checks a target's block.
-			"allOf": []any{
-				map[string]any{"if": writtenKey("cert_file"), "then": writtenKey("key_file")},
-				map[string]any{"if": writtenKey("key_file"), "then": writtenKey("cert_file")},
-			},
 			"description": "redis, ldap, tcp, sql, grpc, http and graphite: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for; for http and graphite, whose URL's scheme decides, it is the block every https request of the target's trips is made with, its redirects' and its login's, and is not written beside the target's insecure_skip_verify. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
 		},
 		"targets[].request.tls.ca_file":                     {"not": placeholder()},
@@ -959,7 +1063,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.connections.keepalive":           {"description": "sql: how a kept connection to this target is found broken."},
 		"targets[].request.connections.idle_timeout":        {"description": "sql: how long an idle connection to this target is kept; 0 keeps it."},
 		"targets[].request.connections.max_lifetime":        {"description": "sql: how long a connection to this target is used; 0 uses it as long as it works."},
-		"targets[].request.connections.keepalive.interval":  {"description": "sql: how often a connection to this target is checked; at least 1s, 0 for none."},
+		"targets[].request.connections.keepalive.interval":  {"not": fetch.SchemaLeastDuration(time.Second, true), "description": "sql: how often a connection to this target is checked; at least 1s, 0 for none."},
 		"targets[].request.connections.keepalive.check":     {"enum": optionalEnum([]string{"tcp", "ping"}), "description": "sql: tcp or ping."},
 		"targets[].request.rate_limit":                      {"required": []string{"requests_per_second"}, "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting."},
 		"targets[].request.rate_limit.requests_per_second":  {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0."},

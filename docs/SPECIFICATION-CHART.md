@@ -2221,7 +2221,11 @@ The chart release workflow MUST be triggered by tags under `chart` and MUST:
 - publish the chart as an OCI artifact, and sign and verify it with cosign by
   the digest `helm push` reports, never by its tag, which could be moved to
   other content between the push and the signature; and
-- create a GitHub Release containing the chart archive.
+- create a GitHub Release containing the chart archive, described by the
+  version's section of `CHANGELOG.md`, which it reads with
+  `tools/release-notes.sh chart <version>` once the version is checked against
+  `Chart.yaml` and before the lint
+  ([SPECIFICATION-EXPORTER.md](SPECIFICATION-EXPORTER.md) § 42.12).
 
 The CI workflow MUST run the Go suite for changes to anything the repository
 tests read — Go sources, workflows, the chart, `configs`, `examples`,

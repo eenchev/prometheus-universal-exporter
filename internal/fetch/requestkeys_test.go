@@ -68,7 +68,10 @@ func TestAKeyOfAnotherTypesOwnIsRefusedWhetherTheBuildHasTheTypeOrNot(t *testing
 			}
 			err := ValidateRequest(&c)
 			want := fmt.Sprintf(`collector "c" sets request.%s, which does not apply to request.type %q`, entry.Key, owner)
-			if got := err != nil && err.Error() == want; got != refused {
+			// A key another type has a key like is followed by the advice
+			// to write that one, such as ldap's start_tls under tcp.
+			got := err != nil && (err.Error() == want || strings.HasPrefix(err.Error(), want+"; "))
+			if got != refused {
 				t.Errorf("%s of %s written %s under %s: %v, want refused %t", entry.Key, entry.Type, value, owner, err, refused)
 			}
 		}

@@ -34,11 +34,12 @@ const configSchemaID = schemaBaseURL + "config.schema.json"
 // --config.schema and written by make schemas; a test fails when the two
 // differ.
 //
-// The schema describes the canonical spelling. The exporter is more lenient
-// in places — it accepts request.type and error policies in any case — and
-// startup validation remains the authority on what is
-// valid: it also checks what a schema cannot, such as that expressions
-// compile. The request types listed are the ones this binary was built with.
+// The schema describes the canonical spelling, and the exporter takes the
+// words a key holds in that spelling alone — request.type, the error
+// policies and the other keys of a few words in lower case, request.method
+// in upper or lower case — so that the two agree on them. Startup validation
+// remains the authority on what is valid: it also checks what a schema
+// cannot, such as that expressions compile. The request types listed are the ones this binary was built with.
 func configSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.Config{}), "", configSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -1033,7 +1034,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		},
 		"targets[].export_via_otlp":             {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
 		"targets[].request":                     withCredentialsRule(map[string]any{"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."}),
-		"targets[].request.method":              {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
+		"targets[].request.method":              {"enum": optionalEnum(fetch.HTTPMethodSpellings()), "description": "Replaces the collector's HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case."},
 		"targets[].request.path":                {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.timeout":             {"description": "How long a scrape of this target may take. At most the target's interval."},
 		"targets[].request.targets":             {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},

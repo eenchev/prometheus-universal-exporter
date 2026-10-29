@@ -388,7 +388,7 @@ func TestOnlyTheSameRuleTwiceIsRefusedAnew(t *testing.T) {
 			made(func(r *model.MetricRule) { r.TimeFormat = "rfc3339" }),
 			made(func(r *model.MetricRule) { r.TimeFormat, r.TimeZone = "rfc3339", "UTC" }),
 			made(func(r *model.MetricRule) { r.Labels = nil }),
-			made(func(r *model.MetricRule) { r.Labels, r.ErrorMode = nil, " LOG " }),
+			made(func(r *model.MetricRule) { r.Labels, r.ErrorMode = nil, "log" }),
 			made(func(r *model.MetricRule) { r.Name = "" }),
 			{},
 			{Name: "bad-name", Expression: "("},

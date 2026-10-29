@@ -3169,7 +3169,7 @@
                 "type": "object"
               },
               "method": {
-                "description": "HTTP method. Defaults to GET.",
+                "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET.",
                 "enum": [
                   "GET",
                   "POST",

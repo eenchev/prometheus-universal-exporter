@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -101,13 +100,12 @@ func (httpRequester) Validate(c *model.Collector) error {
 	if own.Method == "" {
 		own.Method = http.MethodGet
 	}
-	own.Method = strings.ToUpper(own.Method)
-	c.Request.Own = own
-	switch own.Method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-	default:
-		return fmt.Errorf("collector %q has unsupported method %q", c.Name, own.Method)
+	method, err := CheckHTTPMethod(own.Method)
+	if err != nil {
+		return fmt.Errorf("collector %q has unsupported method %q; %w", c.Name, own.Method, err)
 	}
+	own.Method = method
+	c.Request.Own = own
 	return validatePagination(c)
 }
 
@@ -125,7 +123,7 @@ func (httpRequester) CheckTarget(c *model.Collector, target string, static bool)
 // collector's own keys.
 func httpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"method":               {"enum": SchemaOptionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
+		"method":               {"enum": SchemaOptionalEnum(HTTPMethodSpellings()), "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET."},
 		"body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
 		"pagination":           httpPaginationRule(),
 		"pagination.type":      {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},

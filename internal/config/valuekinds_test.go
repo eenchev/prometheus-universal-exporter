@@ -93,7 +93,7 @@ func TestAValueOfAnotherKindThanItsKeyTakesIsRefused(t *testing.T) {
 	if _, err := Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: [collectors.yaml]\n")); err == nil || err.Error() != want {
 		t.Errorf("in a collector file: %v\nwant %s", err, want)
 	}
-	want = notText(3, "name", "1", "a number") + "; " + noBoolean(5, "export_via_otlp", "yes", true) + "; " + oneOf(7, "method", "true", "a boolean", methods[:6]...) + "; " + notText(8, "accept_codes entry 1", "5", "a number") + "; " + noBoolean(9, "non_idempotent", "N", false)
+	want = notText(3, "name", "1", "a number") + "; " + noBoolean(5, "export_via_otlp", "yes", true) + "; " + oneOf(7, "method", "true", "a boolean", methods...) + "; " + notText(8, "accept_codes entry 1", "5", "a number") + "; " + noBoolean(9, "non_idempotent", "N", false)
 	if _, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: 1\n    collector: node\n    export_via_otlp: yes\n    request:\n      method: true\n      accept_codes: [5]\n      retry: {non_idempotent: N}\n")); err == nil || err.Error() != want {
 		t.Errorf("in the target file: %v\nwant %s", err, want)
 	}

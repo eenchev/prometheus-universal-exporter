@@ -49,9 +49,10 @@ func SchemaCaseless(text string) string {
 
 // SchemaCaselessOneOf is the pattern of a text naming one of names as the
 // exporter matches a name such as request.driver or request.record_type: in
-// any case, with blanks around it or not. The spec has a driver matched so,
-// as it has request.type, so the schema takes what the exporter takes
-// rather than the exporter refusing what an enum would.
+// any case, with blanks around it or not. The spec has a driver and a DNS
+// record type matched so, as their databases and RFCs name them in any
+// case, so the schema takes what the exporter takes rather than the
+// exporter refusing what an enum would.
 func SchemaCaselessOneOf(names ...string) string {
 	alternatives := make([]string, len(names))
 	for i, name := range names {

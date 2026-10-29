@@ -114,7 +114,13 @@ func TestGraphiteDecoderSettings(t *testing.T) {
 		"a bad value":        {func(c *model.Collector) { c.Response.Graphite.Value = "median" }, `response.graphite.value is "median"; want one of last, max, min, avg, sum`},
 		"a negative max_age": {func(c *model.Collector) { c.Response.Graphite.MaxAge = model.Duration(-time.Second) }, "response.graphite.max_age must not be negative"},
 		"bad invalid_lines":  {func(c *model.Collector) { c.Response.Graphite.InvalidLines = "drop" }, `response.graphite.invalid_lines is "drop"; want fail or skip`},
-		"another decoder":    {func(c *model.Collector) { c.Decoder.Type = "json"; c.Response.Graphite.Value = "max" }, "sets response.graphite, which applies to the graphite decoder, but its decoder is json"},
+		// Each is taken as the schema takes it, in lower case and without
+		// blanks around it.
+		"a value in capitals":        {func(c *model.Collector) { c.Response.Graphite.Value = "MAX" }, `response.graphite.value is "MAX"; want one of last, max, min, avg, sum, in lower case`},
+		"a value with blanks":        {func(c *model.Collector) { c.Response.Graphite.Value = " max " }, `response.graphite.value is " max "; want one of`},
+		"invalid_lines in capitals":  {func(c *model.Collector) { c.Response.Graphite.InvalidLines = "Skip" }, `response.graphite.invalid_lines is "Skip"; want fail or skip, in lower case`},
+		"invalid_lines with a blank": {func(c *model.Collector) { c.Response.Graphite.InvalidLines = "skip " }, `response.graphite.invalid_lines is "skip "; want fail or skip`},
+		"another decoder":            {func(c *model.Collector) { c.Decoder.Type = "json"; c.Response.Graphite.Value = "max" }, "sets response.graphite, which applies to the graphite decoder, but its decoder is json"},
 		"a regex transform": {func(c *model.Collector) {
 			c.Transform.Type = "regex"
 			c.Decoder.Type = "graphite"
@@ -131,9 +137,9 @@ func TestGraphiteDecoderSettings(t *testing.T) {
 		})
 	}
 	for name, edit := range map[string]func(*model.Collector){
-		"value in any case": func(c *model.Collector) {
-			c.Response.Graphite.Value = " MAX "
-			c.Response.Graphite.InvalidLines = "Skip"
+		"value and invalid_lines": func(c *model.Collector) {
+			c.Response.Graphite.Value = "max"
+			c.Response.Graphite.InvalidLines = "skip"
 		},
 		"a python transform": func(c *model.Collector) {
 			c.Transform = model.TransformConfig{Type: "python", Script: "pass"}
@@ -153,7 +159,7 @@ func TestGraphiteDecoderSettings(t *testing.T) {
 			if err := Validate(cfg); err != nil {
 				t.Fatal(err)
 			}
-			if g := cfg.Collectors[0].Response.Graphite; name == "value in any case" && (g.Value != "max" || g.InvalidLines != "skip") {
+			if g := cfg.Collectors[0].Response.Graphite; name == "value and invalid_lines" && (g.Value != "max" || g.InvalidLines != "skip") {
 				t.Fatalf("settings %+v", g)
 			}
 		})

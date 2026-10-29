@@ -3543,7 +3543,16 @@ allocator's two — are in `configs/` with the examples, and are regenerated wit
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
 you are running; its `request.type` values are the request types that binary
-was built with. The schema describes the canonical spelling and is not the last
+was built with. A key that takes one of a few words takes them as the schema
+writes them, and the exporter refuses any other spelling as the schema does:
+`request.type: http`, `transform.type: jq`, `decoder.type`, the
+`error_handling` policies and a rule's `error_mode` (`log`, not `LOG`),
+`request.pagination.type`, `request.descriptors` and `response.graphite`'s
+`value` and `invalid_lines` in lower case and without blanks around them, and
+`request.method` in upper case or lower case, `GET` or `get`. The keys whose
+values are matched in any case where they come from — `request.driver`,
+`request.record_type`, header names, `allowed_schemes` and gRPC status
+codes — take any case in the schema too. The schema is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that a duration of several parts, such as
 `script_timeout: 400us400us`, is not under its key's least — a schema reads

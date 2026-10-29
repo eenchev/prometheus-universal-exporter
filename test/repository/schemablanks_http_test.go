@@ -16,14 +16,12 @@ type said struct {
 	loader string
 }
 
-// The four things the two can say of one file: both take it, both refuse
-// it, the exporter alone refuses it, having checked what a schema cannot,
-// and the schema alone refuses it, the exporter being more lenient than the
-// canonical spelling.
-var (
-	bothTake      = said{schema: true}
-	schemaRefuses = said{}
-)
+// What the two can say of one file: both take it, both refuse it, and the
+// exporter alone refuses it, having checked what a schema cannot. The
+// schema alone refused a decoder.type of blanks, which the exporter took as
+// the default, before the exporter took the words of a key in the schema's
+// spelling alone.
+var bothTake = said{schema: true}
 
 func bothRefuse(message string) said    { return said{loader: message} }
 func loaderRefuses(message string) said { return said{schema: true, loader: message} }
@@ -105,8 +103,8 @@ func blanksKeys() []blanksKey {
 		{key: "collectors[].transform.pre_script", document: jqCollector, at: transform, setting: transform + "      pre_script: %s\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].transform.script", of: "of a python transform", document: pythonCollector, at: "      script: metric('up', 1)\n", setting: "      script: %s\n", blanks: bothRefuse("Python transform requires a script"), empty: bothRefuse("Python transform requires a script")},
 		{key: "collectors[].transform.script", of: "of a jq transform", document: jqCollector, at: transform, setting: transform + "      script: %s\n", blanks: bothTake, empty: bothTake},
-		{key: "collectors[].transform.type", document: jqCollector, at: transform, setting: "      type: %s\n", blanks: bothRefuse("has no transform.type"), empty: bothRefuse("has no transform.type")},
-		{key: "collectors[].decoder.type", document: jqCollector, at: collector, setting: "    decoder:\n      type: %s\n", blanks: schemaRefuses, empty: bothTake},
+		{key: "collectors[].transform.type", document: jqCollector, at: transform, setting: "      type: %s\n", blanks: bothRefuse("has unknown transform"), empty: bothRefuse("has no transform.type")},
+		{key: "collectors[].decoder.type", document: jqCollector, at: collector, setting: "    decoder:\n      type: %s\n", blanks: bothRefuse("has unknown decoder"), empty: bothTake},
 		{key: "collectors[].request.path", document: jqCollector, at: request, setting: "      path: %s\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].request.method", document: jqCollector, at: request, setting: "      method: %s\n", blanks: bothRefuse("has unsupported method"), empty: bothTake},
 		{key: "collectors[].metrics_prefix", document: jqCollector, at: collector, setting: "    metrics_prefix: %s\n", blanks: bothRefuse("has invalid metrics_prefix"), empty: bothTake},
@@ -142,9 +140,12 @@ func blanksKeys() []blanksKey {
 // constant of blanks; the names transform.rename,
 // remove_labels and rename_labels look for, which may be such names;
 // request.path; and a
-// namespace of response.namespaces. A pre_script of blanks is no script,
-// and a decoder.type of blanks the default, which the schema, describing
-// the canonical spelling, does not take. What the exporter alone refuses is
+// namespace of response.namespaces. A pre_script of blanks is no script. A
+// transform.type and a decoder.type of blanks are refused by both as no
+// type there is: the exporter took them as the key left out, refusing the
+// transform as missing and taking the decoder as the default, which the
+// schema, describing the canonical spelling, did not take. What the
+// exporter alone refuses is
 // what a schema cannot tell: that an expression compiles, that a layout is
 // one, that a name is a metric's or a label's.
 func TestSchemaAndExporterOnKeysWrittenAsBlanks(t *testing.T) {

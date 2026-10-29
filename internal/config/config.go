@@ -176,7 +176,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 		if *policy.value == "" {
 			*policy.value = model.ErrorPolicyFail
 		}
-		if err := normalizeErrorPolicy(x.Name, "error_handling."+policy.key, policy.value); err != nil {
+		if err := checkErrorPolicy(x.Name, "error_handling."+policy.key, *policy.value); err != nil {
 			return err
 		}
 	}
@@ -296,26 +296,25 @@ func requestTypeOf(x *model.Collector) *fetch.RequestType {
 	return &fetch.RequestType{}
 }
 
-// normalizeFormats lower-cases the transform and decoder, refuses a missing or
-// unknown transform and an unknown decoder, and infers the decoder a transform
-// implies.
+// normalizeFormats refuses a missing or unknown transform and an unknown
+// decoder, and infers the decoder a transform implies. Each is taken as
+// written, in lower case and without blanks around it, the one spelling the
+// schemas take.
 func normalizeFormats(x *model.Collector) error {
 	if err := decode.CheckCharset(x.Response.Charset); err != nil {
 		return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
 	}
-	x.Transform.Type = strings.ToLower(strings.TrimSpace(x.Transform.Type))
 	switch {
 	case x.Transform.Type == "":
 		return fmt.Errorf("collector %q has no transform.type; it is required: %s", x.Name, strings.Join(model.TransformTypes, ", "))
 	case !slices.Contains(model.TransformTypes, x.Transform.Type):
-		return fmt.Errorf("collector %q has unknown transform %q; want one of %s", x.Name, x.Transform.Type, strings.Join(model.TransformTypes, ", "))
+		return fmt.Errorf("collector %q has unknown transform %q; want one of %s, in lower case", x.Name, x.Transform.Type, strings.Join(model.TransformTypes, ", "))
 	}
-	x.Decoder.Type = strings.ToLower(strings.TrimSpace(x.Decoder.Type))
 	if x.Decoder.Type == "" {
 		x.Decoder.Type = "auto"
 	}
 	if !slices.Contains(model.DecoderTypes, x.Decoder.Type) {
-		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
+		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s, in lower case", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
 	}
 	rt := requestTypeOf(x)
 	if x.Decoder.Type == "auto" && rt.Decoder != "" {
@@ -425,16 +424,14 @@ func checkGraphiteResponse(x *model.Collector) error {
 	if set && x.Decoder.Type != "graphite" && x.Decoder.Type != "auto" {
 		return fmt.Errorf("collector %q sets response.graphite, which applies to the graphite decoder, but its decoder is %s", x.Name, x.Decoder.Type)
 	}
-	g.Value = strings.ToLower(strings.TrimSpace(g.Value))
 	if g.Value != "" && !slices.Contains(model.GraphiteValues, g.Value) {
-		return fmt.Errorf("collector %q response.graphite.value is %q; want one of %s", x.Name, g.Value, strings.Join(model.GraphiteValues, ", "))
+		return fmt.Errorf("collector %q response.graphite.value is %q; want one of %s, in lower case", x.Name, g.Value, strings.Join(model.GraphiteValues, ", "))
 	}
 	if g.MaxAge < 0 {
 		return fmt.Errorf("collector %q response.graphite.max_age must not be negative", x.Name)
 	}
-	g.InvalidLines = strings.ToLower(strings.TrimSpace(g.InvalidLines))
 	if g.InvalidLines != "" && !slices.Contains(model.GraphiteInvalidLines, g.InvalidLines) {
-		return fmt.Errorf("collector %q response.graphite.invalid_lines is %q; want fail or skip", x.Name, g.InvalidLines)
+		return fmt.Errorf("collector %q response.graphite.invalid_lines is %q; want fail or skip, in lower case", x.Name, g.InvalidLines)
 	}
 	if x.Decoder.Type == "graphite" {
 		switch x.Transform.Type {
@@ -792,7 +789,7 @@ func validateMetricRule(x *model.Collector, index int) error {
 	if r.ErrorMode == "" {
 		r.ErrorMode = model.ErrorModeLog
 	}
-	if err := normalizeErrorPolicy(x.Name, transform.RuleName(r, index)+" error_mode", &r.ErrorMode); err != nil {
+	if err := checkErrorPolicy(x.Name, transform.RuleName(r, index)+" error_mode", r.ErrorMode); err != nil {
 		return err
 	}
 	// A prometheus transform's rule without a type keeps the type of
@@ -2211,17 +2208,16 @@ func undecidedDecoderWarning(x *model.Collector) string {
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)
 }
 
-// normalizeErrorPolicy lower-cases a policy and rejects anything but fail,
-// log and ignore.
-func normalizeErrorPolicy(collector, key string, value *string) error {
-	policy := strings.ToLower(strings.TrimSpace(*value))
-	switch policy {
+// checkErrorPolicy refuses a policy that is not fail, log or ignore as
+// written: in lower case and without blanks around it, the one spelling
+// the schemas take, so that a file an editor marks is one the exporter
+// refuses, and the other way round.
+func checkErrorPolicy(collector, key, value string) error {
+	switch value {
 	case model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore:
-	default:
-		return fmt.Errorf("collector %q %s has invalid value %q; want fail, log or ignore", collector, key, *value)
+		return nil
 	}
-	*value = policy
-	return nil
+	return fmt.Errorf("collector %q %s has invalid value %q; want fail, log or ignore, in lower case", collector, key, value)
 }
 
 // validateFailureBackoff checks failure_backoff and fills in its defaults:

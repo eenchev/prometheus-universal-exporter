@@ -163,7 +163,7 @@ func defaultApplies(x *model.Collector, key string) bool {
 func joinRequestTypes(collectors []model.Collector) string {
 	var types []string
 	for i := range collectors {
-		if t := strings.ToLower(strings.TrimSpace(collectors[i].Request.Type)); !slices.Contains(types, t) {
+		if t := collectors[i].Request.Type; !slices.Contains(types, t) {
 			types = append(types, t)
 		}
 	}
@@ -214,7 +214,7 @@ func checkDefaults(d *model.CollectorDefaults) error {
 		{"on_transform_error", d.ErrorHandling.OnTransformError},
 	} {
 		if policy.value != "" {
-			errs = append(errs, normalizeErrorPolicy("", "error_handling."+policy.key, &policy.value))
+			errs = append(errs, checkErrorPolicy("", "error_handling."+policy.key, policy.value))
 		}
 	}
 	if retry := d.Request.Retry; retry.Attempts < 0 || retry.Attempts > fetch.MaxRetryAttempts {

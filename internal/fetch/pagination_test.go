@@ -524,7 +524,16 @@ func TestPaginationValidation(t *testing.T) {
 		})
 	}
 	c := testutil.Collector("paged", "json")
-	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: " Offset ", Param: "o", Items: "."} })
+	// The type is taken as the schemas take it, in lower case and without
+	// blanks around it.
+	for _, written := range []string{" Offset ", "OFFSET", "offset "} {
+		editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: written, Param: "o", Items: "."} })
+		if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("request.pagination.type is %q; want one of link, next_url, cursor, page, offset, in lower case", written)) {
+			t.Fatalf("%q: err=%v", written, err)
+		}
+	}
+	c = testutil.Collector("paged", "json")
+	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: "offset", Param: "o", Items: "."} })
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}

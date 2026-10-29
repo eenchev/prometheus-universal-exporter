@@ -23,6 +23,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   without its certificate, two credentials in one request, a pagination key of
   another paging type, `grpc` descriptor files beside the wrong source, and a
   `python` transform without a `script`.
+- A key that takes one of a few words takes them only as the schemas write
+  them: `request.type`, `transform.type`, `decoder.type`, the
+  `error_handling` policies and a rule's `error_mode`,
+  `request.pagination.type`, `request.descriptors` and `response.graphite`'s
+  `value` and `invalid_lines` in lower case and without blanks around them
+  (`log`, not `LOG`; `type: http`, not `HTTP`), and `request.method` in upper
+  case or lower case (`GET` or `get`, not `Get`). A configuration that writes
+  one otherwise is refused, naming the words taken: write them in lower case.
+  The static target file's schema now takes a `method` in lower case, as the
+  exporter does.
 - `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.

@@ -59,21 +59,21 @@ import (
 // document.
 
 // validatePagination checks request.pagination at load and fills in its
-// defaults: its type, in lower case, max_pages, and start for page and
-// offset. The expressions are compiled, so a mistake in one is refused now
+// defaults: max_pages, and start for page and offset. The type is taken as
+// written, in lower case and without blanks around it, the one spelling the
+// schemas take. The expressions are compiled, so a mistake in one is refused now
 // rather than by every scrape.
 func validatePagination(c *model.Collector) error {
 	p := httpRequest(c).Pagination
 	if p == nil {
 		return nil
 	}
-	p.Type = strings.ToLower(strings.TrimSpace(p.Type))
 	switch p.Type {
 	case "":
 		return fmt.Errorf("collector %q request.pagination.type is required: one of %s", c.Name, strings.Join(model.PaginationTypes, ", "))
 	case model.PaginationLink, model.PaginationNextURL, model.PaginationCursor, model.PaginationPage, model.PaginationOffset:
 	default:
-		return fmt.Errorf("collector %q request.pagination.type is %q; want one of %s", c.Name, p.Type, strings.Join(model.PaginationTypes, ", "))
+		return fmt.Errorf("collector %q request.pagination.type is %q; want one of %s, in lower case", c.Name, p.Type, strings.Join(model.PaginationTypes, ", "))
 	}
 	if httpRequest(c).Method == http.MethodHead {
 		return fmt.Errorf("collector %q sets request.pagination with method HEAD; the pages are read from their bodies, which the answer to a HEAD request has none of", c.Name)

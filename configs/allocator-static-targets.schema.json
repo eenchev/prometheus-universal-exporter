@@ -1538,6 +1538,7 @@
                 "type": "object"
               },
               "method": {
+                "description": "Replaces the collector's HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case.",
                 "enum": [
                   "GET",
                   "POST",
@@ -1545,6 +1546,12 @@
                   "PATCH",
                   "DELETE",
                   "HEAD",
+                  "get",
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+                  "head",
                   ""
                 ],
                 "type": "string"
@@ -2958,6 +2965,7 @@
                 "type": "object"
               },
               "method": {
+                "description": "Replaces the collector's HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case.",
                 "enum": [
                   "GET",
                   "POST",
@@ -2965,6 +2973,12 @@
                   "PATCH",
                   "DELETE",
                   "HEAD",
+                  "get",
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+                  "head",
                   ""
                 ],
                 "type": "string"

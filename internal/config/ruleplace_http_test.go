@@ -101,7 +101,7 @@ func TestARuleWithoutANameIsToldOfByItsPlace(t *testing.T) {
 	for _, tc := range []struct{ transform, rules, want string }{
 		{"jq", "      - name: up\n", `collector "node" metric "up" has no expression`},
 		{"jq", "      - name: w\n        expression: .w\n      - name: up\n        expression: .v\n        type: timer\n", `collector "node" metric "up" has invalid type "timer"`},
-		{"jq", "      - name: up\n        expression: .v\n        error_mode: panic\n", `collector "node" metric "up" error_mode has invalid value "panic"; want fail, log or ignore`},
+		{"jq", "      - name: up\n        expression: .v\n        error_mode: panic\n", `collector "node" metric "up" error_mode has invalid value "panic"; want fail, log or ignore, in lower case`},
 		{"jq", "      - name: bad-name\n        expression: .v\n", `collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`},
 		{"jq", "      - name: \" up\"\n        expression: .v\n", `collector "node" metric " up": " up" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`},
 		{"prometheus", "      - name: up\n        items: .rows[]\n", `collector "node" metric "up" sets items, which only the jq, yq and css transforms support`},

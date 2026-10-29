@@ -263,7 +263,6 @@ func (l *requestLayout) refusedKeys(n *yaml.Node, requestType string) []string {
 	if l.refuses == nil {
 		return nil
 	}
-	requestType = strings.ToLower(strings.TrimSpace(requestType))
 	var refused []string
 	for _, entry := range DecodedEntries(n) {
 		if key := KeyName(entry.Key); key != "type" && l.refuses(requestType, key) {
@@ -281,7 +280,6 @@ func (l *requestLayout) firstRefused(n *yaml.Node, decoded reflect.Value, reques
 	if l.refuses == nil {
 		return keyAt{}, false
 	}
-	requestType = strings.ToLower(strings.TrimSpace(requestType))
 	for _, key := range blockKeys(n, decoded, written...) {
 		if key.path != "type" && l.refuses(requestType, key.path) {
 			return key, true
@@ -297,9 +295,9 @@ func (l *requestLayout) store(decoded reflect.Value, r *RequestConfig) {
 	for i, field := range l.common {
 		out.Field(field).Set(decoded.Field(i))
 	}
-	// The type is taken as the validation names it, whatever its case and
-	// the blanks around it.
-	owner := strings.ToLower(strings.TrimSpace(r.Type))
+	// The type is taken as written, as the validation takes it: in lower
+	// case, and without blanks around it.
+	owner := r.Type
 	var own reflect.Value
 	if structType, ok := l.structs[owner]; ok {
 		own = reflect.New(structType).Elem()
@@ -363,7 +361,7 @@ func RequestView(r *RequestConfig) reflect.Value {
 	for i, field := range layout.common {
 		view.Field(i).Set(in.Field(field))
 	}
-	owner := strings.ToLower(strings.TrimSpace(r.Type))
+	owner := r.Type
 	if r.Own != nil && reflect.TypeOf(r.Own) == layout.structs[owner] {
 		own := reflect.ValueOf(r.Own)
 		for _, key := range layout.owned {

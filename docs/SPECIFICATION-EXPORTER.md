@@ -707,8 +707,9 @@ stating that the type is required, listing the supported types and showing
 `type: http` — or, in a build that left `http` out (below), the first of the
 types it carries, never one the build would then refuse; an unknown type MUST
 be rejected with the supported types listed.
-The value MUST be matched without regard to case or surrounding whitespace and
-stored in lower case.
+The value MUST be written in lower case and without blanks around it, as the
+schemas take it (§ 24.3): one written otherwise, `HTTP` or ` http `, MUST be
+rejected, the message saying how the type it spells is written.
 
 Each type MUST own, and the implementation MUST keep in one registry:
 
@@ -992,7 +993,7 @@ and the source MUST list the opt-in types.
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `method` | `GET` | One of GET, POST, PUT, PATCH, DELETE, HEAD, case-insensitive. |
+| `method` | `GET` | One of GET, POST, PUT, PATCH, DELETE, HEAD, in upper case or lower case, as the schemas take it, and sent in upper case; `Get`, and a method with blanks around it, MUST be refused naming the methods. A static target's `method` alike. |
 | `path` | none | Joined onto the target URL; may carry path parameters (§ 42.10a). Empty is valid, since the target URL may carry the whole path. A percent-escape in it MUST be sent as written (§ 4). |
 | `query` | none | Query parameters added to the request, after the target's own query (§ 4). A name MUST NOT be empty or hold a control character, either of which MUST be refused at load; any other name is sent escaped. |
 | `headers` | none | Headers sent to the target. |
@@ -1037,7 +1038,7 @@ parameter MAY set or change it. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `type` | none | Required: `link`, `next_url`, `cursor`, `page` or `offset`, matched without regard to case or surrounding whitespace. |
+| `type` | none | Required: `link`, `next_url`, `cursor`, `page` or `offset`, in lower case and without blanks around it; any other spelling MUST be refused naming the five. |
 | `items` | none | Required: a jq path to the array of a page's items, such as `.items` or `.`. An expression that is not one path of keys and indexes — evaluated against `null` at load, it fails or names other than one place — MUST be refused at load. |
 | `next` | none | Required with `next_url` and `cursor`, refused with the others: a jq expression over the page, with `$status` and `$headers` bound as in a rule, giving the next URL or cursor. |
 | `param` | none | Required with `cursor`, `page` and `offset`, refused with the others: the query parameter the cursor, page number or offset is sent in. A name with a control character, and a `request.query` key that is the same name in any case, MUST be refused at load. |
@@ -1455,7 +1456,7 @@ keys:
 | `rpc` | none | **Required.** `package.Service/Method`; a leading `/` MUST be dropped. MUST match `^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$` and hold no placeholder. |
 | `message` | `{}` | The request message in the protobuf JSON mapping. MAY hold placeholders (§ 42.10a) with the filters `json`, `number` and `raw`; `form` and `xml` MUST be refused. |
 | `metadata` | none | Keys MUST be `[0-9a-z_.-]+`; `-bin` keys, `grpc-` and `:` keys, `content-type`, `te`, `host`, `connection` and `user-agent` MUST be refused, and `authorization` when a credential key is set. Values MAY hold placeholders, filled with the header rule; a literal value with a control character MUST be refused. |
-| `descriptors` | none | `reflection`, `protoset` or `proto`, case-insensitive. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in. |
+| `descriptors` | none | `reflection`, `protoset` or `proto`, in lower case and without blanks around it; any other spelling MUST be refused naming the three. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in. |
 | `protoset_file` | none | Required with, and only with, `protoset`. |
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
@@ -6791,8 +6792,9 @@ request type (§ 5.1): for `http` a transport failure or a non-success status,
 for `localfile` a file that cannot be read. It is named for the stage rather
 than for one type, so it reads the same on every collector.
 
-This is the vocabulary `error_mode` uses (§ 18.1). The value MUST be matched
-case-insensitively; anything else MUST be rejected naming the collector, the
+This is the vocabulary `error_mode` uses (§ 18.1). The value MUST be written
+in lower case and without blanks around it, as the schemas take it; anything
+else, `LOG` and ` log ` included, MUST be rejected naming the collector, the
 key and the accepted values.
 
 No configuration spelling is deprecated at present. When one is replaced and
@@ -8264,9 +8266,9 @@ before the configuration is validated, a file that changed between that
 reading and its stamp counting as changed. Which files a collector's
 `.proto` files import MUST be learnt then from the configuration as its
 files write it, its `request.type` and `request.descriptors` taken as the
-validation names them (§ 5.1): a collector written `type: GRPC` has its
-imported files stamped before the validation as one written `type: grpc`
-has, and nothing is stamped once the configuration is in force. The compile
+validation takes them, as written (§ 5.1): a collector written `type: GRPC`,
+which the validation refuses, has none stamped, and nothing is stamped once
+the configuration is in force. The compile
 that learns them MUST be the one the validation uses. A descriptor file
 changed at any later moment — while the configuration is validated, while
 the rest of a startup or a reload runs, or once the configuration is in
@@ -8969,6 +8971,19 @@ The schemas and the example configurations MUST live together in `configs/`,
 not at the repository root, and the schemas' published addresses MUST be under
 it. `make schemas` MUST regenerate all three, and the target allocator's two
 (§ 42.14d).
+
+A key the schemas hold to a set of words MUST be taken by the exporter in the
+spelling the schemas take and no other, so that a file an editor marks is one
+the exporter refuses: `request.type`, `transform.type`, `decoder.type`, the
+three `error_handling` policies, a rule's `error_mode`,
+`request.pagination.type`, `request.descriptors`, `response.graphite.value`
+and `response.graphite.invalid_lines` in lower case and without blanks around
+them, and `request.method`, a collector's and a static target's, in upper case
+or lower case; any other spelling MUST be refused at load naming the values
+taken. A key whose values the exporter matches in any case, as a standard or
+its own documentation has them — `request.driver`, `request.record_type`, a
+header name, an `allowed_schemes` entry, a gRPC status code of
+`retry.codes` — MUST be taken in any case by the schemas too.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads free text, since YAML reads `expression: 1`
@@ -11752,7 +11767,8 @@ status captured:
   `type: http`; `--dry-run` reports it as a failed configuration.
 - Unknown types — including the anticipated `ftpfile` — are rejected with the
   supported types listed; `grpc` is a known type.
-- The type is matched case-insensitively and stored in lower case.
+- The type is taken in lower case alone (§ 34.233): `HTTP` and ` Http ` are
+  refused saying the type is written `http`.
 - An `http` collector with only `type` is valid and defaults `method` to GET;
   one setting every `http` key together is valid; the `http` cross-key rules
   (method, credential exclusivity, retries, path parameters) still apply.
@@ -12360,7 +12376,7 @@ Further:
   target's short targets are a `GET` again.
 - A static target's `from` and `until` enter its cache query as probe
   parameters, and only its `targets` its own section.
-- `invalid_lines` is refused unless `fail` or `skip`, in any case.
+- `invalid_lines` is refused unless `fail` or `skip`, in lower case (§ 34.233).
 - A carbon file with a torn line under `skip` answers the rest, counts the
   skipped lines and the stale series in the self-metrics, warns once, logs the
   series left out at debug level, and logs the recovery once the file is
@@ -18846,7 +18862,7 @@ Tests MUST show:
 
 - A `python` rule with `type: counter`, `gauge` or `untyped`, with a
   `description`, one of a blank and of `0` among them, with `required: true`
-  or `false`, or with `error_mode: fail`, `log`, `ignore` or ` LOG ` is
+  or `false`, or with `error_mode: fail`, `log` or `ignore` is
   refused at load, each in its own words after `collector "racks" metric
   "cpu"`: `sets type, which a python rule does not take: the script gives
   each of its series its type, with metric(..., type="counter"), and a series
@@ -22114,31 +22130,28 @@ The watch looks at the descriptor files of the configuration in force (§ 24.1):
   (`OnPrepare`), after the validation read it, is a `configuration reload
   rejected` line naming `base.proto:3:` at the next tick, with
   `http_exporter_config_last_reload_successful` at 0 and three quiet ticks
-  after it, for a collector written `type: grpc`, `type: GRPC` and `type: '
-  Grpc '` alike; the files watched after the reload are the named file and
-  the two it leads to in each case.
+  after it; the files watched after the reload are the named file and the
+  two it leads to.
 - A manager started as the exporter with the watch starts one, an imported
   file broken after the configuration was read and before the manager was
   made: the first three ticks log one `configuration reload rejected` line
-  naming `base.proto:3:`, for each of the three ways of writing the type.
-- For each of the three ways of writing `request.type` with each of
-  `descriptors: proto`, `PROTO` and `' Proto '`, the descriptor files stamped
-  for the configuration as its file writes it, before it is validated, are
-  the named file and the two it leads to, with imported files among them, and
-  stamping the validated configuration gives the same files and the same
-  stamp.
+  naming `base.proto:3:`.
+- The descriptor files stamped for the configuration as its file writes it,
+  before it is validated, are the named file and the two it leads to, with
+  imported files among them, and stamping the validated configuration gives
+  the same files and the same stamp; `request.type` written `GRPC` or
+  `' grpc '`, and `descriptors` written `PROTO` or `' proto '`, are refused
+  (§ 34.233), the type stamping no files.
 - `fetch.ReadFiles` answers what the old function, which looked the type up
   as the collector has it, answers, paths and mark, for every collector of a
   table of over 100: each known request type, one unknown and none, with each
   source of descriptors and `Proto`, with and without `.proto` files and
-  import paths, at least four of them with files read. The same collector
-  with its type in capitals, or with blanks around it, is answered as for the
-  type as it is named, where the old function answered nothing; the whole
-  table compiles twice, once for the files with their import path and once
-  without.
-- A collector written `type: GRPC` whose files are asked for before it is
-  validated is compiled once, and `ValidateRequest` then compiles nothing and
-  leaves the type `grpc`.
+  import paths, at least two of them with files read. The same collector
+  with its type in capitals, or with blanks around it, is answered nothing,
+  as by the old function (§ 34.233); the whole table compiles twice, once for
+  the files with their import path and once without.
+- A collector whose files are asked for before it is validated is compiled
+  once, and `ValidateRequest` then compiles nothing.
 - Every collector of the shipped configurations that load in the build — the
   examples, those under `configs` and the fixtures' — and of 300 generated
   configurations leads to the files, and gives the mark, that its type looked
@@ -25533,7 +25546,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   their types and refused by the others, a control character in `param`,
   `request.query` setting `param` in another case, `start` and `size` on
   the wrong types or out of range, `max_pages` outside 1 to 1000, and method
-  `HEAD`; the type is lower-cased and `max_pages` and `start` filled in.
+  `HEAD`; the type in another case is refused (§ 34.233) and `max_pages` and
+  `start` filled in.
 - A probe of a GitHub-style collector reads all three pages into its jq
   rules and counts them in `http_exporter_pages_fetched_total`; with
   `max_pages: 2` two probes answer the first two pages, count 2 in
@@ -29077,7 +29091,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType`: `next` beside `link`, `page` and `offset`, `param` beside `link` and `next_url`, `start` beside `link`, `cursor` and `next_url`, and `size` beside `link`, `page` and `cursor` are refused by both; each key with its own types, and `next` and `param` written `""` beside another, are taken by both.
 - `TestSchemaAndExporterAgreeOnTheFilesOfASourceOfDescriptors`: a `grpc` collector's `protoset_file`, `proto_files` or `proto_import_paths` beside another source of `descriptors`, or beside none for the health service, `protoset` without its file or with one of blanks, and `proto` without `proto_files` are refused by both; `reflection` alone, and with the files written empty, is taken by both.
 - `TestSchemaAndExporterAgreeOnAPythonTransformWithoutAScript`: a `python` transform without `script`, with `script: ""` and with a script of blanks is refused by both; the blanks table says the same of `transform.script`.
-- `TestAnLDAPCollectorsStartTLSIsToldItsOwnKey`: in a build with `ldap`, `starttls` written `true`, `smtp`, `'true'`, `yes` and `1` in an `ldap` collector (its type written `LDAP`) is refused as a key the type does not take, naming `start_tls: true`, and never told the protocols `smtp, imap, pop3, ftp`.
+- `TestAnLDAPCollectorsStartTLSIsToldItsOwnKey`: in a build with `ldap`, `starttls` written `true`, `smtp`, `'true'`, `yes` and `1` in an `ldap` collector is refused as a key the type does not take, naming `start_tls: true`, and never told the protocols `smtp, imap, pop3, ftp`.
 - `TestATLSCertCollectorsStartTLSIsToldItsOwnKey` and `TestATCPCollectorsStartTLSIsToldItsOwnKey`: `start_tls: true`, and in a `tlscert` collector `start_tls: smtp`, which is no boolean, is refused as a key the type does not take naming `starttls` and its four protocols; `TestAKeyOfAnotherTypeHidesNoOtherKeysMistakeOnItsLine`: on the line of such a key, an `allowed_targets` that is no list is still said.
 - `TestOnlyAValueOfAnotherKindIsRefusedAnew`: at a key of a shipped document's request block that the collector's type does not take, a value of another kind adds no message of its kind, the key being refused for not applying; `TestOnlyAValueThatIsNoneIsRefusedAnew`: a value that is none is refused there as anywhere.
 - `TestTheProblemsOfOneLineAreSaidInTheOrderOfTheFile`: a one-line `defaults` block of six unknown keys and five values of the wrong kind in its `request`, `retry`, `limits` and `error_handling`, a collector's one-line `request` block of three unknown keys and three such values, and a one-line `otlp` block of two unknown keys and three such values, each say every problem in the order of the keys on the line, loaded 200 times with the same text every time; with the decoder's messages placed where the mapping around them began, the unknown keys and the values came out of order.

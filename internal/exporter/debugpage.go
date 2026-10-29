@@ -307,7 +307,7 @@ func debugSameOrigin(r *http.Request) error {
 // than http, the one the page writes (fetch.RequestType.DebugPage), and an
 // http collector that names a file of the server's.
 func refusedOnDebugPage(x *model.Collector) error {
-	if kind := strings.ToLower(strings.TrimSpace(x.Request.Type)); kind != "" && !onDebugPage(kind) {
+	if kind := x.Request.Type; kind != "" && !onDebugPage(kind) {
 		return fmt.Errorf("collector %q uses request.type %s; a collector written on the debug page is an http collector, since the other types read files, hosts and databases with the server's own credentials. Write it with request.type http to try its decoder and rules on a pasted response, or run a configured collector by name", x.Name, kind)
 	}
 	if runsPython(x) {

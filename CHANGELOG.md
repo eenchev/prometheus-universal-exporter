@@ -34,6 +34,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   the line.
 - An answer sent uncompressed no longer allocates for the answer-size
   counters.
+- Reading a scraper's `Accept-Encoding` header no longer allocates on every
+  scrape.
 - GitHub Releases are described from `CHANGELOG.md` instead of a list of pull
   requests.
 

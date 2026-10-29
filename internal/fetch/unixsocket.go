@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -41,6 +42,14 @@ import (
 // configuration's JSON Schema: an absolute path, or "", which is the key
 // left out. What else it has to be is the exporter's to refuse.
 const UnixSocketPattern = `^$|^/`
+
+// maxUnixSocketPath is the longest request.unix_socket the system the
+// exporter runs on can connect to, in bytes: sun_path, the path's room in
+// the socket address, less the NUL that ends it. That is 107 on Linux, and
+// on Windows, whose sun_path is 108 bytes too, and 103 on macOS and the
+// BSDs, whose sun_path is 104; Go's net package refuses a longer path only
+// when it dials.
+const maxUnixSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
 
 // validateUnixSocket checks an http collector's request.unix_socket when
 // the configuration loads: other than "", the key left out, it is an

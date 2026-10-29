@@ -1041,8 +1041,8 @@ parameter MAY set or change it. Its keys:
 | `items` | none | Required: a jq path to the array of a page's items, such as `.items` or `.`. An expression that is not one path of keys and indexes — evaluated against `null` at load, it fails or names other than one place — MUST be refused at load. |
 | `next` | none | Required with `next_url` and `cursor`, refused with the others: a jq expression over the page, with `$status` and `$headers` bound as in a rule, giving the next URL or cursor. |
 | `param` | none | Required with `cursor`, `page` and `offset`, refused with the others: the query parameter the cursor, page number or offset is sent in. A name with a control character, and a `request.query` key that is the same name in any case, MUST be refused at load. |
-| `start` | 1 for `page`, 0 for `offset` | `page` and `offset` only, not negative: the first page's number or offset, sent on the first page. |
-| `size` | the items received | `offset` only, at least 1: how far the offset moves from one page to the next. |
+| `start` | 1 for `page`, 0 for `offset` | `page` and `offset` only, not negative: the first page's number or offset, sent on the first page. `start: 0` with `page` MUST number the pages from 0. |
+| `size` | the items received | `offset` only, not negative: how far the offset moves from one page to the next. `0` MUST be taken as the key left out, beside any type, the offset moving on by the items the page held. |
 | `max_pages` | 10 | From 1 to 1000: the most pages one trip fetches, the first included. |
 
 A key that does not apply to the type MUST be refused at load naming it and

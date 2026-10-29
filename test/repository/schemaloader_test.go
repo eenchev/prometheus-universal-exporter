@@ -736,7 +736,10 @@ func TestSchemaAndExporterAgreeOnAClientCertificateWithoutItsKey(t *testing.T) {
 // schema, which took next, param, start and size beside any type: next is
 // of next_url and cursor, param of cursor, page and offset, start of page
 // and offset and size of offset. next and param written "" are left out, to
-// both.
+// both, and so is size written 0, which the exporter reads into a whole
+// number and the schema refused under its minimum of 1: the offset moves on
+// by the items the page held, and 0 is taken beside any type. A size under
+// 0 is refused by both.
 func TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType(t *testing.T) {
 	schema := loadSchema(t)
 	paged := func(pagination string) string {
@@ -747,6 +750,7 @@ func TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType(t *testing.T) {
 		"type: link, items: .items, param: page", "type: next_url, items: .items, next: .next, param: p",
 		"type: link, items: .items, start: 1", "type: cursor, items: .items, next: .c, param: c, start: 0", "type: next_url, items: .items, next: .n, start: 2",
 		"type: link, items: .items, size: 10", "type: page, items: .items, param: page, size: 10", "type: cursor, items: .items, next: .c, param: c, size: 5",
+		"type: offset, items: .items, param: o, size: -1",
 	} {
 		agree(t, schema, "pagination: {"+pagination+"}", paged(pagination), false)
 	}
@@ -754,6 +758,8 @@ func TestSchemaAndExporterAgreeOnAPaginationKeyOfAnotherType(t *testing.T) {
 		"type: link, items: .items", `type: link, items: .items, next: "", param: ""`, "type: next_url, items: .items, next: .next",
 		"type: cursor, items: .items, next: .c, param: c", "type: page, items: .items, param: page, start: 0", "type: offset, items: .items, param: o, start: 0, size: 50",
 		`type: page, items: .items, param: page, next: ""`,
+		"type: offset, items: .items, param: o, size: 0", "type: offset, items: .items, param: o, start: 0, size: 0",
+		"type: page, items: .items, param: page, size: 0", "type: link, items: .items, size: 0", "type: cursor, items: .items, next: .c, param: c, size: 0",
 	} {
 		agree(t, schema, "pagination: {"+pagination+"}", paged(pagination), true)
 	}

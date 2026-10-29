@@ -131,7 +131,7 @@ func validatePagination(c *model.Collector) error {
 	case p.Size != 0 && p.Type != model.PaginationOffset:
 		return fmt.Errorf("collector %q sets request.pagination.size, which applies to type offset", c.Name)
 	case p.Size < 0:
-		return fmt.Errorf("collector %q request.pagination.size must be at least 1, or left out to move the offset on by the items each page holds", c.Name)
+		return fmt.Errorf("collector %q request.pagination.size must not be negative: 0, as the key left out, moves the offset on by the items each page holds", c.Name)
 	}
 	if p.MaxPages == 0 {
 		p.MaxPages = model.DefaultMaxPages

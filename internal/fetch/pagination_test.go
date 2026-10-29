@@ -506,7 +506,7 @@ func TestPaginationValidation(t *testing.T) {
 		"start cursor":     {model.PaginationConfig{Type: "cursor", Param: "c", Next: ".n", Start: ptr(1), Items: "."}, nil, `sets request.pagination.start, which applies to type page and offset`},
 		"start negative":   {model.PaginationConfig{Type: "page", Param: "p", Start: ptr(-1), Items: "."}, nil, `request.pagination.start must not be negative`},
 		"size page":        {model.PaginationConfig{Type: "page", Param: "p", Size: 5, Items: "."}, nil, `sets request.pagination.size, which applies to type offset`},
-		"size negative":    {model.PaginationConfig{Type: "offset", Param: "p", Size: -5, Items: "."}, nil, `request.pagination.size must be at least 1`},
+		"size negative":    {model.PaginationConfig{Type: "offset", Param: "p", Size: -5, Items: "."}, nil, `request.pagination.size must not be negative: 0, as the key left out`},
 		"max pages":        {model.PaginationConfig{Type: "link", MaxPages: 1001, Items: "."}, nil, `collector "paged" request.pagination.max_pages must be from 1 to 1000`},
 		"max pages low":    {model.PaginationConfig{Type: "link", MaxPages: -1, Items: "."}, nil, `request.pagination.max_pages must be from 1 to 1000`},
 		"head":             {model.PaginationConfig{Type: "link", Items: "."}, func(c *model.Collector) { editHTTP(c, func(r *HTTPConfig) { r.Method = "head" }) }, `collector "paged" sets request.pagination with method HEAD`},

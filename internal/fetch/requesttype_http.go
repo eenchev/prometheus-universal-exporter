@@ -132,8 +132,8 @@ func httpKeyRules() map[string]map[string]any {
 		"pagination.items":     {"not": SchemaOnlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
 		"pagination.next":      {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
 		"pagination.param":     {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
-		"pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it."},
-		"pagination.size":      {"minimum": 1, "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held."},
+		"pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it; 0 numbers the pages from 0."},
+		"pagination.size":      {"minimum": 0, "description": "offset: how far the offset moves from one page to the next. 0, as when left out, moves it by the number of items the page held. 0 is taken beside any type."},
 		"pagination.max_pages": {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
 	}
 }
@@ -144,7 +144,9 @@ func httpKeyRules() map[string]map[string]any {
 // and with no other, start with page and offset alone and size with offset
 // alone, as the exporter has them (fetch.validatePagination). The schema
 // took next, param, start and size beside any type, which the exporter
-// refuses as a key of another way of paging.
+// refuses as a key of another way of paging. A size of 0 is the key left
+// out to the exporter, which reads it into a whole number, so it is taken
+// beside any type.
 func httpPaginationRule() map[string]any {
 	when := func(types ...string) map[string]any {
 		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
@@ -157,7 +159,7 @@ func httpPaginationRule() map[string]any {
 			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": SchemaWrittenKey("next"), "else": map[string]any{"not": SchemaWrittenKey("next")}},
 			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": SchemaWrittenKey("param"), "else": map[string]any{"not": SchemaWrittenKey("param")}},
 			map[string]any{"if": when(model.PaginationPage, model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"start"}}}},
-			map[string]any{"if": when(model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"size"}}}},
+			map[string]any{"if": when(model.PaginationOffset), "else": map[string]any{"properties": map[string]any{"size": map[string]any{"const": 0}}}},
 		},
 	}
 }

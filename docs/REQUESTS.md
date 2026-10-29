@@ -1321,8 +1321,8 @@ not on the first.
 | `link` | The URL of the `Link` header's `rel="next"` (RFC 8288), absolute or relative to the page's URL. | — |
 | `next_url` | The URL the jq expression `next` reads from the page, absolute or relative to the page's URL. | `next` |
 | `cursor` | The first page's URL with the value `next` reads from the page in the query parameter `param`. | `next`, `param` |
-| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. | `param` |
-| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. | `param` |
+| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. An API that numbers its pages from 0 is paged with `start: 0`. | `param` |
+| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. `size: 0` is `size` left out. | `param` |
 
 ```yaml
 pagination:              # {"data":{"hosts":[...]},"links":{"next":"/api/hosts?page=2"}}

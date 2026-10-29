@@ -339,13 +339,17 @@ func CollectorLogins(requestType, collector string) (made, failed uint64) {
 	return 0, 0
 }
 
-// RequestPolicy is what a collector's request lets through, and how it
-// pages, that only some request types have (RequestType.Policy): the gRPC
-// status codes, other than OK, whose calls are answers, and the pagination
-// of a paginated answer, its defaults filled in once validated.
+// RequestPolicy is what a collector's request lets through, how it pages
+// and where it is sent, that only some request types have
+// (RequestType.Policy): the gRPC status codes, other than OK, whose calls
+// are answers, the pagination of a paginated answer, its defaults filled in
+// once validated, and the Unix socket an http collector's requests go to.
 type RequestPolicy struct {
 	AcceptCodes []string
 	Pagination  *model.PaginationConfig
+	// UnixSocket is the http type's request.unix_socket, the socket every
+	// request of the collector is sent over (unixsocket.go), "" for none.
+	UnixSocket string
 }
 
 // CollectorPolicy is what the request of c lets through that only its type
@@ -458,7 +462,7 @@ func CollectorConnectionLimit(requestType, collector string) (waited, failed uin
 // method and message are checked against. The collector need not have been
 // validated, its request.type being taken as ReadFiles takes it.
 func NamedFiles(c *model.Collector) []string {
-	if rt := RequestTypes[strings.ToLower(strings.TrimSpace(c.Request.Type))]; rt != nil && rt.NamedFiles != nil {
+	if rt := RequestTypes[c.Request.Type]; rt != nil && rt.NamedFiles != nil {
 		return rt.NamedFiles(c)
 	}
 	return nil
@@ -481,12 +485,10 @@ func NamedFiles(c *model.Collector) []string {
 //
 // The collector need not have been validated: the watch asks before the
 // configuration is, to stamp the files before the validation reads them. Its
-// request.type is therefore taken as ValidateRequest names it, whatever its
-// case and the blanks around it, so that a collector written `type: GRPC`
-// has the files it will have once it is validated. Of a validated collector,
-// whose type is written as the types are named, this changes nothing.
+// request.type is taken as written, as ValidateRequest takes it, so a
+// collector written `type: GRPC`, which the validation refuses, has none.
 func ReadFiles(c *model.Collector) (paths []string, read string) {
-	if rt := RequestTypes[strings.ToLower(strings.TrimSpace(c.Request.Type))]; rt != nil && rt.ReadFiles != nil {
+	if rt := RequestTypes[c.Request.Type]; rt != nil && rt.ReadFiles != nil {
 		return rt.ReadFiles(c)
 	}
 	return nil, ""
@@ -571,8 +573,11 @@ func suggestedRequestType() string {
 // known, every key set belongs to that type, and the type's own rules hold.
 // The keys are checked before the type validates, so a default the type fills
 // in, such as method GET, is never mistaken for something the author wrote.
+//
+// The type is taken as written, in lower case and without blanks around it,
+// the one spelling the schemas take; one written otherwise is refused,
+// saying how the type it names is written.
 func ValidateRequest(c *model.Collector) error {
-	c.Request.Type = strings.ToLower(strings.TrimSpace(c.Request.Type))
 	if c.Request.Type == "" {
 		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: %s` to its request block)", c.Name, supportedRequestTypes(), suggestedRequestType())
 	}
@@ -582,6 +587,9 @@ func ValidateRequest(c *model.Collector) error {
 	}
 	if !ok && slices.Contains(knownRequestTypes, c.Request.Type) {
 		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. Use a build that includes it: the default build includes every type, and a build with -tags select_request_types needs request_type_%s in its tags too", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type)
+	}
+	if lower := strings.ToLower(strings.TrimSpace(c.Request.Type)); !ok && lower != c.Request.Type && (RequestTypes[lower] != nil || slices.Contains(knownRequestTypes, lower)) {
+		return fmt.Errorf("collector %q has unsupported request.type %q; a type is written in lower case and without blanks around it: %s", c.Name, c.Request.Type, lower)
 	}
 	if !ok {
 		return fmt.Errorf("collector %q has unsupported request.type %q; the supported types are: %s", c.Name, c.Request.Type, supportedRequestTypes())

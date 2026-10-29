@@ -274,12 +274,10 @@ func decodeSwitchedBlockAsItWas(n *yaml.Node, out any, name, block string) error
 // an alias was read as the key it names.
 func requestAsItWas(n *yaml.Node) (TargetRequestConfig, error) {
 	var t TargetRequestConfig
-	if err := checkKnownKeysAsItWas(n, reflect.TypeOf(plainRequest{}), "model.TargetRequestConfig"); err != nil {
-		return t, err
-	}
 	var out plainRequest
-	if err := n.Decode(&out); err != nil {
-		return t, err
+	problems := errorMessages(checkKnownKeysAsItWas(n, reflect.TypeOf(plainRequest{}), "model.TargetRequestConfig"))
+	if problems = append(problems, errorMessages(n.Decode(&out))...); len(problems) > 0 {
+		return t, &yaml.TypeError{Errors: problems}
 	}
 	t = TargetRequestConfig(out)
 	for _, entry := range MappingEntries(n) {
@@ -294,22 +292,27 @@ func requestAsItWas(n *yaml.Node) (TargetRequestConfig, error) {
 }
 
 // cacheAsItWas is CacheConfig.UnmarshalYAML before a key that is an alias was
-// read as the key it names.
+// read as the key it names, saying every problem of the block, as it now
+// does, where it said the first unknown key alone.
 func cacheAsItWas(n *yaml.Node) (CacheConfig, error) {
 	var c CacheConfig
 	if n.Kind == yaml.ScalarNode {
-		return c, fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
+		return c, lineError(n, "cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return c, fmt.Errorf("line %d: cache must be a mapping with ttl, stale_if_error and revalidate", n.Line)
+		return c, lineError(n, "cache must be a mapping with ttl, stale_if_error and revalidate")
 	}
+	var problems []string
 	for _, entry := range MappingEntries(n) {
 		if key := entry.Key.Value; !slices.Contains(cacheConfigKeys, key) {
-			return c, fmt.Errorf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])
+			problems = append(problems, fmt.Sprintf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1]))
 		}
 	}
-	err := n.Decode((*plainCache)(&c))
-	return c, err
+	var out plainCache
+	if problems = append(problems, errorMessages(n.Decode(&out))...); len(problems) > 0 {
+		return c, &yaml.TypeError{Errors: problems}
+	}
+	return CacheConfig(out), nil
 }
 
 // errorText is an error's text, and "" for none.
@@ -393,12 +396,12 @@ func sameAsItWas(t *testing.T, where string, n *yaml.Node, seen map[*yaml.Node]b
 	requestErr := request.UnmarshalYAML(n)
 	// The order of the keys was not recorded before (keyorder_test.go).
 	request.Order = nil
-	if was, wasErr := requestAsItWas(n); errorText(requestErr) != errorText(wasErr) || (requestErr == nil && !reflect.DeepEqual(request, was)) {
+	if was, wasErr := requestAsItWas(n); problemsText(requestErr) != problemsText(wasErr) || (requestErr == nil && !reflect.DeepEqual(request, was)) {
 		t.Fatalf("%s: line %d: request is %v %+v, and was %v %+v", where, n.Line, requestErr, request, wasErr, was)
 	}
 	var cache CacheConfig
 	cacheErr := cache.UnmarshalYAML(n)
-	if was, wasErr := cacheAsItWas(n); errorText(cacheErr) != errorText(wasErr) || !reflect.DeepEqual(cache, was) {
+	if was, wasErr := cacheAsItWas(n); problemsText(cacheErr) != problemsText(wasErr) || !reflect.DeepEqual(cache, was) {
 		t.Fatalf("%s: line %d: cache is %v %+v, and was %v %+v", where, n.Line, cacheErr, cache, wasErr, was)
 	}
 	return compared + 1

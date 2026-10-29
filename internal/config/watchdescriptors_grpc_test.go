@@ -527,34 +527,6 @@ func TestStartingTheWatchStampsTheDescriptorFilesBeforeTheyAreRead(t *testing.T)
 	}
 }
 
-// A request.type and a request.descriptors written in capitals, with blanks
-// around them, are read by the stamp taken before the validation as the
-// validation names them: the files the .proto files import are watched from
-// the start and after a reload, and the ticks after each are quiet.
-func TestTheImportsOfATypeWrittenInCapitalsAreWatched(t *testing.T) {
-	dir := t.TempDir()
-	service, types, base := writeService(t, dir)
-	document := strings.Replace(importingDocument("v1", plainMessage, dir, dir), "type: grpc", "type: ' GRPC '", 1)
-	document = strings.Replace(document, "descriptors: proto", "descriptors: ' Proto '", 1)
-	m, logs := startedPair(t, document, true, func() {})
-	for step := range 2 {
-		if want := []string{service, base, types}; !slices.Equal(m.descriptors.files, want) {
-			t.Fatalf("step %d: the descriptor files watched are %v, want %v", step, m.descriptors.files, want)
-		}
-		for range 3 {
-			m.reloadChanged()
-		}
-		if logs.Len() != 0 {
-			t.Fatalf("step %d: ticks with nothing changed logged %q", step, logs)
-		}
-		writeProto(t, dir, importedBase, baseWithRegion+strings.Repeat("// again\n", step))
-		m.reloadChanged()
-		if line := theLine(t, logs); line["msg"] != "configuration reloaded" {
-			t.Fatalf("step %d: with the imported file changed: logged %v", step, line)
-		}
-	}
-}
-
 // The files watched are those of the configuration in force: a reload that
 // points the collector at other .proto files watches those from then on and
 // the old ones no longer, and one that takes the descriptor files from the
@@ -653,94 +625,90 @@ func TestWithoutTheWatchADescriptorFileReloadsNothing(t *testing.T) {
 	}
 }
 
-// writtenTypes are ways a configuration may write request.type: grpc for a
-// collector, as the types are named and not.
-var writtenTypes = []string{"grpc", "GRPC", "' Grpc '"}
-
 // An imported file edited while a reload is put in force, after the
-// validation read it, reloads at the next tick however the collector's
-// request.type is written: the files are stamped before the configuration
-// is validated, when the type is still as the file writes it, and the
-// imports of a collector written `type: GRPC` are found then as those of one
-// written `type: grpc` are. The file no longer compiles, so the tick after
-// the reload is a rejected one, and the reload metric does not go on reading
-// a successful load while the collector's calls fail.
-func TestAnImportEditedWhileTheReloadIsPreparedReloadsHoweverTheTypeIsWritten(t *testing.T) {
-	for _, written := range writtenTypes {
-		t.Run(written, func(t *testing.T) {
-			dir := t.TempDir()
-			service, types, base := writeService(t, dir)
-			document := func(metric string) string {
-				return strings.Replace(importingDocument(metric, plainMessage, dir, dir), "type: grpc", "type: "+written, 1)
-			}
-			p := newPair(t, document("v1"), importingTargets(""))
-			logs := &bytes.Buffer{}
-			p.manager.logger = slog.New(slog.NewJSONHandler(logs, nil))
-			p.manager.SetWatchInterval(time.Minute)
-			edits := 0
-			p.manager.OnPrepare(func(*model.Config, *model.StaticTargetFile) {
-				if edits++; edits == 1 {
-					writeProto(t, dir, importedBase, baseBroken)
-				}
-			})
-			p.write(t, p.configPath, document("v2"))
-			p.manager.reloadChanged()
-			if line := theLine(t, logs); line["msg"] != "configuration reloaded" || versionInForce(p) != "v2" {
-				t.Fatalf("the reload of the configuration: logged %v", line)
-			}
-			if want := []string{service, base, types}; !slices.Equal(p.manager.descriptors.files, want) {
-				t.Fatalf("the descriptor files watched after the reload are %v, want %v", p.manager.descriptors.files, want)
-			}
-			p.manager.reloadChanged()
-			if line := theLine(t, logs); line["msg"] != "configuration reload rejected" || !strings.Contains(line["error"].(string), "base.proto:3:") || lastReloadSuccessful(t, p.manager, reloadFileConfig) != 0 {
-				t.Fatalf("the tick after an imported file was broken while the reload was put in force: logged %v, and the reload metric reads %v", line, lastReloadSuccessful(t, p.manager, reloadFileConfig))
-			}
-			for range 3 {
-				p.manager.reloadChanged()
-			}
-			if logs.Len() != 0 {
-				t.Fatalf("the ticks after the rejected reload logged %q", logs)
-			}
-		})
+// validation read it, reloads at the next tick: the files are stamped
+// before the configuration is validated, and the imports of the collector
+// are found then. The file no longer compiles, so the tick after the reload
+// is a rejected one, and the reload metric does not go on reading a
+// successful load while the collector's calls fail.
+func TestAnImportEditedWhileTheReloadIsPreparedReloads(t *testing.T) {
+	dir := t.TempDir()
+	service, types, base := writeService(t, dir)
+	document := func(metric string) string {
+		return importingDocument(metric, plainMessage, dir, dir)
+	}
+	p := newPair(t, document("v1"), importingTargets(""))
+	logs := &bytes.Buffer{}
+	p.manager.logger = slog.New(slog.NewJSONHandler(logs, nil))
+	p.manager.SetWatchInterval(time.Minute)
+	edits := 0
+	p.manager.OnPrepare(func(*model.Config, *model.StaticTargetFile) {
+		if edits++; edits == 1 {
+			writeProto(t, dir, importedBase, baseBroken)
+		}
+	})
+	p.write(t, p.configPath, document("v2"))
+	p.manager.reloadChanged()
+	if line := theLine(t, logs); line["msg"] != "configuration reloaded" || versionInForce(p) != "v2" {
+		t.Fatalf("the reload of the configuration: logged %v", line)
+	}
+	if want := []string{service, base, types}; !slices.Equal(p.manager.descriptors.files, want) {
+		t.Fatalf("the descriptor files watched after the reload are %v, want %v", p.manager.descriptors.files, want)
+	}
+	p.manager.reloadChanged()
+	if line := theLine(t, logs); line["msg"] != "configuration reload rejected" || !strings.Contains(line["error"].(string), "base.proto:3:") || lastReloadSuccessful(t, p.manager, reloadFileConfig) != 0 {
+		t.Fatalf("the tick after an imported file was broken while the reload was put in force: logged %v, and the reload metric reads %v", line, lastReloadSuccessful(t, p.manager, reloadFileConfig))
+	}
+	for range 3 {
+		p.manager.reloadChanged()
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("the ticks after the rejected reload logged %q", logs)
 	}
 }
 
 // The same at startup: an imported file broken after the startup read the
 // configuration, before the manager took over, is one rejected reload at
-// the first tick, however the collector's request.type is written.
-func TestAnImportEditedDuringStartupIsSeenByTheFirstTickHoweverTheTypeIsWritten(t *testing.T) {
-	for _, written := range writtenTypes {
-		t.Run(written, func(t *testing.T) {
-			dir := t.TempDir()
-			writeService(t, dir)
-			document := strings.Replace(importingDocument("v1", plainMessage, dir, dir), "type: grpc", "type: "+written, 1)
-			m, logs := startedPair(t, document, true, func() { writeProto(t, dir, importedBase, baseBroken) })
-			for range 3 {
-				m.reloadChanged()
-			}
-			if line := theLine(t, logs); line["msg"] != "configuration reload rejected" || !strings.Contains(line["error"].(string), "base.proto:3:") {
-				t.Fatalf("the first ticks after an imported file was broken during the startup logged %v, want one rejected reload", line)
-			}
-		})
+// the first tick.
+func TestAnImportEditedDuringStartupIsSeenByTheFirstTick(t *testing.T) {
+	dir := t.TempDir()
+	writeService(t, dir)
+	document := importingDocument("v1", plainMessage, dir, dir)
+	m, logs := startedPair(t, document, true, func() { writeProto(t, dir, importedBase, baseBroken) })
+	for range 3 {
+		m.reloadChanged()
+	}
+	if line := theLine(t, logs); line["msg"] != "configuration reload rejected" || !strings.Contains(line["error"].(string), "base.proto:3:") {
+		t.Fatalf("the first ticks after an imported file was broken during the startup logged %v, want one rejected reload", line)
 	}
 }
 
 // The descriptor files a configuration is stamped with before it is
-// validated are the ones it has once it is: over the ways a collector may
-// write its request.type and its request.descriptors, the files stamped for
-// the configuration as its file writes it are those stamped for the
-// validated one, the named file and the two it leads to, and they are
-// learnt by one compile.
+// validated are the ones it has once it is: the files stamped for the
+// configuration as its file writes it are those stamped for the validated
+// one, the named file and the two it leads to, and they are learnt by one
+// compile. A request.type or a request.descriptors written in capitals, or
+// with blanks around it, is refused, as the schemas refuse it, and a
+// configuration that writes either so stamps no files before it is.
 func TestTheFilesStampedBeforeTheValidationAreTheValidatedConfigurations(t *testing.T) {
 	dir := t.TempDir()
 	service, types, base := writeService(t, dir)
-	for _, writtenType := range writtenTypes {
-		for _, descriptors := range []string{"proto", "PROTO", "' Proto '"} {
+	for _, writtenType := range []string{"GRPC", "' grpc '", "grpc"} {
+		for _, descriptors := range []string{"PROTO", "' proto '", "proto"} {
 			document := strings.Replace(importingDocument("v1", plainMessage, dir, dir), "type: grpc", "type: "+writtenType, 1)
 			document = strings.Replace(document, "descriptors: proto", "descriptors: "+descriptors, 1)
 			path := testutil.WriteIn(t, t.TempDir(), "config.yaml", document)
 			var written stampedFiles
 			validated, err := load(path, nil, func(c *model.Config) { written = stampDescriptors(c) })
+			if writtenType != "grpc" || descriptors != "proto" {
+				if refused := map[bool]string{true: "request.type", false: "request.descriptors"}[writtenType != "grpc"]; err == nil || !strings.Contains(err.Error(), refused) {
+					t.Errorf("type %s, descriptors %s: err=%v, want it refused for its %s", writtenType, descriptors, err, refused)
+				}
+				if writtenType != "grpc" && len(written.files) != 0 {
+					t.Errorf("type %s, descriptors %s: the files stamped before the validation are %v, want none", writtenType, descriptors, written.files)
+				}
+				continue
+			}
 			if err != nil {
 				t.Fatalf("type %s, descriptors %s: %v", writtenType, descriptors, err)
 			}

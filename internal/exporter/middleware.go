@@ -31,16 +31,27 @@ import (
 // or covered by *, with a quality above zero. gzip or x-gzip named decides,
 // whatever * says, as RFC 9110 has a coding named override *: gzip;q=0, *
 // refuses gzip.
+//
+// The header is read where it lies, its parts cut off one by one and their
+// names compared in any case, rather than split into slices and lower-cased
+// copies: it is read on every scrape of a compressing endpoint, and the
+// splitting allocated on each. Only a quality that is no number allocates,
+// in strconv's error, and is then taken as 1, as it was.
 func acceptsGzip(header string) bool {
 	named, wildcard := -1.0, -1.0
-	for _, part := range strings.Split(header, ",") {
+	for rest, more := header, true; more; {
+		var part string
+		part, rest, more = strings.Cut(rest, ",")
 		coding, params, _ := strings.Cut(strings.TrimSpace(part), ";")
-		coding = strings.ToLower(strings.TrimSpace(coding))
-		if coding != "gzip" && coding != "x-gzip" && coding != "*" {
+		coding = strings.TrimSpace(coding)
+		gzipped := strings.EqualFold(coding, "gzip") || strings.EqualFold(coding, "x-gzip")
+		if !gzipped && coding != "*" {
 			continue
 		}
 		quality := 1.0
-		for _, param := range strings.Split(params, ";") {
+		for params, more := params, true; more; {
+			var param string
+			param, params, more = strings.Cut(params, ";")
 			name, value, found := strings.Cut(strings.TrimSpace(param), "=")
 			if found && strings.EqualFold(strings.TrimSpace(name), "q") {
 				if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
@@ -48,10 +59,10 @@ func acceptsGzip(header string) bool {
 				}
 			}
 		}
-		if coding == "*" {
-			wildcard = max(wildcard, quality)
-		} else {
+		if gzipped {
 			named = max(named, quality)
+		} else {
+			wildcard = max(wildcard, quality)
 		}
 	}
 	if named >= 0 {

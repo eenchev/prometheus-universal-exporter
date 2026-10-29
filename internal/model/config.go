@@ -1,6 +1,7 @@
 package model
 
 import (
+	"cmp"
 	"fmt"
 	"reflect"
 	"slices"
@@ -511,13 +512,13 @@ func (t *TLSConfig) UnmarshalYAML(n *yaml.Node) error {
 		return notAMapping(n, "model.TLSConfig")
 	}
 	// Node.Decode does not refuse unknown keys the way the file's decoder
-	// does, so they are checked here, or a misspelt key would be ignored.
-	if err := checkKnownKeys(n, reflect.TypeOf(plain{}), "model.TLSConfig"); err != nil {
-		return err
-	}
+	// does, so they are checked here, or a misspelt key would be ignored;
+	// the values are decoded all the same, so a value of the wrong kind is
+	// said beside them (decodeBlock).
 	var out plain
-	if err := n.Decode(&out); err != nil {
-		return err
+	problems, err := decodeBlock(n, &out, unknownKeys(n, reflect.TypeOf(out), "model.TLSConfig"))
+	if err != nil || len(problems) > 0 {
+		return cmp.Or(err, keyProblemsError(problems))
 	}
 	*t = TLSConfig(out)
 	t.Set = true
@@ -882,21 +883,32 @@ var cacheConfigKeys = []string{"ttl", "stale_if_error", "revalidate"}
 // UnmarshalYAML refuses the keys it does not know, which a custom decoder
 // would otherwise let through, and explains the one-value form. The keys of
 // a mapping merged in with << are the cache's own keys, and checked as such,
-// and a key that is an alias is the key it names (KeyName).
+// and a key that is an alias is the key it names (KeyName). Every unknown
+// key and every value of the wrong kind is said, in the order of the file
+// (decodeBlock), and as the decoder's own errors, so the rest of the file
+// is read and its problems said too.
 func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
+	n = resolveAlias(n)
 	if n.Kind == yaml.ScalarNode {
-		return fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
+		return lineError(n, "cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: cache must be a mapping with ttl, stale_if_error and revalidate", n.Line)
+		return lineError(n, "cache must be a mapping with ttl, stale_if_error and revalidate")
 	}
+	var unknown []keyProblem
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(cacheConfigKeys, key) {
-			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])
+			unknown = append(unknown, keyProblem{entry.Key.Line, entry.Key.Column, fmt.Sprintf("line %d: cache has the unknown key %q; it takes %s and %s", entry.Key.Line, key, strings.Join(cacheConfigKeys[:len(cacheConfigKeys)-1], ", "), cacheConfigKeys[len(cacheConfigKeys)-1])})
 		}
 	}
 	type plain CacheConfig
-	return n.Decode((*plain)(c))
+	var out plain
+	problems, err := decodeBlock(n, &out, unknown)
+	if err != nil || len(problems) > 0 {
+		return cmp.Or(err, keyProblemsError(problems))
+	}
+	*c = CacheConfig(out)
+	return nil
 }
 
 // FailureBackoffConfig is a collector's failure_backoff: after After
@@ -928,28 +940,38 @@ func BackoffSwitchedOff(b *FailureBackoffConfig) bool {
 // UnmarshalYAML refuses the keys it does not know in the words the cache's
 // do, naming the block rather than the type, and explains the one-value
 // form. The keys of a mapping merged in with << are the block's own keys,
-// and a key that is an alias is the key it names (KeyName).
+// and a key that is an alias is the key it names (KeyName). Every unknown
+// key and every value of the wrong kind is said, in the order of the file,
+// as the cache's are.
 func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
+	n = resolveAlias(n)
 	if n.Kind == yaml.ScalarNode && n.ShortTag() == boolTag {
 		var on bool
 		if n.Decode(&on) == nil && on {
-			return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {} to back off with the defaults of its keys", n.Line)
+			return lineError(n, "failure_backoff is a mapping: write failure_backoff: {} to back off with the defaults of its keys")
 		}
-		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {enabled: false} to turn off the backoff the file's defaults give the collector, or leave failure_backoff out for no backoff", n.Line)
+		return lineError(n, "failure_backoff is a mapping: write failure_backoff: {enabled: false} to turn off the backoff the file's defaults give the collector, or leave failure_backoff out for no backoff")
 	}
 	if n.Kind == yaml.ScalarNode {
-		return fmt.Errorf("line %d: failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Line, n.Value, n.Value)
+		return lineError(n, "failure_backoff is a mapping: write failure_backoff: {initial: %s} to wait %s after a target's third consecutive failed scrape, and add after and max to change when it starts and how long the wait may grow", n.Value, n.Value)
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: failure_backoff must be a mapping with enabled, after, initial, max and min_budget", n.Line)
+		return lineError(n, "failure_backoff must be a mapping with enabled, after, initial, max and min_budget")
 	}
+	var unknown []keyProblem
 	for _, entry := range MappingEntries(n) {
 		if key := KeyName(entry.Key); !slices.Contains(failureBackoffKeys, key) {
-			return fmt.Errorf("line %d: failure_backoff has the unknown key %q; it takes enabled, after, initial, max and min_budget", entry.Key.Line, key)
+			unknown = append(unknown, keyProblem{entry.Key.Line, entry.Key.Column, fmt.Sprintf("line %d: failure_backoff has the unknown key %q; it takes enabled, after, initial, max and min_budget", entry.Key.Line, key)})
 		}
 	}
 	type plain FailureBackoffConfig
-	return n.Decode((*plain)(b))
+	var out plain
+	problems, err := decodeBlock(n, &out, unknown)
+	if err != nil || len(problems) > 0 {
+		return cmp.Or(err, keyProblemsError(problems))
+	}
+	*b = FailureBackoffConfig(out)
+	return nil
 }
 
 // Defaults of failure_backoff's keys.

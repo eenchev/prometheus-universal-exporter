@@ -21,9 +21,10 @@ func (w *discardWriter) WriteHeader(int)             {}
 // answer is counted, where one was made for every answer, a small
 // allocation on every scrape of /probe, the self-metrics and the static
 // targets. At level 0 an answer allocates nothing at all, and at another
-// level, to a client that does not take gzip, what the handler, saying
-// that the answer varies with Accept-Encoding and reading that header
-// allocate, and nothing more.
+// level, to a client that does not take gzip, what the handler and saying
+// that the answer varies with Accept-Encoding allocate, and nothing more:
+// reading the client's Accept-Encoding, of several codings, none of them
+// gzip, allocates nothing, where splitting it into its parts allocated.
 // The bytes are counted all the same.
 func TestCountingAnAnswerSentAsItIsAllocatesNothing(t *testing.T) {
 	body := []byte("up 1\n")
@@ -35,15 +36,15 @@ func TestCountingAnAnswerSentAsItIsAllocatesNothing(t *testing.T) {
 		var counter answerCounter
 		handler := newAnswerCompression(level).wrap(&counter, answer)
 		r := httptest.NewRequest(http.MethodGet, "/probe", nil)
+		r.Header.Set("Accept-Encoding", "identity, br;q=0.9, deflate;q=0.5, gzip;q=0")
 		w := &discardWriter{header: http.Header{}}
-		// What the answer allocates without the counting: the handler,
-		// and at a level that compresses, the Vary header and the reading
-		// of Accept-Encoding.
+		// What the answer allocates without the counting and the reading
+		// of Accept-Encoding: the handler, and at a level that compresses,
+		// the Vary header.
 		alone, _ := alloctest.Allocations(100, func() {
 			clear(w.header)
 			if level > 0 {
 				w.Header().Add("Vary", "Accept-Encoding")
-				_ = acceptsGzip(r.Header.Get("Accept-Encoding"))
 			}
 			answer(w, r)
 		})

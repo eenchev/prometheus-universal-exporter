@@ -2,8 +2,9 @@
 // were never meant for Prometheus into Prometheus targets, as configured by
 // collectors. See README.md and docs/.
 //
-// The command line and the process lifecycle are here, and the --dry-run
-// report in check.go; everything else is under internal/.
+// The command line and the process lifecycle are here, the --dry-run
+// report in check.go and --healthcheck in healthcheck.go; everything else is
+// under internal/.
 package main
 
 import (
@@ -58,9 +59,10 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 // paths that terminate early, and taking the arguments and output streams as
 // parameters lets the command line be tested end to end.
 //
-// Exit statuses: 0 on a clean shutdown or a passing --dry-run, 1 when the
-// configuration is invalid, a --dry-run fails or the server stops with an error,
-// and 2 when the command line itself cannot be parsed.
+// Exit statuses: 0 on a clean shutdown, a passing --dry-run or a passing
+// --healthcheck, 1 when the configuration is invalid, a --dry-run or a
+// --healthcheck fails or the server stops with an error, and 2 when the
+// command line itself cannot be parsed.
 func run(args []string, stdout, stderr io.Writer) int {
 	// SIGHUP is caught before anything else, and until run returns. Its
 	// default action ends the process, and a start can take seconds — the
@@ -106,6 +108,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&allocator.member, "allocator.member", "", "This replica's name in the allocator's member list; the host name, such as the pod's name, when left out")
 	flags.StringVar(&allocator.advertise, "allocator.advertise", "", "host:port the allocator tells Prometheus to send this replica's probes to; the listen address's host, or else the host's first address that is not a loopback one, with the listen port, when left out")
 	flags.StringVar(&allocator.tokenFile, "allocator.token-file", "", "File holding the bearer token sent to the allocator, read again for every request")
+	healthcheck := healthcheckFlag{}
+	flags.Var(&healthcheck, "healthcheck", "Ask the exporter at --web.listen-address whether it is ready, GET /ready, or with --healthcheck=health whether it is alive, GET /health, and exit 0 on 200 or 1 otherwise, within 5s, without starting the exporter or reading its configuration; for a container health check")
 	check := flags.Bool("dry-run", false, "Validate the configuration and static target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -205,6 +209,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *showVersion {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
 		return 0
+	}
+
+	if healthcheck.endpoint != "" {
+		return runHealthcheck(*listenAddress, healthcheck.endpoint, stderr)
 	}
 
 	if *printSchema || *printCollectorFileSchema || *printStaticTargetsSchema {

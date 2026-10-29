@@ -59,22 +59,10 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 	}
 	// Node.Decode does not refuse unknown keys the way the file's decoder
 	// does, so they are checked here, or a misspelt key would be ignored.
-	placed := unknownKeys(n, reflect.TypeOf(out).Elem(), name)
-	err := n.Decode(out)
-	var typeErr *yaml.TypeError
-	if err != nil && !errors.As(err, &typeErr) {
+	placed, err := decodeBlock(n, out, unknownKeys(n, reflect.TypeOf(out).Elem(), name))
+	if err != nil {
 		return err
 	}
-	if typeErr != nil {
-		// Each value is decoded again on its own, so that a message the
-		// decoder gives with its line alone sorts among the unknown keys
-		// in the order of the file (placeMessages).
-		at := keyAt{"", n.Line, n.Column}
-		pieces := decodedPieces(n, reflect.TypeOf(out).Elem(), at)
-		decoded, _ := placeMessages(typeErr.Errors, pieces, at)
-		placed = append(placed, decoded...)
-	}
-	sortProblems(placed)
 	problems := make([]string, 0, len(placed))
 	for _, problem := range placed {
 		problems = append(problems, problem.message)
@@ -103,6 +91,33 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 		return &yaml.TypeError{Errors: problems}
 	}
 	return nil
+}
+
+// decodeBlock decodes n, a mapping, into out, a pointer to the block's
+// struct without its UnmarshalYAML, and returns every problem of the
+// block in the order of the file: unknown, the keys the block refuses,
+// which its own check found, and the decoder's message of each value of
+// the wrong kind. A block that checks its own keys decodes itself all the
+// same, so that an unknown key does not hide the values after it, nor one
+// value the keys and values after it; each value is decoded again on its
+// own, so that a message the decoder gives with its line alone is placed
+// at its key (placeMessages). An error of another kind than the decoder's
+// is returned as it is.
+func decodeBlock(n *yaml.Node, out any, unknown []keyProblem) ([]keyProblem, error) {
+	placed := unknown
+	err := n.Decode(out)
+	var typeErr *yaml.TypeError
+	if err != nil && !errors.As(err, &typeErr) {
+		return nil, err
+	}
+	if typeErr != nil {
+		at := keyAt{"", n.Line, n.Column}
+		pieces := decodedPieces(n, reflect.TypeOf(out).Elem(), at)
+		decoded, _ := placeMessages(typeErr.Errors, pieces, at)
+		placed = append(placed, decoded...)
+	}
+	sortProblems(placed)
+	return placed, nil
 }
 
 // joinWithAnd writes names as "a", "a and b" and "a, b and c".

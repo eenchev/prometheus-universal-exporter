@@ -376,6 +376,10 @@ type policyGuard struct {
 	// for the refusal to name.
 	clientCertificate bool
 	targetCertificate bool
+	// socket says the request goes to the collector's request.unix_socket
+	// (unixsocket.go), so no connection is made to an address of the hosts
+	// it checks.
+	socket bool
 }
 
 // certificateOwner names whose client certificate the request presents.
@@ -395,7 +399,7 @@ type policyGuardKey struct{}
 // certificate a redirect is judged by is the one the request presents;
 // ownTLS says that block is the target's.
 func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error), ownTLS bool) (context.Context, error) {
-	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS}
+	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS, socket: CollectorPolicy(c).UnixSocket != ""}
 	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}
@@ -420,11 +424,31 @@ func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 	if err != nil {
 		return err
 	}
+	if g.socket {
+		if err := g.policy.overSocket(host, nameAllowed); err != nil {
+			return err
+		}
+	}
 	g.mu.Lock()
 	g.hosts[host] = nameAllowed
 	g.proxied = g.proxied || proxied
 	g.mu.Unlock()
 	return nil
+}
+
+// overSocket decides for a host whose request goes to a Unix socket, which
+// has no address of its own to hold to the rules: the connection is made to
+// the socket, never to what the host's name resolves to, so the name is not
+// looked up. The name rules and, for an address written as the host, the
+// address rules were applied already (check); what is left is a name that
+// allowed_targets does not list by name, which nothing can show to be
+// allowed, and is refused, as a name behind a proxy that cannot be looked
+// up is (unresolved).
+func (p *targetPolicy) overSocket(host string, nameAllowed bool) error {
+	if _, literal := literalAddr(host); literal || nameAllowed || len(p.allowNames)+len(p.allowNets) == 0 {
+		return nil
+	}
+	return &TargetRefusedError{Host: host, Reason: "it is not in request.allowed_targets by name, and the request goes to request.unix_socket, whose connection has no address to hold to the list"}
 }
 
 // canonicalHost is host as the policy matches it, which is the name the

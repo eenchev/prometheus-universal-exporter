@@ -29,7 +29,10 @@ The allocator is built beside the exporter: `make build` leaves it in
 `bin/pue-allocator`, the release archives carry it, and the container image
 has it at `/bin/pue-allocator`, beside the exporter (run the image with
 `--entrypoint /bin/pue-allocator`, or the pod with `command:
-["/bin/pue-allocator"]`). It is built with the same request types as the
+["/bin/pue-allocator"]`). Run that way under Docker, give it
+`--no-healthcheck` too: the image's `HEALTHCHECK` asks the exporter's
+`/ready` on port 8080 ([Health checks](CONFIGURATION.md#health-checks)), which
+the allocator does not serve. It is built with the same request types as the
 exporter, since it checks the configuration it serves with the exporter's
 loader: an allocator built with only some request types refuses a
 configuration that uses another, as such an exporter does.

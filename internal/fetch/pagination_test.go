@@ -506,7 +506,7 @@ func TestPaginationValidation(t *testing.T) {
 		"start cursor":     {model.PaginationConfig{Type: "cursor", Param: "c", Next: ".n", Start: ptr(1), Items: "."}, nil, `sets request.pagination.start, which applies to type page and offset`},
 		"start negative":   {model.PaginationConfig{Type: "page", Param: "p", Start: ptr(-1), Items: "."}, nil, `request.pagination.start must not be negative`},
 		"size page":        {model.PaginationConfig{Type: "page", Param: "p", Size: 5, Items: "."}, nil, `sets request.pagination.size, which applies to type offset`},
-		"size negative":    {model.PaginationConfig{Type: "offset", Param: "p", Size: -5, Items: "."}, nil, `request.pagination.size must be at least 1`},
+		"size negative":    {model.PaginationConfig{Type: "offset", Param: "p", Size: -5, Items: "."}, nil, `request.pagination.size must not be negative: 0, as the key left out`},
 		"max pages":        {model.PaginationConfig{Type: "link", MaxPages: 1001, Items: "."}, nil, `collector "paged" request.pagination.max_pages must be from 1 to 1000`},
 		"max pages low":    {model.PaginationConfig{Type: "link", MaxPages: -1, Items: "."}, nil, `request.pagination.max_pages must be from 1 to 1000`},
 		"head":             {model.PaginationConfig{Type: "link", Items: "."}, func(c *model.Collector) { editHTTP(c, func(r *HTTPConfig) { r.Method = "head" }) }, `collector "paged" sets request.pagination with method HEAD`},
@@ -524,7 +524,16 @@ func TestPaginationValidation(t *testing.T) {
 		})
 	}
 	c := testutil.Collector("paged", "json")
-	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: " Offset ", Param: "o", Items: "."} })
+	// The type is taken as the schemas take it, in lower case and without
+	// blanks around it.
+	for _, written := range []string{" Offset ", "OFFSET", "offset "} {
+		editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: written, Param: "o", Items: "."} })
+		if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("request.pagination.type is %q; want one of link, next_url, cursor, page, offset, in lower case", written)) {
+			t.Fatalf("%q: err=%v", written, err)
+		}
+	}
+	c = testutil.Collector("paged", "json")
+	editHTTP(&c, func(r *HTTPConfig) { r.Pagination = &model.PaginationConfig{Type: "offset", Param: "o", Items: "."} })
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}

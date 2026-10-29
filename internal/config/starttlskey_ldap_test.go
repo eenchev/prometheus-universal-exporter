@@ -21,7 +21,7 @@ func TestAnLDAPCollectorsStartTLSIsToldItsOwnKey(t *testing.T) {
 		_, err := Load(testutil.WriteFile(t, "config.yaml", `collectors:
   - name: directory
     request:
-      type: LDAP
+      type: ldap
       starttls: `+written+`
       searches:
         - name: people

@@ -802,7 +802,7 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 
 `server.debug` sets how far collectors can be debugged — see [Debugging collectors](../../docs/CONFIGURATION.md#debugging-collectors). `edit` enables `/debug`, a page where a collector written there, or a configured one, is run on a pasted response, showing each stage of the trip and the series a probe would serve, with nothing put in force and nothing fetched; a collector written on the page never runs Python or reads a file of the pod. `full` adds what shows a target's answer: fetching a target through a configured collector, or scraping a static target, on that page, `/probe?...&debug=true` and `/static-targets?debug=<name>`, and the status page shows each error whole, with the values of the answer it quotes and what it holds for the operator alone, such as an `sshexec` command's stderr. Turn `full` on while a collector is being fixed, and off again. Empty and `off` render no flag; anything else fails rendering. `--web.debug` in `extraArgs` fails rendering too.
 
-The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
+The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version`, `--healthcheck` — print something or check something and exit, so they have no values: run them as a separate command, or, for `--healthcheck`, with [`healthProbes.mode: exec`](#probes). A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
 ### Configuration mount and rollout
 
@@ -906,6 +906,13 @@ readinessProbe:
   periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 3
+```
+
+`healthProbes.mode: exec` has the kubelet run the exporter's own [health check](../../docs/CONFIGURATION.md#health-checks) in the container instead, `/bin/prometheus-universal-exporter --healthcheck=health` for liveness and `--healthcheck=ready` for readiness, each with the `--web.listen-address` the container is given, so the check follows `server.listenAddress`. It asks the same endpoints from inside the pod, for a cluster where the kubelet cannot reach the pod's address. Each run starts a process in the container, which a `GET` does not, so `http`, the default, is the cheaper where it works. `exec` needs the exporter at `/bin/prometheus-universal-exporter`, where the exporter's image has it, and the timings above still apply; the check gives up after 5 seconds on its own, and the kubelet at `timeoutSeconds`.
+
+```yaml
+healthProbes:
+  mode: exec
 ```
 
 ### Replicas
@@ -1203,7 +1210,7 @@ Three mistakes are rejected while rendering, because each fails in a way that po
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 
-`--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
+`--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version`, `--healthcheck` and `--help` are rejected as well: each prints or checks something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
 An entry that does not begin with `--` is rejected too, since `some.new-flag=value` as an argument is read as a positional value and ignored.
 
@@ -1598,6 +1605,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
 | `goGC` | object | unset | `percent`, the Go garbage collector's target, rendered as the container's `GOGC` environment variable: a whole number from 1 to 10000, or `"off"` with a Go memory limit in force; empty keeps Go's default, 100. See [Garbage collector](#garbage-collector). |
+| `healthProbes` | object | `mode: http` | `mode`: `http` GETs `/health` and `/ready` on the `http` port, `exec` runs the exporter's `--healthcheck` in the container; see [Probes](#probes). |
 | `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings; `terminationGracePeriodSeconds` on the liveness probe only. |
 | `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `targetBusy`, `busyMetric`, `targetStaticTargetsPerPod`, `staticTargetsMetric`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
 | `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |

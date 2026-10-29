@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -133,12 +132,11 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 		}
 		seen[t.Name] = true
 		if t.Request.Method != "" {
-			t.Request.Method = strings.ToUpper(t.Request.Method)
-			switch t.Request.Method {
-			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-			default:
-				return fmt.Errorf("target %q has unsupported method %q", t.Name, t.Request.Method)
+			method, err := fetch.CheckHTTPMethod(t.Request.Method)
+			if err != nil {
+				return fmt.Errorf("target %q has unsupported method %q; %w", t.Name, t.Request.Method, err)
 			}
+			t.Request.Method = method
 		}
 		// A static target is scraped on the exporter's own timer, with no
 		// probe to supply a path parameter, so a placeholder here could only

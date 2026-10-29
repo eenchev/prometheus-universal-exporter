@@ -601,7 +601,7 @@ func TestDryRunReportsPagination(t *testing.T) {
 	paged := func(pagination string) string {
 		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: paged\n    request:\n      type: http\n      pagination: "+pagination+"\n    transform: {type: jq}\n    metrics: [{name: v, expression: length}]\n")
 	}
-	check := runCheckCLI(t, "--config.file="+paged("{type: Page, param: p, items: .}"))
+	check := runCheckCLI(t, "--config.file="+paged("{type: page, param: p, items: .}"))
 	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
 	policy, _ := policies["paged"].(map[string]any)
 	if want := map[string]any{"type": "page", "param": "p", "items": ".", "start": float64(1), "max_pages": float64(10)}; check.code != 0 || !reflect.DeepEqual(policy["pagination"], want) {

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -34,15 +35,23 @@ func TestAnUnknownRequestTypeIsRejected(t *testing.T) {
 	}
 }
 
-func TestRequestTypeIsNormalised(t *testing.T) {
-	for _, given := range []string{"http", "HTTP", " Http "} {
-		cfg := &model.Config{Collectors: []model.Collector{typedCollector(given)}}
-		if err := Validate(cfg); err != nil {
-			t.Fatalf("%q: %v", given, err)
+// A request type is taken as the schemas take it, in lower case and
+// without blanks around it; written otherwise, it is refused naming the
+// type as it is written. The exporter took any case and blanks around it.
+func TestRequestTypeIsTakenAsWritten(t *testing.T) {
+	cfg := &model.Config{Collectors: []model.Collector{typedCollector("http")}}
+	if err := Validate(cfg); err != nil || cfg.Collectors[0].Request.Type != fetch.RequestTypeHTTP {
+		t.Fatalf("http: %v, stored as %q", err, cfg.Collectors[0].Request.Type)
+	}
+	for _, given := range []string{"HTTP", " Http ", "http ", "Http"} {
+		err := Validate(&model.Config{Collectors: []model.Collector{typedCollector(given)}})
+		if want := fmt.Sprintf(`collector "typed" has unsupported request.type %q; a type is written in lower case and without blanks around it: http`, given); err == nil || err.Error() != want {
+			t.Errorf("%q: err=%v, want %q", given, err, want)
 		}
-		if got := cfg.Collectors[0].Request.Type; got != fetch.RequestTypeHTTP {
-			t.Fatalf("%q was stored as %q", given, got)
-		}
+	}
+	// A type no build has is refused as unknown, whatever its case.
+	if err := Validate(&model.Config{Collectors: []model.Collector{typedCollector("SOAP")}}); err == nil || !strings.Contains(err.Error(), `unsupported request.type "SOAP"; the supported types are: `) {
+		t.Errorf("SOAP: err=%v", err)
 	}
 }
 

@@ -2539,6 +2539,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
 | `proxy_url` | the environment's | The proxy every request of the collector, its login's included, goes through instead of the one `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` name: `http://host:port`, `https://host:port` or `socks5://host:port`, without credentials; `direct` for none. See [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy). |
 | `proxy_basic_auth_file` | none | With `proxy_url`: the files the `username` and the `password` sent to the proxy are read from, at every request. |
+| `unix_socket` | none | The absolute path of a Unix domain socket every request of the collector, its login's included, is sent over in place of a TCP connection to the URL's host, as `curl --unix-socket` does, such as `/var/run/docker.sock`; the URL's host is still the `Host` header and its path and query the request's. Not with `proxy_url`; no probe parameter, static target or `defaults` sets it. See [Over a Unix socket](REQUESTS.md#over-a-unix-socket). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -3007,8 +3008,9 @@ has the whole of it. What is withheld from the answer:
   network — the address and port a connection was made from (`read tcp
   [withheld; in the exporter's log]->10.1.2.3:443`), the proxy a request
   went through, with all a connection to it or a SOCKS proxy's handshake
-  failed with, the name server a lookup asked. The address the connection
-  went to stays: the caller named it.
+  failed with, the name server a lookup asked, the path of the
+  [Unix socket](REQUESTS.md#over-a-unix-socket) a request went to. The
+  address the connection went to stays: the caller named it.
 
 An error over the 2,000 bytes every failure is cut to is cut after what the
 caller may be told is taken from it, so nothing withheld reaches the answer
@@ -3502,7 +3504,10 @@ line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; w
 The errors come in the order of the file, and on one line, as in a block
 written `{...}`, in the order of the keys they are about: `defaults:
 {bogus: 1, limits: {max_metrics: x}}` says the unknown key first and the
-value that is no whole number after it, every time the file is loaded.
+value that is no whole number after it, every time the file is loaded. A
+block is read to its end: `cache: {bogus: 1, ttl: fast, revalidate: maybe}`
+says all three of its problems, and what the rest of the file has wrong
+after them.
 
 Every unknown key is refused, a static target's `request` block
 included, since a misspelt key would otherwise be ignored without a word.
@@ -3540,7 +3545,16 @@ allocator's two — are in `configs/` with the examples, and are regenerated wit
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
 you are running; its `request.type` values are the request types that binary
-was built with. The schema describes the canonical spelling and is not the last
+was built with. A key that takes one of a few words takes them as the schema
+writes them, and the exporter refuses any other spelling as the schema does:
+`request.type: http`, `transform.type: jq`, `decoder.type`, the
+`error_handling` policies and a rule's `error_mode` (`log`, not `LOG`),
+`request.pagination.type`, `request.descriptors` and `response.graphite`'s
+`value` and `invalid_lines` in lower case and without blanks around them, and
+`request.method` in upper case or lower case, `GET` or `get`. The keys whose
+values are matched in any case where they come from — `request.driver`,
+`request.record_type`, header names, `allowed_schemes` and gRPC status
+codes — take any case in the schema too. The schema is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that a duration of several parts, such as
 `script_timeout: 400us400us`, is not under its key's least — a schema reads
@@ -3958,7 +3972,9 @@ collectors:
   Without a `proxy_url` in the block, the credentials are for the collectors
   that name their own proxies, and one that writes `proxy_url: direct`
   leaves them out ([A collector's own
-  proxy](REQUESTS.md#a-collectors-own-proxy)). Any other key, of a
+  proxy](REQUESTS.md#a-collectors-own-proxy)). A collector that sends its
+  requests to a [`unix_socket`](REQUESTS.md#over-a-unix-socket) takes
+  neither. Any other key, of a
   collector (`metrics`, `request.path`, `request.type`, a key of one request
   type's own) or of nothing, is refused when the configuration loads, naming
   the key and its line, and so is a value of the wrong kind.
@@ -5674,6 +5690,40 @@ Prometheus stops probing through it. Setting `otlp.unready_after_failures`
 takes a pod out of its Service while its OTLP endpoint fails, which also stops
 Prometheus probing through it; set it only where OTLP delivery is the pod's
 job.
+
+### Health checks
+
+The image has no `curl` or `wget`, so the exporter asks itself:
+`--healthcheck` sends one `GET /ready` to the exporter listening at
+`--web.listen-address` and exits `0` when it answers `200`, and `1`
+otherwise, logging one JSON line to stderr saying why: the status and
+`/ready`'s reasons, or the error of a connection that failed.
+`--healthcheck=health` asks `/health` instead, for a liveness check, which
+stays `200` while the exporter is not ready.
+
+```sh
+prometheus-universal-exporter --healthcheck --web.listen-address=:8080
+prometheus-universal-exporter --healthcheck=health --web.listen-address=:8080
+```
+
+A listen address with no host, or with `0.0.0.0`, is asked on `127.0.0.1`,
+and `[::]` on `[::1]`; a name or a particular address is asked as it is.
+The check gives up after 5 seconds. It starts no server, reads no file and
+loads no configuration, so it takes a few milliseconds. The other flags are
+checked as at a start, so the container's own arguments can be given with
+it, but only the listen address is used. It sends no credentials, since
+`/health` and `/ready` never ask for them, with `web.basic_auth` on too, and
+ignores `HTTP_PROXY`.
+
+The image's `HEALTHCHECK` runs `--healthcheck` at `:8080`, the address its
+`CMD` gives, so `docker ps` shows the container `healthy` while the exporter
+is ready. A container started with another `--web.listen-address` needs a
+health command of its own, such as `docker run --health-cmd
+'/bin/prometheus-universal-exporter --healthcheck --web.listen-address=:9115'`,
+and one running the [target allocator](ALLOCATOR.md#running-it) from the image
+needs `--no-healthcheck`. Kubernetes ignores `HEALTHCHECK`; the Helm chart's
+probes GET the endpoints, or run the check with
+[`healthProbes.mode: exec`](../charts/prometheus-universal-exporter/README.md#probes).
 
 ## Shutting down
 

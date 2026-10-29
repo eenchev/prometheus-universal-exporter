@@ -333,6 +333,7 @@ helm-test: helm-version
 	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
 	helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
+	helm template test charts/prometheus-universal-exporter --set healthProbes.mode=exec | grep -q -- '--healthcheck=ready'
 	@# The shutdown delay and timeout, their grace period and the exporter
 	@# credential Secret.
 	@set -eu; \

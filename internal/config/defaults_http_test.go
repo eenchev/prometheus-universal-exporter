@@ -255,7 +255,7 @@ func TestADefaultRequestKeyAppliesToTheTypesThatTakeIt(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct{ document, want string }{
-		"no type takes it": {"defaults:\n  request:\n    retry: {attempts: 3}\n    allowed_targets: [example.com]\ncollectors:\n" + defaultsCollector("names", "dns") + defaultsCollector("more", "DNS"),
+		"no type takes it": {"defaults:\n  request:\n    retry: {attempts: 3}\n    allowed_targets: [example.com]\ncollectors:\n" + defaultsCollector("names", "dns") + defaultsCollector("more", "dns"),
 			`defaults.request.retry.attempts applies to no collector of the file: request.retry.attempts does not apply to request.type "dns" of its collectors; remove it from defaults`},
 		"a retry key of another type": {"defaults:\n  request:\n    retry: {codes: [ABORTED]}\ncollectors:\n" + defaultsCollector("web", "http") + defaultsCollector("names", "dns"),
 			`defaults.request.retry.codes applies to no collector of the file: request.retry.codes does not apply to request.type "http" or "dns" of its collectors`},

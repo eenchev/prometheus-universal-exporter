@@ -252,7 +252,7 @@ func keysOfAnotherType(n *yaml.Node) func(key string) bool {
 		if model.KeyName(entry.Key) != "type" || value == nil || value.Kind != yaml.ScalarNode {
 			continue
 		}
-		if rt := fetch.RequestTypes[strings.ToLower(strings.TrimSpace(value.Value))]; rt != nil {
+		if rt := fetch.RequestTypes[value.Value]; rt != nil {
 			return func(key string) bool { return key != "type" && !rt.Takes(key) }
 		}
 	}

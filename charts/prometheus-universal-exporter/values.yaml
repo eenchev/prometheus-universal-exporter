@@ -498,8 +498,18 @@ goMemLimit:
 # Go's default in place. GOGC in env beside a percent here fails rendering.
 goGC:
   percent: ""
+# How the kubelet runs the liveness and readiness probes. http, the default,
+# GETs /health and /ready on the http port. exec runs the exporter's own
+# --healthcheck in the container, which GETs the same endpoints from inside
+# the pod at server.listenAddress, for a cluster where the kubelet cannot
+# reach the pod's address. It starts a process in the container on every
+# probe, so http is the cheaper where it works. exec needs the exporter at
+# /bin/prometheus-universal-exporter, as in the exporter's image.
+healthProbes:
+  mode: http
 # Timings of the container's probes. The chart sets what they check, /health
-# for liveness and /ready for readiness on the http port; these add to it.
+# for liveness and /ready for readiness, as healthProbes.mode says; these add
+# to it.
 # /health only says the process answers, so a liveness probe is given some
 # slack: a pod busy with a burst of probes is slow, not dead, and a restart
 # would lose its cache and Python workers.

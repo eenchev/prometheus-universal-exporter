@@ -324,5 +324,5 @@ func copyValue(v reflect.Value) reflect.Value {
 // have, which the validation refuses the block for.
 func RequestKeyRefused(requestType, key string) bool {
 	refuses := currentRequestLayout().refuses
-	return refuses != nil && refuses(strings.ToLower(strings.TrimSpace(requestType)), key)
+	return refuses != nil && refuses(requestType, key)
 }

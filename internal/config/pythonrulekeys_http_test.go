@@ -42,7 +42,7 @@ func TestAPythonRuleDoesNotTakeWhatItsScriptSays(t *testing.T) {
 		"name: cpu\n        error_mode: fail\n":                     pythonRuleErrorMode,
 		"name: cpu\n        error_mode: log\n":                      pythonRuleErrorMode,
 		"name: cpu\n        error_mode: ignore\n":                   pythonRuleErrorMode,
-		"name: cpu\n        error_mode: \" LOG \"\n":                pythonRuleErrorMode,
+		"name: cpu\n        error_mode: \" LOG \"\n":                `error_mode has invalid value " LOG "; want fail, log or ignore, in lower case`,
 		"name: cpu\n        expression: x\n        type: counter\n": pythonRuleType,
 	} {
 		want := `collector "racks" metric "cpu" ` + message
@@ -82,7 +82,7 @@ func TestAPythonRuleDoesNotTakeWhatItsScriptSays(t *testing.T) {
 	for keys, message := range map[string]string{
 		"type: histogram\n":      `collector "racks" metric "cpu" has type histogram, which only a prometheus transform can give, passing through a histogram that has its buckets or quantiles; a python rule reads one value, so use gauge, counter or untyped`,
 		"type: timer\n":          `collector "racks" metric "cpu" has invalid type "timer"`,
-		"error_mode: panic\n":    `collector "racks" metric "cpu" error_mode has invalid value "panic"; want fail, log or ignore`,
+		"error_mode: panic\n":    `collector "racks" metric "cpu" error_mode has invalid value "panic"; want fail, log or ignore, in lower case`,
 		"items: .rows[]\n":       `collector "racks" metric "cpu" sets items, which only the jq, yq and css transforms support`,
 		"scale: 2\n":             `collector "racks" metric "cpu" sets value_map or scale, which the python transform does not use: its script sets each value with metric(...)`,
 		"value_map: {up: 1}\n":   `collector "racks" metric "cpu" sets value_map or scale, which the python transform does not use: its script sets each value with metric(...)`,

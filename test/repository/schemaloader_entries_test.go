@@ -94,9 +94,9 @@ func TestSchemaAndExporterAgreeOnAPythonRulesLabel(t *testing.T) {
 	agree(t, schema, "a prometheus rule's label without truncate", prometheusCollector+"        labels:\n          - name: note\n            expression: note\n", true)
 	agree(t, schema, "a jq rule's label with truncate: false", strings.Replace(jqCollector, "            # label\n", "", 1), true)
 	agree(t, schema, "a jq rule's label with a value", strings.Replace(jqCollector, "expression: .l\n", "value: x\n", 1), true)
-	// The transform's type in another case is the exporter's to take and
-	// no canonical spelling: the schema refuses the type, and both refuse
-	// the label.
+	// The transform's type in another case is no spelling either takes:
+	// both refuse the type, where the exporter took it and refused the
+	// label.
 	agree(t, schema, "a Python rule's label with a value", strings.Replace(label("            value: x\n"), "type: python", "type: Python", 1), false)
 }
 
@@ -163,9 +163,9 @@ func TestSchemaAndExporterAgreeOnAPythonRule(t *testing.T) {
 		agree(t, schema, "a "+transform+" rule with the four keys", document, true)
 	}
 	agree(t, schema, "a prometheus rule with the four keys and no name", strings.Replace(prometheusCollector, "        # metric\n", "        type: counter\n        description: Up or not.\n        required: false\n        error_mode: fail\n", 1), true)
-	// The transform's type in another case is the exporter's to take and
-	// no canonical spelling: the schema refuses the type, and both refuse
-	// the rule.
+	// The transform's type in another case is no spelling either takes:
+	// both refuse the type, where the exporter took it and refused the
+	// rule.
 	agree(t, schema, "a Python rule with a type", strings.Replace(rule("        type: counter\n"), "type: python", "type: Python", 1), false)
 	for keys, message := range map[string]string{
 		"        items: .rows[]\n":       "sets items, which only the jq, yq and css transforms support",
@@ -272,9 +272,9 @@ func TestSchemaAndExporterAgreeOnAPrometheusRuleOfNeitherANameNorAnExpression(t 
 		agree(t, schema, "prometheus rules "+strings.Join(strings.Fields(written), " "), rules(written), accepted)
 	}
 	agree(t, schema, "a prometheus collector without metrics", strings.Replace(rules(""), "    metrics:\n", "", 1), true)
-	// The transform's type in another case is the exporter's to take and
-	// no canonical spelling: the schema refuses the type, and both refuse
-	// the rule.
+	// The transform's type in another case is no spelling either takes:
+	// both refuse the type, where the exporter took it and refused the
+	// rule.
 	agree(t, schema, "a Prometheus rule of neither", strings.Replace(rules("      - {}\n"), "type: prometheus", "type: Prometheus", 1), false)
 	// What the exporter refused such a rule for before, it refuses it for
 	// still, and where a schema cannot tell that, the schema refuses the

@@ -403,7 +403,7 @@ func TestAPatternThatMatchesANamedRulesMetricMakesItsSeriesTwice(t *testing.T) {
 		"another type in one":                   {[]model.MetricRule{{Name: "up", Type: model.CounterMetricType}, {Expression: "^up$"}}, true, 0, 1, 0, `metric "up" has inconsistent types`, 2},
 		"a scale that cannot apply":             {[]model.MetricRule{{Name: "lat", Scale: &two, ErrorMode: "ignore"}, {Expression: "^lat$"}}, true, 0, 1, 0, "", 1},
 		"the pattern's scale, under fail":       {[]model.MetricRule{{Name: "up"}, {Expression: "^up$", Scale: &two, ErrorMode: "fail"}}, true, 0, 1, 0, duplicateUp, 2},
-		"the pattern's type, under fail":        {[]model.MetricRule{{Name: "up"}, {Expression: "^up$", Type: model.CounterMetricType, ErrorMode: " Fail "}}, true, 0, 1, 0, `metric "up" has inconsistent types`, 2},
+		"the pattern's type, under fail":        {[]model.MetricRule{{Name: "up"}, {Expression: "^up$", Type: model.CounterMetricType, ErrorMode: "fail"}}, true, 0, 1, 0, `metric "up" has inconsistent types`, 2},
 		"a name the target has not":             {[]model.MetricRule{{Name: "down"}, {Expression: "^down$"}}, true, 0, 1, 0, "", 0},
 		"that name, not required":               {[]model.MetricRule{{Name: "down", Required: &no}, {Expression: ".*"}}, true, 0, 1, 0, "", 4},
 
@@ -416,7 +416,7 @@ func TestAPatternThatMatchesANamedRulesMetricMakesItsSeriesTwice(t *testing.T) {
 		"the pattern's scale, written first":       {[]model.MetricRule{{Expression: ".*", Scale: &two}, {Name: "lat"}}, true, 0, 1, 1, "", 4},
 		"the pattern's type of histogram in both":  {[]model.MetricRule{{Name: "lat", Type: model.HistogramMetricType}, {Expression: ".*", Type: model.HistogramMetricType, ErrorMode: "ignore"}}, true, 0, 1, 0, `duplicate metric series "lat"`, 2},
 		"the pattern's type of summary in both":    {[]model.MetricRule{{Expression: "^up", Type: model.SummaryMetricType}, {Name: "up", Type: model.SummaryMetricType}}, true, 0, 1, 1, "", 0},
-		"a pattern of histograms, under fail":      {[]model.MetricRule{{Name: "lat"}, {Expression: "^lat$", Type: model.HistogramMetricType, ErrorMode: "FAIL"}}, true, 0, 1, 0, `duplicate metric series "lat"`, 2},
+		"a pattern of histograms, under fail":      {[]model.MetricRule{{Name: "lat"}, {Expression: "^lat$", Type: model.HistogramMetricType, ErrorMode: "fail"}}, true, 0, 1, 0, `duplicate metric series "lat"`, 2},
 
 		"a pattern of every histogram":              {[]model.MetricRule{{Name: "up"}, {Expression: ".*", Type: model.HistogramMetricType, ErrorMode: "ignore"}}, false, 0, 0, 0, "", 2},
 		"that pattern, written first":               {[]model.MetricRule{{Expression: ".*", Type: model.HistogramMetricType}, {Name: "up", Scale: &two}}, false, 0, 0, 0, "", 2},
@@ -911,14 +911,14 @@ func TestOnlyANameBesideAPatternOfHistogramsOrSummariesLoadsAgain(t *testing.T) 
 			}
 			pool = append(pool,
 				model.MetricRule{Name: name, Expression: expression, Scale: &two},
-				model.MetricRule{Name: name, Expression: expression, Scale: &two, ErrorMode: " FAIL "},
+				model.MetricRule{Name: name, Expression: expression, Scale: &two, ErrorMode: "fail"},
 				model.MetricRule{Name: name, Expression: expression, Description: "A description.", Required: &no, ErrorMode: "ignore"},
 				model.MetricRule{Name: name, Expression: expression, Type: model.CounterMetricType},
 				model.MetricRule{Name: name, Expression: expression, Labels: []model.LabelRule{{Name: "service", Expression: "job", Truncate: true}}},
 				model.MetricRule{Name: name, Expression: expression, Labels: []model.LabelRule{{Name: "service", Expression: "job", Required: true}}},
 				model.MetricRule{Name: name, Expression: expression, Type: model.HistogramMetricType},
 				model.MetricRule{Name: name, Expression: expression, Type: model.SummaryMetricType, ErrorMode: "ignore"},
-				model.MetricRule{Name: name, Expression: expression, Type: model.HistogramMetricType, ErrorMode: " Fail "},
+				model.MetricRule{Name: name, Expression: expression, Type: model.HistogramMetricType, ErrorMode: "fail"},
 				model.MetricRule{Name: name, Expression: expression, Type: model.HistogramMetricType, Scale: &two},
 				model.MetricRule{Name: name, Expression: expression, Type: model.SummaryMetricType, Labels: []model.LabelRule{{Name: "service", Expression: "job", Required: true}}},
 			)
@@ -962,7 +962,7 @@ func TestOnlyANameBesideAPatternOfHistogramsOrSummariesLoadsAgain(t *testing.T) 
 	// Collectors of three rules, of a few: a copy among them, a name that
 	// two patterns match, and a name beside a pattern that is refused and
 	// one that is taken again.
-	few := []model.MetricRule{{Name: "up"}, {Expression: "^up$"}, {Expression: ".*"}, {Name: "up", Expression: "^up"}, {Name: "node_load1"}, {Expression: "p", Type: model.GaugeMetricType, Scale: &two, ErrorMode: " Ignore "}, {Expression: "p", Type: model.HistogramMetricType, ErrorMode: "ignore"}, {Name: "up", Labels: labelSets[1]}, {Expression: "p", Labels: labelSets[1]}, {Name: "other", Expression: "^up$"}, {Expression: "^up$", Scale: &two}, {}, {Name: "up", Type: "meter"}}
+	few := []model.MetricRule{{Name: "up"}, {Expression: "^up$"}, {Expression: ".*"}, {Name: "up", Expression: "^up"}, {Name: "node_load1"}, {Expression: "p", Type: model.GaugeMetricType, Scale: &two, ErrorMode: "ignore"}, {Expression: "p", Type: model.HistogramMetricType, ErrorMode: "ignore"}, {Name: "up", Labels: labelSets[1]}, {Expression: "p", Labels: labelSets[1]}, {Name: "other", Expression: "^up$"}, {Expression: "^up$", Scale: &two}, {}, {Name: "up", Type: "meter"}}
 	few = few[:alloctest.UnlessRaced(len(few), 7)]
 	for _, first := range few {
 		for _, second := range few {

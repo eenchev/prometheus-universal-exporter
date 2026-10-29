@@ -921,7 +921,8 @@ handshake rather than one per scrape. Every collector and scrape with the same
 TLS settings — the whole `tls` block: `ca_file`, `cert_file`, `key_file`,
 `insecure_skip_verify` and `server_name` — the same `enable_http2` and the same
 `allowed_targets` and `denied_targets`, and the same
-[proxy](#a-collectors-own-proxy) and proxy credentials, shares one connection pool; a scrape
+[proxy](#a-collectors-own-proxy) and proxy credentials, or the same
+[Unix socket](#over-a-unix-socket), shares one connection pool; a scrape
 overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
 settings, and so does a static target with a `tls` block of its own, so no
 connection made with one client certificate carries a request that is to
@@ -1057,6 +1058,83 @@ collectors:
           username: /run/secrets/egress/username
           password: /run/secrets/egress/password
   ```
+
+### Over a Unix socket
+
+An `http` collector can send its requests over a Unix domain socket in place
+of a TCP connection to the URL's host, as `curl --unix-socket` does: Docker's
+API on `/var/run/docker.sock`, a php-fpm or nginx status page served on a
+socket, a systemd service's:
+
+```yaml
+collectors:
+  - name: docker
+    request:
+      type: http
+      unix_socket: /var/run/docker.sock
+      path: /v1.43/info
+```
+
+A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
+`Host: docker`.
+
+- **`unix_socket`** is the absolute path of the socket. A relative path, one
+  of nothing but blanks, one with a placeholder or a control character are
+  refused when the configuration loads; `""` is the key left out. It is the
+  `http` type's alone: another type's collector that sets it is refused, as
+  any key of another type is.
+- **The URL keeps its meaning**: its host is the `Host` header, its path and
+  query are the request's, joined with `path` and `query` as usual. The host
+  is never looked up or dialed; any name will do, such as `http://docker` or
+  `http://localhost`.
+- **`https://`** URLs are asked with TLS over the socket, the URL's host
+  being the server name the certificate is verified for, with the
+  collector's [TLS settings](#tls).
+- **Everything the collector sends goes to the socket**: its requests, their
+  retries, pages and followed redirects, whatever host a redirect names, and
+  its [login](AUTHENTICATION.md#logging-in-to-a-target).
+- **No proxy.** The socket stands in place of one: `proxy_url` and
+  `proxy_basic_auth_file` beside `unix_socket` are refused, the environment's
+  proxy does not apply, and the collector takes neither from its file's
+  [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file).
+- **Configuration only.** No probe parameter sets the socket, and neither does
+  a static target or `defaults`: whoever can reach `/probe` names the URL,
+  whose host only goes into the request, never the file the exporter
+  connects to. The socket's path is trusted as the configuration is, and is
+  not held to `allowed_targets` and `denied_targets`.
+- **Target lists** apply to the URL's host as written: a name to the names
+  and globs, an address written as the host to the addresses and networks.
+  The name is not looked up, since the connection goes to the socket and not
+  to an address, so a name that `allowed_targets` does not list by name is
+  refused even when the list holds networks.
+- **Connections.** Collectors with different sockets never share a
+  connection, and none shares one with a collector that dials TCP
+  ([Connections](#connections)).
+- **Errors.** A socket that cannot be reached fails the request with an
+  error naming its path, `dial unix /var/run/docker.sock: connect: permission
+  denied`, in the exporter's log; a probe's caller is told the path withheld
+  ([What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told)).
+
+The exporter needs read and write access to the socket file. In Kubernetes,
+mount the socket's directory from the node with the chart's `extraVolumes`
+and `extraVolumeMounts`, and give the pod the socket's group in
+`podSecurityContext.supplementalGroups` when the exporter's user, 65532,
+does not own it:
+
+```yaml
+extraVolumes:
+  - name: docker
+    hostPath: {path: /var/run/docker.sock, type: Socket}
+extraVolumeMounts:
+  - name: docker
+    mountPath: /var/run/docker.sock
+podSecurityContext:
+  supplementalGroups: [998]   # the group the socket belongs to on the node
+```
+
+Access to Docker's socket is control of the node's containers: give it to
+an exporter whose `/probe` only those you trust can reach, and prefer a
+read-only socket proxy in front of it where you have one.
 
 ## Retries
 
@@ -1321,8 +1399,8 @@ not on the first.
 | `link` | The URL of the `Link` header's `rel="next"` (RFC 8288), absolute or relative to the page's URL. | — |
 | `next_url` | The URL the jq expression `next` reads from the page, absolute or relative to the page's URL. | `next` |
 | `cursor` | The first page's URL with the value `next` reads from the page in the query parameter `param`. | `next`, `param` |
-| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. | `param` |
-| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. | `param` |
+| `page` | A page number in `param`: `start`, 1 by default, on the first page, one more on each. An API that numbers its pages from 0 is paged with `start: 0`. | `param` |
+| `offset` | An offset in `param`: `start`, 0 by default, on the first page, moved on by the number of items each page held, or by `size`. `size: 0` is `size` left out. | `param` |
 
 ```yaml
 pagination:              # {"data":{"hosts":[...]},"links":{"next":"/api/hosts?page=2"}}

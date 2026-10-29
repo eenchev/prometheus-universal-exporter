@@ -3139,7 +3139,7 @@
                 "type": "object"
               },
               "method": {
-                "description": "HTTP method. Defaults to GET.",
+                "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET.",
                 "enum": [
                   "GET",
                   "POST",
@@ -3311,10 +3311,10 @@
                   },
                   {
                     "else": {
-                      "not": {
-                        "required": [
-                          "size"
-                        ]
+                      "properties": {
+                        "size": {
+                          "const": 0
+                        }
                       }
                     },
                     "if": {
@@ -3368,12 +3368,12 @@
                     ]
                   },
                   "size": {
-                    "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held.",
-                    "minimum": 1,
+                    "description": "offset: how far the offset moves from one page to the next. 0, as when left out, moves it by the number of items the page held. 0 is taken beside any type.",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "start": {
-                    "description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it.",
+                    "description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it; 0 numbers the pages from 0.",
                     "minimum": 0,
                     "type": "integer"
                   },
@@ -3858,6 +3858,11 @@
                   "sshfile",
                   "tlscert"
                 ],
+                "type": "string"
+              },
+              "unix_socket": {
+                "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket.",
+                "pattern": "^$|^/",
                 "type": "string"
               },
               "until": {

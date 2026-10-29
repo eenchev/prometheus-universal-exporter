@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -16,14 +15,17 @@ import (
 // is included only when request_type_http is among the tags.
 
 // HTTPConfig is an http collector's own request keys: the method, GET
-// when left out; the body sent; and the pagination that fetches the
+// when left out; the body sent; the pagination that fetches the
 // further pages of a paginated answer and merges them into one JSON
 // document, the first page with its items array holding every page's items
-// (pagination.go), nil when the answer is one page.
+// (pagination.go), nil when the answer is one page; and the Unix domain
+// socket every request of the collector is sent over in place of a TCP
+// connection to the URL's host, "" for none (unixsocket.go).
 type HTTPConfig struct {
 	Method     string                  `yaml:"method"`
 	Body       string                  `yaml:"body"`
 	Pagination *model.PaginationConfig `yaml:"pagination,omitempty"`
+	UnixSocket string                  `yaml:"unix_socket,omitempty"`
 }
 
 // httpRequest is an http collector's own request keys: the zero HTTPConfig
@@ -53,7 +55,8 @@ func init() {
 			return own.Method, own.Body
 		},
 		Policy: func(c *model.Collector) RequestPolicy {
-			return RequestPolicy{Pagination: httpRequest(c).Pagination}
+			own := httpRequest(c)
+			return RequestPolicy{Pagination: own.Pagination, UnixSocket: own.UnixSocket}
 		},
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
@@ -101,12 +104,14 @@ func (httpRequester) Validate(c *model.Collector) error {
 	if own.Method == "" {
 		own.Method = http.MethodGet
 	}
-	own.Method = strings.ToUpper(own.Method)
+	method, err := CheckHTTPMethod(own.Method)
+	if err != nil {
+		return fmt.Errorf("collector %q has unsupported method %q; %w", c.Name, own.Method, err)
+	}
+	own.Method = method
 	c.Request.Own = own
-	switch own.Method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-	default:
-		return fmt.Errorf("collector %q has unsupported method %q", c.Name, own.Method)
+	if err := validateUnixSocket(c, own.UnixSocket); err != nil {
+		return err
 	}
 	return validatePagination(c)
 }
@@ -125,15 +130,16 @@ func (httpRequester) CheckTarget(c *model.Collector, target string, static bool)
 // collector's own keys.
 func httpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"method":               {"enum": SchemaOptionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
+		"method":               {"enum": SchemaOptionalEnum(HTTPMethodSpellings()), "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET."},
 		"body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
 		"pagination":           httpPaginationRule(),
+		"unix_socket":          {"pattern": UnixSocketPattern, "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket."},
 		"pagination.type":      {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
 		"pagination.items":     {"not": SchemaOnlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
 		"pagination.next":      {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
 		"pagination.param":     {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
-		"pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it."},
-		"pagination.size":      {"minimum": 1, "description": "offset: how far the offset moves from one page to the next. Left out, by the number of items the page held."},
+		"pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it; 0 numbers the pages from 0."},
+		"pagination.size":      {"minimum": 0, "description": "offset: how far the offset moves from one page to the next. 0, as when left out, moves it by the number of items the page held. 0 is taken beside any type."},
 		"pagination.max_pages": {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
 	}
 }
@@ -144,7 +150,9 @@ func httpKeyRules() map[string]map[string]any {
 // and with no other, start with page and offset alone and size with offset
 // alone, as the exporter has them (fetch.validatePagination). The schema
 // took next, param, start and size beside any type, which the exporter
-// refuses as a key of another way of paging.
+// refuses as a key of another way of paging. A size of 0 is the key left
+// out to the exporter, which reads it into a whole number, so it is taken
+// beside any type.
 func httpPaginationRule() map[string]any {
 	when := func(types ...string) map[string]any {
 		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}
@@ -157,7 +165,7 @@ func httpPaginationRule() map[string]any {
 			map[string]any{"if": when(model.PaginationNextURL, model.PaginationCursor), "then": SchemaWrittenKey("next"), "else": map[string]any{"not": SchemaWrittenKey("next")}},
 			map[string]any{"if": when(model.PaginationCursor, model.PaginationPage, model.PaginationOffset), "then": SchemaWrittenKey("param"), "else": map[string]any{"not": SchemaWrittenKey("param")}},
 			map[string]any{"if": when(model.PaginationPage, model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"start"}}}},
-			map[string]any{"if": when(model.PaginationOffset), "else": map[string]any{"not": map[string]any{"required": []string{"size"}}}},
+			map[string]any{"if": when(model.PaginationOffset), "else": map[string]any{"properties": map[string]any{"size": map[string]any{"const": 0}}}},
 		},
 	}
 }

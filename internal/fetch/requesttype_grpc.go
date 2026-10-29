@@ -206,7 +206,7 @@ func (grpcRequester) Display(target string) string {
 // (fileSets.protoLooked). A descriptor set is one file, which the request
 // names, and reflection reads none.
 func grpcReadFiles(c *model.Collector) (paths []string, read string) {
-	if len(grpcRequest(c).ProtoFiles) == 0 || strings.ToLower(strings.TrimSpace(grpcRequest(c).Descriptors)) != descriptorsProto {
+	if len(grpcRequest(c).ProtoFiles) == 0 || grpcRequest(c).Descriptors != descriptorsProto {
 		return nil, ""
 	}
 	return descriptorFiles.protoLooked(grpcRequest(c).ProtoFiles, grpcRequest(c).ProtoImportPaths)
@@ -296,11 +296,10 @@ func validateGRPCRequest(x *model.Collector) error {
 
 // validateDescriptorKeys checks descriptors and the keys of its sources:
 // descriptors is required, but for the health service, and each source's
-// keys go only with it.
+// keys go only with it. descriptors is taken as written, in lower case and
+// without blanks around it, the one spelling the schemas take.
 func validateDescriptorKeys(x *model.Collector) error {
 	r := grpcRequest(x)
-	r.Descriptors = strings.ToLower(strings.TrimSpace(r.Descriptors))
-	x.Request.Own = r
 	service, _, _ := strings.Cut(r.RPC, "/")
 	switch {
 	case r.Descriptors == "" && service == grpcHealthService:
@@ -308,7 +307,7 @@ func validateDescriptorKeys(x *model.Collector) error {
 	case r.Descriptors == "":
 		return fmt.Errorf("collector %q has no request.descriptors; say where the message types of %s come from: reflection, to ask the server's reflection service; protoset, to read a descriptor set from protoset_file; or proto, to compile the .proto files in proto_files", x.Name, service)
 	case !slices.Contains(descriptorSources, r.Descriptors):
-		return fmt.Errorf("collector %q request.descriptors is %q; want reflection, protoset or proto", x.Name, r.Descriptors)
+		return fmt.Errorf("collector %q request.descriptors is %q; want reflection, protoset or proto, in lower case", x.Name, r.Descriptors)
 	}
 	if r.ProtosetFile != "" && r.Descriptors != descriptorsProtoset {
 		return fmt.Errorf("collector %q sets request.protoset_file, which applies only with descriptors: protoset", x.Name)

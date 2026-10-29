@@ -28,7 +28,7 @@ func validateMetricRuleBeforeEscapedNames(x *model.Collector, index int) error {
 	if r.ErrorMode == "" {
 		r.ErrorMode = model.ErrorModeLog
 	}
-	if err := normalizeErrorPolicy(x.Name, transform.RuleName(r, index)+" error_mode", &r.ErrorMode); err != nil {
+	if err := checkErrorPolicy(x.Name, transform.RuleName(r, index)+" error_mode", r.ErrorMode); err != nil {
 		return err
 	}
 	// A prometheus transform's rule without a type keeps the type of

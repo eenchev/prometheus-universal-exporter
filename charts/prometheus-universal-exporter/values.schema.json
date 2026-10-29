@@ -401,8 +401,16 @@
       "description": "Rendered as the GOGC environment variable of the exporter container when percent is set: the Go garbage collector's target, how far the heap may grow over the live data before the next collection. A whole number from 1 to 10000, as a number or a string, or the string off, which needs a Go memory limit in force; empty or null leaves Go's default, 100. In a values file off needs quotes, since YAML reads a bare off as the boolean false.",
       "properties": {"percent": {"type": ["integer", "string", "null"], "minimum": 1, "maximum": 10000, "pattern": "^$|^([1-9][0-9]{0,3}|10000|off)$"}}
     },
-    "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health on the http port."},
-    "readinessProbe": {"$ref": "#/$defs/readinessProbeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},
+    "healthProbes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the kubelet runs the liveness and readiness probes.",
+      "properties": {
+        "mode": {"enum": ["http", "exec"], "description": "http GETs /health and /ready on the http port; exec runs /bin/prometheus-universal-exporter --healthcheck in the container, which GETs them at server.listenAddress from inside the pod."}
+      }
+    },
+    "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health as healthProbes.mode says."},
+    "readinessProbe": {"$ref": "#/$defs/readinessProbeTimings", "description": "Timings of the readiness probe, which checks /ready as healthProbes.mode says."},
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,

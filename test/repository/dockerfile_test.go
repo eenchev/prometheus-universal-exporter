@@ -85,6 +85,28 @@ func TestTheImageUserIsNumeric(t *testing.T) {
 	}
 }
 
+// The image checks its own health with the exporter's --healthcheck, since it
+// has no curl or wget, in exec form, so no shell runs on every check, and at
+// the listen address CMD gives.
+func TestTheImageChecksItsHealthWithTheExporter(t *testing.T) {
+	raw, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Skipf("no Dockerfile to check: %v", err)
+	}
+	dockerfile := string(raw)
+	health := regexp.MustCompile(`(?m)^HEALTHCHECK (?:--\S+ )*CMD \["/bin/prometheus-universal-exporter", "--healthcheck", "(--web\.listen-address=[^"]+)"\]$`).FindStringSubmatch(dockerfile)
+	if health == nil {
+		t.Fatal("the Dockerfile has no HEALTHCHECK running /bin/prometheus-universal-exporter --healthcheck with a listen address")
+	}
+	cmd := regexp.MustCompile(`(?m)^CMD \[.*"(--web\.listen-address=[^"]+)".*\]$`).FindStringSubmatch(dockerfile)
+	if cmd == nil || cmd[1] != health[1] {
+		t.Errorf("the HEALTHCHECK asks %s, and CMD listens with %v", health[1], cmd)
+	}
+	if !strings.Contains(dockerfile, `ENTRYPOINT ["/bin/prometheus-universal-exporter"]`) {
+		t.Error("the HEALTHCHECK runs /bin/prometheus-universal-exporter, which is no longer the entrypoint")
+	}
+}
+
 // tools/request-type-tags.sh turns REQUEST_TYPES, SQL_DRIVERS and
 // OPT_IN_REQUEST_TYPES into build tags for the Dockerfile and the Makefile.
 func TestRequestTypeTagsScript(t *testing.T) {

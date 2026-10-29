@@ -35,7 +35,7 @@ func ruleSettingsBeforeBlankExpressions(x *model.Collector, r *model.MetricRule)
 	if r.ErrorMode == "" {
 		r.ErrorMode = model.ErrorModeLog
 	}
-	if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+	if err := checkErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), r.ErrorMode); err != nil {
 		return err
 	}
 	if r.Type == "" && x.Transform.Type != "prometheus" {

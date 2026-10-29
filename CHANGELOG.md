@@ -23,9 +23,36 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   without its certificate, two credentials in one request, a pagination key of
   another paging type, `grpc` descriptor files beside the wrong source, and a
   `python` transform without a `script`.
+- A key that takes one of a few words takes them only as the schemas write
+  them: `request.type`, `transform.type`, `decoder.type`, the
+  `error_handling` policies and a rule's `error_mode`,
+  `request.pagination.type`, `request.descriptors` and `response.graphite`'s
+  `value` and `invalid_lines` in lower case and without blanks around them
+  (`log`, not `LOG`; `type: http`, not `HTTP`), and `request.method` in upper
+  case or lower case (`GET` or `get`, not `Get`). A configuration that writes
+  one otherwise is refused, naming the words taken: write them in lower case.
+  The static target file's schema now takes a `method` in lower case, as the
+  exporter does.
 - `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.
+- The image declares a `HEALTHCHECK`, so Docker shows the container
+  `healthy` while the exporter is ready. A container started with another
+  `--web.listen-address` needs `--health-cmd` with it, and the target
+  allocator run from the image needs `--no-healthcheck`.
+
+### New
+
+- `--healthcheck` asks a running exporter whether it is ready (`/ready`), or
+  with `--healthcheck=health` alive (`/health`), and exits 0 or 1, for a
+  container health check in an image without `curl`.
+- The chart's `healthProbes.mode: exec` runs the liveness and readiness
+  probes as the exporter's `--healthcheck` in the container instead of HTTP
+  GETs from the kubelet.
+- `request.unix_socket` sends an `http` collector's requests over a Unix
+  domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
+  socket, as `curl --unix-socket` does; the URL's host is still the `Host`
+  header.
 
 ### Fixed
 
@@ -34,6 +61,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   the line.
 - An answer sent uncompressed no longer allocates for the answer-size
   counters.
+- A `cache`, `failure_backoff` or `request.tls` block, and a static target's
+  `request`, say every unknown key and value of the wrong kind they hold, not
+  only their first unknown key; a mistake in a `cache` or `failure_backoff`
+  no longer hides the problems in the rest of the file.
+- The schemas take `request.pagination.size: 0`, which the exporter reads
+  as `size` left out: the offset moves on by the items each page held.
+- Reading a scraper's `Accept-Encoding` header no longer allocates on every
+  scrape.
 - GitHub Releases are described from `CHANGELOG.md` instead of a list of pull
   requests.
 

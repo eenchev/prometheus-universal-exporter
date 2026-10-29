@@ -125,18 +125,35 @@ func TestPrometheusTransformSettingsAreChecked(t *testing.T) {
 }
 
 // error_handling and error_mode share one vocabulary, fail, log and ignore,
-// matched in any case.
+// written in lower case and without blanks around them, as the schemas take
+// them: LOG, Fail and " log " are refused naming the values taken, where
+// the exporter lower-cased and trimmed them.
 func TestErrorPolicyVocabulary(t *testing.T) {
 	c := testutil.Collector("policies", "text")
-	c.ErrorHandling = model.ErrorHandling{OnFetchError: "Fail", OnDecodeError: "LOG", OnTransformError: "ignore"}
-	c.Metrics[0].ErrorMode = "Log"
+	c.ErrorHandling = model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "log", OnTransformError: "ignore"}
+	c.Metrics[0].ErrorMode = "log"
 	cfg := &model.Config{Collectors: []model.Collector{c}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	got := cfg.Collectors[0]
 	if got.ErrorHandling.OnFetchError != "fail" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
-		t.Fatalf("normalised to %+v, error_mode %q", got.ErrorHandling, got.Metrics[0].ErrorMode)
+		t.Fatalf("taken as %+v, error_mode %q", got.ErrorHandling, got.Metrics[0].ErrorMode)
+	}
+	for _, written := range []string{"LOG", "Fail", " log ", "ignore\t"} {
+		for key, edit := range map[string]func(*model.Collector){
+			"error_handling.on_fetch_error":     func(c *model.Collector) { c.ErrorHandling.OnFetchError = written },
+			"error_handling.on_decode_error":    func(c *model.Collector) { c.ErrorHandling.OnDecodeError = written },
+			"error_handling.on_transform_error": func(c *model.Collector) { c.ErrorHandling.OnTransformError = written },
+			"error_mode":                        func(c *model.Collector) { c.Metrics[0].ErrorMode = written },
+		} {
+			c := testutil.Collector("policies", "text")
+			edit(&c)
+			err := Validate(&model.Config{Collectors: []model.Collector{c}})
+			if want := fmt.Sprintf("%s has invalid value %q; want fail, log or ignore, in lower case", key, written); err == nil || !strings.HasSuffix(err.Error(), want) {
+				t.Errorf("%s: %q: err=%v, want %q", key, written, err, want)
+			}
+		}
 	}
 	if len(cfg.Deprecations) != 0 {
 		t.Fatalf("deprecations=%q", cfg.Deprecations)

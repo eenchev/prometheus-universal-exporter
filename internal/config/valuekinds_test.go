@@ -93,7 +93,7 @@ func TestAValueOfAnotherKindThanItsKeyTakesIsRefused(t *testing.T) {
 	if _, err := Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: [collectors.yaml]\n")); err == nil || err.Error() != want {
 		t.Errorf("in a collector file: %v\nwant %s", err, want)
 	}
-	want = notText(3, "name", "1", "a number") + "; " + noBoolean(5, "export_via_otlp", "yes", true) + "; " + oneOf(7, "method", "true", "a boolean", methods[:6]...) + "; " + notText(8, "accept_codes entry 1", "5", "a number") + "; " + noBoolean(9, "non_idempotent", "N", false)
+	want = notText(3, "name", "1", "a number") + "; " + noBoolean(5, "export_via_otlp", "yes", true) + "; " + oneOf(7, "method", "true", "a boolean", methods...) + "; " + notText(8, "accept_codes entry 1", "5", "a number") + "; " + noBoolean(9, "non_idempotent", "N", false)
 	if _, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: 1\n    collector: node\n    export_via_otlp: yes\n    request:\n      method: true\n      accept_codes: [5]\n      retry: {non_idempotent: N}\n")); err == nil || err.Error() != want {
 		t.Errorf("in the target file: %v\nwant %s", err, want)
 	}
@@ -218,7 +218,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		"lint.ignore[]", "metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
 		"request.accept_codes[]", "request.api_server", "request.commands[].name", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]", "request.group", "request.info_sections[]",
 		"request.login.auth_style", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type", "request.login.url",
-		"request.method", "request.namespaces[]", "request.pagination.type", "request.proxy_url", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.starttls", "request.transport", "request.type", "request.version",
+		"request.method", "request.namespaces[]", "request.pagination.type", "request.proxy_url", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.starttls", "request.transport", "request.type", "request.unix_socket", "request.version",
 		"response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string

@@ -53,6 +53,7 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 	}
 	taken := map[string]bool{}
 	takes := map[string]bool{}
+	socketed := false
 	for i := range collectors {
 		x := &collectors[i]
 		applies := func(key string) bool { return defaultApplies(x, key) }
@@ -74,6 +75,12 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 		// direct has no proxy to send them to.
 		if slices.Contains(written, "request.proxy_url") && (x.Request.ProxyURL == model.ProxyDirect || slices.Contains(defaults.Keys, "request.proxy_url")) {
 			written = append(written, "request.proxy_basic_auth_file")
+		}
+		// A collector whose requests go to a Unix socket takes no proxy,
+		// which the socket stands in place of (fetch/unixsocket.go).
+		if fetch.CollectorPolicy(x).UnixSocket != "" {
+			written = append(written, "request.proxy_url", "request.proxy_basic_auth_file")
+			socketed = true
 		}
 		x.FromDefaults = defaults.ApplyTo(x, written, applies)
 		for _, key := range defaults.Keys {
@@ -99,6 +106,9 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 			how := "sets " + key + " itself"
 			if key == "failure_backoff" || strings.HasPrefix(key, "failure_backoff.") {
 				how += ", or turns the backoff off"
+			}
+			if socketed && (key == "request.proxy_url" || key == "request.proxy_basic_auth_file") {
+				how += ", or sends its requests to its request.unix_socket"
 			}
 			if key == "request.proxy_basic_auth_file" {
 				how += ", or goes direct with request.proxy_url: " + model.ProxyDirect
@@ -163,7 +173,7 @@ func defaultApplies(x *model.Collector, key string) bool {
 func joinRequestTypes(collectors []model.Collector) string {
 	var types []string
 	for i := range collectors {
-		if t := strings.ToLower(strings.TrimSpace(collectors[i].Request.Type)); !slices.Contains(types, t) {
+		if t := collectors[i].Request.Type; !slices.Contains(types, t) {
 			types = append(types, t)
 		}
 	}
@@ -214,7 +224,7 @@ func checkDefaults(d *model.CollectorDefaults) error {
 		{"on_transform_error", d.ErrorHandling.OnTransformError},
 	} {
 		if policy.value != "" {
-			errs = append(errs, normalizeErrorPolicy("", "error_handling."+policy.key, &policy.value))
+			errs = append(errs, checkErrorPolicy("", "error_handling."+policy.key, policy.value))
 		}
 	}
 	if retry := d.Request.Retry; retry.Attempts < 0 || retry.Attempts > fetch.MaxRetryAttempts {

@@ -40,9 +40,11 @@ import (
 // proxy is asked to connect to the target by name, which it resolves.
 
 // withProxy is settings with c's request.proxy_url and the files of its
-// credentials.
+// credentials, and the request.unix_socket of an http collector, which
+// takes the proxy's place (unixsocket.go).
 func withProxy(settings TransportSettings, c *model.Collector) TransportSettings {
 	settings.proxy = c.Request.ProxyURL
+	settings.socket = CollectorPolicy(c).UnixSocket
 	if files := c.Request.ProxyBasicAuthFile; files != nil {
 		settings.proxyAuth = *files
 	}

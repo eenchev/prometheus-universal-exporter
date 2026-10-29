@@ -160,3 +160,15 @@ func TestAHealthcheckOfAnotherEndpointIsACommandLineError(t *testing.T) {
 		}
 	}
 }
+
+// A redirect is not followed: neither endpoint redirects, so an answer that
+// does is not the exporter's, even when where it points answers 200.
+func TestTheHealthcheckFailsARedirect(t *testing.T) {
+	_, port := healthcheckExporter(t, &model.Config{})
+	redirect := httptest.NewServer(http.RedirectHandler("http://127.0.0.1:"+port+"/ready", http.StatusFound))
+	t.Cleanup(redirect.Close)
+	out := runCLI(t, "--healthcheck", "--web.listen-address="+redirect.Listener.Addr().String())
+	if out.code != 1 || len(out.logs) != 1 || out.logs[0]["status"] != float64(http.StatusFound) {
+		t.Fatalf("exit %d, stderr %q", out.code, out.stderr)
+	}
+}

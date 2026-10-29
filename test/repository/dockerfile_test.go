@@ -86,8 +86,8 @@ func TestTheImageUserIsNumeric(t *testing.T) {
 }
 
 // The image checks its own health with the exporter's --healthcheck, since it
-// has no curl or wget, in exec form, as the image has no shell to need, and
-// at the listen address CMD gives.
+// has no curl or wget, in exec form, so no shell runs on every check, and at
+// the listen address CMD gives.
 func TestTheImageChecksItsHealthWithTheExporter(t *testing.T) {
 	raw, err := os.ReadFile("Dockerfile")
 	if err != nil {

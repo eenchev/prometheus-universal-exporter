@@ -618,7 +618,7 @@ func TestTheDebugPageIsSelfContained(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
 	// The icon is the logo, as a data: URL (TestEveryPageHasTheLogoAsItsIcon).
 	page := strings.Replace(getPage(t, server, "/debug"), pageIcon, "", 1)
-	requireContains(t, page, "<title>Debug · Prometheus Universal Exporter</title>", `new URL("debug/run", document.baseURI)`, `"X-Debug-Run": "run"`, "room_temperature_celsius", "never runs Python", `<option value="rooms">rooms (http)</option>`, `asked.get("collector")`)
+	requireContains(t, page, "<title>Debug · Prometheus Universal Exporter</title>", `new URL("debug/run", document.baseURI)`, `"X-Debug-Run": "run"`, "room_temperature_celsius", "never runs Python", `<option value="rooms">rooms (http)</option>`, `pick($("configured"), $("configured").dataset.chosen);`)
 	for _, pattern := range []string{`<link`, `src=`, `@import`, `url\(`, `(?:href|action)="/`, `fetch\("/`} {
 		if found := regexp.MustCompile(pattern).FindString(page); found != "" {
 			t.Errorf("the page has %q", found)

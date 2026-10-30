@@ -66,7 +66,7 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 	}
 	playground := getPage(t, server, "/debug")
 	requireContains(t, playground, `<input type="radio" name="mode" value="fetch" id="mode-fetch" disabled> Fetch a target`,
-		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target.</p>`,
+		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>`,
 		`<p class="note" id="fetched-through"></p>`)
 	chosen := getPage(t, server, "/debug?collector=rooms")
 	requireContains(t, chosen, `<input type="radio" name="mode" value="fetch" id="mode-fetch"> Fetch a target`,

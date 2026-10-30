@@ -357,18 +357,42 @@ type debugPageCollector struct {
 
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
-	cfg := s.manager.Get()
+	// The collectors and the static targets in force, read together, as a
+	// run reads them (prepareDebugRun, staticDebugProbe).
+	followed := s.reconcile()
+	cfg := followed.config
+	chosen := r.URL.Query().Get("collector")
+	// A link that names a static target opens the page with the collector
+	// it is scraped through chosen, whatever collector the link names
+	// besides: the page offers the static targets of the collector chosen
+	// alone.
+	if page.Full {
+		if named := r.URL.Query().Get("static_target"); named != "" {
+			if target, c := staticDebugTarget(followed, named); target != nil && c != nil {
+				chosen, page.StaticTarget = c.Name, target.Name
+			}
+		}
+	}
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
-		if chosen := r.URL.Query().Get("collector"); chosen != "" && chosen == c.Name {
+		if chosen != "" && chosen == c.Name && page.Chosen == "" {
 			if shown, err := shownCollectorYAML(c); err == nil {
 				page.Chosen, page.ChosenYAML = c.Name, shown
 			} else {
 				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", err)
 			}
+		}
+	}
+	if page.Full {
+		page.StaticTargets = debugStaticTargets(followed, page.Chosen)
+		switch {
+		case len(staticTargetsOf(followed.targets)) == 0:
+			page.StaticNote = "No static target is configured."
+		case page.Chosen != "" && len(page.StaticTargets) == 0:
+			page.StaticNote = "No static target uses " + page.Chosen + "."
 		}
 	}
 	s.renderPage(w, debugPageTemplate, page)

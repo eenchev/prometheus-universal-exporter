@@ -29448,10 +29448,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
 - `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
 - `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
-- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
 - `TestTheDebugPagesBodyFitsTheCollectorChosen`: the body has the placeholder `Paste what the target answers` and the example in `data-example`; `/debug` starts it as the example, `/debug?collector=rooms` empty, and the script changes it on a change of collector only while it is empty or the example.
 - `TestTheDebugPageNeverRunsOnOpening` (changed): `run` is named only where it is defined and by *Run*'s click handler, with no timer.
-- `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note.
+- `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note; its script chooses the collector the server chose (`data-chosen`).
+- `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen`: at `full`, `/debug?collector=rooms` offers *Scrape a static target* enabled with a `<select id="static-target">` of `rooms`'s two static targets, each as `<name> — <target>`, the one with a password and a `token` in its URL shown `https://redacted:redacted@…?token=<redacted>`, and neither `halls`'s target nor a text input; `/debug/collector?name=rooms` answers the same two in `static_targets`; the script reads `static_targets` from `/debug/collector` for `fetcher()` on every change of collector; at `edit` neither `/debug/collector` nor the page names a static target.
+- `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector`: `/debug?collector=lonely` offers the radio and an empty list disabled with `No static target uses lonely.`, and `/debug/collector?name=lonely` answers `static_targets: []`; `/debug` offers it disabled under `… to fetch a target or scrape a static target.`; without static targets `/debug` and `/debug?collector=rooms` say `No static target is configured.`
+- `TestTheDebugPagePreselectsTheStaticTargetItsAddressNames`: `/debug?static_target=varna` and `/debug?collector=halls&static_target=varna` choose `rooms`, `varna`'s collector, and `varna` in the list; a name no target has leaves `halls` chosen.
+- `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
 
 # 35. Documentation requirements
 
@@ -33233,8 +33237,12 @@ shown, with the lines that hold what was withheld left out and written on
 the page, MUST be read as a collector and give the series the configured
 collector gives. `GET /debug/collector?name=<name>`, served and
 authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
-`yaml` and `from_defaults`, the keys taken from defaults, and a name the
-configuration in force does not have `404` with `error`.
+`yaml` and `from_defaults`, the keys taken from defaults, and, at `full`
+only, `static_targets`, the static targets in force scraped through that
+collector, each with its `name` and its `target` shown as the status page
+shows it (§ 42.14a), with any credential in it withheld, an empty list when
+there is none; a name the configuration in force does not have `404` with
+`error`.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a
@@ -33257,7 +33265,20 @@ the example's answer with the example playground and empty with a
 configured collector or a copy of one, and a change of collector MUST NOT
 replace a body the visitor wrote. A static target's scrape, at `full` only, MUST be
 made as `/static-targets?debug=<name>` makes it, through the target's own
-collector, and answered as what the
+collector. The page MUST offer it as a list of the static targets in force
+scraped through the collector a target would be fetched through — the
+configured collector chosen, or the one the playground was copied from —
+each by its name and its target as `/debug/collector` shows it, never as a
+name to type; it MUST open with those of the collector its address chooses
+and read them from `/debug/collector` again whenever that collector
+changes, so that they follow a reload. With none, the page MUST offer
+*Scrape a static target* disabled, saying that no static target uses the
+collector, that none is configured, or, for a playground copied from none,
+to choose a configured collector or *Edit a copy* of one. `?static_target=<name>`
+MUST open the page with that target chosen and the collector it is scraped
+through chosen on the left, whatever collector the address names besides; a
+name no static target in force has MUST be ignored. A scrape MUST be
+answered as what the
 scrape would have published, its series with the target's labels and
 `static_target`; nothing MUST be published. A collector run on what
 another collector fetched — a written one, or one other than the static

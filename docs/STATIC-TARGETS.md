@@ -636,8 +636,10 @@ last scheduled result, and nothing is counted in the self-metrics but
 slot of the collector's `max_concurrent_probes` as the scrape would. A name no
 target in force has is answered `404`; `debug` takes one name and cannot be
 combined with `targets` (`400`); below `--web.debug=full` it is `403`. The
-[debug page](CONFIGURATION.md#the-debug-page) makes the same scrape, and can
-run another collector on what it fetched.
+[debug page](CONFIGURATION.md#the-debug-page) makes the same scrape, the
+target chosen from a list of those of the collector chosen, and can run an
+edited copy of the collector on what it fetched;
+`/debug?static_target=legacy_eu` opens it on that target.
 
 ## Status page
 

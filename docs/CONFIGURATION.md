@@ -5440,9 +5440,21 @@ It reads one of three responses:
   makes it, with the target's own settings and credentials, its interval as
   the budget and its labels on the series, as
   [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target)
-  makes it, through the target's own collector. Nothing is published. It is
-  read by the collector chosen, the playground or a configured one, which
-  may be the target's own.
+  makes it, through the target's own collector. Nothing is published. The
+  target is chosen from a list of the static targets scraped through the
+  collector a target is fetched through — the configured one chosen, or the
+  one the playground was copied from — each shown as its name and its
+  target, `sofia — https://api.open-meteo.com`, with any
+  credential in the address withheld as the
+  [status page](ENDPOINTS.md#status-page) withholds it. The list is read
+  again whenever that collector changes, so it follows a reload of the
+  static target file. With no static target of that collector, or none at
+  all, *Scrape a static target* is offered disabled with a note saying so;
+  the example playground, copied from no collector, scrapes none, as it
+  fetches none. The scrape is read by the collector chosen, the target's
+  own, or by the playground, a copy of it that may have been edited.
+  `/debug?static_target=<name>` opens the page with that target chosen and
+  its collector chosen on the left.
 
 The playground may do nothing past the response, since what it is given
 runs on the server:
@@ -5482,9 +5494,11 @@ curl -s http://exporter:8080/debug/run \
 
 The editor reads a configured collector from `GET
 /debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
-YAML as the page shows it, and `from_defaults`, the keys it took from its
-file's defaults; a name the configuration does not have is answered `404`
-with `error`.
+YAML as the page shows it, `from_defaults`, the keys it took from its
+file's defaults, and at `full` `static_targets`, the static targets scraped
+through it, each a `name` and its `target` as the list shows it, `[]` for
+none; a name the configuration does not have is answered `404` with
+`error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for

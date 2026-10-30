@@ -8,7 +8,9 @@ package exporter
 // the metric lint's advice, what was logged and the whole debug report. It
 // runs when Run is pressed, and only then; a run cancels the one before it.
 // The collectors page links each collector here as ?collector=<name>, with
-// &target=<target> at full, and the page starts from what the link names.
+// &target=<target> at full, and the page starts from what the link names;
+// at full ?static_target=<name> opens it on that static target, its
+// collector chosen.
 
 type debugPage struct {
 	// Chrome is the bar at the top of the page (pagechrome.go).
@@ -26,6 +28,12 @@ type debugPage struct {
 	// it opens with, and ChosenYAML that collector as the page shows it
 	// (debugcollector.go).
 	Chosen, ChosenYAML string
+	// StaticTargets are the static targets scraped through Chosen, which
+	// the page offers to scrape, StaticTarget the one the page's address
+	// names, and StaticNote why none is offered, at full.
+	StaticTargets []debugStaticTarget
+	StaticTarget  string
+	StaticNote    string
 }
 
 // debugExample and debugExampleBody are what the page starts with: a
@@ -104,7 +112,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <section class="panel">
 <h2>Collector</h2>
 <label for="configured">Collector to run</label>
-<select id="configured">
+<select id="configured" data-chosen="{{.Chosen}}">
 <option value="">Playground</option>
 {{- if .Collectors}}
 <optgroup label="Configured, run as configured">
@@ -127,9 +135,10 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <div class="modes" role="radiogroup" aria-label="Response">
 <label><input type="radio" name="mode" value="paste" checked> Paste a response</label>
 <label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not .Chosen}} disabled{{end}}> Fetch a target</label>
-<label><input type="radio" name="mode" value="static"> Scrape a static target</label>
+<label><input type="radio" name="mode" value="static" id="mode-static"{{if not .StaticTargets}} disabled{{end}}> Scrape a static target</label>
 </div>
-<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target.</p>
+<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>
+<p class="note" id="static-unavailable"{{if not .StaticNote}} hidden{{end}}>{{.StaticNote}}</p>
 {{- end}}
 <div data-mode="paste">
 <div class="row">
@@ -153,9 +162,13 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <textarea id="params" rows="3" spellcheck="false" autocomplete="off" placeholder="param_tenant=a"></textarea>
 </div>
 <div data-mode="static" hidden>
-<p class="note">The static target is scraped once as its schedule scrapes it, through its own collector, with its own settings and credentials, and read by the collector chosen. Nothing is published.</p>
-<label for="static-target">Static target name</label>
-<input id="static-target" type="text" autocomplete="off">
+<p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, through the collector chosen, or the one the playground was copied from, and read by the collector chosen. Nothing is published.</p>
+<label for="static-target">Static target</label>
+<select id="static-target" data-for="{{.Chosen}}"{{if not .StaticTargets}} disabled{{end}}>
+{{- range .StaticTargets}}
+<option value="{{.Name}}"{{if eq .Name $.StaticTarget}} selected{{end}}>{{.Name}}{{if .Target}} — {{.Target}}{{end}}</option>
+{{- end}}
+</select>
 </div>
 {{- end}}
 <div class="actions">
@@ -214,7 +227,9 @@ for (const id of ["collector", "body", "copied"]) {
   } catch (error) { /* storage refused: start from the example */ }
 }
 // A link from the collectors page names the collector, and at full the
-// target or the static target.
+// target or the static target. The server has chosen the collector the
+// link names, or the one of the static target it names, and the browser's
+// own memory of the form does not choose another.
 const asked = new URLSearchParams(location.search);
 const pick = (select, value) => {
   for (const option of select.options) if (option.value === value) { select.value = value; return true; }
@@ -223,13 +238,13 @@ const pick = (select, value) => {
 // A copy of a collector a reload has since taken away fetches through
 // nothing.
 if (copiedFrom !== "" && ![...$("configured").options].some((option) => option.value !== "" && option.value === copiedFrom)) copiedFrom = "";
-if (asked.get("collector")) pick($("configured"), asked.get("collector"));
+pick($("configured"), $("configured").dataset.chosen);
 const choose = (value) => {
   const radio = document.querySelector('input[name="mode"][value="' + value + '"]');
   if (radio) radio.checked = true;
 };
 if (asked.get("target") !== null && $("target")) { choose("fetch"); $("target").value = asked.get("target"); }
-if (asked.get("static_target") !== null && $("static-target")) { choose("static"); $("static-target").value = asked.get("static_target"); }
+if (asked.get("static_target") !== null && $("static-target") && pick($("static-target"), asked.get("static_target"))) choose("static");
 const mode = () => {
   const checked = document.querySelector('input[name="mode"]:checked');
   return checked ? checked.value : "paste";
@@ -251,6 +266,41 @@ function showFetch() {
   $("fetched-through").textContent = through === "" ? "" : $("configured").value !== ""
     ? "Fetched through " + through + ", the collector chosen."
     : "Fetched through " + through + ", the collector this playground was copied from.";
+  showMode();
+}
+// The static targets offered are those scraped through fetcher(), read from
+// /debug/collector whenever it changes, so they follow a reload of the
+// static target file; the page opens with those of the collector chosen.
+// A response comes through that collector, a fetched target's as a static
+// target's, so the example playground, copied from none, scrapes none.
+let listedFor = $("static-target") ? $("static-target").dataset.for : "";
+async function showStaticTargets() {
+  const select = $("static-target"), through = fetcher();
+  if (!select || through === listedFor) return;
+  listedFor = through;
+  let targets = [], note = "";
+  if (through !== "") {
+    try {
+      const url = new URL("debug/collector", document.baseURI);
+      url.searchParams.set("name", through);
+      const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+      const answer = await response.json();
+      if (answer.error) note = answer.error;
+      else targets = answer.static_targets || [];
+    } catch (error) {
+      note = "The static targets could not be read: " + error.message;
+    }
+    if (note === "" && targets.length === 0) note = "No static target uses " + through + ".";
+  }
+  if (listedFor !== through) return;
+  const kept = select.value;
+  select.replaceChildren(...targets.map((target) => new Option(target.target ? target.name + " — " + target.target : target.name, target.name)));
+  pick(select, kept);
+  select.disabled = targets.length === 0;
+  $("mode-static").disabled = targets.length === 0;
+  $("static-unavailable").textContent = note;
+  $("static-unavailable").hidden = note === "";
+  if ($("mode-static").disabled && $("mode-static").checked) choose("paste");
   showMode();
 }
 // The example body fits the example collector alone: with a configured
@@ -275,6 +325,7 @@ async function showCollector() {
     : copiedFrom !== "" ? "Playground, a copy of " + copiedFrom + ": the YAML of a collector, which runs"
     : "Playground: the YAML of a collector, which runs";
   showFetch();
+  showStaticTargets();
   fitBody();
   if (name === "") { area.value = written; return; }
   if (configuredYAML.has(name)) { area.value = configuredYAML.get(name); return; }

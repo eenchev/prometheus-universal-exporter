@@ -20,7 +20,8 @@ import (
 // whether it succeeded, came from the cache, failed and served a stale
 // result, or was skipped by failure_backoff, the error of the last failed
 // scrape, and whether the target is backing off. ?format=json serves the
-// same as JSON.
+// same as JSON, and ?format=fragment the page's content section alone,
+// which the page fetches to refresh itself (statusrefresh.go).
 //
 // It shows what the static targets endpoint's series, the self-metrics and
 // the exporter's log already show, read by whoever may read the endpoints:
@@ -215,6 +216,8 @@ type staticStatusPage struct {
 	// reverse proxy that serves the exporter under a path of its own.
 	StaticTargetsPath string `json:"-"`
 	HomeHref          string `json:"-"`
+	// Refresh is the page's refresh controls (statusrefresh.go).
+	Refresh statusRefreshControl `json:"-"`
 }
 
 // staticStatusPageFor builds the page of targets, those in force with cfg,
@@ -366,8 +369,8 @@ func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	format := r.URL.Query().Get("format")
-	if format != "" && format != "html" && format != "json" {
-		http.Error(w, "the format parameter is html or json", http.StatusBadRequest)
+	if format != "" && format != "html" && format != "json" && format != "fragment" {
+		http.Error(w, "the format parameter is html, json or fragment", http.StatusBadRequest)
 		return
 	}
 	cfg, file := s.manager.InForce()
@@ -386,6 +389,14 @@ func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Reque
 		_, _ = w.Write(append(body, '\n'))
 		return
 	}
+	if format == "fragment" {
+		// What a refresh swaps in: the content section, rendered by the
+		// page's own template, with the page's headers, so it is never
+		// cached either.
+		s.renderPage(w, staticStatusContentTemplate, page)
+		return
+	}
+	page.Refresh = s.statusRefreshControlFor(r.URL.Query().Get("refresh"))
 	s.renderPage(w, staticStatusTemplate, page)
 }
 
@@ -408,12 +419,100 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
+form.refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0; }
+form.refresh a.button, form.refresh button, form.refresh select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; text-decoration: none; }
+form.refresh a.button { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 </style>
+{{- if .Refresh.Seconds}}
+<noscript><meta http-equiv="refresh" content="{{.Refresh.Seconds}}"></noscript>
+{{- end}}
 </head>
 <body>
 <main>
 <h1>Status</h1>
-<p class="meta">As of {{.GeneratedAt}}; reload the page to see it again. <a href="{{.HomeHref}}">Home</a></p>
+<form class="refresh" id="refresh" method="get">
+<a class="button" id="refresh-now" href="">Refresh</a>
+<label>Auto-refresh <select name="refresh" id="refresh-every">
+{{- range .Refresh.Choices}}
+<option value="{{.Value}}" data-seconds="{{.Seconds}}"{{if .Selected}} selected{{end}}>{{if eq .Value "off"}}Off{{else}}{{.Value}}{{end}}</option>
+{{- end}}
+</select></label>
+<noscript><button type="submit">Apply</button></noscript>
+<span id="refresh-state" class="muted" role="status" aria-live="polite"></span>
+<a href="{{.HomeHref}}">Home</a>
+</form>
+<div id="status-content">
+{{- template "content" .}}
+</div>
+<script>
+"use strict";
+// The Refresh button and the auto-refresh fetch this page's content section
+// again, ?format=fragment, and swap it in: one template renders both, and
+// the fetch, same-origin, carries the Basic Auth the page was opened with
+// and passes the cross-site refusal. Without JavaScript the button reloads
+// the page, the form puts the interval chosen in the URL, and the meta
+// refresh above reloads the page on it.
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const content = $("status-content"), every = $("refresh-every"), state = $("refresh-state");
+  let timer = 0, inFlight = false, refreshedAt = Date.now();
+  const clock = (ms) => new Date(ms).toLocaleTimeString();
+  const seconds = () => Number(every.selectedOptions[0].dataset.seconds) || 0;
+  state.textContent = "Loaded at " + clock(refreshedAt);
+  async function refresh() {
+    // A refresh still waiting for its answer is not overlapped: a tick
+    // that finds one is skipped.
+    if (inFlight) return;
+    inFlight = true;
+    const url = new URL(location.href);
+    url.searchParams.set("format", "fragment");
+    url.hash = "";
+    try {
+      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      content.innerHTML = await response.text();
+      refreshedAt = Date.now();
+      state.className = "muted";
+      state.textContent = "Last refreshed at " + clock(refreshedAt);
+    } catch (error) {
+      // The last data stays, and the state says how old it is.
+      state.className = "bad";
+      state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data of " + clock(refreshedAt);
+    } finally {
+      inFlight = false;
+    }
+  }
+  // A hidden tab is not refreshed; back in view, it refreshes at once if a
+  // tick fell due meanwhile, and the ticks start again from there.
+  function schedule() {
+    clearInterval(timer);
+    timer = 0;
+    const s = seconds();
+    if (!s || document.visibilityState === "hidden") return;
+    if (Date.now() - refreshedAt >= s * 1000) refresh();
+    timer = setInterval(refresh, s * 1000);
+  }
+  $("refresh-now").addEventListener("click", (event) => {
+    event.preventDefault();
+    refresh();
+  });
+  every.addEventListener("change", () => {
+    // The URL keeps the interval, so a bookmark or a shared link has it.
+    const url = new URL(location.href);
+    url.searchParams.set("refresh", every.value);
+    history.replaceState(null, "", url);
+    schedule();
+  });
+  $("refresh").addEventListener("submit", (event) => event.preventDefault());
+  document.addEventListener("visibilitychange", schedule);
+  schedule();
+})();
+</script>
+</main>
+</body>
+</html>
+{{define "content"}}
+<p class="meta">As of {{.GeneratedAt}}.</p>
 {{- if .Allocator}}
 <p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
 {{- end}}
@@ -516,7 +615,8 @@ table.facts th { background: none; font-weight: 600; white-space: nowrap; }
 <p class="muted">OTLP export is off.</p>
 {{- end}}
 {{- end}}
-</main>
-</body>
-</html>
-`))
+{{end}}`))
+
+// staticStatusContentTemplate is the page's content section alone, which a
+// refresh swaps in.
+var staticStatusContentTemplate = staticStatusTemplate.Lookup("content")

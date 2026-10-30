@@ -586,6 +586,7 @@ values schema:
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.debug` | `--web.debug=<level>`, rendered only for `edit` or `full`; empty, the default, and `off` render no flag, and any other value MUST fail rendering, by the schema's enum and in the template |
 | `server.gzipLevel` | `--web.gzip-level=<level>`, a whole number from 0 to 9, as a number or as a string; empty, the default, renders no flag, `0` MUST render, and any other value MUST fail rendering, by the schema and in the template |
+| `server.statusRefresh` | `--web.status-refresh=<interval>`, `off` or whole hours, minutes and seconds from `5s` to `24h`; empty, the default, renders no flag, and any other value MUST fail rendering, in the template whether or not the schema is checked |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -1341,7 +1342,13 @@ are skipped and the text checks of the templates still run:
    MUST render `--web.gzip-level` with that level, the default MUST render
    none, `10`, `-1`, `1.5` and `"fast"` MUST fail rendering naming
    `server.gzipLevel`, and `--web.gzip-level` in `extraArgs` MUST fail
-   rendering naming `server.gzipLevel`.
+   rendering naming `server.gzipLevel`. Likewise `server.statusRefresh` of
+   `off`, `5s`, `30s`, `1m30s`, `1h` and `24h` MUST render
+   `--web.status-refresh` with that value, the default MUST render none,
+   `4s`, `0s`, `0m0s`, `24h1s`, `25h`, `1.5s`, `500ms`, `30`, `never` and
+   `OFF` MUST fail rendering naming `server.statusRefresh`, with the schema
+   checked and with it skipped, and `--web.status-refresh` in `extraArgs`
+   MUST fail rendering naming `server.statusRefresh`.
 20. Names, network policy, monitors and scheduling: releases `blue` and
    `green` MUST get objects of their own names, a release named after the
    chart the chart's name, and `fullnameOverride` its own; the network policy

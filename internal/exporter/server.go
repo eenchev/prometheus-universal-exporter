@@ -33,8 +33,11 @@ type Server struct {
 	// debug is the level of --web.debug (debuglevel.go); debugSlots bounds
 	// the debug page's runs in progress (debugpage.go), and debugRunCounts
 	// counts every run of the debug engine.
-	debug             DebugLevel
-	debugSlots        chan struct{}
+	debug      DebugLevel
+	debugSlots chan struct{}
+	// statusRefresh is the status page's auto-refresh when its URL does
+	// not say, --web.status-refresh, 0 for off (statusrefresh.go).
+	statusRefresh     time.Duration
 	debugRunCounts    debugRuns
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet

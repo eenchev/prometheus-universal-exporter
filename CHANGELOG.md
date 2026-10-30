@@ -73,6 +73,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Logging never waits for it: a line that finds `max_pending_records` waiting
   is dropped and counted (`http_exporter_otlp_log_*`), and the status page
   shows the log export. It never makes the exporter unready.
+- The status page has a Refresh button and an auto-refresh selector, as a
+  Grafana dashboard has: `Off`, or every `5s` to `1h`, kept in the URL as
+  `?refresh=30s`, refreshing the page's content in place, pausing while the
+  tab is hidden, and saying when it last refreshed or that a refresh failed.
+  `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
+  interval a URL without one gets; off by default.
 
 ### Fixed
 

@@ -29328,6 +29328,78 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   environment` alone (`TestDryRunReportsRequestPolicies`,
   `TestDryRunReportsRetryStatuses`, `TestDryRunReportsRetryAfter`).
 
+## 34.236 The status page's refresh, and the exporter's own log over OTLP
+
+- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says when it last refreshed or that a refresh failed.
+- `TestTheStatusPageAutoRefreshDefaultsToTheFlag`: with `--web.status-refresh` 30s (`SetStatusRefresh`) and no `?refresh=`, 30s is the one choice selected and the page carries `<noscript><meta http-equiv="refresh" content="30"></noscript>`.
+- `TestTheStatusPageReadsTheRefreshParameter`: `?refresh=` of `5m`, `300s`, `off`, `20s`, `90s`, `2h` and `24h` is the one choice selected over the flag's 1m; `1s`, `4s`, `0s`, `-30s`, `1500ms`, `25h`, `often`, `<b>` and `Off` are ignored and 1m stays selected; `20s` is listed between 10s and 30s and reloads the page every 20 seconds without JavaScript, and `off` leaves the meta refresh out.
+- `TestTheStatusFragmentIsThePageContentAlone`: `?format=fragment` is HTML, `no-store`, `X-Frame-Options: DENY` and the pages' Content-Security-Policy, holds the as-of line and the three sections and no document, head, body, main, script, form, style, heading, content element or meta refresh, and is, its as-of time aside, the page's content element byte for byte; an unknown `format` is answered 400 naming html, json and fragment.
+- `TestTheStatusFragmentIsGuardedAsThePageIs`: with Basic Auth on, the fragment is answered 401 without the credential and 403 cross-site with it, and same-origin with it 200, `no-store`, the content without a document.
+- `TestParseStatusRefresh`: `--web.status-refresh` takes off, 5s, 30s, 1m, 90s, 1h30m and 24h; refuses the empty value, 0, 0s, 1s, 4s, 4.999s, 5.5s, 1500ms, -30s, 24h0m1s, 48h, Off, OFF, never and 30, saying it must be off or a duration in whole seconds from 5s to 24h.
+- `TestStatusRefreshText`: an interval is written as Grafana writes it: off, 5s, 1m, 1m30s, 1h, 1h1s, 24h.
+- `TestOutOfRangeLimitsAreCommandLineErrors` (the `--web.status-refresh` cases): 1s, 0s, 48h, 2.5s and the empty value exit 2 naming the flag, on a start and with `--dry-run`.
+- `TestEveryStatusRefreshFromFiveSecondsIsNoCommandLineError`: `--dry-run` with `--web.status-refresh` of off, 5s, 30s, 1m, 90s and 24h is no command-line error.
+- `TestChartRendersItsOptions` (the status refresh cases): `server.statusRefresh` of `30s`, `5s` and `off` renders `--web.status-refresh` with it; the default renders none.
+- `TestChartRefusesInvalidOptions` (the status refresh cases): `server.statusRefresh` of `4s`, `0s`, `25h`, `7.5s`, `never` and the string `30`, and `--web.status-refresh` in `extraArgs`, fail rendering naming `server.statusRefresh`.
+- `TestChartHoldsTheStatusRefreshToTheExportersBounds`: `server.statusRefresh` of `4s`, `0s`, `0m0s`, `24h1s`, `25h`, `1.5s`, `500ms`, `30`, `never` and `OFF` fails rendering naming it with the schema checked and with it skipped, the template's own refusal given when skipped; `off`, `5s`, `1m30s`, `1h` and `24h` render with the schema skipped.
+- `TestTheExportersLogArrivesOverOTLP`: a warning and an error logged through
+  the tee arrive at the metrics' collector at `/v1/logs`, under the
+  exporter-wide resource and the scope `prometheus-universal-exporter`, with
+  the line's time and the observed time, severity 13 `WARN` and 17 `ERROR`,
+  the message as the body and the attributes typed — an int, a double, a
+  bool, a duration, an error, a uint64 past int64 and an empty string as
+  strings, a `slog.LogValuer` resolved, a group's under `group.` and an
+  unnamed group inline; the debug line under `level: info` is not sent;
+  stderr has the lines as before; the sent and success counters count them,
+  and an export with nothing waiting makes no request.
+- `TestOTLPLogsLevelIsTheLeastExported`: `otlp.logs.level` `debug`, `info`,
+  `warn` and `ERROR` export the lines at and above it, `debug` exporting a
+  line stderr at `info` does not write.
+- `TestOTLPLogsDropWhatFindsTheQueueFull`: with `max_pending_records: 2`,
+  five lines keep the first two and count three in
+  `http_exporter_otlp_log_records_dropped_total` and on the status page, in
+  the JSON and the HTML; stderr has all five.
+- `TestTheOTLPLogExportDoesNotExportItsOwnLines`: with the collector
+  answering `503`, `level: debug` and retries, five failed exports leave only
+  the one line logged waiting, the failure is logged at warn once, the
+  failures are counted and shown, `/ready` stays `200`; when the collector is
+  back it receives that line alone, and the recovery is logged.
+- `TestOTLPLogsRefusedAndRejectedAreDropped`: a `400` drops and counts the
+  request's records; a log export's `partialSuccess` reads
+  `rejectedLogRecords` and not `rejectedDataPoints`.
+- `TestOTLPLogsAreSentInBatches`: five records with `batch_max_size: 2` are
+  three requests, in order.
+- `TestTheLastOTLPExportSendsTheLogsWaiting` and
+  `TestAFailedLastOTLPLogExportDropsItsRecords`: `FlushOTLP` sends the
+  metrics' last export and then the records waiting, the line announcing the
+  last export among them, and takes nothing after; a failed one drops and
+  counts its records, the metrics' failure warning among them.
+- `TestAReloadSwitchesTheOTLPLogExport`: a reload switching `otlp.logs` off
+  stops the tee and drops what waits, the status page says the log export is
+  off and its self-metrics are gone; switched on again, only the lines
+  logged since are sent.
+- `TestOTLPLogsGoToTheMetricsCollector` and
+  `TestOTLPLogsSettingsAreCheckedAndFilledIn`: the logs endpoint is the
+  metrics' with `/v1/metrics` made `/v1/logs`, query and userinfo kept; the
+  defaults are `info`, `5s` and 10000; an endpoint without `/v1/metrics` and
+  no `logs.endpoint`, an endpoint that is no URL, an unknown level, an
+  interval under 1s and a negative bound are refused, and kept unchecked with
+  either block switched off. `TestOTLPLogsBlockMustSayEnabled`: a logs block
+  without `enabled` is refused naming its keys.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` has a `logs` row: in a
+  block switched on, a logs block switched on with an unknown or numeric
+  level, an interval under 1s or negative, or a negative bound is refused by
+  both, an endpoint that is no URL and `400ms400ms` by the exporter alone;
+  each is taken with `otlp` off; a logs block without `enabled`, an unknown
+  key or a value of the wrong kind is refused by both, off and on.
+- `TestTheExporterForwardsItsOwnLogOverOTLP`: the exporter run in a child
+  process with `otlp.logs` exports `starting exporter` in the background and
+  the shutdown's lines in its last export, and writes them to stderr.
+- `TestChartReadmeOTLPLogExportExampleRendersAndLoads`: the chart README's
+  OTLP export example renders with `--config.expand-env` and the token from
+  the Secret, and the exporter loads the rendered configuration with the log
+  export on at `/v1/logs` and the header expanded.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31636,11 +31708,33 @@ then one of the OTLP export. Of the static targets:
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
-- Every value MUST be HTML-escaped, the page MUST NOT refresh itself or run
-  a script, and it MUST be served as the other pages are (no caching, the
-  pages' Content-Security-Policy).
-- `?format=json` MUST serve the same rows and summary as JSON; another
+- Every value MUST be HTML-escaped, and the page MUST be served as the
+  other pages are (no caching, the pages' Content-Security-Policy).
+- `?format=json` MUST serve the same rows and summary as JSON, and
+  `?format=fragment` the page's content section alone, rendered by the
+  page's template, with no controls or script, with the page's headers
+  (`Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, the
+  pages' Content-Security-Policy and `X-Frame-Options: DENY`), behind the
+  same Basic Auth and refusal of requests from other sites; another
   `format` MUST be answered `400`.
+- The page MUST have a Refresh button, which without JavaScript MUST be a
+  link reloading the page, and an auto-refresh selector offering `Off`,
+  `5s`, `10s`, `30s`, `1m`, `5m`, `15m`, `30m` and `1h`. Its inline script
+  MUST refresh by fetching the page's URL with `?format=fragment`,
+  same-origin with credentials, and putting the answer in place of the
+  content section; it MUST NOT start a refresh while one is waiting for its
+  answer, MUST NOT refresh while the tab is hidden, MUST say when it last
+  refreshed, and when a refresh fails MUST say so and keep the data shown.
+- The interval MUST be `?refresh=` when that is `off` or a duration in whole
+  seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
+  `?refresh=` MUST be ignored. An interval none of the selector's MUST be
+  listed in it in its place by length. Choosing an interval MUST put it in
+  the URL as `?refresh=`. With an interval, the page MUST reload itself on
+  it without JavaScript (a `<meta http-equiv="refresh">` in `<noscript>`),
+  and the selector MUST put the interval chosen in the URL through a form.
+- `--web.status-refresh` MUST take `off` or a duration in whole seconds from
+  5s to 24h, by default `off`; any other value, `0s` and the empty value
+  among them, MUST be a command-line error, exit `2`.
 - In allocator mode the page MUST say that it shows the targets the
   allocator gave this replica, and the probes this replica answered.
 - The page MUST be served with or without static targets in force; without

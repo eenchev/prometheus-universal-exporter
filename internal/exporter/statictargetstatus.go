@@ -454,10 +454,23 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 (() => {
   const $ = (id) => document.getElementById(id);
   const content = $("status-content"), every = $("refresh-every"), state = $("refresh-state");
-  let timer = 0, inFlight = false, refreshedAt = Date.now();
+  let timer = 0, inFlight = false, refreshedAt = Date.now(), dataAt = "";
   const clock = (ms) => new Date(ms).toLocaleTimeString();
   const seconds = () => Number(every.selectedOptions[0].dataset.seconds) || 0;
-  state.textContent = "Loaded at " + clock(refreshedAt);
+  // The content's own as-of line, in UTC, is what a page without
+  // JavaScript reads. With it, the line beside the controls says the same
+  // in the browser's time, so the content's line is hidden rather than
+  // said twice; its UTC time is the line's tooltip.
+  function asOf() {
+    const line = content.querySelector("#as-of"), time = line && line.querySelector("time");
+    if (!time) return;
+    line.hidden = true;
+    dataAt = time.getAttribute("datetime");
+    state.title = dataAt;
+  }
+  const dataClock = () => clock(Date.parse(dataAt) || refreshedAt);
+  asOf();
+  state.textContent = "As of " + dataClock();
   async function refresh() {
     // A refresh still waiting for its answer is not overlapped: a tick
     // that finds one is skipped.
@@ -472,11 +485,12 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
       content.innerHTML = await response.text();
       refreshedAt = Date.now();
       state.className = "muted";
-      state.textContent = "Last refreshed at " + clock(refreshedAt);
+      asOf();
+      state.textContent = "As of " + dataClock();
     } catch (error) {
       // The last data stays, and the state says how old it is.
       state.className = "bad";
-      state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data of " + clock(refreshedAt);
+      state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data as of " + dataClock();
     } finally {
       inFlight = false;
     }
@@ -511,7 +525,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 </body>
 </html>
 {{define "content"}}
-<p class="meta">As of {{.GeneratedAt}}.</p>
+<p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
 {{- if .Allocator}}
 <p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
 {{- end}}

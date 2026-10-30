@@ -29341,7 +29341,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.236 The status page's refresh, and the exporter's own log over OTLP
 
-- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says when it last refreshed or that a refresh failed.
+- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says the time the data is of once, hiding the content's as-of line, or that a refresh failed with the time the data shown is of; it says neither "Loaded at" nor "Last refreshed at", and the page's as-of line carries its time in a `<time datetime>` element.
 - `TestTheStatusPageAutoRefreshDefaultsToTheFlag`: with `--web.status-refresh` 30s (`SetStatusRefresh`) and no `?refresh=`, 30s is the one choice selected and the page carries `<noscript><meta http-equiv="refresh" content="30"></noscript>`.
 - `TestTheStatusPageReadsTheRefreshParameter`: `?refresh=` of `5m`, `300s`, `off`, `20s`, `90s`, `2h` and `24h` is the one choice selected over the flag's 1m; `1s`, `4s`, `0s`, `-30s`, `1500ms`, `25h`, `often`, `<b>` and `Off` are ignored and 1m stays selected; `20s` is listed between 10s and 30s and reloads the page every 20 seconds without JavaScript, and `off` leaves the meta refresh out.
 - `TestTheStatusFragmentIsThePageContentAlone`: `?format=fragment` is HTML, `no-store`, `X-Frame-Options: DENY` and the pages' Content-Security-Policy, holds the as-of line and the three sections and no document, head, body, main, script, form, style, heading, content element or meta refresh, and is, its as-of time aside, the page's content element byte for byte; an unknown `format` is answered 400 naming html, json and fragment.
@@ -31791,8 +31791,10 @@ then one of the OTLP export. Of the static targets:
   MUST refresh by fetching the page's URL with `?format=fragment`,
   same-origin with credentials, and putting the answer in place of the
   content section; it MUST NOT start a refresh while one is waiting for its
-  answer, MUST NOT refresh while the tab is hidden, MUST say when it last
-  refreshed, and when a refresh fails MUST say so and keep the data shown.
+  answer, MUST NOT refresh while the tab is hidden, MUST say the time the
+  data shown is of once (beside the controls, hiding the content's own
+  as-of line, which a page without JavaScript shows), and when a refresh
+  fails MUST say so and keep the data shown.
 - The interval MUST be `?refresh=` when that is `off` or a duration in whole
   seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
   `?refresh=` MUST be ignored. An interval none of the selector's MUST be

@@ -76,7 +76,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - The status page has a Refresh button and an auto-refresh selector, as a
   Grafana dashboard has: `Off`, or every `5s` to `1h`, kept in the URL as
   `?refresh=30s`, refreshing the page's content in place, pausing while the
-  tab is hidden, and saying when it last refreshed or that a refresh failed.
+  tab is hidden, and saying once, beside the controls and in the browser's
+  time, the time the data shown is of, or that a refresh failed.
   `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
   interval a URL without one gets; off by default.
 - `otlp.metric_names: otel` names the OTLP export's metrics as OpenTelemetry

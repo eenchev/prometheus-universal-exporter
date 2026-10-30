@@ -57,10 +57,12 @@ with the failed exports in a row and whether they made the exporter unready.
 The page refreshes as a Grafana dashboard does. Its Refresh button fetches
 the page's content again and puts it in place, without reloading the page;
 its auto-refresh selector does so every `5s`, `10s`, `30s`, `1m`, `5m`, `15m`,
-`30m` or `1h`, or not at all, `Off`. Beside them the page says when it was
-last refreshed, or, when a refresh fails — the exporter is restarting, or
-answers an error — that it failed, why, and how old the data still shown is;
-the next refresh tries again.
+`30m` or `1h`, or not at all, `Off`. Beside them the page says the time the data
+shown is of, once, in the browser's time, with the UTC time as its tooltip:
+the content's own "As of" line, in UTC, is for a page without JavaScript, and
+the script hides it. When a refresh fails — the exporter is restarting, or
+answers an error — the page says that it failed, why, and the time the data
+still shown is of; the next refresh tries again.
 
 The interval chosen is kept in the page's URL, `?refresh=30s`, so a bookmark
 or a shared link opens the page with it. A URL without one takes

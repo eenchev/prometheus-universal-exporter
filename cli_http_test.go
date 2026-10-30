@@ -583,11 +583,6 @@ func TestDryRunReportsHowACollectorConnects(t *testing.T) {
     request: {type: http}
     transform: {type: regex}
     metrics: [{name: v, expression: 'v=(\d+)'}]
-  - name: graphite
-    request: {type: graphite, targets: [app.requests]}
-    decoder: {type: graphite}
-    transform: {type: jq}
-    metrics: [{name: v, items: '.series[]', expression: .value}]
 collector_files: [`+testutil.WriteIn(t, dir, "defaulted.yaml", `defaults:
   request: {proxy_url: socks5://defaults-proxy.example:1080}
 collectors:
@@ -604,7 +599,6 @@ collectors:
 		"proxied":     map[string]any{"proxy": "http://proxy.example:3128", "proxy_basic_auth_file": map[string]any{"username": username, "password": password}},
 		"direct":      map[string]any{"proxy": "direct"},
 		"environment": map[string]any{"proxy": "environment"},
-		"graphite":    map[string]any{"proxy": "environment"},
 		"defaulted":   map[string]any{"proxy": "socks5://defaults-proxy.example:1080"},
 	}
 	if check.code != 0 || !reflect.DeepEqual(policies, want) {

@@ -29292,11 +29292,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `--dry-run` lists under `request_policies` an `http` collector's
   `unix_socket` with no `proxy`, `proxy: http://proxy.example:3128` with the
   paths of its `proxy_basic_auth_file`, `proxy: direct`, `proxy:
-  environment` for an `http` and a `graphite` collector that name none, and
-  the `socks5://` proxy a collector file's `defaults` gives a collector;
-  the contents of the credential files and the `HTTPS_PROXY` the test sets,
-  with its user and password, appear nowhere in the report
-  (`TestDryRunReportsHowACollectorConnects`).
+  environment` for an `http` collector that names none, and the `socks5://`
+  proxy a collector file's `defaults` gives a collector; the contents of the
+  credential files and the `HTTPS_PROXY` the test sets, with its user and
+  password, appear nowhere in the report
+  (`TestDryRunReportsHowACollectorConnects`); a `graphite` collector naming
+  no proxy is listed with `proxy: environment` and one naming `direct` with
+  `proxy: direct`, in a build with `graphite` whether or not it has `http`
+  (`TestDryRunReportsHowAGraphiteCollectorConnects`).
 - A collector that sets no other request policy is listed with `proxy:
   environment` alone (`TestDryRunReportsRequestPolicies`,
   `TestDryRunReportsRetryStatuses`, `TestDryRunReportsRetryAfter`).

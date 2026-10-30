@@ -44,6 +44,7 @@ var yamlPlaces = map[string]string{
 	"DecoderConfig":       "decoder",
 	"ErrorHandling":       "error_handling",
 	"OTLPConfig":          "otlp",
+	"OTLPLogsConfig":      "otlp.logs",
 	"Limits":              "limits",
 	"MetricRule":          "a metric rule",
 	"LabelRule":           "a label",

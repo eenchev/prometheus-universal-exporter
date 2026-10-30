@@ -75,6 +75,96 @@ type OTLPStatusDetails struct {
 	FailedAll uint64          `json:"exports_failed"`
 	// LastSuccessAge is LastSuccess as the page writes it.
 	LastSuccessAge string `json:"-"`
+	// Logs is the export of the exporter's own log (otlplogs.go).
+	Logs otlpLogsSection `json:"logs"`
+}
+
+// otlpLogsSection is the log export's part of the OTLP section:
+// {"enabled": false} alone while otlp.logs is off.
+type otlpLogsSection struct {
+	Enabled bool `json:"enabled"`
+	*OTLPLogsStatusDetails
+}
+
+// OTLPLogsStatusDetails is the log export's part while it is on, exported
+// for encoding/json as OTLPStatusDetails is. Readiness is not among it: the
+// log export does not make the exporter unready.
+type OTLPLogsStatusDetails struct {
+	// Endpoint is otlp.logs.endpoint with its credentials withheld.
+	Endpoint string `json:"endpoint"`
+	Level    string `json:"level"`
+	Interval string `json:"interval"`
+	// LastExport is when the last export began, LastResult how it went
+	// and LastRecords the records it carried.
+	LastExport  string `json:"last_export,omitempty"`
+	LastResult  string `json:"last_result,omitempty"`
+	LastRecords int    `json:"last_records,omitempty"`
+	LastSuccess string `json:"last_success,omitempty"`
+	Failing     bool   `json:"failing"`
+	Failures    int    `json:"consecutive_failures"`
+	LastError   string `json:"last_error,omitempty"`
+	LastErrorAt string `json:"last_error_at,omitempty"`
+	// Pending are the records waiting, MaxPending
+	// otlp.logs.max_pending_records.
+	Pending    int `json:"pending_records"`
+	MaxPending int `json:"max_pending_records"`
+	Sent       int `json:"records_sent"`
+	// Dropped is http_exporter_otlp_log_records_dropped_total, DroppedBy
+	// the same by why.
+	Dropped   int                `json:"records_dropped"`
+	DroppedBy otlpLogDroppedKind `json:"records_dropped_by_reason"`
+	Succeeded int                `json:"exports_succeeded"`
+	FailedAll int                `json:"exports_failed"`
+}
+
+// otlpLogDroppedKind is the log records given up on, by why
+// (otlpLogDropReason).
+type otlpLogDroppedKind struct {
+	PendingCap int `json:"over_max_pending_records"`
+	Refused    int `json:"refused"`
+	Shutdown   int `json:"last_export_at_shutdown"`
+}
+
+// otlpLogsSectionFor is the log export's part of the OTLP section with cfg
+// in force.
+func (s *Server) otlpLogsSectionFor(cfg model.OTLPConfig) otlpLogsSection {
+	if s.otlpLogs == nil || !otlpLogsOn(cfg) {
+		return otlpLogsSection{}
+	}
+	interval := time.Duration(cfg.Logs.Interval)
+	if interval <= 0 {
+		interval = model.DefaultOTLPLogsInterval
+	}
+	maxPending := cfg.Logs.MaxPendingRecords
+	if maxPending <= 0 {
+		maxPending = model.DefaultOTLPLogsMaxPendingRecords
+	}
+	d := &OTLPLogsStatusDetails{Endpoint: redactedOTLPEndpoint(cfg.Logs.Endpoint), Level: cfg.Logs.Level, Interval: interval.String(), MaxPending: maxPending}
+	l := s.otlpLogs
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	d.Pending, d.Sent, d.Succeeded, d.FailedAll = len(l.queue), l.sent, l.successes, l.failures
+	d.Dropped = l.droppedLocked()
+	d.DroppedBy = otlpLogDroppedKind{PendingCap: l.dropped[otlpLogDropPendingCap], Refused: l.dropped[otlpLogDropRefused], Shutdown: l.dropped[otlpLogDropShutdown]}
+	// The record of another endpoint is not this one's.
+	if l.endpoint != cfg.Logs.Endpoint {
+		return otlpLogsSection{Enabled: true, OTLPLogsStatusDetails: d}
+	}
+	h := l.history
+	if !h.lastStarted.IsZero() {
+		d.LastExport, d.LastResult, d.LastRecords = h.lastStarted.UTC().Format(time.RFC3339), statusFailed, h.lastRecords
+		if h.lastOK {
+			d.LastResult = statusSuccess
+		}
+	}
+	if !h.lastSuccess.IsZero() {
+		d.LastSuccess = h.lastSuccess.UTC().Format(time.RFC3339)
+	}
+	d.Failures, d.Failing, d.LastError = h.failures, h.failures > 0, h.errorText
+	if !h.failedAt.IsZero() {
+		d.LastErrorAt = h.failedAt.UTC().Format(time.RFC3339)
+	}
+	return otlpLogsSection{Enabled: true, OTLPLogsStatusDetails: d}
 }
 
 // otlpExportedKind is what the exports carry.
@@ -138,6 +228,7 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 		Allocator:    s.allocatorStatus != nil,
 		MaxPending:   maxPending,
 		UnreadyAfter: max(cfg.UnreadyAfterFailures, 0),
+		Logs:         s.otlpLogsSectionFor(cfg),
 	}
 	s.otlpMu.Lock()
 	d.Pending = s.otlpPoints

@@ -440,8 +440,9 @@ func TestTheStatusPagesOTLPJSON(t *testing.T) {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	// last_error, last_error_at and unready_since are left out when empty.
-	want := []string{"allocator_mode", "consecutive_failures", "enabled", "endpoint", "exported", "exports_failed", "exports_succeeded", "failing", "interval", "last_export", "last_success", "max_pending_points", "pending_points", "points_dropped", "points_dropped_by_reason", "protocol", "readiness", "retries", "unready_after_failures"}
+	// last_error, last_error_at and unready_since are left out when empty;
+	// logs is {"enabled": false} while otlp.logs is off.
+	want := []string{"allocator_mode", "consecutive_failures", "enabled", "endpoint", "exported", "exports_failed", "exports_succeeded", "failing", "interval", "last_export", "last_success", "logs", "max_pending_points", "pending_points", "points_dropped", "points_dropped_by_reason", "protocol", "readiness", "retries", "unready_after_failures"}
 	if !slices.Equal(keys, want) {
 		t.Errorf("the otlp object has the fields\n%v\nwant\n%v", keys, want)
 	}

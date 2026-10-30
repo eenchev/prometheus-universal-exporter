@@ -30,6 +30,13 @@ otlp:
   #   insecure_skip_verify: false
   # resource_attributes:
   #   deployment.environment: production
+  # Also send the exporter's own log lines, from this level up, to the same
+  # collector, at /v1/logs unless endpoint says otherwise. stderr is written
+  # as before.
+  # logs:
+  #   enabled: true
+  #   level: info
+  #   endpoint: http://otel-collector:4318/v1/logs
 
 # Optional exporter endpoint protection. Do not enable this together with a
 # collector using request.forward_authorization; both use the incoming

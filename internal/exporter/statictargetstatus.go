@@ -490,6 +490,28 @@ table.facts th { background: none; font-weight: 600; white-space: nowrap; }
 </tbody>
 </table>
 </div>
+<h3 id="otlp-logs">Log export</h3>
+{{- with .Logs}}
+{{- if .Enabled}}
+<p>The exporter's own log lines at {{.Level}} and above, exported every {{.Interval}}. Failing log exports do not make the exporter unready.</p>
+<div class="scroll">
+<table class="facts">
+<tbody>
+<tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}, {{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Pending</th><td>{{.Pending}} log record{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
+<tr><th>Dropped since start</th><td>{{.Dropped}} log record{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
+<tr><th>Since start</th><td>{{.Sent}} log record{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="muted">Log export is off.</p>
+{{- end}}
+{{- end}}
 {{- else}}
 <p class="muted">OTLP export is off.</p>
 {{- end}}

@@ -195,6 +195,19 @@ The numbers since the start are the
 of its own only the last export's details and the last failure's error, one
 record whatever the exports.
 
+With [`otlp.logs`](OTLP.md#the-exporters-own-log) on, a part of the section,
+**Log export**, shows the export of the exporter's own log: its endpoint, with
+its credentials withheld as `otlp.endpoint`'s are, its level and interval; when
+the last log export began, its result and the records it carried; the last
+that got through; the failed log exports in a row; the last failure's error and
+when that export began; the records waiting and `otlp.logs.max_pending_records`;
+and since the start, the records dropped, by why — over the bound, refused or
+rejected by the endpoint, and of the last export at shutdown — the records
+sent, and the exports that succeeded and failed. It says nothing of readiness,
+which the log export does not touch. A reload that changes
+`otlp.logs.endpoint` starts its record again, as for `otlp.endpoint`. With
+`otlp.logs` off it is a line saying so.
+
 A reload that changes `otlp.endpoint` shows the new endpoint at once, and
 starts that record again: no last export, last success, failures or error
 until the new endpoint's first export, as the failures that make the
@@ -221,8 +234,22 @@ export is off, and otherwise:
  "pending_points": 812, "max_pending_points": 100000,
  "points_dropped": 0,
  "points_dropped_by_reason": {"refused": 0, "rejected": 0, "over_max_pending_points": 0, "last_export_at_shutdown": 0},
- "retries": 9, "exports_succeeded": 41, "exports_failed": 2}
+ "retries": 9, "exports_succeeded": 41, "exports_failed": 2,
+ "logs": {"enabled": true,
+  "endpoint": "https://redacted:redacted@otel.example/v1/logs?token=<redacted>&tenant=acme",
+  "level": "info", "interval": "5s",
+  "last_export": "2026-10-24T08:59:55Z", "last_result": "success", "last_records": 3,
+  "last_success": "2026-10-24T08:59:55Z",
+  "failing": false, "consecutive_failures": 0,
+  "pending_records": 0, "max_pending_records": 10000, "records_sent": 4210,
+  "records_dropped": 0,
+  "records_dropped_by_reason": {"over_max_pending_records": 0, "refused": 0, "last_export_at_shutdown": 0},
+  "exports_succeeded": 512, "exports_failed": 0}}
 ```
+
+`logs` is `{"enabled": false}` alone while `otlp.logs` is off. Its
+`last_export`, `last_result`, `last_records`, `last_success`, `last_error` and
+`last_error_at` are left out when there is nothing to say.
 
 `failing` says the last export failed. `last_export`, `last_success`,
 `last_error`, `last_error_at`, `unready_after_failures`, `readiness`,

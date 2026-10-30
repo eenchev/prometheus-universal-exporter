@@ -2069,7 +2069,8 @@ databases' ports for use with `networkPolicy.egress`.
 A stopping pod needs `server.shutdownDelay` (none when empty), during which it
 answers probes while `/ready` answers `503` so Kubernetes removes it from its
 Service before it stops listening, then `server.shutdownTimeout` (the
-exporter's 15 seconds when empty), and 10 seconds more for the last OTLP export
+exporter's 15 seconds when empty), and 10 seconds more for the last OTLP export,
+the last export of the exporter's own log within the same `otlp.timeout`,
 and exiting: 30 seconds with the defaults. The chart MUST
 offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
 none while that need is 30 seconds or less, Kubernetes' default, and the need
@@ -2266,3 +2267,11 @@ The same `env` is how a proxy is set: the exporter takes `HTTPS_PROXY`,
 `HTTP_PROXY` and `NO_PROXY` from its environment (SPECIFICATION-EXPORTER.md
 § 42.15b), and the chart MUST NOT add a proxy value of its own. The chart
 README MUST show setting them.
+
+OTLP export, of metrics and of the exporter's own log (`otlp.logs`,
+SPECIFICATION-EXPORTER.md § 42.1b), is configured in the configuration the
+chart renders, and the chart MUST NOT add values of its own for it. The chart
+README MUST show an `otlp` block with `logs` switched on whose collector
+token comes from a Secret through `env` and `server.expandEnv`, and a test
+MUST render that example and load the configuration it renders, with the
+token in the environment, as the exporter does.

@@ -796,7 +796,7 @@ helm install exporter charts/prometheus-universal-exporter \
   --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 75
 ```
 
-Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds.
+Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds. With [`otlp.logs`](#otlp-export) the last export of the exporter's own log follows the metrics' within the same `otlp.timeout`, taking at least a second, which the 10 seconds cover at the default.
 
 `server.enableLifecycle` enables `/-/reload`, which, on `POST` or `PUT`, reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
@@ -1154,6 +1154,45 @@ env:
   - name: NO_PROXY
     value: .svc,.cluster.local,10.0.0.0/8
 ```
+
+### OTLP export
+
+OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers both exports send:
+
+```yaml
+server:
+  expandEnv: true
+
+env:
+  - name: OTLP_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: otel-collector-credentials
+        key: token
+
+config:
+  data:
+    config.yaml: |
+      otlp:
+        enabled: true
+        endpoint: http://otel-collector.observability:4318/v1/metrics
+        headers:
+          Authorization: Bearer ${OTLP_TOKEN}
+        logs:
+          enabled: true
+          level: info
+      collectors:
+        - name: example
+          request:
+            type: http
+          transform:
+            type: regex
+          metrics:
+            - name: example_value
+              expression: 'value=(\d+)'
+```
+
+A failing log export never makes the pod unready; the exporter's [status page](../../docs/ENDPOINTS.md#otlp-export) and the `http_exporter_otlp_log_*` [self-metrics](../../docs/SELF-METRICS.md#otlp-export-status) say how it is going. Keep the collector's name in `NO_PROXY` behind an egress proxy, as [above](#environment-variables-in-the-configuration).
 
 ### Exporter resource metrics
 

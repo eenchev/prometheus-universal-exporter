@@ -3,6 +3,7 @@ package model
 import (
 	"cmp"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -638,6 +639,57 @@ type OTLPConfig struct {
 	// exports in a row; 0, the default, leaves readiness to the configuration.
 	// At most MaxOTLPUnreadyAfterFailures.
 	UnreadyAfterFailures int `yaml:"unready_after_failures"`
+	// Logs forwards the exporter's own log over OTLP to the same collector,
+	// with the block's headers, TLS, compression and timeout
+	// (exporter/otlplogs.go).
+	Logs OTLPLogsConfig `yaml:"logs"`
+}
+
+// OTLPLogsConfig is otlp.logs: whether the exporter's own log lines are
+// exported too, where to, from which level, and how many may wait.
+type OTLPLogsConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the OTLP/HTTP logs endpoint; left out, otlp.endpoint with
+	// its /v1/metrics made /v1/logs.
+	Endpoint string `yaml:"endpoint"`
+	// Level is the least level of a line exported: debug, info, the
+	// default, warn or error, whatever --log.level writes to stderr.
+	Level    string   `yaml:"level"`
+	Interval Duration `yaml:"interval"`
+	// MaxPendingRecords bounds the lines waiting for export; past it a new
+	// line is dropped rather than waited for.
+	MaxPendingRecords int `yaml:"max_pending_records"`
+}
+
+// UnmarshalYAML reads otlp.logs, refusing settings that enabled does not
+// switch on or off (decodeSwitchedBlock).
+func (o *OTLPLogsConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain OTLPLogsConfig
+	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPLogsConfig", "otlp.logs")
+}
+
+// The defaults of otlp.logs.interval and otlp.logs.max_pending_records.
+// A log line is wanted soon after it is written, so the interval is far
+// shorter than the metrics'.
+const (
+	DefaultOTLPLogsInterval          = 5 * time.Second
+	DefaultOTLPLogsMaxPendingRecords = 10000
+)
+
+// LogLevel reads a log level as --log.level and otlp.logs.level take it:
+// debug, info, warn or error, in any case.
+func LogLevel(name string) (slog.Level, bool) {
+	switch strings.ToLower(name) {
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn":
+		return slog.LevelWarn, true
+	case "error":
+		return slog.LevelError, true
+	}
+	return slog.LevelInfo, false
 }
 
 // UnmarshalYAML reads otlp, refusing settings that enabled does not switch

@@ -2,12 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -748,6 +750,12 @@ func collectorSchemaRules() map[string]map[string]any {
 		"otlp.batch_max_size":                      {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
 		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB once the block is switched on; 0, like the key left out, is the default, 4MiB."},
 		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000."},
+		"otlp.logs":                                enabledSwitchRule(reflect.TypeOf(model.OTLPLogsConfig{}), "Export of the exporter's own log lines over OTLP/HTTP, besides stderr, with the block's headers, tls, compression, timeout, batch bounds and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporters-own-log."),
+		"otlp.logs.enabled":                        {"description": "Turn the log export on. false keeps the block's settings without using them."},
+		"otlp.logs.endpoint":                       {"description": "OTLP/HTTP logs endpoint, such as http://otel-collector:4318/v1/logs. Left out, otlp.endpoint with its /v1/metrics made /v1/logs; required when otlp.endpoint does not end in /v1/metrics."},
+		"otlp.logs.level":                          {"description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info."},
+		"otlp.logs.interval":                       {"pattern": signedDurationPattern, "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
+		"otlp.logs.max_pending_records":            {"minimum": nil, "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000."},
 		"otlp.probe_attributes":                    {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":     {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
@@ -844,8 +852,33 @@ func otlpSchemaRule() map[string]any {
 		"batch_max_bytes":        batchBytes,
 		"headers":                map[string]any{"propertyNames": headerNames()},
 		"tls":                    clientCertificatePair(),
+		"logs":                   otlpLogsOnRule(),
 	}}
 	return rule
+}
+
+// otlpLogsOnRule is what otlp.logs is held to in an otlp block switched on,
+// once it is switched on itself, as validateOTLPLogs holds it: its level is
+// one of the levels, in any case, or left out; its interval at least 1s; and
+// its max_pending_records not negative. Switched off, it is unchecked, and
+// so is the whole of it in an otlp block switched off.
+func otlpLogsOnRule() map[string]any {
+	var levels []string
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		var caseless strings.Builder
+		for _, r := range level {
+			fmt.Fprintf(&caseless, "[%c%c]", r, unicode.ToUpper(r))
+		}
+		levels = append(levels, caseless.String())
+	}
+	return map[string]any{
+		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
+		"then": map[string]any{"properties": map[string]any{
+			"level":               map[string]any{"type": "string", "pattern": "^(|" + strings.Join(levels, "|") + ")$"},
+			"interval":            map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
+			"max_pending_records": map[string]any{"minimum": 0},
+		}},
+	}
 }
 
 // metricRuleSchemaRule is what the exporter refuses of a metric rule's

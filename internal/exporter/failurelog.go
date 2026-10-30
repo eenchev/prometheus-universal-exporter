@@ -138,6 +138,9 @@ const (
 	endpointSubject = 'e'
 	exportSubject   = 'o'
 	webAuthSubject  = 'w'
+	// logExportSubject is the export of the exporter's own log over OTLP
+	// (otlpLogsKey), which has no parts: there is one.
+	logExportSubject = 'l'
 )
 
 // failureAspect is what of a subject a failure is, when it is not the

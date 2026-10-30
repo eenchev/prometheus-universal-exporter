@@ -98,6 +98,11 @@ type Server struct {
 	lifecycle bool
 	// otlp is how exports are going (otlp.go).
 	otlp *otlpStatus
+	// otlpLogs is the tee the exporter's log goes through, nil unless the
+	// exporter set one (SetOTLPLogs), and otlpLogsLogger the logger beneath
+	// it, to stderr alone, that the log export logs to (otlplogs.go).
+	otlpLogs       *OTLPLogs
+	otlpLogsLogger *slog.Logger
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
 	// scrapesCtx is what static target scrapes run under, until

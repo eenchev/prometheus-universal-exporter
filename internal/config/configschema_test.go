@@ -163,7 +163,7 @@ func TestTheDurationPatternsTakeWhatTheExporterReads(t *testing.T) {
 // schemas took text alone. The keys are found by their type, so a duration
 // key added to a file is held to this without anyone adding it here.
 func TestEveryDurationKeyTakesTextOrTheNumberZero(t *testing.T) {
-	signed := map[string]bool{".otlp.timeout": true, ".otlp.interval": true}
+	signed := map[string]bool{".otlp.timeout": true, ".otlp.interval": true, ".otlp.logs.interval": true}
 	keys := 0
 	var walk func(typ reflect.Type, schema map[string]any, path string)
 	walk = func(typ reflect.Type, schema map[string]any, path string) {

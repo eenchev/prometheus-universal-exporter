@@ -53,6 +53,18 @@ var otlpKeys = map[string]struct {
 	"max_pending_points":     {checked: []otlpValue{{"-1", ""}, {"-100000", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}, {"1001", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"batch_max_size":         {checked: []otlpValue{{"-1", ""}, {"-8192", ""}}, noValue: []string{"1.5", "many", "[1]"}},
+	// The logs block is checked once it is switched on itself, in a block
+	// switched on: an endpoint that is no URL by the exporter alone. A logs
+	// block that sets a key without enabled, or a key it does not have,
+	// is refused off and on, as the otlp block is.
+	"logs": {
+		checked: []otlpValue{
+			{"{enabled: true, level: verbose}", ""}, {"{enabled: true, level: 5}", ""}, {"{enabled: true, interval: 500ms}", ""}, {"{enabled: true, interval: -1s}", ""},
+			{"{enabled: true, max_pending_records: -1}", ""}, {"{enabled: true, endpoint: not-a-url}", "otlp.logs.endpoint must be an http or https URL"},
+			{"{enabled: true, interval: 400ms400ms}", "otlp.logs.interval 800ms is under the least, 1s"},
+		},
+		noValue: []string{"x", "[a]", "{level: debug}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, interval: soon}", "{enabled: true, max_pending_records: many}"},
+	},
 	// A size written as text is held to the least by both, as one
 	// written as a number is.
 	"batch_max_bytes": {
@@ -123,7 +135,8 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 		t.Errorf("the table has %d keys, and the block %d beside enabled", len(otlpKeys), fields.NumField()-1)
 	}
 	// Values in order, off and on.
-	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB"} {
+	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB",
+		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`} {
 		key, value, _ := strings.Cut(setting, ": ")
 		agree(t, schema, "otlp."+setting+", switched off", block(false, key, value), true)
 		agree(t, schema, "otlp."+setting+", switched on", block(true, key, value), true)

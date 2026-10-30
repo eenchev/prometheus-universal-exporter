@@ -377,6 +377,23 @@ func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet
 // retried. It returns the number of retries made, and the partial success the
 // endpoint reported when it accepted the request without some of it.
 func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
+	return s.deliverOTLPOf(ctx, otlpMetricsSignal(s.logger), cfg, body, deadline)
+}
+
+// otlpSignal is what an export of metrics and one of logs are sent apart
+// by: what the endpoint's partialSuccess counts the rejected in, and the
+// logger a retry is logged to. The export of the exporter's own log logs
+// to stderr alone (otlplogs.go), or each retry of it would be a line to
+// export.
+type otlpSignal struct {
+	logs   bool
+	logger *slog.Logger
+}
+
+func otlpMetricsSignal(logger *slog.Logger) otlpSignal { return otlpSignal{logger: logger} }
+
+// deliverOTLPOf is deliverOTLP for the signal, to cfg.Endpoint.
+func (s *Server) deliverOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
 	timeout := time.Duration(cfg.Timeout)
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -384,7 +401,7 @@ func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []b
 	tlsSettings := cfg.TLS
 	for retries := 0; ; retries++ {
 		attempt := min(timeout, time.Until(deadline))
-		answer, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
+		answer, err := s.sendOTLPOf(ctx, signal, cfg, tlsSettings, body, attempt)
 		if err == nil || !answer.retryable {
 			return retries, answer.partial, err
 		}
@@ -396,7 +413,7 @@ func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []b
 		if time.Until(deadline) < wait+otlpMinAttempt {
 			return retries, otlpPartialSuccess{}, err
 		}
-		s.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
+		signal.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -480,8 +497,8 @@ type otlpPartialSuccess struct {
 // ExportMetricsServiceResponse or an error Status is far smaller.
 const otlpResponseLimit = 1 << 20
 
-// sendOTLP makes one attempt.
-func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
+// sendOTLPOf makes one attempt of an export of the signal.
+func (s *Server) sendOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
 	// One connection to the collector is reused from export to export.
 	// Redirects are not followed: Go would send otlp.headers, which carry
 	// the endpoint's API keys and tenant, and the body to wherever the
@@ -517,7 +534,7 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return otlpAnswer{partial: partialSuccess(answer, resp.Header.Get("Content-Type"))}, nil
+		return otlpAnswer{partial: partialSuccessOf(answer, resp.Header.Get("Content-Type"), signal.logs)}, nil
 	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
 		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
 		return otlpAnswer{retryable: true, wait: retryAfter(resp.Header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
@@ -531,7 +548,11 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 // partialSuccess reads the partialSuccess of a JSON export response. An
 // answer that is empty, is not JSON, or does not carry one is a full success:
 // the field is optional, and a protobuf answer is not read.
-func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
+//
+// It reads an ExportMetricsServiceResponse, or when logs says so an
+// ExportLogsServiceResponse, which counts what it rejected in
+// rejectedLogRecords.
+func partialSuccessOf(body []byte, contentType string, logs bool) otlpPartialSuccess {
 	if len(bytes.TrimSpace(body)) == 0 || contentType != "" && !strings.Contains(strings.ToLower(contentType), "json") {
 		return otlpPartialSuccess{}
 	}
@@ -540,6 +561,7 @@ func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
 			// OTLP/JSON writes an int64 as a string, and a number is
 			// accepted too; json.Number reads either.
 			RejectedDataPoints json.Number `json:"rejectedDataPoints"`
+			RejectedLogRecords json.Number `json:"rejectedLogRecords"`
 			ErrorMessage       string      `json:"errorMessage"`
 		} `json:"partialSuccess"`
 	}
@@ -549,7 +571,11 @@ func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
 		return otlpPartialSuccess{}
 	}
 	partial := otlpPartialSuccess{message: response.PartialSuccess.ErrorMessage}
-	if rejected, err := strconv.ParseInt(strings.Trim(string(response.PartialSuccess.RejectedDataPoints), `"`), 10, 64); err == nil && rejected > 0 {
+	count := response.PartialSuccess.RejectedDataPoints
+	if logs {
+		count = response.PartialSuccess.RejectedLogRecords
+	}
+	if rejected, err := strconv.ParseInt(strings.Trim(string(count), `"`), 10, 64); err == nil && rejected > 0 {
 		partial.rejected = rejected
 	}
 	return partial
@@ -1699,14 +1725,19 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 
 // FlushOTLP makes the last export at shutdown: the metrics probes queued since
 // the last export, and a final self-metric snapshot, within otlp.timeout.
-// Static targets are not scraped again.
+// Static targets are not scraped again. With otlp.logs, the log records
+// waiting follow, in what is left of otlp.timeout (flushOTLPLogs).
 func (s *Server) FlushOTLP() {
 	cfg := s.manager.Get().OTLP
 	if !cfg.Enabled || cfg.Endpoint == "" {
 		return
 	}
 	s.logger.Info("sending the last OTLP export before exiting")
+	start := time.Now()
 	s.exportOTLPOnce(context.Background(), time.Duration(cfg.Timeout), true)
+	// The log export's last is within the same otlp.timeout, after the
+	// metrics', so the lines that one logged go with it.
+	s.flushOTLPLogs(cfg, start.Add(time.Duration(cfg.Timeout)))
 }
 
 // exportOTLP sends everything pending, with a self-metric snapshot, retrying

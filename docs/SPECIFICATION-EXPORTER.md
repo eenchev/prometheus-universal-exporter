@@ -7642,6 +7642,25 @@ every request and retry included, and the timestamp that of the last export that
 the last export delivers its data. These families MUST be part of the one
 self-metric set, so they are also exported over OTLP.
 
+While the export of the exporter's own log is on as well (`otlp.logs`,
+§ 42.1b), and only then, the exporter MUST publish:
+
+```text
+http_exporter_otlp_log_exports_total{result}     counter
+http_exporter_otlp_log_records_sent_total        counter
+http_exporter_otlp_log_records_dropped_total     counter
+```
+
+A log export is one delivery of the records waiting, however many requests
+it is sent in, counted once by `result` as an export of metrics is; an
+interval with no record waiting MUST make none. The records the endpoint
+accepted MUST be counted as sent, less those it rejected in a
+`partialSuccess`. A record dropped because it found
+`otlp.logs.max_pending_records` waiting, because it was the oldest past it
+after a failed export, because the endpoint refused its request or rejected
+it, or because the last log export at shutdown failed, MUST be counted as
+dropped; records kept for the next export MUST NOT be.
+
 ### 22.0d Build information
 
 The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
@@ -8100,7 +8119,8 @@ Recommended behavior:
   changes `otlp.endpoint` starts the count again, and a negative value, or
   one over 1000, MUST be rejected: the status page keeps when each failure
   of a run ended, up to the most the threshold may be, to say when the
-  exporter became unready under any threshold (§ 42.14a). A `503` body MUST name each reason on a line of its
+  exporter became unready under any threshold (§ 42.14a). Failing exports of
+  the exporter's own log (§ 42.1b) MUST NOT make it unready. A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration. A rejected reload of the configuration or of the
@@ -9308,6 +9328,10 @@ The configured log level MUST apply to those lines too. `--log.level` MUST be
 one of `debug`, `info`, `warn` and `error`, matched case-insensitively; any
 other value MUST be refused as a malformed command line, with exit status 2
 before `--dry-run` or startup, rather than falling back to `info`.
+
+With `otlp.logs` (§ 42.1b) the lines MUST also be exported over OTLP, through
+the logger installed as the process default, so the default logger's lines
+are exported too; stderr MUST be written exactly as it is without it.
 
 A logged metric extraction failure MUST name the collector as well as the rule.
 A metric name is not unique across collectors — the same rule is often copied
@@ -29912,6 +29936,58 @@ of their series' keys still. With `otlp.probe_attributes`, the points of one
 probe MUST share one copy of its target attribute, and MUST NOT keep any
 more of the probe's request than that copy.
 
+### 42.1b The exporter's own log
+
+With `otlp.logs.enabled` true in an `otlp` block switched on, the exporter
+MUST export its own log lines as OTLP log records, besides writing them to
+stderr as it does without it, and MUST NOT add a dependency for it.
+`otlp.logs` is a block `enabled` switches (§ 42.1): one that sets another key
+without it MUST be refused, and one switched off, or in an `otlp` block
+switched off, MUST be kept unchecked, by the exporter and the schema alike.
+
+- The records MUST be sent as OTLP/HTTP JSON `ExportLogsServiceRequest`s to
+  `otlp.logs.endpoint`, which left out MUST be `otlp.endpoint` with its
+  trailing `/v1/metrics` made `/v1/logs`; an `otlp.endpoint` without that
+  path and no `otlp.logs.endpoint` MUST be refused when the configuration
+  loads. The requests MUST carry the `otlp` block's headers, TLS and
+  compression, be bounded by its timeout, be retried, refused and dropped by
+  the rules of § 42.1a, and be split by `otlp.batch_max_size` records and
+  `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
+- Each record MUST be under the resource the exporter's own metrics are
+  under (`otlp.service_name` and `otlp.resource_attributes`), and carry the
+  line's time, the time it was taken as its observed time, the OTLP severity
+  number of its slog level — DEBUG 5, INFO 9, WARN 13, ERROR 17, a level
+  between them as far from theirs, within 1 to 24 — with the level's name as
+  the severity text, the message as its body, and the line's attributes,
+  each a string, an int, a double or a bool as its value is, and an
+  attribute of a group named after the group and a dot. A value JSON has no
+  number for, a whole number past an int, a duration, a time and an error
+  MUST be strings.
+- Only the lines at or above `otlp.logs.level` — `debug`, `info`, `warn` or
+  `error`, in any case, `info` by default, any other value refused — MUST be
+  exported, whatever `--log.level` writes to stderr.
+- Logging MUST NOT wait for the export: the records waiting MUST be bounded
+  by `otlp.logs.max_pending_records`, 10000 by default, a negative value
+  refused, and a line that finds the bound reached MUST be dropped and
+  counted (§ 22.0c). They MUST be sent every `otlp.logs.interval`, 5 seconds
+  by default and at least 1 second, in the background. What an export could
+  not deliver for a reason worth retrying MUST wait for the next export,
+  before the lines logged since, the oldest dropped past the bound.
+- What the export logs of itself MUST NOT be exported, so that a failing
+  collector cannot feed the export lines about itself: it MUST be written to
+  stderr alone, and logged as a repeated failure (§ 25), once and then at
+  most every five minutes, with a recovery line when an export gets through
+  again.
+- A reload that switches `otlp.logs` off MUST stop taking lines at once and
+  drop those waiting; one that switches it on MUST take the lines logged
+  from then on.
+- At shutdown, after the metrics' last export (§ 42.1a), the records waiting
+  MUST be sent in a last export within what is left of the same
+  `otlp.timeout`, and at least a second; when it fails its records MUST be
+  dropped and counted. No line logged after it is exported.
+- The log export MUST NOT change readiness (§ 23), and its state MUST be on
+  the status page (§ 42.14a).
+
 ## 42.2 CSV transformation
 
 CSV MUST be usable without CSS or Python for the common case. The CSV decoder
@@ -31680,6 +31756,19 @@ Of the OTLP export:
   export is failing, with the failed exports in a row and whether the
   exporter is unready.
 - In allocator mode the section MUST say the exports are this replica's.
+- With `otlp.logs` on, the section MUST show the log export (§ 42.1b): its
+  endpoint with its credentials withheld as `otlp.endpoint`'s are, its level
+  and interval, when the last log export began with its result and the
+  records it carried, the last that got through, the failed log exports in
+  a row, the last failure's error with when that export began, shown as an
+  export's error is, the records waiting and `otlp.logs.max_pending_records`,
+  and since the start the records dropped, in all and by why (over the
+  bound, refused or rejected, of the last export at shutdown), the records
+  sent and the log exports that succeeded and failed, from the counters of
+  § 22.0c; nothing of readiness. In the JSON it MUST be the `otlp` object's
+  `logs`, `{"enabled": false}` alone while `otlp.logs` is off, as the
+  section MUST then say in one line. A reload that changes
+  `otlp.logs.endpoint` MUST start its record again.
 - Every value MUST be HTML-escaped, and `?format=json` MUST give the section
   as `otlp`.
 

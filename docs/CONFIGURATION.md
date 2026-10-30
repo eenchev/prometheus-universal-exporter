@@ -7,6 +7,8 @@ metrics to publish — and, optionally, the exporter's own settings under `web`
 and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
+`otlp` exports probe results, the exporter's own metrics and, with
+`otlp.logs`, its own log over [OTLP](OTLP.md).
 
 The top-level keys are `collectors`, `collector_files`,
 [`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
@@ -5664,7 +5666,9 @@ when the exporter should be sent probes, and `503` when it should not, with one
   current endpoint failed in a row, retries included (see
   [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
   is off by default, since an exporter whose exports fail still answers
-  probes, and at most 1000.
+  probes, and at most 1000. It counts the metrics' exports alone: failing
+  exports of the exporter's own log ([`otlp.logs`](OTLP.md#the-exporters-own-log))
+  never make the exporter unready.
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.
@@ -5740,6 +5744,8 @@ through the delay.
 Then it stops accepting connections, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
+followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
+export of its own log within the same `otlp.timeout`,
 and exits `0`. It logs that it is shutting down, and, when the timeout runs
 out with probes still in progress, that it closed them — Prometheus records
 those as failed scrapes. Keep the timeout at least as long as the longest

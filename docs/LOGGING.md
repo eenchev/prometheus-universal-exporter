@@ -10,6 +10,10 @@ word):
 {"time":"2026-09-18T21:49:54+03:00","level":"WARN","msg":"metric extraction failed","collector":"exchange_rates","target":"https://api.frankfurter.dev/v1/latest","url":"https://api.frankfurter.dev/v1/latest","metric":"exchange_rate_observation_timestamp_seconds","error_mode":"log","failures":1,"error":"metric \"exchange_rate_observation_timestamp_seconds\" value is missing"}
 ```
 
+With [`otlp.logs`](OTLP.md#the-exporters-own-log) the same lines are also
+sent over OTLP, as log records, from `otlp.logs.level` up; stderr is written
+as it is without it, and the export's own lines are written to stderr alone.
+
 There is no second format. That is worth stating because it is easy to lose:
 code deep inside a transform, several calls below anything holding a logger,
 can still reach Go's default logger. The exporter installs its JSON logger as

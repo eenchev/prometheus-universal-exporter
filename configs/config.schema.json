@@ -4678,6 +4678,9 @@
         "interval": [
           "enabled"
         ],
+        "logs": [
+          "enabled"
+        ],
         "max_pending_points": [
           "enabled"
         ],
@@ -4765,6 +4768,61 @@
             "string",
             "integer"
           ]
+        },
+        "logs": {
+          "additionalProperties": false,
+          "dependentRequired": {
+            "endpoint": [
+              "enabled"
+            ],
+            "interval": [
+              "enabled"
+            ],
+            "level": [
+              "enabled"
+            ],
+            "max_pending_records": [
+              "enabled"
+            ]
+          },
+          "description": "Export of the exporter's own log lines over OTLP/HTTP, besides stderr, with the block's headers, tls, compression, timeout, batch bounds and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporters-own-log.",
+          "properties": {
+            "enabled": {
+              "description": "Turn the log export on. false keeps the block's settings without using them.",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "description": "OTLP/HTTP logs endpoint, such as http://otel-collector:4318/v1/logs. Left out, otlp.endpoint with its /v1/metrics made /v1/logs; required when otlp.endpoint does not end in /v1/metrics.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "interval": {
+              "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "level": {
+              "description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "max_pending_records": {
+              "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000.",
+              "type": "integer"
+            }
+          },
+          "type": "object"
         },
         "max_pending_points": {
           "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000.",
@@ -4889,6 +4947,39 @@
               "type": "string"
             },
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+          },
+          "logs": {
+            "if": {
+              "properties": {
+                "enabled": {
+                  "const": true
+                }
+              },
+              "required": [
+                "enabled"
+              ]
+            },
+            "then": {
+              "properties": {
+                "interval": {
+                  "not": {
+                    "not": {
+                      "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                    },
+                    "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                    "type": "string"
+                  },
+                  "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+                },
+                "level": {
+                  "pattern": "^(|[dD][eE][bB][uU][gG]|[iI][nN][fF][oO]|[wW][aA][rR][nN]|[eE][rR][rR][oO][rR])$",
+                  "type": "string"
+                },
+                "max_pending_records": {
+                  "minimum": 0
+                }
+              }
+            }
           },
           "max_pending_points": {
             "minimum": 0

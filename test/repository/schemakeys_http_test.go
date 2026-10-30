@@ -295,6 +295,9 @@ func httpSchemaKeys() []schemaKey {
 		{key: "otlp.interval", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  interval: %s\n", valid: "1s", invalid: "999ms", absent: true, invalidWas: taken},
 		{key: "otlp.timeout", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.interval", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.logs.interval", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: true\n    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.logs.interval", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: true\n    interval: %s\n", valid: "1s", invalid: "999ms", absent: true},
+		{key: "otlp.logs.interval", of: "switched off", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: false\n    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 
 		// The target file. A target's name left out is made of its
 		// collector and its place; its collector is required.

@@ -67,6 +67,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `proxy_url`, from its own request or its file's `defaults`, `direct`, or
   `environment` when it follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` —
   with the paths of `proxy_basic_auth_file`, never the credentials.
+- `otlp.logs` sends the exporter's own log lines over OTLP as well, to the
+  collector its metrics go to (`/v1/logs`), from `otlp.logs.level` up, with
+  the `otlp` block's headers, TLS and retries; stderr is written as before.
+  Logging never waits for it: a line that finds `max_pending_records` waiting
+  is dropped and counted (`http_exporter_otlp_log_*`), and the status page
+  shows the log export. It never makes the exporter unready.
 
 ### Fixed
 

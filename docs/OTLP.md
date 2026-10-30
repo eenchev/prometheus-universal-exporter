@@ -25,7 +25,13 @@ otlp:
   # resource_attributes:
   #   deployment.environment: production
   # probe_attributes: false
+  # logs:
+  #   enabled: true
+  #   level: info
 ```
+
+`logs` forwards the exporter's own log too; see
+[The exporter's own log](#the-exporters-own-log).
 
 `enabled` is the switch, and a block that sets anything must say it: `true`
 exports, `false` keeps the settings without using or checking them: a block
@@ -377,3 +383,106 @@ scrapes left since the last one: they are scraped on their own intervals, not
 on `otlp.interval`. A target that sets `export_via_otlp` while OTLP export is
 disabled or has no endpoint stops the exporter at startup, and a reload that
 would disable OTLP export while one is loaded is rejected.
+
+## The exporter's own log
+
+With `otlp.logs`, the exporter sends its own log lines over OTLP as well, to
+the collector its metrics go to, as OTLP log records. stderr keeps every line
+as it was:
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  logs:
+    enabled: true
+    # endpoint: http://otel-collector:4318/v1/logs
+    # level: info
+    # interval: 5s
+    # max_pending_records: 10000
+```
+
+`logs` is switched by its own `enabled`, as the `otlp` block is: a `logs`
+block that sets anything must say it, and one with `enabled: false` keeps its
+settings unchecked. It is used only while the `otlp` block is switched on,
+and takes that block's `headers`, `tls`, `compression`, `timeout`,
+`batch_max_size`, `batch_max_bytes`, `service_name` and
+`resource_attributes`: the records are under the resource the exporter's own
+metrics are under, with the scope `prometheus-universal-exporter`. Its own
+keys:
+
+- `endpoint` is the OTLP/HTTP logs endpoint. Left out, it is `otlp.endpoint`
+  with its `/v1/metrics` made `/v1/logs`, the collector's standard path for
+  logs, its query kept; an `otlp.endpoint` that does not end in `/v1/metrics`
+  has no such path, so `endpoint` is then required, and its absence refused
+  when the configuration loads. The export is OTLP/HTTP with a JSON body, as
+  the metrics' is: the exporter speaks no gRPC.
+- `level` is the least level of a line exported, `debug`, `info`, `warn` or
+  `error` in any case, `info` by default, whatever `--log.level` writes to
+  stderr: with `level: debug` and `--log.level=info` the debug lines are
+  exported and not written, and with `level: warn` the info lines are written
+  and not exported.
+- `interval` is how often the records waiting are sent, `5s` by default and
+  at least `1s`.
+- `max_pending_records` bounds the records waiting, `10000` by default.
+
+Each line is one record: its time, and as its observed time when the export
+took it; its level as the severity number the OTLP specification gives a
+slog level — `DEBUG` 5, `INFO` 9, `WARN` 13, `ERROR` 17 — with the level's
+name as the severity text; its message as the body; and its attributes, each
+of its own type: text as a string, a whole number as an int, a number with a
+fraction as a double, `true` and `false` as a bool. A whole number past the
+range of an int, and a number that is not one or is infinite, is a string, as
+are a duration (`1.5s`), a time (RFC 3339) and an error (its text). An
+attribute of a group is named after the group and a dot, `group.key`, as
+stderr's JSON nests it. The lines say what stderr says, credentials withheld
+alike: the redaction is where a line is made, not in what writes it.
+
+Logging never waits for the export. A line is queued as it is written, and one
+that finds `max_pending_records` waiting is dropped and counted in
+`http_exporter_otlp_log_records_dropped_total` rather than waited for: a
+collector that is down holds up nothing but the records. An export sends
+everything waiting, in requests of at most `otlp.batch_max_size` records and
+`otlp.batch_max_bytes` of JSON before compression, one after another, and an
+interval with nothing waiting sends nothing. Retries are those of the metrics'
+export ([Delivery](#delivery)): a request that fails with a network error,
+`429`, `502`, `503` or `504` is tried again within the interval, and what was
+not delivered when they run out waits for the next export, before the lines
+logged since, the oldest dropped and counted past `max_pending_records`. A
+request the endpoint refuses with any other answer, or a redirect, is dropped
+and counted, and so are the records the endpoint rejects in a
+`partialSuccess` (its `rejectedLogRecords`).
+
+The export's own lines are not exported: what it logs of itself — a failure,
+a retry at debug level, a recovery — is written to stderr alone, and says so
+(`this line is not exported`). A collector that is down would otherwise have
+each failed export queue a line about itself for the next one, which fails
+too. A failure is a [repeated failure](LOGGING.md#repeated-failures), logged
+once and then every five minutes while it goes on:
+
+```json
+{"level":"WARN","msg":"OTLP log export failed; its log records are kept for the next export; this line is not exported","endpoint":"http://otel-collector:4318/v1/logs","records":12,"retries":2,"kept_records":12,"error":"the OTLP endpoint answered 503"}
+{"level":"INFO","msg":"OTLP log export recovered; this line is not exported","endpoint":"http://otel-collector:4318/v1/logs","stage":"export","failed_for":"1m0s","failures":12}
+```
+
+The lines the metrics' export logs are the exporter's like any other, and are
+exported: a warning that a metrics export failed reaches the backend with the
+next log export that gets through.
+
+Failing log exports never make the exporter unready, whatever
+`otlp.unready_after_failures` says: that counts the metrics' exports alone. The
+log export's state is in the [self-metrics](SELF-METRICS.md#otlp-export-status)
+and on the [status page](ENDPOINTS.md#otlp-export).
+
+A reload that switches `logs` off stops taking lines at once and drops those
+waiting, uncounted, as the metrics' export drops what waits while it is off; one
+that switches it on takes the lines logged from then on. A reload that changes
+the endpoint sends what waits to the new one. The lines logged while the
+configuration is first read, before the exporter knows the export is on, are
+on stderr alone.
+
+At shutdown, the records waiting are sent after the metrics'
+[last export](#shutting-down), with the lines that one logged among them,
+within the same `otlp.timeout`: the log export has what the metrics' leaves of
+it, and at least a second. If it fails, its records are dropped and counted.
+Nothing logged after it is exported.

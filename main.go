@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 	// The IANA time zones, for a rule's time_zone: carried in the binary, so
@@ -242,7 +241,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		staticTargetsLoadOptions = append(staticTargetsLoadOptions, config.WithStaticTargetsEnvExpansion())
 	}
 
-	logger := newLogger(*logLevel, stderr)
+	logger, otlpLogs := newExporterLogger(*logLevel, stderr)
 	if *check {
 		// In allocator mode the files checked are the bundle in the cache
 		// directory, which a restart would start with.
@@ -318,6 +317,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)
+	server.SetOTLPLogs(otlpLogs)
 	server.SetSelfMetricsPath(selfMetricsEndpoint)
 	server.SetStaticTargetsPath(staticTargetsEndpoint)
 	server.SetTimeoutOffset(*timeoutOffset)
@@ -359,6 +359,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go func() {
 		defer close(scrapeLoopDone)
 		server.StaticScrapeLoop(loopsCtx)
+	}()
+	logExportLoopDone := make(chan struct{})
+	go func() {
+		defer close(logExportLoopDone)
+		server.OTLPLogExportLoop(loopsCtx)
 	}()
 	// The allocator client heartbeats and takes new bundles until run
 	// returns: through --web.shutdown-delay too, its heartbeats saying the
@@ -444,6 +449,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// bounded by otlp.timeout.
 		<-exportLoopDone
 		<-scrapeLoopDone
+		<-logExportLoopDone
 		// The allocator client stops once nothing is served any more, and is
 		// waited for: a bundle it is writing is put in force or refused
 		// before the process ends, rather than left half written.
@@ -468,15 +474,8 @@ var waitOutShutdownDelay = time.Sleep
 
 // parseLogLevel reads --log.level: debug, info, warn or error, in any case.
 func parseLogLevel(level string) (slog.Level, error) {
-	switch strings.ToLower(level) {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
+	if l, ok := model.LogLevel(level); ok {
+		return l, nil
 	}
 	return slog.LevelInfo, fmt.Errorf("--log.level %q is not a level; use debug, info, warn or error", level)
 }
@@ -494,6 +493,17 @@ func newLogger(level string, out io.Writer) *slog.Logger {
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
 	slog.SetDefault(logger)
 	return logger
+}
+
+// newExporterLogger is newLogger for the running exporter: its lines go
+// through the tee that exports them over OTLP when otlp.logs says so, as
+// well as to out, and so do those of slog's default logger.
+func newExporterLogger(level string, out io.Writer) (*slog.Logger, *exporter.OTLPLogs) {
+	l, _ := parseLogLevel(level)
+	logs := exporter.NewOTLPLogs(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
+	logger := slog.New(logs.Handler())
+	slog.SetDefault(logger)
+	return logger, logs
 }
 
 // shutdownMessage is the line the graceful shutdown begins with: the probes in

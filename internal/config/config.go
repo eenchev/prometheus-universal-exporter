@@ -1074,7 +1074,38 @@ func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	default:
 		return fmt.Errorf("otlp.compression must be %s or %s, not %q", model.OTLPCompressionGzip, model.OTLPCompressionNone, o.Compression)
 	}
+	switch o.MetricNames {
+	case "":
+		o.MetricNames = model.OTLPMetricNamesPrometheus
+	case model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel:
+	default:
+		return fmt.Errorf("otlp.metric_names must be %s or %s, not %q", model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel, o.MetricNames)
+	}
+	if err := checkOTLPScope(o.Scope); err != nil {
+		return err
+	}
 	return validateOTLPLogs(&o.Logs, u)
+}
+
+// checkOTLPScope checks otlp.scope, when it is written: a scope is known by
+// its name, which an empty one would not give it, and the name and the
+// version are sent as written, where a control character is nothing a
+// backend shows.
+func checkOTLPScope(scope *model.OTLPScopeConfig) error {
+	if scope == nil {
+		return nil
+	}
+	if scope.Name == "" {
+		return fmt.Errorf("otlp.scope.name is required when otlp.scope is written; leave scope out for the default, %s", model.DefaultOTLPScopeName)
+	}
+	for _, key := range []struct{ name, value string }{{"name", scope.Name}, {"version", scope.Version}} {
+		for _, r := range key.value {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("otlp.scope.%s has the control character %q in it", key.name, r)
+			}
+		}
+	}
+	return nil
 }
 
 // validateOTLPLogs checks otlp.logs, of a block switched on whose endpoint is

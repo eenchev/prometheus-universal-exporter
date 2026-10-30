@@ -762,6 +762,12 @@ func collectorSchemaRules() map[string]map[string]any {
 		// and the two numbers above any whole number, and otlpSchemaRule
 		// holds them to their values in a block that is switched on.
 		"otlp.compression": {"description": "Compression of the export requests: gzip, the default, or none."},
+		// So do metric_names and scope, which otlpSchemaRule holds to
+		// their values in a block switched on.
+		"otlp.metric_names":  {"description": "How the export names metrics: prometheus, the default, as the exposition writes them; or otel, as OpenTelemetry names them, a counter without its _total and a unit suffix such as _seconds or _bytes moved into the metric's unit. See docs/OTLP.md#metric-names."},
+		"otlp.scope":         {"description": "The instrumentation scope the export's metrics and log records are sent under. Left out, the name prometheus-universal-exporter without a version; written, name is required. See docs/OTLP.md#instrumentation-scope."},
+		"otlp.scope.name":    {"description": "The scope's name, not empty and without a control character once the block is switched on."},
+		"otlp.scope.version": {"description": "The scope's version, without a control character once the block is switched on; left out, the scope has none."},
 		// A disabled block may hold any duration, so the two keys take a
 		// signed one, and otlpSchemaRule refuses a negative one of a block
 		// that is switched on.
@@ -807,7 +813,9 @@ func collectorSchemaRules() map[string]map[string]any {
 // negative, whose compression is then one of its values, whose
 // max_pending_points, unready_after_failures and batch_max_size are then not
 // negative, whose unready_after_failures is then at most its most, whose
-// interval is then at least 1s, whose batch_max_bytes is then 0 or at least
+// interval is then at least 1s, whose metric_names is then one of its
+// values, whose scope then has a name without a control character and a
+// version without one, whose batch_max_bytes is then 0 or at least
 // its least (leastSizeRule), whose tls is then a client certificate with its
 // key or neither (clientCertificatePair), and whose headers' names are then
 // header names (headerNames), as the exporter checks them then
@@ -853,9 +861,18 @@ func otlpSchemaRule() map[string]any {
 		"headers":                map[string]any{"propertyNames": headerNames()},
 		"tls":                    clientCertificatePair(),
 		"logs":                   otlpLogsOnRule(),
+		"metric_names":           map[string]any{"enum": optionalEnum([]string{model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel})},
+		"scope": map[string]any{"required": []string{"name"}, "properties": map[string]any{
+			"name":    map[string]any{"minLength": 1, "pattern": noControlCharacters},
+			"version": map[string]any{"pattern": noControlCharacters},
+		}},
 	}}
 	return rule
 }
+
+// noControlCharacters is text without a control character of ASCII, which
+// otlp.scope's name and version may not hold (checkOTLPScope).
+const noControlCharacters = `^[^\x00-\x1F\x7F]*$`
 
 // otlpLogsOnRule is what otlp.logs is held to in an otlp block switched on,
 // once it is switched on itself, as validateOTLPLogs holds it: its level is
@@ -1116,6 +1133,8 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.retry.retry_after":               {"description": "http and graphite: replaces the collector's request.retry.retry_after for this target."},
 		"targets[].request.retry.non_idempotent":            {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                                    {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
+		"targets[].otlp.labels_as_resource":                 {"uniqueItems": true, "description": "Labels of the target's labels that its resource carries as attributes in place of the target's data points, each named once. Not one its resource has as an attribute already, from otlp.resource_attributes here or exporter-wide; that, and a name that is not among the target's labels, the exporter checks. See docs/OTLP.md#static-target-labels-as-resource-attributes."},
+		"targets[].otlp.instance_id":                        {"description": "Give the target's resource the attribute service.instance.id, the target's name, so every target is a resource of its own. Not beside a service.instance.id of otlp.resource_attributes. Defaults to false."},
 		"targets[].shard_key":                               {"description": "For the target allocator (pue-allocator): what it hashes to choose the replica that scrapes this target, in place of the target's name, so targets with one key share a replica. The exporter itself ignores it. See docs/ALLOCATOR.md."},
 	})
 }

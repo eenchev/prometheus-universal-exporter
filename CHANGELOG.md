@@ -79,6 +79,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   tab is hidden, and saying when it last refreshed or that a refresh failed.
   `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
   interval a URL without one gets; off by default.
+- `otlp.metric_names: otel` names the OTLP export's metrics as OpenTelemetry
+  does: a counter without its `_total`, and a unit suffix such as `_seconds`
+  or `_bytes_per_second` moved into the metric's unit (`s`, `By/s`). The
+  default, `prometheus`, keeps the names as they are.
+- `otlp.scope` sets the instrumentation scope's name and version of the
+  exported metrics and log records; left out, it is
+  `prometheus-universal-exporter` without a version, as before.
+- A static target's `otlp.labels_as_resource` moves labels of its own from
+  every exported data point to its OTLP resource, and `otlp.instance_id: true`
+  gives the resource `service.instance.id`, the target's name.
 
 ### Fixed
 

@@ -182,6 +182,17 @@ func (r *TargetRetryConfig) Over(collector RetryConfig) RetryConfig {
 type TargetOTLPConfig struct {
 	ServiceName        string            `yaml:"service_name"`
 	ResourceAttributes map[string]string `yaml:"resource_attributes"`
+	// LabelsAsResource names labels of the target's own that its resource
+	// carries as attributes in place of every data point of the target.
+	LabelsAsResource []string `yaml:"labels_as_resource"`
+	// InstanceID gives the target's resource the attribute
+	// service.instance.id, the target's name.
+	InstanceID bool `yaml:"instance_id"`
+}
+
+// Set reports whether the block sets anything.
+func (o TargetOTLPConfig) Set() bool {
+	return o.ServiceName != "" || len(o.ResourceAttributes) > 0 || len(o.LabelsAsResource) > 0 || o.InstanceID
 }
 
 // UnmarshalYAML records whether path and body were present, because an empty

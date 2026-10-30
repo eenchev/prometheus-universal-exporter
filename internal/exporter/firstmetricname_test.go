@@ -273,7 +273,7 @@ func TestAnOTLPNameOfTwoKindsIsNamedByItsFirst200BytesAndItsLength(t *testing.T)
 	within, first, second := strings.Repeat("w", 200), strings.Repeat("m", 100<<10)+"_a", strings.Repeat("m", 100<<10)+"_b"
 	var clashes []otlpNameClash
 	for _, name := range []string{"m", within, first, second} {
-		clashes = append(clashes, otlpNameClash{name: name, kept: otlpKindSum, leftOut: []int{otlpKindGauge}, points: 1})
+		clashes = append(clashes, otlpNameClash{name: name, kept: otlpShape{kind: otlpKindSum}, leftOut: []otlpShape{{kind: otlpKindGauge}}, points: 1})
 	}
 	server.logOTLPNameClashes(identity, "resource", clashes)
 	if size := out.Len(); size > 4<<10 {

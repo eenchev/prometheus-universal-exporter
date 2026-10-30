@@ -70,6 +70,11 @@ targets:
       resource_attributes:
         deployment.environment: production
         team: platform
+      # Labels of this target's labels its resource carries in place of its
+      # data points; the endpoint keeps them on every series.
+      # labels_as_resource: [region]
+      # The resource's service.instance.id is the target's name.
+      # instance_id: true
 
   - name: legacy_us
     collector: legacy_text

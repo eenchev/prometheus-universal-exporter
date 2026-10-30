@@ -447,6 +447,9 @@ one the job writes `""` takes a discovered label away.
 A static target an entry makes has the labels its source gave it but every
 one starting with `__`, and `job`, `instance` and `static_target`; the
 entry's `labels` win over them.
+An entry's `otlp.labels_as_resource` is checked at load, with the entry's
+own `labels`, before discovery has found anything: it names labels the entry
+writes, not labels a source gives.
 
 ### Failures and changes
 

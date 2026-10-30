@@ -429,7 +429,7 @@ func otlpLogRequests(cfg model.OTLPConfig, records [][]byte) ([]otlpLogRequest, 
 	if err != nil {
 		return nil, err
 	}
-	scope, err := json.Marshal(otlpScope{Name: "prometheus-universal-exporter"})
+	scope, err := json.Marshal(otlpScopeOf(cfg))
 	if err != nil {
 		return nil, err
 	}

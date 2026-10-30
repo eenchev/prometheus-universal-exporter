@@ -25,18 +25,27 @@ otlp:
   # resource_attributes:
   #   deployment.environment: production
   # probe_attributes: false
+  # metric_names: prometheus
+  # scope:
+  #   name: prometheus-universal-exporter
+  #   version: ""
   # logs:
   #   enabled: true
   #   level: info
 ```
 
 `logs` forwards the exporter's own log too; see
-[The exporter's own log](#the-exporters-own-log).
+[The exporter's own log](#the-exporters-own-log). `metric_names` is how
+metrics are named ([Metric names](#metric-names)), and `scope` the
+instrumentation scope they are sent under
+([Instrumentation scope](#instrumentation-scope)).
 
 `enabled` is the switch, and a block that sets anything must say it: `true`
 exports, `false` keeps the settings without using or checking them: a block
 that is switched off may hold an endpoint that is no URL, a `compression`
-that is neither `gzip` nor `none`, a negative duration or count, and the
+that is neither `gzip` nor `none`, a `metric_names` that is neither
+`prometheus` nor `otel`, a `scope` without a name, a negative duration or
+count, and the
 [schema](CONFIGURATION.md#editor-support) flags none of them, as the exporter
 refuses none. Only what cannot be read as the key's kind of value at all,
 such as `timeout: soon` or an unknown key, is refused there too. An `otlp`
@@ -166,7 +175,12 @@ rule a series already has while it waits: **the later replaces the earlier**.
   logged, as nothing is when a later scrape's value replaces a series'.
 - **One name as two kinds.** A gauge `jobs` of one probe and a counter `jobs`
   of another are one name, whatever their labels: `otlp.probe_attributes`
-  keeps points apart, not metrics. The kind written last is exported, with
+  keeps points apart, not metrics. With
+  [`metric_names: otel`](#metric-names) the names are those exported: a gauge
+  `jobs` and a counter `jobs_total` are the name `jobs` of two kinds, and a
+  gauge `latency` and a gauge `latency_seconds` the name `latency` of two
+  units, which is two kinds here too, the log line naming the unit
+  (`"left_out_kind":"gauge of unit s"`). The kind written last is exported, with
   every point of that kind, and the points of the other kind are left out of
   that export, where it used to carry two metrics of the name. Which of the
   two is last may change from one export to the next, so this is something to
@@ -353,6 +367,82 @@ is such a series, so that a name is one kind of metric in an export, and its
 points carry no start time, as no gauge does. A family whose values its type
 allows always keeps the type.
 
+## Metric names
+
+`otlp.metric_names` is how the export names metrics. `prometheus`, the
+default, names each as the exposition writes it, `http_requests_total` and
+`request_duration_seconds`, with no unit. `otel` names them as
+OpenTelemetry does: a counter's name loses its `_total`, and a name that ends
+in a unit loses it to the metric's `unit` field, a
+[UCUM](https://ucum.org/ucum) code, so the counter `http_requests_total` is
+`http_requests`, the histogram `request_duration_seconds` is
+`request_duration` of unit `s`, and the counter `process_cpu_seconds_total` is
+`process_cpu` of unit `s`. The units are those the OpenTelemetry Collector's
+Prometheus translator writes as a name's suffix, read backwards:
+
+| Suffix | Unit | Suffix | Unit | Suffix | Unit |
+| --- | --- | --- | --- | --- | --- |
+| `_days` | `d` | `_bytes` | `By` | `_meters` | `m` |
+| `_hours` | `h` | `_kibibytes` | `KiBy` | `_volts` | `V` |
+| `_minutes` | `min` | `_mebibytes` | `MiBy` | `_amperes` | `A` |
+| `_seconds` | `s` | `_gibibytes` | `GiBy` | `_joules` | `J` |
+| `_milliseconds` | `ms` | `_tibibytes` | `TiBy` | `_watts` | `W` |
+| `_microseconds` | `us` | `_kilobytes` | `KBy` | `_grams` | `g` |
+| `_nanoseconds` | `ns` | `_megabytes` | `MBy` | `_celsius` | `Cel` |
+| `_ratio` | `1` | `_gigabytes` | `GBy` | `_hertz` | `Hz` |
+| `_percent` | `%` | `_terabytes` | `TBy` | | |
+
+A unit followed by `_per_` and `second`, `minute`, `hour` or `day` is a unit
+of a time, `s`, `min`, `h` or `d`: `transfer_bytes_per_second` is `transfer`
+of unit `By/s`. The translator writes a unit `By/m` as `bytes_per_minute`,
+but `m` is the metre in UCUM, so a minute here is `min`; a `_per_` after
+anything but a unit of the table, as in `requests_per_second`, stays in the
+name.
+
+A suffix is a whole word at the end of the name, after its last `_`, with
+something before it: `latency_seconds` loses `_seconds`, `xseconds`,
+`seconds_count` and a gauge named `seconds` keep their names, and a recording
+rule's `job:latency_seconds:mean` keeps its name too. Only a counter loses
+`_total`; a gauge `errors_total` is exported as it is named. A histogram and a
+summary are named by their family, `request_duration_seconds`, not their
+samples. The names are the exporter's own metrics' too:
+`http_exporter_otlp_points_dropped_total` is `http_exporter_otlp_points_dropped`, and
+`http_exporter_otlp_export_duration_seconds` is
+`http_exporter_otlp_export_duration` of unit `s`.
+
+A family [exported as gauges](#delivery) under the names of its samples, as a
+counter whose value is `NaN` is, keeps those names and has no unit: they are
+the samples the exposition writes, which no OpenTelemetry metric is named
+after. A Prometheus target's `# UNIT` line of OpenMetrics is not read: the
+exporter keeps no unit of a family, so the unit is the name's.
+
+Two names the translation makes one — a gauge `jobs` and a counter
+`jobs_total`, or a gauge `latency` and a gauge `latency_seconds` — are one
+name under the resource, written as two kinds
+([above](#two-writers-of-one-series-or-one-name)): what was written last is
+exported, and the other is left out and logged.
+
+## Instrumentation scope
+
+Every metric of the export is under the instrumentation scope
+`prometheus-universal-exporter`, without a version, and every log record of
+[`otlp.logs`](#the-exporters-own-log) too. `otlp.scope` names another, with a
+version if wanted, for both:
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  scope:
+    name: acme.example/edge-exporter
+    version: "2.4.0"
+```
+
+A `scope` written has a `name`, which is not empty, and neither the name nor
+the version holds a control character; a block switched on is refused
+otherwise when the configuration loads. The scope is the export's: a static
+target sets its own resource, not its own scope.
+
 ## Static targets
 
 [Static targets](STATIC-TARGETS.md) are scraped by the exporter itself and
@@ -384,6 +474,56 @@ on `otlp.interval`. A target that sets `export_via_otlp` while OTLP export is
 disabled or has no endpoint stops the exporter at startup, and a reload that
 would disable OTLP export while one is loaded is rejected.
 
+### Static target labels as resource attributes
+
+A target's `labels` are on every series of it, and over OTLP on every data
+point. Labels that say what the target is, such as its city or its plant,
+belong to its resource instead, where a backend groups by them.
+`otlp.labels_as_resource` names them, and `otlp.instance_id: true` gives the
+resource the attribute `service.instance.id`, the target's name:
+
+```yaml
+interval: 1m
+targets:
+  - name: plant_berlin
+    collector: legacy_text
+    target: http://plant.berlin.example:8080
+    labels:
+      city: berlin
+      line: "3"
+    export_via_otlp: true
+    otlp:
+      labels_as_resource: [city]
+      instance_id: true
+```
+
+The target's resource then has `city: berlin` and
+`service.instance.id: plant_berlin` besides its service name and its
+attributes, and its data points, of its own series and of its health series
+alike, have no `city`. A series whose own label of the name has another value
+— one its collector gave it, which a target's label does not replace, or a
+health series' `collector` or `target` — keeps it: the resource does not say
+it. A label written `""` is on no series and is no attribute. The static
+targets endpoint serves the labels as before; only the export moves them.
+
+The attributes are part of the resource's identity: targets alike in every
+attribute, `city` included, are one resource, and their series are kept apart
+by `static_target`, as before; a target with `instance_id` is always one of
+its own. Both keys are off by default, and the export is then what it was.
+Each is checked when the file loads, with the configuration it goes with, and
+refused:
+
+- a name that is not among the target's `labels` — a label the collector
+  extracts can differ from series to series, which a resource cannot;
+- a name given twice;
+- a name the resource has as an attribute already, from the target's
+  `otlp.resource_attributes` or the exporter-wide ones it keeps, and
+  `instance_id` beside a `service.instance.id` attribute: the resource would
+  carry the key twice. A label's name has no dot, so it is never
+  `service.name`;
+- either key on a target without `export_via_otlp`, as every key of its
+  `otlp` block is.
+
 ## The exporter's own log
 
 With `otlp.logs`, the exporter sends its own log lines over OTLP as well, to
@@ -408,7 +548,8 @@ settings unchecked. It is used only while the `otlp` block is switched on,
 and takes that block's `headers`, `tls`, `compression`, `timeout`,
 `batch_max_size`, `batch_max_bytes`, `service_name` and
 `resource_attributes`: the records are under the resource the exporter's own
-metrics are under, with the scope `prometheus-universal-exporter`. Its own
+metrics are under, with the [scope](#instrumentation-scope) they are under,
+`prometheus-universal-exporter` unless `otlp.scope` names another. Its own
 keys:
 
 - `endpoint` is the OTLP/HTTP logs endpoint. Left out, it is `otlp.endpoint`

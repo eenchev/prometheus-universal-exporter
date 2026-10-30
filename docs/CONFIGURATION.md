@@ -3611,7 +3611,8 @@ written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
 `otlp` block with `enabled: false`, which is kept unchecked, do both take a
 negative one. Unchecked is of the whole block, to both: switched off, it may
-hold a `compression` that is neither `gzip` nor `none`, a negative
+hold a `compression` that is neither `gzip` nor `none`, a `metric_names`
+that is neither `prometheus` nor `otel`, a `scope` without a name, a negative
 `max_pending_points`, `unready_after_failures` or `batch_max_size`, an
 `unready_after_failures` over 1000, and a `batch_max_bytes` under its least, as it may an endpoint that
 is no URL, and only what is not of a key's type at all — text for a number, a
@@ -3657,7 +3658,8 @@ values or text of a pattern, `""` is its default: `decoder.type: ""` is
 `auto`, `name_escaping: ""` is `fail`, `request.method: ""` is `GET`, an
 error policy or a rule's `error_mode` written `""` is the one it defaults
 to, a rule's `type: ""` is `gauge`, or under a `prometheus` transform the
-type of the series it passes through, `otlp.compression: ""` is `gzip`, and
+type of the series it passes through, `otlp.compression: ""` is `gzip`,
+`otlp.metric_names: ""` is `prometheus`, and
 `metrics_prefix: ""`, `response.graphite.value: ""`,
 `response.graphite.invalid_lines: ""` and a static target's `name: ""` and
 `request.method: ""` are those keys left out. A key that belongs to another

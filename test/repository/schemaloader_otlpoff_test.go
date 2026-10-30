@@ -65,6 +65,13 @@ var otlpKeys = map[string]struct {
 		},
 		noValue: []string{"x", "[a]", "{level: debug}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, interval: soon}", "{enabled: true, max_pending_records: many}"},
 	},
+	"metric_names": {checked: []otlpValue{{"OTel", ""}, {"openmetrics", ""}, {"5", ""}}, noValue: []string{"[otel]", "{a: b}"}},
+	// A scope written is held to a name, without a control character in
+	// it or in its version.
+	"scope": {
+		checked: []otlpValue{{"{}", ""}, {`{version: "1"}`, ""}, {`{name: ""}`, ""}, {`{name: "a\tb"}`, ""}, {`{name: x, version: "1\n"}`, ""}},
+		noValue: []string{"x", "[a]", "{unknown: 1}", "{name: [a]}"},
+	},
 	// A size written as text is held to the least by both, as one
 	// written as a number is.
 	"batch_max_bytes": {
@@ -136,6 +143,7 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 	}
 	// Values in order, off and on.
 	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB",
+		"metric_names: otel", "metric_names: prometheus", `metric_names: ""`, "scope: {name: my-scope}", `scope: {name: my-scope, version: "1.2.3"}`, `scope: {name: "1"}`,
 		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`} {
 		key, value, _ := strings.Cut(setting, ": ")
 		agree(t, schema, "otlp."+setting+", switched off", block(false, key, value), true)

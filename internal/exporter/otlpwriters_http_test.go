@@ -237,7 +237,7 @@ func TestAnExportOfTheExportersOwnMetricsAndProbesIsMadeOnce(t *testing.T) {
 	if len(resources) != 1 || len(resources[0].seqs) < 6 || len(resources[0].Set.Metrics) < 100 {
 		t.Fatalf("the export is of %d resources", len(resources))
 	}
-	out, shared := otlpPoints(resources[0].Set, len(resources[0].seqs), "1", nil, nil)
+	out, shared := otlpPoints(resources[0].Set, len(resources[0].seqs), false, "1", nil, nil)
 	if shared || len(out) < 50 {
 		t.Errorf("the export of %d metrics is taken to have two writers of a stream: %v", len(out), shared)
 	}

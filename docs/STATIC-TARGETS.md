@@ -760,6 +760,32 @@ refused pointing at `service_name`. Over OTLP every series carries `static_targe
 the endpoint: targets often share a resource — the same collector, the
 exporter-wide identity — and the label is what keeps their series apart.
 
+`otlp.labels_as_resource` names labels of the target's `labels` that its
+resource carries in place of its data points, and `otlp.instance_id: true`
+gives the resource the attribute `service.instance.id`, the target's name:
+
+```yaml
+  - name: plant_berlin
+    collector: legacy_text
+    target: http://plant.berlin.example:8080
+    labels:
+      city: berlin
+      line: "3"
+    export_via_otlp: true
+    otlp:
+      labels_as_resource: [city]
+      instance_id: true
+```
+
+Over OTLP the target's series and its health series have `line` and
+`static_target` and no `city`, which is an attribute of their resource,
+beside `service.instance.id="plant_berlin"`; the endpoint serves `city` on
+every series as before. A name that is not among the target's `labels`, one
+named twice, and one its resource has as an attribute already, from its own
+`otlp.resource_attributes` or the exporter-wide ones, are refused, as is
+`instance_id` beside a `service.instance.id` attribute. See
+[Static target labels as resource attributes](OTLP.md#static-target-labels-as-resource-attributes).
+
 `export_via_otlp` needs OTLP export: a target with it while `otlp.enabled` is
 `false`, or without an `otlp.endpoint`, makes the exporter log
 `invalid static target configuration; exiting` and stop.

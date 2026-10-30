@@ -4684,10 +4684,16 @@
         "max_pending_points": [
           "enabled"
         ],
+        "metric_names": [
+          "enabled"
+        ],
         "probe_attributes": [
           "enabled"
         ],
         "resource_attributes": [
+          "enabled"
+        ],
+        "scope": [
           "enabled"
         ],
         "service_name": [
@@ -4828,6 +4834,14 @@
           "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000.",
           "type": "integer"
         },
+        "metric_names": {
+          "description": "How the export names metrics: prometheus, the default, as the exposition writes them; or otel, as OpenTelemetry names them, a counter without its _total and a unit suffix such as _seconds or _bytes moved into the metric's unit. See docs/OTLP.md#metric-names.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
         "probe_attributes": {
           "description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's.",
           "type": "boolean"
@@ -4839,6 +4853,29 @@
               "number",
               "boolean"
             ]
+          },
+          "type": "object"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "description": "The instrumentation scope the export's metrics and log records are sent under. Left out, the name prometheus-universal-exporter without a version; written, name is required. See docs/OTLP.md#instrumentation-scope.",
+          "properties": {
+            "name": {
+              "description": "The scope's name, not empty and without a control character once the block is switched on.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "version": {
+              "description": "The scope's version, without a control character once the block is switched on; left out, the scope has none.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
           },
           "type": "object"
         },
@@ -4983,6 +5020,27 @@
           },
           "max_pending_points": {
             "minimum": 0
+          },
+          "metric_names": {
+            "enum": [
+              "prometheus",
+              "otel",
+              ""
+            ]
+          },
+          "scope": {
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+              },
+              "version": {
+                "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+              }
+            },
+            "required": [
+              "name"
+            ]
           },
           "timeout": {
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"

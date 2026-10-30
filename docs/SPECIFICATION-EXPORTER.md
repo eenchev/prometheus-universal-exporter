@@ -29421,6 +29421,21 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugCollectorPathIsReserved`: `/debug/collector` is refused as `--web.self-metrics-path`.
 - `TestACollectorKeepsTheMappingItsFileWritesItAs` (config): with `--config.expand-env`, a collector of the configuration keeps `${WRITTEN_TOKEN}` as written though it loaded the variable's value, the keys a merge key gives its request after its own, no comment of the file, and the keys of the configuration's defaults it does not write, marked; a collector of a collector file takes that file's defaults alone, marked on the key.
 
+## 34.238 OTLP metric names, the instrumentation scope, and a static target's labels on its resource
+
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings`: an export of a gauge, a counter, a histogram, a summary and a `_per_` gauge under the exporter-wide resource and a static target's gauge, with no `metric_names`, `scope`, `labels_as_resource` or `instance_id`, and the head of a log export, are the JSON they were before the keys, byte for byte.
+- `TestOTLPExportNamesMetricsAsOpenTelemetryDoes`: under `metric_names: otel` that export has `queue_depth`, the sum `jobs_processed`, the histogram `request_latency` of unit `s`, the summary `rpc_duration` of `ms`, `transfer` of `By/s`, the gauge `errors_total` kept, the sum `bytes_sent` of `By`, and the static target's `temperature` of `Cel`.
+- `TestOTelMetricNames`: the table of names, kinds and units: `_total` off a counter only and not a name of nothing else, each unit of the table, `_per_` with `second`, `minute`, `hour` and `day`, and as written `requests_per_second`, `bytes_per_second`, `hits_ratio_per_second`, `xseconds`, `seconds_x`, `x_seconds_`, `seconds` and `job:latency_seconds:mean`; under `prometheus` every name as written without a unit.
+- `TestOTelMetricNamesLeaveAFamilyExportedAsGaugesAsWritten`: a NaN counter `retries_seconds_total` and a histogram of a negative bound under `otel` are the gauges `retries_seconds_total`, `wait_seconds_bucket`, `_sum` and `_count` without a unit.
+- `TestOTelMetricNamesThatCollideAreOneNameOfTwoShapes`: a gauge `jobs`, a gauge `latency_seconds`, a counter `jobs_total` and a gauge `latency` are four metrics under `prometheus`; under `otel` the export has the sum `jobs` and the gauge `latency`, reports `jobs` kept as a sum with a gauge left out and `latency` kept as a gauge with a gauge of unit `s` left out, one point each, and the warning says `"left_out_kind":"gauge of unit s"`.
+- `TestOTelMetricNamesNameTheExportersOwnMetrics`: under `otel` an export of the exporter's own metrics has no name ending in `_total`, `_seconds` or `_bytes`; `http_exporter_otlp_points_dropped` is a sum and `http_exporter_otlp_export_duration` a gauge of unit `s`.
+- `TestOTLPScopeNamesTheMetricsAndTheLogRecordsScope`: `scope: {name: acme.io/edge, version: 1.2.3}` is the scope of both resources' metrics, of none the default's, and of the log records; without a version neither has one.
+- `TestStaticTargetLabelsAsResourceMoveFromThePointsToTheResource`: `labels_as_resource: [city, empty]` and `instance_id` give the resource `city=berlin` and `service.instance.id=eu` and no attribute of the empty label; a point with `city=berlin` loses it, one with its own `city=paris` keeps it, and the set served is unchanged; without the keys the resource is the exporter-wide one and the points are as they were.
+- `TestStaticTargetLabelsAsResourceAreExportedOnTheResource`: three targets scraped and exported to an endpoint: two in `berlin` are one resource with `city=berlin`, whose `demo_value` and `http_exporter_target_up` points carry `rack` and `static_target`, the health series `collector` and `target` too, and no `city`; the one in `paris` with `instance_id` is a resource of its own with `city=paris` and `service.instance.id=paris`; the static targets endpoint has both `city` labels.
+- `TestSchemaAndExporterAgreeOnAStaticTargetsResourceKeys`: the static target schema and the loader with a configuration of the exporter-wide attribute `region` take `labels_as_resource` of `[city]`, `[city, site]` with `instance_id`, `[]`, `instance_id: false`, `[city]` beside a target attribute `region: ''` and beside one `service.instance.id`; refuse both `[city, city]`, a text, a list in the list and `instance_id: maybe`; the exporter alone refuses `[town]`, not a label, `[region]`, an exporter-wide attribute, `[site]` beside the target's attribute `site`, `instance_id` beside the target's `service.instance.id`, and either key without `export_via_otlp`.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` (the `metric_names` and `scope` rows): `metric_names` of `OTel`, `openmetrics` and `5` and `scope` of `{}`, `{version: "1"}`, `{name: ""}`, a name with a tab and a version with a line break are taken switched off and refused by both switched on; `[otel]`, a mapping, text, a list, an unknown key and a list for a name are refused off and on; `otel`, `prometheus`, `""`, a scope with a name, with a name and a version, and the name `"1"` are taken off and on.
+- `TestSchemaAndExporterAgreeOnEnabled` (the `scope` key): `scope: {name: x}` without `enabled`, or beside an empty one, is refused by both, and taken by both with `enabled: false`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -29934,6 +29949,37 @@ resource attributes MUST be preserved:
   own — MUST be what it was before this rule, byte for byte, and MUST be made
   in one pass over its series, as it was.
 
+`otlp.metric_names` MUST name the export's metrics: `prometheus`, the
+default and `""`, as the exposition writes them, with no unit; `otel` as
+OpenTelemetry names them. Under `otel` a counter's name MUST lose a trailing
+`_total`, and then a name, a histogram's or a summary's family name
+included, MUST lose a unit suffix to the metric's `unit`: its last word after
+a `_`, with something before it, when that is a unit the OpenTelemetry
+Collector's Prometheus translator writes — `days` `d`, `hours` `h`,
+`minutes` `min`, `seconds` `s`, `milliseconds` `ms`, `microseconds` `us`,
+`nanoseconds` `ns`, `bytes` `By`, `kibibytes` `KiBy`, `mebibytes` `MiBy`,
+`gibibytes` `GiBy`, `tibibytes` `TiBy`, `kilobytes` `KBy`, `megabytes`
+`MBy`, `gigabytes` `GBy`, `terabytes` `TBy`, `meters` `m`, `volts` `V`,
+`amperes` `A`, `joules` `J`, `watts` `W`, `grams` `g`, `celsius` `Cel`,
+`hertz` `Hz`, `percent` `%`, `ratio` `1` — or its last three words when
+they are such a unit but `ratio` and `percent`, `per`, and `second`,
+`minute`, `hour` or `day`, which MUST be the unit `<unit>/s`, `/min`, `/h`
+or `/d`. It MUST hold for the exporter's own metrics, the probes' and the
+static targets' alike. A family exported as gauges under its samples' names
+MUST keep those names and have no unit. Two names the translation makes one
+MUST be one name to the rule of one writer below, a different unit making a
+different kind of it, logged with the unit. Any other value MUST be refused
+when the configuration loads, in a block that is switched on.
+
+`otlp.scope` MAY name the instrumentation scope of the export, its `name`
+and `version`; left out, every metric and every log record (§ 42.1b) MUST be
+under the scope named `prometheus-universal-exporter` without a version, as
+before, and written, under the scope it names, the version left out where it
+is empty. A `scope` written MUST have a `name`, and its name and its version MUST
+NOT hold a control character; it MUST be refused otherwise when the
+configuration loads, in a block that is switched on, by the exporter and the
+schema alike. A static target MUST NOT set a scope of its own.
+
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
 replaces an earlier one's. With `otlp.probe_attributes: true`, every point a
@@ -30047,7 +30093,8 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   the rules of § 42.1a, and be split by `otlp.batch_max_size` records and
   `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
 - Each record MUST be under the resource the exporter's own metrics are
-  under (`otlp.service_name` and `otlp.resource_attributes`), and carry the
+  under (`otlp.service_name` and `otlp.resource_attributes`), and the scope
+  they are under (`otlp.scope`, § 42.1), and carry the
   line's time, the time it was taken as its observed time, the OTLP severity
   number of its slog level — DEBUG 5, INFO 9, WARN 13, ERROR 17, a level
   between them as far from theirs, within 1 to 24 — with the level's name as
@@ -31923,6 +31970,26 @@ over OTLP — the collector's metrics and the health result — MUST carry
 `static_target`, as on the endpoint: targets sharing a resource, such as two
 of one collector under the exporter-wide identity, would otherwise export the
 same series, and one target's values would replace the other's.
+
+A target MAY set `otlp.labels_as_resource`, a list of names of its own
+`labels`, and `otlp.instance_id`, a boolean defaulting to `false`, only with
+`export_via_otlp` like the rest of its `otlp` block. Each label named with a
+value that is not empty MUST be an attribute of the target's resource, and
+MUST be left out of every data point of the target exported over OTLP — its
+collector's series and its health series — where the point's label of that
+name has the target's value; a point whose own label of the name has another
+value MUST keep it. `otlp.instance_id: true` MUST give the resource the
+attribute `service.instance.id` with the target's name. Both MUST be part of
+the resource's identity (§ 42.1): targets whose resources are alike in every
+attribute MUST be one `resourceMetrics` entry, and targets that differ in one
+MUST be two. The static targets endpoint MUST serve the labels as before.
+The file MUST be refused, naming the target, for a name that is not among the
+target's `labels`, a name given twice, a name that is an attribute of the
+resource already — from the target's `otlp.resource_attributes` or the
+exporter-wide ones, an attribute written `""` being none — and
+`instance_id` beside a `service.instance.id` attribute; the static target
+schema MUST refuse a name given twice. With neither key the export MUST be
+what it was without them, byte for byte.
 
 ### 42.14c Static target self-metrics
 

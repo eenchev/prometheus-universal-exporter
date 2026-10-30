@@ -347,7 +347,7 @@ func otlpRequestOfLines(t *testing.T, lines []string) []byte {
 		}
 		scope := &payload.ResourceMetrics[len(payload.ResourceMetrics)-1].ScopeMetrics[0]
 		if metricKey := name + " " + strconv.Itoa(kind); metricKey != lastMetric {
-			scope.Metrics = append(scope.Metrics, newOTLPMetric(name, description, kind))
+			scope.Metrics = append(scope.Metrics, newOTLPMetric(name, description, otlpShape{kind: kind}))
 			lastMetric = metricKey
 		}
 		m := &scope.Metrics[len(scope.Metrics)-1]

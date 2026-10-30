@@ -649,7 +649,33 @@ type OTLPConfig struct {
 	// with the block's headers, TLS, compression and timeout
 	// (exporter/otlplogs.go).
 	Logs OTLPLogsConfig `yaml:"logs"`
+	// MetricNames is how the export names metrics: prometheus, the
+	// default, as the exposition writes them, or otel, as OpenTelemetry
+	// names them, a counter without _total and a unit suffix moved into
+	// the metric's unit (exporter/otlpnames.go).
+	MetricNames string `yaml:"metric_names"`
+	// Scope is the instrumentation scope the export's metrics and log
+	// records are sent under; nil is DefaultOTLPScopeName without a
+	// version.
+	Scope *OTLPScopeConfig `yaml:"scope"`
 }
+
+// OTLPScopeConfig is otlp.scope: the name and version of the
+// instrumentation scope of the export.
+type OTLPScopeConfig struct {
+	Name    string `yaml:"name"`
+	Version string `yaml:"version"`
+}
+
+// DefaultOTLPScopeName is the instrumentation scope of the export when
+// otlp.scope is left out.
+const DefaultOTLPScopeName = "prometheus-universal-exporter"
+
+// The values of otlp.metric_names.
+const (
+	OTLPMetricNamesPrometheus = "prometheus"
+	OTLPMetricNamesOTel       = "otel"
+)
 
 // OTLPLogsConfig is otlp.logs: whether the exporter's own log lines are
 // exported too, where to, from which level, and how many may wait.

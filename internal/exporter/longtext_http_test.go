@@ -137,3 +137,27 @@ func TestThePagesControlsOnOneLineLineUp(t *testing.T) {
 		"form.refresh label { display: inline-flex; align-items: center; gap: 6px; }",
 		"form.refresh a.button, form.refresh button, form.refresh select { display: inline-flex; align-items: center; height: 30px;")
 }
+
+// The pages break a long word anywhere; in the status page's tables only
+// the cells of long text may, bounded in width, so a long target or error
+// does not squeeze the short columns until their words break: the headers
+// and every other cell keep their words whole.
+func TestTheStatusPagesShortColumnsKeepTheirWordsWhole(t *testing.T) {
+	server, _ := longErrorServer(t)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`th { background: var(--panel); white-space: nowrap; }`,
+		`td { overflow-wrap: normal; }`,
+		`td.what { overflow-wrap: anywhere; min-width: 14em; max-width: 26em; }`,
+		`overflow-wrap: anywhere; }`,
+		`<td class="what"><strong>`,
+		// A facts table, two columns with no scroll of its own, holds an
+		// error too, which must not hold it wider than a phone.
+		`table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }`,
+	)
+	for _, line := range strings.Split(page, "\n") {
+		if strings.HasPrefix(line, "td.err ") && (!strings.Contains(line, "overflow-wrap: anywhere") || !strings.Contains(line, "min-width")) {
+			t.Errorf("an error cell may squeeze or overflow: %s", line)
+		}
+	}
+}

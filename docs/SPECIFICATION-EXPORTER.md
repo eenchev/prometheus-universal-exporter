@@ -29463,6 +29463,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
 - `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
 
+- `TestTheLogExportsLastRecordsAreMutedUnderItsResult`: the log export's last export says its result, and under it, muted as the metrics export's counts are, `1 log record`.
+- `TestTheStatusPagesShortColumnsKeepTheirWordsWhole`: the status page's headers do not wrap, its cells keep their words whole but for the target's and the error's, which break anywhere within bounds, and a facts table's error cell sets no least width, so a phone shows the OTLP sections without scrolling sideways.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -482,3 +482,14 @@ func TestOTLPLogsGoToTheMetricsCollector(t *testing.T) {
 		t.Errorf("the logs endpoint is %q", got)
 	}
 }
+
+// The log export's last export says its result, and under it, muted as the
+// metrics export's counts are, how many records it sent, so the result
+// stands out from the count.
+func TestTheLogExportsLastRecordsAreMutedUnderItsResult(t *testing.T) {
+	receiver := newLogReceiver(t)
+	server, logger, _ := logExportServer(t, receiver, nil)
+	logger.Info("one")
+	exportLogsNow(server)
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="good">success</span><br><span class="muted">1 log record</span>`)
+}

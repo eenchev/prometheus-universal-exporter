@@ -411,8 +411,15 @@ main { max-width: 1200px; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-th { background: var(--panel); }
-td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px; white-space: pre-wrap; }
+th { background: var(--panel); white-space: nowrap; }
+/* The pages break a long word anywhere, which lets a table squeeze its
+   short columns until "success" and "Interval" break mid-word. In the
+   tables only the cells of long text may break anywhere, and they are
+   bounded, so the short columns keep their words whole. */
+td { overflow-wrap: normal; }
+td.what { overflow-wrap: anywhere; min-width: 14em; max-width: 26em; }
+td.err { font-family: ui-monospace, monospace; font-size: 13px; min-width: 18em; max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .bad { color: var(--bad); font-weight: 600; }
 .good { color: var(--good); }
 .muted { color: var(--muted); }
@@ -607,7 +614,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 {{- range .Rows}}
 <tr>
-<td><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td class="what"><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td>{{.Interval}}</td>
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
@@ -631,7 +638,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 {{- range .Probes}}
 <tr>
-<td><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
+<td class="what"><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
 <td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
 <td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
@@ -674,7 +681,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
-<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}, {{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>

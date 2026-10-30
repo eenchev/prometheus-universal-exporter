@@ -543,6 +543,22 @@
             "additionalProperties": false,
             "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true.",
             "properties": {
+              "instance_id": {
+                "description": "Give the target's resource the attribute service.instance.id, the target's name, so every target is a resource of its own. Not beside a service.instance.id of otlp.resource_attributes. Defaults to false.",
+                "type": "boolean"
+              },
+              "labels_as_resource": {
+                "description": "Labels of the target's labels that its resource carries as attributes in place of the target's data points, each named once. Not one its resource has as an attribute already, from otlp.resource_attributes here or exporter-wide; that, and a name that is not among the target's labels, the exporter checks. See docs/OTLP.md#static-target-labels-as-resource-attributes.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
               "resource_attributes": {
                 "additionalProperties": {
                   "type": [
@@ -1972,6 +1988,22 @@
             "additionalProperties": false,
             "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true.",
             "properties": {
+              "instance_id": {
+                "description": "Give the target's resource the attribute service.instance.id, the target's name, so every target is a resource of its own. Not beside a service.instance.id of otlp.resource_attributes. Defaults to false.",
+                "type": "boolean"
+              },
+              "labels_as_resource": {
+                "description": "Labels of the target's labels that its resource carries as attributes in place of the target's data points, each named once. Not one its resource has as an attribute already, from otlp.resource_attributes here or exporter-wide; that, and a name that is not among the target's labels, the exporter checks. See docs/OTLP.md#static-target-labels-as-resource-attributes.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
               "resource_attributes": {
                 "additionalProperties": {
                   "type": [

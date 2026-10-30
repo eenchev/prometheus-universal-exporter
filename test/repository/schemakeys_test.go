@@ -476,6 +476,16 @@ type checkedFile struct {
 	check func(t *testing.T, document string) (now, before []string, loaded any, err error)
 }
 
+// withoutWritten is collectors without the text their file writes each as
+// (model.Collector.Written), which differs as the documents compared do:
+// what the collectors are is the rest.
+func withoutWritten(collectors []model.Collector) []model.Collector {
+	for i := range collectors {
+		collectors[i].Written = nil
+	}
+	return collectors
+}
+
 // files are the files a row's document is checked as.
 func (k schemaKey) files(t *testing.T, schemas keySchemas) []checkedFile {
 	t.Helper()
@@ -485,7 +495,7 @@ func (k schemaKey) files(t *testing.T, schemas keySchemas) []checkedFile {
 			cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", document))
 			var loaded any
 			if err == nil {
-				loaded = []any{cfg.Collectors, cfg.OTLP, cfg.Web}
+				loaded = []any{withoutWritten(cfg.Collectors), cfg.OTLP, cfg.Web}
 			}
 			return schemaProblems(t, schemas.configuration, document), schemaProblems(t, schemas.configurationWas, document), loaded, err
 		}}}
@@ -498,7 +508,7 @@ func (k schemaKey) files(t *testing.T, schemas keySchemas) []checkedFile {
 				cfg, err := config.Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: [collectors.yaml]\n"))
 				var loaded any
 				if err == nil {
-					loaded = cfg.Collectors
+					loaded = withoutWritten(cfg.Collectors)
 				}
 				return schemaProblems(t, schemas.collectorFile, document), schemaProblems(t, schemas.collectorFileWas, document), loaded, err
 			}})

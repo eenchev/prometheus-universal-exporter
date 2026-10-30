@@ -120,7 +120,7 @@ func (s *Server) publishStaticResult(read configRead, target model.StaticTarget,
 	}
 	s.staticMu.Unlock()
 	if target.ExportViaOTLP {
-		s.queueOTLPResource(labelled, identity, at)
+		s.queueOTLPResource(withoutResourceLabels(labelled, target), identity, at)
 	}
 }
 

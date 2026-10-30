@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -178,6 +179,10 @@ type otlpResourceSet struct {
 	Identity otlpResourceIdentity
 	Set      model.MetricSet
 	seqs     []int64
+	// otelNames says the export names its metrics as OpenTelemetry does
+	// (otlp.metric_names: otel, otlpNameOf); set where an export's
+	// metrics are made, from the configuration it is made under.
+	otelNames bool
 }
 
 // key is what tells the resource from every other (otlpKey): its service
@@ -267,7 +272,9 @@ func (s *Server) otlpRequestsOf(cfg model.OTLPConfig, resources []otlpResourceSe
 		if len(resources[r].Set.Metrics) > 0 {
 			made = append(made, r)
 			sources = append(sources, otlpPointSources{index: map[string]int{}})
-			otlpMetricsWith(resources[r], now, nil, &sources[len(sources)-1])
+			resource := resources[r]
+			resource.otelNames = cfg.MetricNames == model.OTLPMetricNamesOTel
+			otlpMetricsWith(resource, now, nil, &sources[len(sources)-1])
 		}
 	}
 	for k, pieces := range split {
@@ -357,14 +364,16 @@ func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
 	s.otlpStarts.bound(cfg.MaxPendingPoints)
+	scope := otlpScopeOf(cfg)
 	for _, resource := range resources {
 		if len(resource.Set.Metrics) == 0 {
 			continue
 		}
+		resource.otelNames = cfg.MetricNames == model.OTLPMetricNamesOTel
 		key := resource.Identity.key()
 		metrics, clashes := otlpMetricsOf(resource, now, s.otlpStarts.forResource(key))
 		s.logOTLPNameClashes(resource.Identity, key, clashes)
-		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: metrics}}})
+		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: scope, Metrics: metrics}}})
 	}
 	return payload, now
 }
@@ -377,6 +386,23 @@ func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet
 // retried. It returns the number of retries made, and the partial success the
 // endpoint reported when it accepted the request without some of it.
 func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
+	return s.deliverOTLPOf(ctx, otlpMetricsSignal(s.logger), cfg, body, deadline)
+}
+
+// otlpSignal is what an export of metrics and one of logs are sent apart
+// by: what the endpoint's partialSuccess counts the rejected in, and the
+// logger a retry is logged to. The export of the exporter's own log logs
+// to stderr alone (otlplogs.go), or each retry of it would be a line to
+// export.
+type otlpSignal struct {
+	logs   bool
+	logger *slog.Logger
+}
+
+func otlpMetricsSignal(logger *slog.Logger) otlpSignal { return otlpSignal{logger: logger} }
+
+// deliverOTLPOf is deliverOTLP for the signal, to cfg.Endpoint.
+func (s *Server) deliverOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
 	timeout := time.Duration(cfg.Timeout)
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -384,7 +410,7 @@ func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []b
 	tlsSettings := cfg.TLS
 	for retries := 0; ; retries++ {
 		attempt := min(timeout, time.Until(deadline))
-		answer, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
+		answer, err := s.sendOTLPOf(ctx, signal, cfg, tlsSettings, body, attempt)
 		if err == nil || !answer.retryable {
 			return retries, answer.partial, err
 		}
@@ -396,7 +422,7 @@ func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []b
 		if time.Until(deadline) < wait+otlpMinAttempt {
 			return retries, otlpPartialSuccess{}, err
 		}
-		s.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
+		signal.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -480,8 +506,8 @@ type otlpPartialSuccess struct {
 // ExportMetricsServiceResponse or an error Status is far smaller.
 const otlpResponseLimit = 1 << 20
 
-// sendOTLP makes one attempt.
-func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
+// sendOTLPOf makes one attempt of an export of the signal.
+func (s *Server) sendOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
 	// One connection to the collector is reused from export to export.
 	// Redirects are not followed: Go would send otlp.headers, which carry
 	// the endpoint's API keys and tenant, and the body to wherever the
@@ -517,7 +543,7 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return otlpAnswer{partial: partialSuccess(answer, resp.Header.Get("Content-Type"))}, nil
+		return otlpAnswer{partial: partialSuccessOf(answer, resp.Header.Get("Content-Type"), signal.logs)}, nil
 	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
 		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
 		return otlpAnswer{retryable: true, wait: retryAfter(resp.Header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
@@ -531,7 +557,11 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 // partialSuccess reads the partialSuccess of a JSON export response. An
 // answer that is empty, is not JSON, or does not carry one is a full success:
 // the field is optional, and a protobuf answer is not read.
-func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
+//
+// It reads an ExportMetricsServiceResponse, or when logs says so an
+// ExportLogsServiceResponse, which counts what it rejected in
+// rejectedLogRecords.
+func partialSuccessOf(body []byte, contentType string, logs bool) otlpPartialSuccess {
 	if len(bytes.TrimSpace(body)) == 0 || contentType != "" && !strings.Contains(strings.ToLower(contentType), "json") {
 		return otlpPartialSuccess{}
 	}
@@ -540,6 +570,7 @@ func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
 			// OTLP/JSON writes an int64 as a string, and a number is
 			// accepted too; json.Number reads either.
 			RejectedDataPoints json.Number `json:"rejectedDataPoints"`
+			RejectedLogRecords json.Number `json:"rejectedLogRecords"`
 			ErrorMessage       string      `json:"errorMessage"`
 		} `json:"partialSuccess"`
 	}
@@ -549,7 +580,11 @@ func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
 		return otlpPartialSuccess{}
 	}
 	partial := otlpPartialSuccess{message: response.PartialSuccess.ErrorMessage}
-	if rejected, err := strconv.ParseInt(strings.Trim(string(response.PartialSuccess.RejectedDataPoints), `"`), 10, 64); err == nil && rejected > 0 {
+	count := response.PartialSuccess.RejectedDataPoints
+	if logs {
+		count = response.PartialSuccess.RejectedLogRecords
+	}
+	if rejected, err := strconv.ParseInt(strings.Trim(string(count), `"`), 10, 64); err == nil && rejected > 0 {
 		partial.rejected = rejected
 	}
 	return partial
@@ -801,23 +836,23 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 // metric gets a point of a second run, where a name is exported as a second
 // kind, and where a histogram or a summary is exported as gauges under its
 // samples' names, with le or quantile among the attributes.
-func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Metric, at string) string, keep func(series int, name string, kind int, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
+func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(m model.Metric, at string) string, keep func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
 	// Where the metric of a name is in out, and the run that made it.
 	type place struct{ at, run int }
 	index := map[string]place{}
 	run := 0
-	// metric is the metric of a name and a kind that a point is added to. A
-	// name first seen, or reused with another kind, is a new metric, so
-	// points of different kinds are never mixed in one.
-	metric := func(name, help string, kind int) *otlpMetric {
+	// metric is the metric of a name and a shape that a point is added to.
+	// A name first seen, or reused with another kind or unit, is a new
+	// metric, so points of different shapes are never mixed in one.
+	metric := func(name, help string, shape otlpShape) *otlpMetric {
 		p, seen := index[name]
-		if seen && otlpKind(out[p.at]) == kind {
+		if seen && otlpKind(out[p.at]) == shape.kind && out[p.at].Unit == shape.unit {
 			shared = shared || p.run != run
 			return &out[p.at]
 		}
 		shared = shared || seen
 		index[name] = place{at: len(out), run: run}
-		out = append(out, newOTLPMetric(name, help, kind))
+		out = append(out, newOTLPMetric(name, help, shape))
 		return &out[len(out)-1]
 	}
 	untyped := untypedFamilies(set)
@@ -831,12 +866,16 @@ func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Met
 			at = strconv.FormatInt(*m.Timestamp*int64(time.Millisecond), 10)
 		}
 		attributes := otlpAttributesForLabels(m.Labels)
-		gauge := func(name string, attributes []otlpAttribute, value float64) {
-			if keep != nil && !keep(i, name, otlpKindGauge, attributes) {
+		// gauge adds a gauge's point; a sample of a family exported as
+		// gauges keeps the name the exposition writes it under, and has
+		// no unit, whatever otlp.metric_names says.
+		gauge := func(name, unit string, attributes []otlpAttribute, value float64) {
+			shape := otlpShape{kind: otlpKindGauge, unit: unit}
+			if keep != nil && !keep(i, name, shape, attributes) {
 				return
 			}
 			v := otlpDouble(value)
-			g := metric(name, m.Help, otlpKindGauge).Gauge
+			g := metric(name, m.Help, shape).Gauge
 			g.DataPoints = append(g.DataPoints, otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v})
 		}
 		kind := otlpKindOf(m)
@@ -847,34 +886,36 @@ func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Met
 			case otlpKindHistogram:
 				for _, b := range e.ascendingBuckets(m.Histogram.Buckets) {
 					if !math.IsInf(b.UpperBound, 1) {
-						gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", strconv.FormatFloat(b.UpperBound, 'g', -1, 64)), float64(b.CumulativeCount))
+						gauge(m.Name+"_bucket", "", otlpAttributesWith(m.Labels, "le", strconv.FormatFloat(b.UpperBound, 'g', -1, 64)), float64(b.CumulativeCount))
 					}
 				}
 				if inf, has := m.Histogram.InfBucket(); has {
-					gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", "+Inf"), float64(inf))
+					gauge(m.Name+"_bucket", "", otlpAttributesWith(m.Labels, "le", "+Inf"), float64(inf))
 				}
 				if !m.Histogram.NoSum {
-					gauge(m.Name+"_sum", attributes, m.Histogram.Sum)
+					gauge(m.Name+"_sum", "", attributes, m.Histogram.Sum)
 				}
 				if !m.Histogram.NoCount {
-					gauge(m.Name+"_count", attributes, float64(m.Histogram.Count))
+					gauge(m.Name+"_count", "", attributes, float64(m.Histogram.Count))
 				}
 			case otlpKindSummary:
 				for _, q := range e.ascendingQuantiles(m.Summary.Quantiles) {
-					gauge(m.Name, otlpAttributesWith(m.Labels, "quantile", strconv.FormatFloat(q.Quantile, 'g', -1, 64)), q.Value)
+					gauge(m.Name, "", otlpAttributesWith(m.Labels, "quantile", strconv.FormatFloat(q.Quantile, 'g', -1, 64)), q.Value)
 				}
 				if !m.Summary.NoSum {
-					gauge(m.Name+"_sum", attributes, m.Summary.Sum)
+					gauge(m.Name+"_sum", "", attributes, m.Summary.Sum)
 				}
 				if !m.Summary.NoCount {
-					gauge(m.Name+"_count", attributes, float64(m.Summary.Count))
+					gauge(m.Name+"_count", "", attributes, float64(m.Summary.Count))
 				}
 			default:
-				gauge(m.Name, attributes, m.Value)
+				gauge(m.Name, "", attributes, m.Value)
 			}
 			continue
 		}
-		if keep != nil && kind != otlpKindGauge && !keep(i, m.Name, kind, attributes) {
+		name, unit := otlpNameOf(m.Name, kind, otel)
+		shape := otlpShape{kind: kind, unit: unit}
+		if keep != nil && kind != otlpKindGauge && !keep(i, name, shape, attributes) {
 			continue
 		}
 		startAt := ""
@@ -891,19 +932,19 @@ func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Met
 		case otlpKindHistogram:
 			point := otlpHistogramPoint(m, attributes, at)
 			point.StartTimeUnixNano = startAt
-			h := metric(m.Name, m.Help, kind).Histogram
+			h := metric(name, m.Help, shape).Histogram
 			h.DataPoints = append(h.DataPoints, point)
 		case otlpKindSummary:
 			point := otlpSummaryPoint(m, attributes, at)
 			point.StartTimeUnixNano = startAt
-			s := metric(m.Name, m.Help, kind).Summary
+			s := metric(name, m.Help, shape).Summary
 			s.DataPoints = append(s.DataPoints, point)
 		case otlpKindSum:
 			v := otlpDouble(m.Value)
-			s := metric(m.Name, m.Help, kind).Sum
+			s := metric(name, m.Help, shape).Sum
 			s.DataPoints = append(s.DataPoints, otlpNumberDataPoint{Attributes: attributes, StartTimeUnixNano: startAt, TimeUnixNano: at, AsDouble: &v})
 		default:
-			gauge(m.Name, attributes, m.Value)
+			gauge(name, unit, attributes, m.Value)
 		}
 	}
 	return out, shared
@@ -915,8 +956,8 @@ func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Met
 // not.
 type otlpNameClash struct {
 	name    string
-	kept    int
-	leftOut []int
+	kept    otlpShape
+	leftOut []otlpShape
 	points  int
 }
 
@@ -969,19 +1010,19 @@ func otlpMetricsOf(resource otlpResourceSet, now string, start func(m model.Metr
 // point of the m'th metric is of. index and kinds are what otlpPoints keeps
 // to find the metric of a name and a kind a point is added to.
 type otlpPointSources struct {
-	index map[string]int
-	kinds []int
-	of    [][]int
+	index  map[string]int
+	shapes []otlpShape
+	of     [][]int
 }
 
 // add says that the next point made is of the series'th series, for the
-// metric of name and kind, found as otlpPoints finds it.
-func (o *otlpPointSources) add(series int, name string, kind int) {
+// metric of name and shape, found as otlpPoints finds it.
+func (o *otlpPointSources) add(series int, name string, shape otlpShape) {
 	at, seen := o.index[name]
-	if !seen || o.kinds[at] != kind {
+	if !seen || o.shapes[at] != shape {
 		at = len(o.of)
 		o.index[name] = at
-		o.kinds = append(o.kinds, kind)
+		o.shapes = append(o.shapes, shape)
 		o.of = append(o.of, nil)
 	}
 	o.of[at] = append(o.of[at], series)
@@ -991,31 +1032,31 @@ func (o *otlpPointSources) add(series int, name string, kind int) {
 // series each point it makes is of. A point is made after keep is asked of
 // it, and only then, so sources are told of a point where keep says yes.
 func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Metric, at string) string, sources *otlpPointSources) ([]otlpMetric, []otlpNameClash) {
-	set, own := resource.Set, len(resource.seqs)
-	var keep func(series int, name string, kind int, attributes []otlpAttribute) bool
+	set, own, otel := resource.Set, len(resource.seqs), resource.otelNames
+	var keep func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool
 	if sources != nil {
-		keep = func(series int, name string, kind int, _ []otlpAttribute) bool {
-			sources.add(series, name, kind)
+		keep = func(series int, name string, shape otlpShape, _ []otlpAttribute) bool {
+			sources.add(series, name, shape)
 			return true
 		}
 	}
-	out, shared := otlpPoints(set, own, now, start, keep)
+	out, shared := otlpPoints(set, own, otel, now, start, keep)
 	if !shared {
 		return out, nil
 	}
 	// Every point the export would have, in the order they are made in.
 	type point struct {
 		name, identity string
-		kind           int
+		shape          otlpShape
 		written        int64
 	}
 	var points []point
-	otlpPoints(set, own, now, nil, func(series int, name string, kind int, attributes []otlpAttribute) bool {
+	otlpPoints(set, own, otel, now, nil, func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool {
 		written := int64(math.MaxInt64)
 		if series < own {
 			written = resource.seqs[series]
 		}
-		points = append(points, point{name: name, identity: otlpPointIdentity(name, attributes), kind: kind, written: written})
+		points = append(points, point{name: name, identity: otlpPointIdentity(name, attributes), shape: shape, written: written})
 		return false
 	})
 	later := func(a, b int) bool {
@@ -1034,7 +1075,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	var clashes map[string]*otlpNameClash
 	for n := range points {
 		p := &points[n]
-		if kept := points[last[p.name]].kind; p.kind != kept {
+		if kept := points[last[p.name]].shape; p.shape != kept {
 			leftOut[n], some = true, true
 			if clashes == nil {
 				clashes = map[string]*otlpNameClash{}
@@ -1044,8 +1085,8 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 				clash = &otlpNameClash{name: p.name, kept: kept}
 				clashes[p.name] = clash
 			}
-			if !slices.Contains(clash.leftOut, p.kind) {
-				clash.leftOut = append(clash.leftOut, p.kind)
+			if !slices.Contains(clash.leftOut, p.shape) {
+				clash.leftOut = append(clash.leftOut, p.shape)
 			}
 			clash.points++
 			continue
@@ -1068,19 +1109,21 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	if sources != nil {
 		*sources = otlpPointSources{index: map[string]int{}}
 	}
-	out, _ = otlpPoints(set, own, now, start, func(series int, name string, kind int, _ []otlpAttribute) bool {
+	out, _ = otlpPoints(set, own, otel, now, start, func(series int, name string, shape otlpShape, _ []otlpAttribute) bool {
 		n++
 		if leftOut[n-1] {
 			return false
 		}
 		if sources != nil {
-			sources.add(series, name, kind)
+			sources.add(series, name, shape)
 		}
 		return true
 	})
 	reported := make([]otlpNameClash, 0, len(clashes))
 	for _, name := range model.SortedKeys(clashes) {
-		slices.Sort(clashes[name].leftOut)
+		slices.SortFunc(clashes[name].leftOut, func(a, b otlpShape) int {
+			return cmp.Or(cmp.Compare(a.kind, b.kind), cmp.Compare(a.unit, b.unit))
+		})
 		reported = append(reported, *clashes[name])
 	}
 	return out, reported
@@ -1109,12 +1152,12 @@ var errOTLPNameClash = errors.New("two writers of one OTLP resource - probes, st
 func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
 	for _, clash := range clashes {
 		kinds := make([]string, 0, len(clash.leftOut))
-		for _, kind := range clash.leftOut {
-			kinds = append(kinds, otlpKindNames[kind])
+		for _, shape := range clash.leftOut {
+			kinds = append(kinds, shape.String())
 		}
 		s.failures.failed(s.logger, slog.LevelWarn, otlpNameClashKey(resource, clash.name),
 			"OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export", "otlp", errOTLPNameClash,
-			"metric", model.ShownName(clash.name), "kind", otlpKindNames[clash.kept], "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
+			"metric", model.ShownName(clash.name), "kind", clash.kept.String(), "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
 	}
 }
 
@@ -1184,9 +1227,9 @@ func otlpKind(m otlpMetric) int {
 	return otlpKindGauge
 }
 
-func newOTLPMetric(name, help string, kind int) otlpMetric {
-	out := otlpMetric{Name: name, Description: help}
-	switch kind {
+func newOTLPMetric(name, help string, shape otlpShape) otlpMetric {
+	out := otlpMetric{Name: name, Description: help, Unit: shape.unit}
+	switch shape.kind {
 	case otlpKindHistogram:
 		out.Histogram = &otlpHistogram{AggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"}
 	case otlpKindSummary:
@@ -1699,14 +1742,19 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 
 // FlushOTLP makes the last export at shutdown: the metrics probes queued since
 // the last export, and a final self-metric snapshot, within otlp.timeout.
-// Static targets are not scraped again.
+// Static targets are not scraped again. With otlp.logs, the log records
+// waiting follow, in what is left of otlp.timeout (flushOTLPLogs).
 func (s *Server) FlushOTLP() {
 	cfg := s.manager.Get().OTLP
 	if !cfg.Enabled || cfg.Endpoint == "" {
 		return
 	}
 	s.logger.Info("sending the last OTLP export before exiting")
+	start := time.Now()
 	s.exportOTLPOnce(context.Background(), time.Duration(cfg.Timeout), true)
+	// The log export's last is within the same otlp.timeout, after the
+	// metrics', so the lines that one logged go with it.
+	s.flushOTLPLogs(cfg, start.Add(time.Duration(cfg.Timeout)))
 }
 
 // exportOTLP sends everything pending, with a self-metric snapshot, retrying

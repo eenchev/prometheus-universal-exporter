@@ -67,6 +67,28 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `proxy_url`, from its own request or its file's `defaults`, `direct`, or
   `environment` when it follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` —
   with the paths of `proxy_basic_auth_file`, never the credentials.
+- `otlp.logs` sends the exporter's own log lines over OTLP as well, to the
+  collector its metrics go to (`/v1/logs`), from `otlp.logs.level` up, with
+  the `otlp` block's headers, TLS and retries; stderr is written as before.
+  Logging never waits for it: a line that finds `max_pending_records` waiting
+  is dropped and counted (`http_exporter_otlp_log_*`), and the status page
+  shows the log export. It never makes the exporter unready.
+- The status page has a Refresh button and an auto-refresh selector, as a
+  Grafana dashboard has: `Off`, or every `5s` to `1h`, kept in the URL as
+  `?refresh=30s`, refreshing the page's content in place, pausing while the
+  tab is hidden, and saying when it last refreshed or that a refresh failed.
+  `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
+  interval a URL without one gets; off by default.
+- `otlp.metric_names: otel` names the OTLP export's metrics as OpenTelemetry
+  does: a counter without its `_total`, and a unit suffix such as `_seconds`
+  or `_bytes_per_second` moved into the metric's unit (`s`, `By/s`). The
+  default, `prometheus`, keeps the names as they are.
+- `otlp.scope` sets the instrumentation scope's name and version of the
+  exported metrics and log records; left out, it is
+  `prometheus-universal-exporter` without a version, as before.
+- A static target's `otlp.labels_as_resource` moves labels of its own from
+  every exported data point to its OTLP resource, and `otlp.instance_id: true`
+  gives the resource `service.instance.id`, the target's name.
 
 ### Fixed
 
@@ -85,6 +107,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   scrape.
 - GitHub Releases are described from `CHANGELOG.md` instead of a list of pull
   requests.
+- The status page has the bar the other pages have at their top: back to the
+  landing page, the other pages and the documentation. Every HTML page now
+  carries the same bar, the page shown marked.
+- The debug page shows the configured collector chosen as YAML, as its file
+  writes it, read-only, with its credentials and file paths withheld and the
+  keys it takes from its file's defaults marked, instead of the example,
+  which it does not run; *Edit a copy* writes it on the page. A link from
+  `/collectors` opens the page with it shown.
 
 ## exporter 1.8.0
 

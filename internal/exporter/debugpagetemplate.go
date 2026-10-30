@@ -1,7 +1,5 @@
 package exporter
 
-import "html/template"
-
 // The debug page (debugpage.go): a collector, written in an editor or chosen
 // from the configuration in force, the response it is run on — pasted, or at
 // --web.debug=full a target fetched through a configured collector or a
@@ -14,6 +12,8 @@ import "html/template"
 // what the link names.
 
 type debugPage struct {
+	// Chrome is the bar at the top of the page (pagechrome.go).
+	Chrome pageChrome
 	// Full offers fetching a target and scraping a static target,
 	// --web.debug=full.
 	Full bool
@@ -25,7 +25,10 @@ type debugPage struct {
 	// scrape timeout Prometheus would send.
 	ProbeTimeoutSeconds  int
 	Example, ExampleBody string
-	Docs                 string
+	// Chosen is the configured collector the page's address names, which
+	// it opens with, and ChosenYAML that collector as the page shows it
+	// (debugcollector.go).
+	Chosen, ChosenYAML string
 }
 
 // debugExample and debugExampleBody are what the page starts with: a
@@ -51,15 +54,14 @@ metrics:
 const debugExampleBody = `{"rooms": [{"name": "kitchen", "celsius": 21.5}, {"name": "attic", "celsius": 17}]}
 `
 
-var debugPageTemplate = template.Must(template.New("debug").Parse(`<!DOCTYPE html>
+var debugPageTemplate = pageTemplate("debug", `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug · Prometheus Universal Exporter</title>
-<style>` + pageStyle + `
+<style>`+pageStyle+`
 main { max-width: 1200px; }
-nav { margin-bottom: 16px; font-size: 14px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-top: 16px; }
 section.panel { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--panel); min-width: 0; }
@@ -68,7 +70,9 @@ label { display: block; font-size: 13px; margin: 8px 0 2px; }
 input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; resize: vertical; tab-size: 2; }
 textarea#collector { min-height: 360px; }
-textarea:disabled { opacity: .55; }
+textarea[readonly] { background: var(--code); }
+.collector-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.collector-head label { flex: 1 1 200px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row > div { flex: 1 1 160px; min-width: 0; }
 .row > div.narrow { flex: 0 1 120px; }
@@ -77,6 +81,7 @@ textarea:disabled { opacity: .55; }
 .modes input { width: auto; }
 .actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
 button { padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
+button.secondary { padding: 3px 12px; margin-top: 6px; background: transparent; color: var(--accent); font-size: 13px; }
 [hidden] { display: none !important; }
 .switch { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; cursor: pointer; }
 .switch input { appearance: none; -webkit-appearance: none; position: relative; width: 36px; height: 20px; flex: none; margin: 0; padding: 0; border-radius: 10px; border: 1px solid var(--muted); background: transparent; cursor: pointer; transition: background .15s; }
@@ -98,7 +103,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 </head>
 <body>
 <main>
-<nav><a href="./">← Prometheus Universal Exporter</a> · <a href="collectors">Collectors</a></nav>
+{{template "chrome" .Chrome}}
 <h1>Debug</h1>
 <p class="meta">Run one collector — written here, as it is written under <code>collectors:</code>, or one of the configuration — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
 <p class="note">A collector written here never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Fetching a target needs <code>--web.debug=full</code>.{{end}}</p>
@@ -108,17 +113,21 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <h2>Collector</h2>
 <label for="configured">Collector to run</label>
 <select id="configured">
-<option value="">The one written below</option>
+<option value="">The one written on this page</option>
 {{- if .Collectors}}
-<optgroup label="Configured">
+<optgroup label="Configured, run as configured">
 {{- range .Collectors}}
-<option value="{{.Name}}">{{.Name}} ({{.RequestType}})</option>
+<option value="{{.Name}}"{{if eq .Name $.Chosen}} selected{{end}}>{{.Name}} ({{.RequestType}})</option>
 {{- end}}
 </optgroup>
 {{- end}}
 </select>
-<label for="collector">YAML of one collector</label>
-<textarea id="collector" spellcheck="false" autocomplete="off">{{.Example}}</textarea>
+<div class="collector-head">
+<label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}YAML of the collector written here, which runs{{end}}</label>
+<button type="button" class="secondary" id="edit-copy"{{if not .Chosen}} hidden{{end}}>Edit a copy</button>
+</div>
+<p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> writes it on this page, where the copy runs in its place.</p>
+<textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
 </section>
 <section class="panel">
 <h2>Response</h2>
@@ -198,17 +207,21 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <pre id="report"></pre>
 </details>
 </section>
-<p class="meta"><a href="{{.Docs}}">Documentation</a></p>
 </main>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 const store = (() => { try { return window.localStorage; } catch (error) { return null; } })();
-// The collector and the body are kept in this browser between visits.
+// The collector written here and the body are kept in this browser between
+// visits; written is the collector written here, which the editor shows
+// while no configured collector is chosen.
+let written = $("collector").dataset.example;
 for (const id of ["collector", "body"]) {
   try {
     const kept = store && store.getItem("debug." + id);
-    if (kept !== null && kept !== undefined) $(id).value = kept;
+    if (kept === null || kept === undefined) continue;
+    if (id === "collector") written = kept;
+    else $(id).value = kept;
   } catch (error) { /* storage refused: start from the example */ }
 }
 // A link from the collectors page names the collector, and at full the
@@ -231,12 +244,46 @@ const mode = () => {
 };
 const showMode = () => {
   for (const part of document.querySelectorAll("[data-mode]")) part.hidden = part.dataset.mode !== mode();
-  // A configured collector is run as configured: the editor is not read.
-  $("collector").disabled = $("configured").value !== "";
 };
+// The editor shows what runs: the collector written here, or the configured
+// one chosen, as /debug/collector shows it, read-only, since it runs as
+// configured. Edit a copy writes that one here, where the copy runs.
+const configuredYAML = new Map();
+if ($("collector").dataset.shown) configuredYAML.set($("collector").dataset.shown, $("collector").value);
+async function showCollector() {
+  const area = $("collector"), name = $("configured").value;
+  area.readOnly = name !== "";
+  $("edit-copy").hidden = name === "";
+  $("collector-note").hidden = name === "";
+  $("collector-label").textContent = name === "" ? "YAML of the collector written here, which runs" : "The configuration of " + name + ", which runs as configured (read-only)";
+  if (name === "") { area.value = written; return; }
+  if (configuredYAML.has(name)) { area.value = configuredYAML.get(name); return; }
+  area.value = "# Reading the configuration of " + name + "…";
+  let text;
+  try {
+    const url = new URL("debug/collector", document.baseURI);
+    url.searchParams.set("name", name);
+    const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+    const answer = await response.json();
+    if (answer.error) text = "# " + answer.error;
+    else configuredYAML.set(name, text = answer.yaml);
+  } catch (error) {
+    text = "# The configuration could not be read: " + error.message;
+  }
+  if ($("configured").value === name) area.value = text;
+}
+$("collector").addEventListener("input", () => { if (!$("collector").readOnly) written = $("collector").value; });
+$("edit-copy").addEventListener("click", () => {
+  written = $("collector").value;
+  $("configured").value = "";
+  showCollector();
+  $("collector").focus();
+  schedule();
+});
 for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", () => { showMode(); schedule(); });
-$("configured").addEventListener("change", showMode);
+$("configured").addEventListener("change", showCollector);
 showMode();
+showCollector();
 // "Name: value" and "name=value" lines, a blank one skipped.
 const lines = (text, separator) => {
   const out = {};
@@ -354,9 +401,12 @@ function show(answer, response, took) {
 }
 let timer = null;
 function schedule() {
-  for (const id of ["collector", "body"]) {
-    try { if (store) store.setItem("debug." + id, $(id).value); } catch (error) { /* not kept */ }
-  }
+  try {
+    if (store) {
+      store.setItem("debug.collector", written);
+      store.setItem("debug.body", $("body").value);
+    }
+  } catch (error) { /* not kept */ }
   if (!$("live").checked) return;
   clearTimeout(timer);
   timer = setTimeout(run, 600);
@@ -373,4 +423,4 @@ $("run").addEventListener("click", run);
 </script>
 </body>
 </html>
-`))
+`)

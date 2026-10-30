@@ -91,7 +91,7 @@ func TestARedirectedOTLPAttemptSaysWhereItLed(t *testing.T) {
 			t.Cleanup(endpoint.Close)
 			server := otlpServer(t, endpoint.URL)
 			cfg := otlpConfig(endpoint.URL + "/v1/metrics")
-			answer, err := server.sendOTLP(context.Background(), cfg, model.TLSConfig{}, []byte("{}"), time.Second)
+			answer, err := server.sendOTLPOf(context.Background(), otlpMetricsSignal(server.logger), cfg, model.TLSConfig{}, []byte("{}"), time.Second)
 			if err == nil || answer.retryable {
 				t.Fatalf("a redirect was not a refusal: %v %+v", err, answer)
 			}

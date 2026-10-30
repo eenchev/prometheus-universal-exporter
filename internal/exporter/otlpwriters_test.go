@@ -711,7 +711,7 @@ func TestAnExportWithoutSharedStreamsIsMadeOnce(t *testing.T) {
 	clear(asked)
 	set.Metrics = append(set.Metrics, valueOf("item_seconds", model.CounterMetricType, map[string]string{"id": "sum"}, 1))
 	out, clashes := otlpMetricsOf(otlpResourceSet{Set: set}, "1", start)
-	if len(clashes) != 1 || clashes[0].name != "item_seconds" || clashes[0].kept != otlpKindSum || clashes[0].points != 1 || len(out) != 5 {
+	if len(clashes) != 1 || clashes[0].name != "item_seconds" || clashes[0].kept != (otlpShape{kind: otlpKindSum}) || clashes[0].points != 1 || len(out) != 5 {
 		t.Fatalf("the names of two kinds are %+v, and the export has %d metrics", clashes, len(out))
 	}
 	for series, times := range asked {
@@ -760,7 +760,7 @@ func TestOneScrapesPointsAreMadeAsTheyWere(t *testing.T) {
 		if !bytes.Equal(now, was) || !slices.Equal(asked, askedBefore) {
 			t.Fatalf("set %d is made\n%s\nasking for the start times of %q, and was made\n%s\nasking for %q", n, now, asked, was, askedBefore)
 		}
-		if _, shared := otlpPoints(set, 0, "9", nil, nil); shared {
+		if _, shared := otlpPoints(set, 0, false, "9", nil, nil); shared {
 			asGauges++
 		}
 		if len(set.Metrics) > 3 {
@@ -1041,7 +1041,7 @@ func otlpMetricsAsItWas(set model.MetricSet, now string, start func(m model.Metr
 		if !seen || otlpKind(out[i]) != kind {
 			index[name] = len(out)
 			i = len(out)
-			out = append(out, newOTLPMetric(name, help, kind))
+			out = append(out, newOTLPMetric(name, help, otlpShape{kind: kind}))
 		}
 		return &out[i]
 	}

@@ -756,6 +756,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.debug` | `--web.debug`: `off`, `edit` or `full` | off |
 | `server.gzipLevel` | `--web.gzip-level`: `0` to `9` | unset: the exporter's `1` |
+| `server.statusRefresh` | `--web.status-refresh`: `off`, or `5s` to `24h` | unset: the exporter's `off` |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
@@ -772,6 +773,8 @@ The exporter's own flags are chart values rather than something to assemble by h
 `server.probeDefaultTimeout` bounds a probe without a scrape timeout header, as from curl, a script or the exporter's collectors page with JavaScript off; a `timeout` parameter bounds the request within it and cannot lift it. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
 
 `server.gzipLevel` is the gzip level of the answers of `/probe`, the self-metrics and the static targets to a scrape that accepts gzip, as Prometheus's do: `1`, the exporter's default, is the fastest, and `9` makes the smallest answers, for a scrape over a slow link; `0` answers them uncompressed, which Prometheus takes as well, when the network is cheaper than the pod's CPU (see [Endpoints](../../docs/ENDPOINTS.md)). It takes a whole number from `0` to `9`, as a number or a string; anything else fails rendering, as does `--web.gzip-level` in `extraArgs`. Empty, the default, renders no flag.
+
+`server.statusRefresh` is how often the status page, at the static targets path followed by `/status`, refreshes itself when its URL does not say with `?refresh=` (see [Status page](../../docs/ENDPOINTS.md#status-page)): `off`, or whole hours, minutes and seconds from `5s` to `24h`, such as `30s` or `1m`, for a page left open on a wall screen. Anything else fails rendering, as does `--web.status-refresh` in `extraArgs`. Empty, the default, renders no flag, and the page does not refresh by itself until someone picks an interval on it.
 
 `server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit (the exporter's flag reads `010` as eight and refuses `08`), `0` for no limit, and are rendered only when set; the exporter itself takes a larger number on a 64-bit platform, and the chart does not. Size them to `resources.limits.memory`.
 
@@ -796,7 +799,7 @@ helm install exporter charts/prometheus-universal-exporter \
   --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 75
 ```
 
-Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds.
+Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds. With [`otlp.logs`](#otlp-export) the last export of the exporter's own log follows the metrics' within the same `otlp.timeout`, taking at least a second, which the 10 seconds cover at the default.
 
 `server.enableLifecycle` enables `/-/reload`, which, on `POST` or `PUT`, reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
@@ -1154,6 +1157,45 @@ env:
   - name: NO_PROXY
     value: .svc,.cluster.local,10.0.0.0/8
 ```
+
+### OTLP export
+
+OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers both exports send:
+
+```yaml
+server:
+  expandEnv: true
+
+env:
+  - name: OTLP_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: otel-collector-credentials
+        key: token
+
+config:
+  data:
+    config.yaml: |
+      otlp:
+        enabled: true
+        endpoint: http://otel-collector.observability:4318/v1/metrics
+        headers:
+          Authorization: Bearer ${OTLP_TOKEN}
+        logs:
+          enabled: true
+          level: info
+      collectors:
+        - name: example
+          request:
+            type: http
+          transform:
+            type: regex
+          metrics:
+            - name: example_value
+              expression: 'value=(\d+)'
+```
+
+A failing log export never makes the pod unready; the exporter's [status page](../../docs/ENDPOINTS.md#otlp-export) and the `http_exporter_otlp_log_*` [self-metrics](../../docs/SELF-METRICS.md#otlp-export-status) say how it is going. Keep the collector's name in `NO_PROXY` behind an egress proxy, as [above](#environment-variables-in-the-configuration).
 
 ### Exporter resource metrics
 
@@ -1592,7 +1634,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
 | `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

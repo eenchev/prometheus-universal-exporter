@@ -225,13 +225,60 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 		}
 		// The OTLP resource identity is only used by a target exported over
 		// OTLP; set without it, it would be quietly ignored.
-		if !t.ExportViaOTLP && (t.OTLP.ServiceName != "" || len(t.OTLP.ResourceAttributes) > 0) {
+		if !t.ExportViaOTLP && t.OTLP.Set() {
 			return fmt.Errorf("target %q sets otlp, which only a target with export_via_otlp: true uses", t.Name)
 		}
 		// As for the exporter-wide otlp block: service_name is the
 		// resource's service.name, which the attributes must not set again.
 		if _, twice := t.OTLP.ResourceAttributes[otlpServiceNameAttribute]; twice {
 			return fmt.Errorf("target %q otlp.resource_attributes sets %s, which otlp.service_name sets; write the name as the target's otlp.service_name", t.Name, otlpServiceNameAttribute)
+		}
+		// A label moved to the resource is one the target sets, the same on
+		// every series of it; one a series has of its own may differ from
+		// series to series, which no resource can.
+		named := map[string]bool{}
+		for _, name := range t.OTLP.LabelsAsResource {
+			if _, own := t.Labels[name]; !own {
+				return fmt.Errorf("target %q otlp.labels_as_resource names %q, which is not one of its labels; only a label the target's labels set, the same on every series of it, can move to its resource", t.Name, name)
+			}
+			if named[name] {
+				return fmt.Errorf("target %q otlp.labels_as_resource names %q twice", t.Name, name)
+			}
+			named[name] = true
+		}
+	}
+	return nil
+}
+
+// otlpServiceInstanceIDAttribute is the resource attribute a static target's
+// otlp.instance_id gives its resource.
+const otlpServiceInstanceIDAttribute = "service.instance.id"
+
+// checkTargetResourceKeys refuses a target whose otlp.labels_as_resource or
+// otlp.instance_id would give its resource an attribute it has already,
+// from its own otlp.resource_attributes or from the exporter-wide ones it
+// keeps: the resource would carry the key twice. An attribute written ""
+// is one left out (exporter/statictarget.go's targetResource): the
+// target's keeps the exporter-wide one of the name, and that is none. A label's name has no dot, so neither service.name nor
+// service.instance.id can be one.
+func checkTargetResourceKeys(t *model.StaticTarget, o model.OTLPConfig) error {
+	from := func(key string) string {
+		if t.OTLP.ResourceAttributes[key] != "" {
+			return "its otlp.resource_attributes"
+		}
+		if o.ResourceAttributes[key] != "" {
+			return "the exporter's otlp.resource_attributes"
+		}
+		return ""
+	}
+	for _, name := range t.OTLP.LabelsAsResource {
+		if source := from(name); source != "" {
+			return fmt.Errorf("target %q otlp.labels_as_resource names %q, which its resource has already as an attribute, from %s; rename the label, or leave it on the target's points", t.Name, name, source)
+		}
+	}
+	if t.OTLP.InstanceID {
+		if source := from(otlpServiceInstanceIDAttribute); source != "" {
+			return fmt.Errorf("target %q sets otlp.instance_id, which makes the target's name its resource's %s, and its resource has that attribute already, from %s; leave one of the two out", t.Name, otlpServiceInstanceIDAttribute, source)
 		}
 	}
 	return nil
@@ -276,6 +323,9 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		}
 		if strings.TrimSpace(c.OTLP.Endpoint) == "" {
 			return fmt.Errorf("target %q sets export_via_otlp, which needs otlp.endpoint", t.Name)
+		}
+		if err := checkTargetResourceKeys(t, c.OTLP); err != nil {
+			return err
 		}
 	}
 	collectors := collectorsByName(c)

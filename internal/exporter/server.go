@@ -33,8 +33,11 @@ type Server struct {
 	// debug is the level of --web.debug (debuglevel.go); debugSlots bounds
 	// the debug page's runs in progress (debugpage.go), and debugRunCounts
 	// counts every run of the debug engine.
-	debug             DebugLevel
-	debugSlots        chan struct{}
+	debug      DebugLevel
+	debugSlots chan struct{}
+	// statusRefresh is the status page's auto-refresh when its URL does
+	// not say, --web.status-refresh, 0 for off (statusrefresh.go).
+	statusRefresh     time.Duration
 	debugRunCounts    debugRuns
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet
@@ -98,6 +101,11 @@ type Server struct {
 	lifecycle bool
 	// otlp is how exports are going (otlp.go).
 	otlp *otlpStatus
+	// otlpLogs is the tee the exporter's log goes through, nil unless the
+	// exporter set one (SetOTLPLogs), and otlpLogsLogger the logger beneath
+	// it, to stderr alone, that the log export logs to (otlplogs.go).
+	otlpLogs       *OTLPLogs
+	otlpLogsLogger *slog.Logger
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
 	// scrapesCtx is what static target scrapes run under, until
@@ -198,7 +206,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath:
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -273,7 +281,7 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
 // targets path and its status page, /health, /ready and /-/reload, and with --web.debug on
-// /debug and /debug/run. Whatever answers, its client has
+// /debug, /debug/run and /debug/collector. Whatever answers, its client has
 // AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -300,6 +308,7 @@ func (s *Server) Handler() http.Handler {
 	if s.debug != DebugOff {
 		mux.HandleFunc("GET "+debugPagePath, protected(s.debugPageHandler))
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
+		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
 	}
 	return s.writeBounded(mux)
 }

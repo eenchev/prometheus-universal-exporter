@@ -1002,8 +1002,8 @@ func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	if strings.TrimSpace(o.Endpoint) == "" {
 		return errors.New("otlp.endpoint is required when OTLP is enabled")
 	}
-	u, err := url.Parse(o.Endpoint)
-	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+	u, ok := otlpEndpointURL(o.Endpoint)
+	if !ok {
 		return errors.New("otlp.endpoint must be an http or https URL")
 	}
 	// What the export sends and connects with is held to what a collector's
@@ -1074,8 +1074,98 @@ func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	default:
 		return fmt.Errorf("otlp.compression must be %s or %s, not %q", model.OTLPCompressionGzip, model.OTLPCompressionNone, o.Compression)
 	}
+	switch o.MetricNames {
+	case "":
+		o.MetricNames = model.OTLPMetricNamesPrometheus
+	case model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel:
+	default:
+		return fmt.Errorf("otlp.metric_names must be %s or %s, not %q", model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel, o.MetricNames)
+	}
+	if err := checkOTLPScope(o.Scope); err != nil {
+		return err
+	}
+	return validateOTLPLogs(&o.Logs, u)
+}
+
+// checkOTLPScope checks otlp.scope, when it is written: a scope is known by
+// its name, which an empty one would not give it, and the name and the
+// version are sent as written, where a control character is nothing a
+// backend shows.
+func checkOTLPScope(scope *model.OTLPScopeConfig) error {
+	if scope == nil {
+		return nil
+	}
+	if scope.Name == "" {
+		return fmt.Errorf("otlp.scope.name is required when otlp.scope is written; leave scope out for the default, %s", model.DefaultOTLPScopeName)
+	}
+	for _, key := range []struct{ name, value string }{{"name", scope.Name}, {"version", scope.Version}} {
+		for _, r := range key.value {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("otlp.scope.%s has the control character %q in it", key.name, r)
+			}
+		}
+	}
 	return nil
 }
+
+// validateOTLPLogs checks otlp.logs, of a block switched on whose endpoint is
+// metrics, and fills in its defaults. The logs go to the collector the
+// metrics go to, at its standard path for logs, unless the block names
+// another endpoint: an endpoint that does not end in /v1/metrics has no
+// standard path to take it from, so it must.
+func validateOTLPLogs(l *model.OTLPLogsConfig, metrics *url.URL) error {
+	if !l.Enabled {
+		return nil
+	}
+	switch {
+	case strings.TrimSpace(l.Endpoint) != "":
+		if _, ok := otlpEndpointURL(l.Endpoint); !ok {
+			return errors.New("otlp.logs.endpoint must be an http or https URL")
+		}
+	case strings.HasSuffix(metrics.Path, otlpMetricsPath):
+		derived := *metrics
+		derived.Path = strings.TrimSuffix(metrics.Path, otlpMetricsPath) + otlpLogsPath
+		derived.RawPath = ""
+		l.Endpoint = derived.String()
+	default:
+		return fmt.Errorf("otlp.logs.endpoint is required when otlp.endpoint does not end in %s, which would be made %s for the logs", otlpMetricsPath, otlpLogsPath)
+	}
+	level, ok := model.LogLevel(l.Level)
+	switch {
+	case l.Level == "":
+		l.Level = "info"
+	case !ok:
+		return fmt.Errorf("otlp.logs.level %q is not a level; use debug, info, warn or error", l.Level)
+	default:
+		l.Level = strings.ToLower(level.String())
+	}
+	switch {
+	case l.Interval == 0:
+		l.Interval = model.Duration(model.DefaultOTLPLogsInterval)
+	case l.Interval < model.Duration(time.Second):
+		return fmt.Errorf("otlp.logs.interval %s is under the least, 1s; leave it out for the default, %s", time.Duration(l.Interval), model.DefaultOTLPLogsInterval)
+	}
+	switch {
+	case l.MaxPendingRecords < 0:
+		return errors.New("otlp.logs.max_pending_records must not be negative")
+	case l.MaxPendingRecords == 0:
+		l.MaxPendingRecords = model.DefaultOTLPLogsMaxPendingRecords
+	}
+	return nil
+}
+
+// otlpEndpointURL reads an OTLP/HTTP endpoint, which is an http or https
+// URL with a host.
+func otlpEndpointURL(endpoint string) (*url.URL, bool) {
+	u, err := url.Parse(endpoint)
+	return u, err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// The standard paths of OTLP/HTTP's metrics and logs.
+const (
+	otlpMetricsPath = "/v1/metrics"
+	otlpLogsPath    = "/v1/logs"
+)
 
 // LoadOption adjusts how a configuration document is read. Options are
 // variadic so that reading a file without them — which is what every test and
@@ -1133,18 +1223,26 @@ func WithoutNamedFiles() LoadOption {
 // target file. A file it cannot read is a readError, which the watch tries
 // again at every tick (Manager.configUnread).
 func readDocument(path string, opts []LoadOption) ([]byte, error) {
+	b, _, err := readDocumentSource(path, opts)
+	return b, err
+}
+
+// readDocumentSource is readDocument, which also gives the file as it is
+// written, before its references were expanded (recordWritten).
+func readDocumentSource(path string, opts []LoadOption) (document, raw []byte, err error) {
 	var options loadOptions
 	for _, apply := range opts {
 		apply(&options)
 	}
-	b, err := readFile(path)
+	raw, err = readFile(path)
 	if err != nil {
-		return nil, &readError{err: err}
+		return nil, nil, &readError{err: err}
 	}
 	if !options.expandEnv {
-		return b, nil
+		return raw, raw, nil
 	}
-	return expandEnvironment(path, b, options.flag)
+	document, err = expandEnvironment(path, raw, options.flag)
+	return document, raw, err
 }
 
 // readFile reads the file at path for readDocument; tests set it to make a
@@ -1181,7 +1279,7 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 // validation is what opens the files the configuration names (namedFiles),
 // so a reload that stamps them stamps them before they are read.
 func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.Config, error) {
-	b, err := readDocument(path, opts)
+	b, raw, err := readDocumentSource(path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1203,6 +1301,7 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	// The configuration's defaults are its own collectors', given before
 	// the collector files' join them.
 	ownDefaultsErr := applyOwnDefaults(&c, b)
+	recordWritten(raw, c.Collectors)
 	err = model.JoinProblems(ownDefaultsErr, mergeCollectorFiles(&c, path, opts))
 	if decoded != nil {
 		decoded(&c)

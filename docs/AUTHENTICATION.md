@@ -476,7 +476,12 @@ is kept from reaching further than that:
   files, hosts and databases with the server's keys. `${NAME}` references in
   it are not expanded, so the environment stays unseen. A pasted response
   makes no request at all. A configured collector run by name is the
-  operator's own: on a pasted response it makes no request either.
+  operator's own: on a pasted response it makes no request either. The page
+  shows such a collector's YAML, at `edit` as at `full`, with every value
+  whose key reads as a credential's, every path a `*_file` key names and a
+  URL's userinfo withheld, and what reads as a credential in a Python
+  script masked ([The debug page](CONFIGURATION.md#the-debug-page)): it
+  shows how the collector is configured, not what it is configured with.
 - **Requests to anywhere.** A target is only fetched, at `full`, through a
   collector of the configuration in force, with its target policy and its
   credentials, as a debug probe of it would be — nothing a probe could not

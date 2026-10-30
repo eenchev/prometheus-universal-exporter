@@ -10,14 +10,21 @@ the [command-line flags](FLAGS.md).
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.debug`, a link into the debug page. See [Probing from the browser](AUTHENTICATION.md#probing-from-the-browser). |
 | `/debug` | With `--web.debug`: run a collector, written there or configured, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
+| `/debug/collector` | With `--web.debug`: a configured collector as the debug page shows it, `?name=<name>`, with `GET`: its YAML as its file writes it, credentials and file paths withheld, as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
-| `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — the recent probes of each collector and target, and how the OTLP export is going, as an HTML page, or as JSON with `?format=json`, with `GET` or `HEAD`. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
+| `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — the recent probes of each collector and target, and how the OTLP export is going, as an HTML page that refreshes itself every `?refresh=` interval or `--web.status-refresh`, or as JSON with `?format=json`, with `GET` or `HEAD`; `?format=fragment` is the page's content section alone. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
 | `/-/reload` | `POST` or `PUT` reloads the configuration, with `--web.enable-lifecycle`, as either does Prometheus's own; any other method is answered `405`. See [Reloading on demand](CONFIGURATION.md#reloading-on-demand). |
 | `/health`, `/ready` | Kubernetes probes, and the exporter's own [`--healthcheck`](CONFIGURATION.md#health-checks) for a container health check. `/ready` is `503` while OTLP exports keep failing (when `otlp.unready_after_failures` asks for it), the exporter is shutting down, or in allocator mode before the first bundle, not after a rejected reload; see [Readiness](CONFIGURATION.md#readiness). Never authenticated. |
 
 `/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape. They are compressed at `--web.gzip-level`, by default `1`, the fastest: an answer is compressed on every scrape and read once, and level `1` compresses one in a fifth or less of the time level `6` takes, for an answer at most about a tenth larger. `9` makes the smallest answers, for a scrape over a slow link; `0` answers uncompressed whatever the client accepts, which Prometheus takes as well, when the network is cheaper than the exporter's CPU. The self-metrics count the bytes of these answers before and after compression, by endpoint ([Answer sizes](SELF-METRICS.md#answer-sizes)).
+
+The HTML pages — `/`, `/collectors`, `/debug` and the status page — share
+one bar at the top: the way back to the landing page, a link to each of the
+other pages, the one shown marked, and the documentation. Its links are
+relative to the page, as every link of the pages is, so they hold behind a
+reverse proxy that serves the exporter under a path of its own.
 
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
@@ -44,6 +51,37 @@ refused. It has three sections:
 
 While the last OTLP export failed, a line at the top of the page says so,
 with the failed exports in a row and whether they made the exporter unready.
+
+### Refreshing
+
+The page refreshes as a Grafana dashboard does. Its Refresh button fetches
+the page's content again and puts it in place, without reloading the page;
+its auto-refresh selector does so every `5s`, `10s`, `30s`, `1m`, `5m`, `15m`,
+`30m` or `1h`, or not at all, `Off`. Beside them the page says when it was
+last refreshed, or, when a refresh fails — the exporter is restarting, or
+answers an error — that it failed, why, and how old the data still shown is;
+the next refresh tries again.
+
+The interval chosen is kept in the page's URL, `?refresh=30s`, so a bookmark
+or a shared link opens the page with it. A URL without one takes
+`--web.status-refresh`, off by default. `?refresh=` takes `off` or a duration
+in whole seconds from `5s` to `24h`, such as `90s`, which the selector then
+lists in its place among the others; any other value is ignored and the
+flag's interval applies, so a mistyped link still shows the page.
+
+The page is not refreshed while its tab is hidden; back in view, it is
+refreshed at once if a refresh fell due meanwhile. A refresh still waiting
+for its answer is never overlapped: the tick that finds one is skipped.
+
+A refresh fetches the page's own URL with `?format=fragment`: the content
+section alone, without the bar at the top, rendered by the page's template, as HTML, with the page's
+headers — `Cache-Control: no-store`, so nothing between keeps a copy, and
+the pages' Content-Security-Policy. The fetch goes to the same origin, so
+the browser sends it with the Basic Auth credential the page was opened with
+and marks it `Sec-Fetch-Site: same-origin`, which the
+[refusal of requests from other sites](AUTHENTICATION.md#requests-from-other-sites) lets through. Without JavaScript the page
+still works: the Refresh button reloads it, and the selector, with an Apply
+button, puts the interval in the URL, on which the page reloads itself.
 
 ### Recent probes
 
@@ -141,8 +179,8 @@ array with an object per row and, in it, the row's probes, oldest first:
 
 The page shows nothing the self-metrics, the series and the log do not: it is
 protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
-only, and every value on it is escaped. It shows the moment it was served and
-does not refresh itself: reload it. In allocator mode it says that it shows
+only, and every value on it is escaped. It shows the moment it was served,
+and refreshes as [Refreshing](#refreshing) says. In allocator mode it says that it shows
 the static targets the allocator gave this replica, the probes this
 replica answered and this replica's OTLP exports: each replica has a page of
 its own, and Prometheus spreads its probes over them.
@@ -195,6 +233,19 @@ The numbers since the start are the
 of its own only the last export's details and the last failure's error, one
 record whatever the exports.
 
+With [`otlp.logs`](OTLP.md#the-exporters-own-log) on, a part of the section,
+**Log export**, shows the export of the exporter's own log: its endpoint, with
+its credentials withheld as `otlp.endpoint`'s are, its level and interval; when
+the last log export began, its result and the records it carried; the last
+that got through; the failed log exports in a row; the last failure's error and
+when that export began; the records waiting and `otlp.logs.max_pending_records`;
+and since the start, the records dropped, by why — over the bound, refused or
+rejected by the endpoint, and of the last export at shutdown — the records
+sent, and the exports that succeeded and failed. It says nothing of readiness,
+which the log export does not touch. A reload that changes
+`otlp.logs.endpoint` starts its record again, as for `otlp.endpoint`. With
+`otlp.logs` off it is a line saying so.
+
 A reload that changes `otlp.endpoint` shows the new endpoint at once, and
 starts that record again: no last export, last success, failures or error
 until the new endpoint's first export, as the failures that make the
@@ -221,8 +272,22 @@ export is off, and otherwise:
  "pending_points": 812, "max_pending_points": 100000,
  "points_dropped": 0,
  "points_dropped_by_reason": {"refused": 0, "rejected": 0, "over_max_pending_points": 0, "last_export_at_shutdown": 0},
- "retries": 9, "exports_succeeded": 41, "exports_failed": 2}
+ "retries": 9, "exports_succeeded": 41, "exports_failed": 2,
+ "logs": {"enabled": true,
+  "endpoint": "https://redacted:redacted@otel.example/v1/logs?token=<redacted>&tenant=acme",
+  "level": "info", "interval": "5s",
+  "last_export": "2026-10-24T08:59:55Z", "last_result": "success", "last_records": 3,
+  "last_success": "2026-10-24T08:59:55Z",
+  "failing": false, "consecutive_failures": 0,
+  "pending_records": 0, "max_pending_records": 10000, "records_sent": 4210,
+  "records_dropped": 0,
+  "records_dropped_by_reason": {"over_max_pending_records": 0, "refused": 0, "last_export_at_shutdown": 0},
+  "exports_succeeded": 512, "exports_failed": 0}}
 ```
+
+`logs` is `{"enabled": false}` alone while `otlp.logs` is off. Its
+`last_export`, `last_result`, `last_records`, `last_success`, `last_error` and
+`last_error_at` are left out when there is nothing to say.
 
 `failing` says the last export failed. `last_export`, `last_success`,
 `last_error`, `last_error_at`, `unready_after_failures`, `readiness`,

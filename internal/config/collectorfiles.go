@@ -177,7 +177,7 @@ func resolveCollectorFiles(configPath string, entries []string) ([]string, error
 // loadCollectorFile reads one collector file, which must have a non-empty
 // collectors list and no other key.
 func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error) {
-	b, err := readDocument(path, opts)
+	b, raw, err := readDocumentSource(path, opts)
 	if err != nil {
 		return nil, fmt.Errorf("collector file %s: %w", path, err)
 	}
@@ -217,6 +217,7 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	if err := applyDefaults(file.Defaults, root, file.Collectors, false); err != nil {
 		return nil, inCollectorFile(path, err)
 	}
+	recordWritten(raw, file.Collectors)
 	return file.Collectors, nil
 }
 

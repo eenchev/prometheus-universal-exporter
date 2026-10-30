@@ -192,6 +192,21 @@ happens to OTLP:
 rate(http_exporter_otlp_exports_total{result="failure"}[15m]) > 0
 ```
 
+With [`otlp.logs`](OTLP.md#the-exporters-own-log) on as well, these say how
+the export of the exporter's own log is going; they are absent while it is
+off:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_otlp_log_exports_total{result}` | counter | Log exports, by `result`: `success` or `failure`. An export is one delivery of the records waiting, however many requests it is sent in; an interval with no record waiting makes none. One of which the endpoint refused a request, or that ran out of retries, is a failure. |
+| `http_exporter_otlp_log_records_sent_total` | counter | Log records the endpoint accepted: those of the requests it took, less those it rejected in a `partialSuccess`. |
+| `http_exporter_otlp_log_records_dropped_total` | counter | Log records given up on: a line that found `otlp.logs.max_pending_records` waiting, or the oldest past it after a failed export; records of a request the endpoint refused with an answer that is not retried, or rejected in a `partialSuccess`; and those of the last export before exiting when it failed. Records of an export that ran out of retries are kept for the next and not counted until then. |
+
+```promql
+# The exporter's own log is being lost.
+rate(http_exporter_otlp_log_records_dropped_total[15m]) > 0
+```
+
 ## Target allocator
 
 An exporter in [allocator mode](CONFIGURATION.md#configuration-from-the-target-allocator)

@@ -164,6 +164,11 @@ server:
   # uncompressed. Empty keeps the exporter's default, 1, and leaves the flag
   # out.
   gzipLevel: ""
+  # The status page's auto-refresh when its URL gives none with ?refresh=
+  # (--web.status-refresh): off, or whole hours, minutes and seconds from 5s
+  # to 24h, such as 30s or 1m. Empty keeps the exporter's default, off, and
+  # leaves the flag out.
+  statusRefresh: ""
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
   # on top of each collector's max_concurrent_probes. Each holds a response

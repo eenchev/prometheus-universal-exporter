@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"errors"
-	"html/template"
 	"net/http"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -40,6 +39,8 @@ type collectorEntry struct {
 }
 
 type collectorsPage struct {
+	// Chrome is the bar at the top of the page (pagechrome.go).
+	Chrome     pageChrome
 	Collectors []collectorEntry
 	// ProbeTimeoutSeconds is the timeout a form starts with, sent as the
 	// scrape timeout Prometheus would send.
@@ -48,7 +49,6 @@ type collectorsPage struct {
 	// full (debugpage.go); DebugTarget, at full, carries the form's target
 	// with the link.
 	Debug, DebugTarget bool
-	Docs               string
 }
 
 // pageProbeTimeoutSeconds is the timeout the collectors page's forms start
@@ -100,7 +100,7 @@ func targetHint(c *model.Collector, required bool) string {
 
 func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.manager.Get()
-	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Debug: s.debug != DebugOff, DebugTarget: s.debug == DebugFull, Docs: landingDocs}
+	page := collectorsPage{Chrome: s.chromeFor(pageCollectors), ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Debug: s.debug != DebugOff, DebugTarget: s.debug == DebugFull}
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
@@ -117,14 +117,13 @@ func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	s.renderPage(w, collectorsTemplate, page)
 }
 
-var collectorsTemplate = template.Must(template.New("collectors").Parse(`<!DOCTYPE html>
+var collectorsTemplate = pageTemplate("collectors", `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collectors · Prometheus Universal Exporter</title>
-<style>` + pageStyle + `
-nav { margin-bottom: 16px; font-size: 14px; }
+<style>`+pageStyle+`
 section.collector { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; background: var(--panel); }
 section.collector h2 { margin: 0; font-size: 17px; }
 section.collector h2 code { font-size: 15px; }
@@ -152,7 +151,7 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 </head>
 <body>
 <main>
-<nav><a href="./">← Prometheus Universal Exporter</a>{{if .Debug}} · <a href="debug">Debug</a>{{end}}</nav>
+{{template "chrome" .Chrome}}
 <h1>Collectors</h1>
 <p class="meta">Probe a target through a collector, as Prometheus would. The answer is what Prometheus would scrape.</p>
 {{- if .DebugTarget}}
@@ -233,7 +232,6 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 </div>
 </section>
 {{- end}}
-<p class="meta"><a href="{{.Docs}}">Documentation</a></p>
 </main>
 <script>
 "use strict";
@@ -316,4 +314,4 @@ for (const form of document.querySelectorAll("form.probe")) {
 </script>
 </body>
 </html>
-`))
+`)

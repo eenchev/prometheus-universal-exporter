@@ -30,6 +30,22 @@ otlp:
   #   insecure_skip_verify: false
   # resource_attributes:
   #   deployment.environment: production
+  # Name metrics as OpenTelemetry does: a counter without _total, and a unit
+  # suffix such as _seconds moved into the metric's unit (s). prometheus, the
+  # default, keeps the names the exposition writes.
+  # metric_names: otel
+  # The instrumentation scope of the metrics and log records; left out, the
+  # name prometheus-universal-exporter without a version.
+  # scope:
+  #   name: acme.example/edge-exporter
+  #   version: "2.4.0"
+  # Also send the exporter's own log lines, from this level up, to the same
+  # collector, at /v1/logs unless endpoint says otherwise. stderr is written
+  # as before.
+  # logs:
+  #   enabled: true
+  #   level: info
+  #   endpoint: http://otel-collector:4318/v1/logs
 
 # Optional exporter endpoint protection. Do not enable this together with a
 # collector using request.forward_authorization; both use the incoming

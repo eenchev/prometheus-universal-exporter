@@ -586,6 +586,7 @@ values schema:
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.debug` | `--web.debug=<level>`, rendered only for `edit` or `full`; empty, the default, and `off` render no flag, and any other value MUST fail rendering, by the schema's enum and in the template |
 | `server.gzipLevel` | `--web.gzip-level=<level>`, a whole number from 0 to 9, as a number or as a string; empty, the default, renders no flag, `0` MUST render, and any other value MUST fail rendering, by the schema and in the template |
+| `server.statusRefresh` | `--web.status-refresh=<interval>`, `off` or whole hours, minutes and seconds from `5s` to `24h`; empty, the default, renders no flag, and any other value MUST fail rendering, in the template whether or not the schema is checked |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -1341,7 +1342,13 @@ are skipped and the text checks of the templates still run:
    MUST render `--web.gzip-level` with that level, the default MUST render
    none, `10`, `-1`, `1.5` and `"fast"` MUST fail rendering naming
    `server.gzipLevel`, and `--web.gzip-level` in `extraArgs` MUST fail
-   rendering naming `server.gzipLevel`.
+   rendering naming `server.gzipLevel`. Likewise `server.statusRefresh` of
+   `off`, `5s`, `30s`, `1m30s`, `1h` and `24h` MUST render
+   `--web.status-refresh` with that value, the default MUST render none,
+   `4s`, `0s`, `0m0s`, `24h1s`, `25h`, `1.5s`, `500ms`, `30`, `never` and
+   `OFF` MUST fail rendering naming `server.statusRefresh`, with the schema
+   checked and with it skipped, and `--web.status-refresh` in `extraArgs`
+   MUST fail rendering naming `server.statusRefresh`.
 20. Names, network policy, monitors and scheduling: releases `blue` and
    `green` MUST get objects of their own names, a release named after the
    chart the chart's name, and `fullnameOverride` its own; the network policy
@@ -2069,7 +2076,8 @@ databases' ports for use with `networkPolicy.egress`.
 A stopping pod needs `server.shutdownDelay` (none when empty), during which it
 answers probes while `/ready` answers `503` so Kubernetes removes it from its
 Service before it stops listening, then `server.shutdownTimeout` (the
-exporter's 15 seconds when empty), and 10 seconds more for the last OTLP export
+exporter's 15 seconds when empty), and 10 seconds more for the last OTLP export,
+the last export of the exporter's own log within the same `otlp.timeout`,
 and exiting: 30 seconds with the defaults. The chart MUST
 offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
 none while that need is 30 seconds or less, Kubernetes' default, and the need
@@ -2266,3 +2274,11 @@ The same `env` is how a proxy is set: the exporter takes `HTTPS_PROXY`,
 `HTTP_PROXY` and `NO_PROXY` from its environment (SPECIFICATION-EXPORTER.md
 § 42.15b), and the chart MUST NOT add a proxy value of its own. The chart
 README MUST show setting them.
+
+OTLP export, of metrics and of the exporter's own log (`otlp.logs`,
+SPECIFICATION-EXPORTER.md § 42.1b), is configured in the configuration the
+chart renders, and the chart MUST NOT add values of its own for it. The chart
+README MUST show an `otlp` block with `logs` switched on whose collector
+token comes from a Secret through `env` and `server.expandEnv`, and a test
+MUST render that example and load the configuration it renders, with the
+token in the environment, as the exporter does.

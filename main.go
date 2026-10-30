@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 	// The IANA time zones, for a rule's time_zone: carried in the binary, so
@@ -83,6 +82,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable /-/reload, which on POST or PUT reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	debugLevel := flags.String("web.debug", "off", "Debugging collectors: off; edit, the /debug page, where a collector written there or a configured one is run on a pasted response and each stage of its trip shown, nothing fetched; or full, which adds fetching a target or a static target's scrape on that page, /probe?...&debug=true and /static-targets?debug=<name>, all of which show what the target answered")
+	statusRefresh := flags.String("web.status-refresh", "off", "The status page's auto-refresh when its URL gives none with ?refresh=: off, or a duration in whole seconds from 5s to 24h, such as 30s or 1m. The page offers off and 5s to 1h, and keeps the interval chosen in its URL")
 	gzipLevel := flags.Int("web.gzip-level", exporter.DefaultGzipLevel, "The gzip level of the answers of /probe, the self-metrics and the static targets to a client that accepts gzip, as Prometheus does: 1, the fastest, to 9, the smallest; or 0 to answer uncompressed whatever the client accepts")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
@@ -185,6 +185,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
+	refresh, err := exporter.ParseStatusRefresh(*statusRefresh)
+	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 	// A misspelt level would otherwise log at info without a word: debug
 	// output that never comes, or warnings that were meant to be the least.
 	if _, err := parseLogLevel(*logLevel); err != nil {
@@ -242,7 +247,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		staticTargetsLoadOptions = append(staticTargetsLoadOptions, config.WithStaticTargetsEnvExpansion())
 	}
 
-	logger := newLogger(*logLevel, stderr)
+	logger, otlpLogs := newExporterLogger(*logLevel, stderr)
 	if *check {
 		// In allocator mode the files checked are the bundle in the cache
 		// directory, which a restart would start with.
@@ -318,6 +323,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)
+	server.SetOTLPLogs(otlpLogs)
 	server.SetSelfMetricsPath(selfMetricsEndpoint)
 	server.SetStaticTargetsPath(staticTargetsEndpoint)
 	server.SetTimeoutOffset(*timeoutOffset)
@@ -325,6 +331,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetDebug(debug)
+	server.SetStatusRefresh(refresh)
 	server.SetGzipLevel(*gzipLevel)
 	if alloc != nil {
 		server.SetAwaitingReason(alloc.awaitingSentence())
@@ -359,6 +366,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go func() {
 		defer close(scrapeLoopDone)
 		server.StaticScrapeLoop(loopsCtx)
+	}()
+	logExportLoopDone := make(chan struct{})
+	go func() {
+		defer close(logExportLoopDone)
+		server.OTLPLogExportLoop(loopsCtx)
 	}()
 	// The allocator client heartbeats and takes new bundles until run
 	// returns: through --web.shutdown-delay too, its heartbeats saying the
@@ -444,6 +456,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// bounded by otlp.timeout.
 		<-exportLoopDone
 		<-scrapeLoopDone
+		<-logExportLoopDone
 		// The allocator client stops once nothing is served any more, and is
 		// waited for: a bundle it is writing is put in force or refused
 		// before the process ends, rather than left half written.
@@ -468,15 +481,8 @@ var waitOutShutdownDelay = time.Sleep
 
 // parseLogLevel reads --log.level: debug, info, warn or error, in any case.
 func parseLogLevel(level string) (slog.Level, error) {
-	switch strings.ToLower(level) {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
+	if l, ok := model.LogLevel(level); ok {
+		return l, nil
 	}
 	return slog.LevelInfo, fmt.Errorf("--log.level %q is not a level; use debug, info, warn or error", level)
 }
@@ -494,6 +500,17 @@ func newLogger(level string, out io.Writer) *slog.Logger {
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
 	slog.SetDefault(logger)
 	return logger
+}
+
+// newExporterLogger is newLogger for the running exporter: its lines go
+// through the tee that exports them over OTLP when otlp.logs says so, as
+// well as to out, and so do those of slog's default logger.
+func newExporterLogger(level string, out io.Writer) (*slog.Logger, *exporter.OTLPLogs) {
+	l, _ := parseLogLevel(level)
+	logs := exporter.NewOTLPLogs(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
+	logger := slog.New(logs.Handler())
+	slog.SetDefault(logger)
+	return logger, logs
 }
 
 // shutdownMessage is the line the graceful shutdown begins with: the probes in

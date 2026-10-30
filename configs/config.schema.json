@@ -4678,13 +4678,22 @@
         "interval": [
           "enabled"
         ],
+        "logs": [
+          "enabled"
+        ],
         "max_pending_points": [
+          "enabled"
+        ],
+        "metric_names": [
           "enabled"
         ],
         "probe_attributes": [
           "enabled"
         ],
         "resource_attributes": [
+          "enabled"
+        ],
+        "scope": [
           "enabled"
         ],
         "service_name": [
@@ -4766,9 +4775,72 @@
             "integer"
           ]
         },
+        "logs": {
+          "additionalProperties": false,
+          "dependentRequired": {
+            "endpoint": [
+              "enabled"
+            ],
+            "interval": [
+              "enabled"
+            ],
+            "level": [
+              "enabled"
+            ],
+            "max_pending_records": [
+              "enabled"
+            ]
+          },
+          "description": "Export of the exporter's own log lines over OTLP/HTTP, besides stderr, with the block's headers, tls, compression, timeout, batch bounds and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporters-own-log.",
+          "properties": {
+            "enabled": {
+              "description": "Turn the log export on. false keeps the block's settings without using them.",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "description": "OTLP/HTTP logs endpoint, such as http://otel-collector:4318/v1/logs. Left out, otlp.endpoint with its /v1/metrics made /v1/logs; required when otlp.endpoint does not end in /v1/metrics.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "interval": {
+              "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "level": {
+              "description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "max_pending_records": {
+              "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000.",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
         "max_pending_points": {
           "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000.",
           "type": "integer"
+        },
+        "metric_names": {
+          "description": "How the export names metrics: prometheus, the default, as the exposition writes them; or otel, as OpenTelemetry names them, a counter without its _total and a unit suffix such as _seconds or _bytes moved into the metric's unit. See docs/OTLP.md#metric-names.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
         },
         "probe_attributes": {
           "description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's.",
@@ -4781,6 +4853,29 @@
               "number",
               "boolean"
             ]
+          },
+          "type": "object"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "description": "The instrumentation scope the export's metrics and log records are sent under. Left out, the name prometheus-universal-exporter without a version; written, name is required. See docs/OTLP.md#instrumentation-scope.",
+          "properties": {
+            "name": {
+              "description": "The scope's name, not empty and without a control character once the block is switched on.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "version": {
+              "description": "The scope's version, without a control character once the block is switched on; left out, the scope has none.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
           },
           "type": "object"
         },
@@ -4890,8 +4985,62 @@
             },
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
           },
+          "logs": {
+            "if": {
+              "properties": {
+                "enabled": {
+                  "const": true
+                }
+              },
+              "required": [
+                "enabled"
+              ]
+            },
+            "then": {
+              "properties": {
+                "interval": {
+                  "not": {
+                    "not": {
+                      "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                    },
+                    "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                    "type": "string"
+                  },
+                  "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+                },
+                "level": {
+                  "pattern": "^(|[dD][eE][bB][uU][gG]|[iI][nN][fF][oO]|[wW][aA][rR][nN]|[eE][rR][rR][oO][rR])$",
+                  "type": "string"
+                },
+                "max_pending_records": {
+                  "minimum": 0
+                }
+              }
+            }
+          },
           "max_pending_points": {
             "minimum": 0
+          },
+          "metric_names": {
+            "enum": [
+              "prometheus",
+              "otel",
+              ""
+            ]
+          },
+          "scope": {
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+              },
+              "version": {
+                "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+              }
+            },
+            "required": [
+              "name"
+            ]
           },
           "timeout": {
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"

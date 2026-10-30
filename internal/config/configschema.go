@@ -2,12 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -748,12 +750,24 @@ func collectorSchemaRules() map[string]map[string]any {
 		"otlp.batch_max_size":                      {"minimum": nil, "description": "The most data points one export request carries; an export of more is sent as several requests, one after another. Defaults to 8192."},
 		"otlp.batch_max_bytes":                     {"description": "The most bytes the body of one export request may hold before compression, such as 4MiB; an export of more is sent as several requests, one after another, and a data point larger alone is sent in a request of its own. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. At least 64KiB once the block is switched on; 0, like the key left out, is the default, 4MiB."},
 		"otlp.unready_after_failures":              {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000."},
+		"otlp.logs":                                enabledSwitchRule(reflect.TypeOf(model.OTLPLogsConfig{}), "Export of the exporter's own log lines over OTLP/HTTP, besides stderr, with the block's headers, tls, compression, timeout, batch bounds and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporters-own-log."),
+		"otlp.logs.enabled":                        {"description": "Turn the log export on. false keeps the block's settings without using them."},
+		"otlp.logs.endpoint":                       {"description": "OTLP/HTTP logs endpoint, such as http://otel-collector:4318/v1/logs. Left out, otlp.endpoint with its /v1/metrics made /v1/logs; required when otlp.endpoint does not end in /v1/metrics."},
+		"otlp.logs.level":                          {"description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info."},
+		"otlp.logs.interval":                       {"pattern": signedDurationPattern, "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
+		"otlp.logs.max_pending_records":            {"minimum": nil, "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000."},
 		"otlp.probe_attributes":                    {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":     {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
 		// and the two numbers above any whole number, and otlpSchemaRule
 		// holds them to their values in a block that is switched on.
 		"otlp.compression": {"description": "Compression of the export requests: gzip, the default, or none."},
+		// So do metric_names and scope, which otlpSchemaRule holds to
+		// their values in a block switched on.
+		"otlp.metric_names":  {"description": "How the export names metrics: prometheus, the default, as the exposition writes them; or otel, as OpenTelemetry names them, a counter without its _total and a unit suffix such as _seconds or _bytes moved into the metric's unit. See docs/OTLP.md#metric-names."},
+		"otlp.scope":         {"description": "The instrumentation scope the export's metrics and log records are sent under. Left out, the name prometheus-universal-exporter without a version; written, name is required. See docs/OTLP.md#instrumentation-scope."},
+		"otlp.scope.name":    {"description": "The scope's name, not empty and without a control character once the block is switched on."},
+		"otlp.scope.version": {"description": "The scope's version, without a control character once the block is switched on; left out, the scope has none."},
 		// A disabled block may hold any duration, so the two keys take a
 		// signed one, and otlpSchemaRule refuses a negative one of a block
 		// that is switched on.
@@ -799,7 +813,9 @@ func collectorSchemaRules() map[string]map[string]any {
 // negative, whose compression is then one of its values, whose
 // max_pending_points, unready_after_failures and batch_max_size are then not
 // negative, whose unready_after_failures is then at most its most, whose
-// interval is then at least 1s, whose batch_max_bytes is then 0 or at least
+// interval is then at least 1s, whose metric_names is then one of its
+// values, whose scope then has a name without a control character and a
+// version without one, whose batch_max_bytes is then 0 or at least
 // its least (leastSizeRule), whose tls is then a client certificate with its
 // key or neither (clientCertificatePair), and whose headers' names are then
 // header names (headerNames), as the exporter checks them then
@@ -844,8 +860,42 @@ func otlpSchemaRule() map[string]any {
 		"batch_max_bytes":        batchBytes,
 		"headers":                map[string]any{"propertyNames": headerNames()},
 		"tls":                    clientCertificatePair(),
+		"logs":                   otlpLogsOnRule(),
+		"metric_names":           map[string]any{"enum": optionalEnum([]string{model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel})},
+		"scope": map[string]any{"required": []string{"name"}, "properties": map[string]any{
+			"name":    map[string]any{"minLength": 1, "pattern": noControlCharacters},
+			"version": map[string]any{"pattern": noControlCharacters},
+		}},
 	}}
 	return rule
+}
+
+// noControlCharacters is text without a control character of ASCII, which
+// otlp.scope's name and version may not hold (checkOTLPScope).
+const noControlCharacters = `^[^\x00-\x1F\x7F]*$`
+
+// otlpLogsOnRule is what otlp.logs is held to in an otlp block switched on,
+// once it is switched on itself, as validateOTLPLogs holds it: its level is
+// one of the levels, in any case, or left out; its interval at least 1s; and
+// its max_pending_records not negative. Switched off, it is unchecked, and
+// so is the whole of it in an otlp block switched off.
+func otlpLogsOnRule() map[string]any {
+	var levels []string
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		var caseless strings.Builder
+		for _, r := range level {
+			fmt.Fprintf(&caseless, "[%c%c]", r, unicode.ToUpper(r))
+		}
+		levels = append(levels, caseless.String())
+	}
+	return map[string]any{
+		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
+		"then": map[string]any{"properties": map[string]any{
+			"level":               map[string]any{"type": "string", "pattern": "^(|" + strings.Join(levels, "|") + ")$"},
+			"interval":            map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
+			"max_pending_records": map[string]any{"minimum": 0},
+		}},
+	}
 }
 
 // metricRuleSchemaRule is what the exporter refuses of a metric rule's
@@ -1083,6 +1133,8 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.retry.retry_after":               {"description": "http and graphite: replaces the collector's request.retry.retry_after for this target."},
 		"targets[].request.retry.non_idempotent":            {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                                    {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
+		"targets[].otlp.labels_as_resource":                 {"uniqueItems": true, "description": "Labels of the target's labels that its resource carries as attributes in place of the target's data points, each named once. Not one its resource has as an attribute already, from otlp.resource_attributes here or exporter-wide; that, and a name that is not among the target's labels, the exporter checks. See docs/OTLP.md#static-target-labels-as-resource-attributes."},
+		"targets[].otlp.instance_id":                        {"description": "Give the target's resource the attribute service.instance.id, the target's name, so every target is a resource of its own. Not beside a service.instance.id of otlp.resource_attributes. Defaults to false."},
 		"targets[].shard_key":                               {"description": "For the target allocator (pue-allocator): what it hashes to choose the replica that scrapes this target, in place of the target's name, so targets with one key share a replica. The exporter itself ignores it. See docs/ALLOCATOR.md."},
 	})
 }

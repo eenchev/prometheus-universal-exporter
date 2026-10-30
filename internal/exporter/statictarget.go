@@ -430,7 +430,13 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 // written "" is the attribute left out, the target's as the exporter-wide
 // one (defaultResourceIdentity): it sets nothing, so an exporter-wide
 // attribute of that name stays as it is, where a value that is not empty
-// replaces it.
+// replaces it. The labels of otlp.labels_as_resource are attributes of it
+// too, a label written "" none, as it is on no series; and otlp.instance_id
+// makes the target's name its service.instance.id. They are part of what
+// tells the resource from another (otlpResourceIdentity.key), so targets
+// that differ in them are exported apart, and those alike in every one
+// under one resource. The configuration's check refuses either beside an
+// attribute of its name (config.checkTargetResourceKeys).
 func targetResource(t *model.StaticTarget, cfg model.OTLPConfig) otlpResourceIdentity {
 	identity := defaultResourceIdentity(cfg)
 	if t.OTLP.ServiceName != "" {
@@ -441,5 +447,49 @@ func targetResource(t *model.StaticTarget, cfg model.OTLPConfig) otlpResourceIde
 			identity.Attributes[key] = value
 		}
 	}
+	for _, name := range t.OTLP.LabelsAsResource {
+		if value := t.Labels[name]; value != "" {
+			identity.Attributes[name] = value
+		}
+	}
+	if t.OTLP.InstanceID {
+		identity.Attributes[otlpServiceInstanceID] = t.Name
+	}
 	return identity
+}
+
+// otlpServiceInstanceID is the resource attribute a static target's
+// otlp.instance_id sets: OpenTelemetry's name for the one instance of a
+// service a resource is, which the target's name is among the targets.
+const otlpServiceInstanceID = "service.instance.id"
+
+// withoutResourceLabels is set, a static target's labelled result, as it is
+// exported over OTLP: without the labels of otlp.labels_as_resource, which
+// its resource carries (targetResource), on a series where the label has
+// the target's value. A series whose own label of the name has another
+// value — one its collector gave it, which a target's label never
+// replaces (withTargetLabels), or a health series' collector or target —
+// keeps it: the resource does not say it. set is not changed: the endpoint
+// serves it as it is.
+func withoutResourceLabels(set model.MetricSet, t model.StaticTarget) model.MetricSet {
+	if len(t.OTLP.LabelsAsResource) == 0 {
+		return set
+	}
+	out := model.MetricSet{Metrics: make([]model.Metric, len(set.Metrics))}
+	for i, m := range set.Metrics {
+		var labels map[string]string
+		for _, name := range t.OTLP.LabelsAsResource {
+			if value, has := m.Labels[name]; has && value == t.Labels[name] {
+				if labels == nil {
+					labels = model.CloneLabels(m.Labels)
+				}
+				delete(labels, name)
+			}
+		}
+		if labels != nil {
+			m.Labels = labels
+		}
+		out.Metrics[i] = m
+	}
+	return out
 }

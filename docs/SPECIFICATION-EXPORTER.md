@@ -7642,6 +7642,25 @@ every request and retry included, and the timestamp that of the last export that
 the last export delivers its data. These families MUST be part of the one
 self-metric set, so they are also exported over OTLP.
 
+While the export of the exporter's own log is on as well (`otlp.logs`,
+§ 42.1b), and only then, the exporter MUST publish:
+
+```text
+http_exporter_otlp_log_exports_total{result}     counter
+http_exporter_otlp_log_records_sent_total        counter
+http_exporter_otlp_log_records_dropped_total     counter
+```
+
+A log export is one delivery of the records waiting, however many requests
+it is sent in, counted once by `result` as an export of metrics is; an
+interval with no record waiting MUST make none. The records the endpoint
+accepted MUST be counted as sent, less those it rejected in a
+`partialSuccess`. A record dropped because it found
+`otlp.logs.max_pending_records` waiting, because it was the oldest past it
+after a failed export, because the endpoint refused its request or rejected
+it, or because the last log export at shutdown failed, MUST be counted as
+dropped; records kept for the next export MUST NOT be.
+
 ### 22.0d Build information
 
 The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
@@ -8074,8 +8093,9 @@ Recommended behavior:
   as `debug?collector=<name>`, and at `full` the link MUST carry the target
   entered in the form as `target`; no form MUST ask `/probe` for a debug
   report.
-- `/debug`, with `--web.debug` at `edit` or `full` only, and `/debug/run`,
-  which its runs post to: § 42.17. With the flag, `/` and `/collectors` MUST
+- `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
+  which its runs post to, and `/debug/collector`, which shows it a
+  configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
   link the page; without it, neither path is served (`404`) and neither page
   links it.
 - Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
@@ -8085,6 +8105,16 @@ Recommended behavior:
   `frame-ancestors 'none'`), since the collectors page takes credentials, and
   MUST lay out at phone width and
   follow the browser's light or dark preference.
+- Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
+  status page (§ 42.14a) — MUST carry the same bar at its top, once, with
+  the same style: a link back to `/` (on `/` itself, the exporter's name
+  marked as the page shown), a link to each of the other pages, the debug
+  page only with `--web.debug` at `edit` or `full`, the page shown marked
+  rather than linked, and the documentation. Its links MUST be relative to
+  the page, so they hold behind a proxy's path prefix and from the status
+  page under a static targets path of several segments. A part of a page
+  that a page's script swaps in, as the status page's `?format=fragment`,
+  MUST NOT carry the bar.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -8100,7 +8130,8 @@ Recommended behavior:
   changes `otlp.endpoint` starts the count again, and a negative value, or
   one over 1000, MUST be rejected: the status page keeps when each failure
   of a run ended, up to the most the threshold may be, to say when the
-  exporter became unready under any threshold (§ 42.14a). A `503` body MUST name each reason on a line of its
+  exporter became unready under any threshold (§ 42.14a). Failing exports of
+  the exporter's own log (§ 42.1b) MUST NOT make it unready. A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration. A rejected reload of the configuration or of the
@@ -9308,6 +9339,10 @@ The configured log level MUST apply to those lines too. `--log.level` MUST be
 one of `debug`, `info`, `warn` and `error`, matched case-insensitively; any
 other value MUST be refused as a malformed command line, with exit status 2
 before `--dry-run` or startup, rather than falling back to `info`.
+
+With `otlp.logs` (§ 42.1b) the lines MUST also be exported over OTLP, through
+the logger installed as the process default, so the default logger's lines
+are exported too; stderr MUST be written exactly as it is without it.
 
 A logged metric extraction failure MUST name the collector as well as the rule.
 A metric name is not unique across collectors — the same rule is often copied
@@ -29304,6 +29339,103 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   environment` alone (`TestDryRunReportsRequestPolicies`,
   `TestDryRunReportsRetryStatuses`, `TestDryRunReportsRetryAfter`).
 
+## 34.236 The status page's refresh, and the exporter's own log over OTLP
+
+- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says when it last refreshed or that a refresh failed.
+- `TestTheStatusPageAutoRefreshDefaultsToTheFlag`: with `--web.status-refresh` 30s (`SetStatusRefresh`) and no `?refresh=`, 30s is the one choice selected and the page carries `<noscript><meta http-equiv="refresh" content="30"></noscript>`.
+- `TestTheStatusPageReadsTheRefreshParameter`: `?refresh=` of `5m`, `300s`, `off`, `20s`, `90s`, `2h` and `24h` is the one choice selected over the flag's 1m; `1s`, `4s`, `0s`, `-30s`, `1500ms`, `25h`, `often`, `<b>` and `Off` are ignored and 1m stays selected; `20s` is listed between 10s and 30s and reloads the page every 20 seconds without JavaScript, and `off` leaves the meta refresh out.
+- `TestTheStatusFragmentIsThePageContentAlone`: `?format=fragment` is HTML, `no-store`, `X-Frame-Options: DENY` and the pages' Content-Security-Policy, holds the as-of line and the three sections and no document, head, body, main, script, form, style, heading, content element or meta refresh, and is, its as-of time aside, the page's content element byte for byte; an unknown `format` is answered 400 naming html, json and fragment.
+- `TestTheStatusFragmentIsGuardedAsThePageIs`: with Basic Auth on, the fragment is answered 401 without the credential and 403 cross-site with it, and same-origin with it 200, `no-store`, the content without a document.
+- `TestParseStatusRefresh`: `--web.status-refresh` takes off, 5s, 30s, 1m, 90s, 1h30m and 24h; refuses the empty value, 0, 0s, 1s, 4s, 4.999s, 5.5s, 1500ms, -30s, 24h0m1s, 48h, Off, OFF, never and 30, saying it must be off or a duration in whole seconds from 5s to 24h.
+- `TestStatusRefreshText`: an interval is written as Grafana writes it: off, 5s, 1m, 1m30s, 1h, 1h1s, 24h.
+- `TestOutOfRangeLimitsAreCommandLineErrors` (the `--web.status-refresh` cases): 1s, 0s, 48h, 2.5s and the empty value exit 2 naming the flag, on a start and with `--dry-run`.
+- `TestEveryStatusRefreshFromFiveSecondsIsNoCommandLineError`: `--dry-run` with `--web.status-refresh` of off, 5s, 30s, 1m, 90s and 24h is no command-line error.
+- `TestChartRendersItsOptions` (the status refresh cases): `server.statusRefresh` of `30s`, `5s` and `off` renders `--web.status-refresh` with it; the default renders none.
+- `TestChartRefusesInvalidOptions` (the status refresh cases): `server.statusRefresh` of `4s`, `0s`, `25h`, `7.5s`, `never` and the string `30`, and `--web.status-refresh` in `extraArgs`, fail rendering naming `server.statusRefresh`.
+- `TestChartHoldsTheStatusRefreshToTheExportersBounds`: `server.statusRefresh` of `4s`, `0s`, `0m0s`, `24h1s`, `25h`, `1.5s`, `500ms`, `30`, `never` and `OFF` fails rendering naming it with the schema checked and with it skipped, the template's own refusal given when skipped; `off`, `5s`, `1m30s`, `1h` and `24h` render with the schema skipped.
+- `TestTheExportersLogArrivesOverOTLP`: a warning and an error logged through
+  the tee arrive at the metrics' collector at `/v1/logs`, under the
+  exporter-wide resource and the scope `prometheus-universal-exporter`, with
+  the line's time and the observed time, severity 13 `WARN` and 17 `ERROR`,
+  the message as the body and the attributes typed — an int, a double, a
+  bool, a duration, an error, a uint64 past int64 and an empty string as
+  strings, a `slog.LogValuer` resolved, a group's under `group.` and an
+  unnamed group inline; the debug line under `level: info` is not sent;
+  stderr has the lines as before; the sent and success counters count them,
+  and an export with nothing waiting makes no request.
+- `TestOTLPLogsLevelIsTheLeastExported`: `otlp.logs.level` `debug`, `info`,
+  `warn` and `ERROR` export the lines at and above it, `debug` exporting a
+  line stderr at `info` does not write.
+- `TestOTLPLogsDropWhatFindsTheQueueFull`: with `max_pending_records: 2`,
+  five lines keep the first two and count three in
+  `http_exporter_otlp_log_records_dropped_total` and on the status page, in
+  the JSON and the HTML; stderr has all five.
+- `TestTheOTLPLogExportDoesNotExportItsOwnLines`: with the collector
+  answering `503`, `level: debug` and retries, five failed exports leave only
+  the one line logged waiting, the failure is logged at warn once, the
+  failures are counted and shown, `/ready` stays `200`; when the collector is
+  back it receives that line alone, and the recovery is logged.
+- `TestOTLPLogsRefusedAndRejectedAreDropped`: a `400` drops and counts the
+  request's records; a log export's `partialSuccess` reads
+  `rejectedLogRecords` and not `rejectedDataPoints`.
+- `TestOTLPLogsAreSentInBatches`: five records with `batch_max_size: 2` are
+  three requests, in order.
+- `TestTheLastOTLPExportSendsTheLogsWaiting` and
+  `TestAFailedLastOTLPLogExportDropsItsRecords`: `FlushOTLP` sends the
+  metrics' last export and then the records waiting, the line announcing the
+  last export among them, and takes nothing after; a failed one drops and
+  counts its records, the metrics' failure warning among them.
+- `TestAReloadSwitchesTheOTLPLogExport`: a reload switching `otlp.logs` off
+  stops the tee and drops what waits, the status page says the log export is
+  off and its self-metrics are gone; switched on again, only the lines
+  logged since are sent.
+- `TestOTLPLogsGoToTheMetricsCollector` and
+  `TestOTLPLogsSettingsAreCheckedAndFilledIn`: the logs endpoint is the
+  metrics' with `/v1/metrics` made `/v1/logs`, query and userinfo kept; the
+  defaults are `info`, `5s` and 10000; an endpoint without `/v1/metrics` and
+  no `logs.endpoint`, an endpoint that is no URL, an unknown level, an
+  interval under 1s and a negative bound are refused, and kept unchecked with
+  either block switched off. `TestOTLPLogsBlockMustSayEnabled`: a logs block
+  without `enabled` is refused naming its keys.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` has a `logs` row: in a
+  block switched on, a logs block switched on with an unknown or numeric
+  level, an interval under 1s or negative, or a negative bound is refused by
+  both, an endpoint that is no URL and `400ms400ms` by the exporter alone;
+  each is taken with `otlp` off; a logs block without `enabled`, an unknown
+  key or a value of the wrong kind is refused by both, off and on.
+- `TestTheExporterForwardsItsOwnLogOverOTLP`: the exporter run in a child
+  process with `otlp.logs` exports `starting exporter` in the background and
+  the shutdown's lines in its last export, and writes them to stderr.
+- `TestChartReadmeOTLPLogExportExampleRendersAndLoads`: the chart README's
+  OTLP export example renders with `--config.expand-env` and the token from
+  the Secret, and the exporter loads the rendered configuration with the log
+  export on at `/v1/logs` and the header expanded.
+
+## 34.237 One bar on every page, and the debug page's configured collector as YAML
+
+- `TestEveryPageCarriesTheBar`: at `--web.debug` `off`, `edit` and `full`, and with the static targets path `/static-targets` and `/static/targets/deep`, every page reached by following the links of `/` behind a proxy prefix that answers HTML — `/`, `/collectors`, the status page and, with debugging on, `/debug` — and no other, carries the bar once, first in its `main` element; it marks the page shown and links each other page, resolving under the prefix, with a `← ` link back to `/` on every page but `/`; the status page's `?format=fragment` holds its content without `header`, `nav`, `html` or `main`.
+- `TestTheDebugPageShowsTheConfiguredCollectorChosen`: `/debug?collector=rooms` of a configuration loaded from a file opens with `rooms` selected and its YAML in a read-only editor, the label saying it runs as configured and *Edit a copy* shown: the keys in the file's order, the alias resolved, the comments left out, `max_metrics` and `max_response_bytes` from the file's defaults marked `# from the file's defaults`, the collector's own `max_label_value_length` kept, and its credentials `<redacted>`; `/debug/collector?name=rooms` answers the same YAML with `from_defaults`; `/debug` opens on the example, editable, with the example in `data-example` and *Edit a copy* hidden; an unknown name is answered `404` with `unknown collector`, and opens the page on the example; with debugging off `/debug/collector` is `404`.
+- `TestTheDebugPageWithholdsAConfiguredCollectorsCredentials`: at `edit` and `full`, neither the page nor `/debug/collector` shows a bearer token, a header or query parameter named like a credential, a login field `password`, a login URL's `api_key`, nor the paths of `bearer_token_file` and `login.field_files`; the login's `username` and `token` expression are shown, and the page's editor holds what `/debug/collector` answers.
+- `TestTheDebugPageShowsAScriptWithItsCredentialsMasked`: a `pre_script` holding an `Authorization: Bearer` value and a password literal is shown as a literal block without either, the rest of the script as written; a collector held without a file is shown without its empty keys.
+- `TestTheShownYAMLOfAConfiguredCollectorRunsWrittenOnThePage`: the YAML `/debug/collector` answers for `rooms`, its `<redacted>` lines left out, posted as a collector written on the page with a pasted body, runs and gives the series the configured collector gives on it.
+- `TestTheDebugCollectorPathIsReserved`: `/debug/collector` is refused as `--web.self-metrics-path`.
+- `TestACollectorKeepsTheMappingItsFileWritesItAs` (config): with `--config.expand-env`, a collector of the configuration keeps `${WRITTEN_TOKEN}` as written though it loaded the variable's value, the keys a merge key gives its request after its own, no comment of the file, and the keys of the configuration's defaults it does not write, marked; a collector of a collector file takes that file's defaults alone, marked on the key.
+
+## 34.238 OTLP metric names, the instrumentation scope, and a static target's labels on its resource
+
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings`: an export of a gauge, a counter, a histogram, a summary and a `_per_` gauge under the exporter-wide resource and a static target's gauge, with no `metric_names`, `scope`, `labels_as_resource` or `instance_id`, and the head of a log export, are the JSON they were before the keys, byte for byte.
+- `TestOTLPExportNamesMetricsAsOpenTelemetryDoes`: under `metric_names: otel` that export has `queue_depth`, the sum `jobs_processed`, the histogram `request_latency` of unit `s`, the summary `rpc_duration` of `ms`, `transfer` of `By/s`, the gauge `errors_total` kept, the sum `bytes_sent` of `By`, and the static target's `temperature` of `Cel`.
+- `TestOTelMetricNames`: the table of names, kinds and units: `_total` off a counter only and not a name of nothing else, each unit of the table, `_per_` with `second`, `minute`, `hour` and `day`, and as written `requests_per_second`, `bytes_per_second`, `hits_ratio_per_second`, `xseconds`, `seconds_x`, `x_seconds_`, `seconds` and `job:latency_seconds:mean`; under `prometheus` every name as written without a unit.
+- `TestOTelMetricNamesLeaveAFamilyExportedAsGaugesAsWritten`: a NaN counter `retries_seconds_total` and a histogram of a negative bound under `otel` are the gauges `retries_seconds_total`, `wait_seconds_bucket`, `_sum` and `_count` without a unit.
+- `TestOTelMetricNamesThatCollideAreOneNameOfTwoShapes`: a gauge `jobs`, a gauge `latency_seconds`, a counter `jobs_total` and a gauge `latency` are four metrics under `prometheus`; under `otel` the export has the sum `jobs` and the gauge `latency`, reports `jobs` kept as a sum with a gauge left out and `latency` kept as a gauge with a gauge of unit `s` left out, one point each, and the warning says `"left_out_kind":"gauge of unit s"`.
+- `TestOTelMetricNamesNameTheExportersOwnMetrics`: under `otel` an export of the exporter's own metrics has no name ending in `_total`, `_seconds` or `_bytes`; `http_exporter_otlp_points_dropped` is a sum and `http_exporter_otlp_export_duration` a gauge of unit `s`.
+- `TestOTLPScopeNamesTheMetricsAndTheLogRecordsScope`: `scope: {name: acme.io/edge, version: 1.2.3}` is the scope of both resources' metrics, of none the default's, and of the log records; without a version neither has one.
+- `TestStaticTargetLabelsAsResourceMoveFromThePointsToTheResource`: `labels_as_resource: [city, empty]` and `instance_id` give the resource `city=berlin` and `service.instance.id=eu` and no attribute of the empty label; a point with `city=berlin` loses it, one with its own `city=paris` keeps it, and the set served is unchanged; without the keys the resource is the exporter-wide one and the points are as they were.
+- `TestStaticTargetLabelsAsResourceAreExportedOnTheResource`: three targets scraped and exported to an endpoint: two in `berlin` are one resource with `city=berlin`, whose `demo_value` and `http_exporter_target_up` points carry `rack` and `static_target`, the health series `collector` and `target` too, and no `city`; the one in `paris` with `instance_id` is a resource of its own with `city=paris` and `service.instance.id=paris`; the static targets endpoint has both `city` labels.
+- `TestSchemaAndExporterAgreeOnAStaticTargetsResourceKeys`: the static target schema and the loader with a configuration of the exporter-wide attribute `region` take `labels_as_resource` of `[city]`, `[city, site]` with `instance_id`, `[]`, `instance_id: false`, `[city]` beside a target attribute `region: ''` and beside one `service.instance.id`; refuse both `[city, city]`, a text, a list in the list and `instance_id: maybe`; the exporter alone refuses `[town]`, not a label, `[region]`, an exporter-wide attribute, `[site]` beside the target's attribute `site`, `instance_id` beside the target's `service.instance.id`, and either key without `export_via_otlp`.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` (the `metric_names` and `scope` rows): `metric_names` of `OTel`, `openmetrics` and `5` and `scope` of `{}`, `{version: "1"}`, `{name: ""}`, a name with a tab and a version with a line break are taken switched off and refused by both switched on; `[otel]`, a mapping, text, a list, an unknown key and a list for a name are refused off and on; `otel`, `prometheus`, `""`, a scope with a name, with a name and a version, and the name `"1"` are taken off and on.
+- `TestSchemaAndExporterAgreeOnEnabled` (the `scope` key): `scope: {name: x}` without `enabled`, or beside an empty one, is refused by both, and taken by both with `enabled: false`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -29614,7 +29746,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`, `/debug`, `/debug/run`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -29817,6 +29949,37 @@ resource attributes MUST be preserved:
   own — MUST be what it was before this rule, byte for byte, and MUST be made
   in one pass over its series, as it was.
 
+`otlp.metric_names` MUST name the export's metrics: `prometheus`, the
+default and `""`, as the exposition writes them, with no unit; `otel` as
+OpenTelemetry names them. Under `otel` a counter's name MUST lose a trailing
+`_total`, and then a name, a histogram's or a summary's family name
+included, MUST lose a unit suffix to the metric's `unit`: its last word after
+a `_`, with something before it, when that is a unit the OpenTelemetry
+Collector's Prometheus translator writes — `days` `d`, `hours` `h`,
+`minutes` `min`, `seconds` `s`, `milliseconds` `ms`, `microseconds` `us`,
+`nanoseconds` `ns`, `bytes` `By`, `kibibytes` `KiBy`, `mebibytes` `MiBy`,
+`gibibytes` `GiBy`, `tibibytes` `TiBy`, `kilobytes` `KBy`, `megabytes`
+`MBy`, `gigabytes` `GBy`, `terabytes` `TBy`, `meters` `m`, `volts` `V`,
+`amperes` `A`, `joules` `J`, `watts` `W`, `grams` `g`, `celsius` `Cel`,
+`hertz` `Hz`, `percent` `%`, `ratio` `1` — or its last three words when
+they are such a unit but `ratio` and `percent`, `per`, and `second`,
+`minute`, `hour` or `day`, which MUST be the unit `<unit>/s`, `/min`, `/h`
+or `/d`. It MUST hold for the exporter's own metrics, the probes' and the
+static targets' alike. A family exported as gauges under its samples' names
+MUST keep those names and have no unit. Two names the translation makes one
+MUST be one name to the rule of one writer below, a different unit making a
+different kind of it, logged with the unit. Any other value MUST be refused
+when the configuration loads, in a block that is switched on.
+
+`otlp.scope` MAY name the instrumentation scope of the export, its `name`
+and `version`; left out, every metric and every log record (§ 42.1b) MUST be
+under the scope named `prometheus-universal-exporter` without a version, as
+before, and written, under the scope it names, the version left out where it
+is empty. A `scope` written MUST have a `name`, and its name and its version MUST
+NOT hold a control character; it MUST be refused otherwise when the
+configuration loads, in a block that is switched on, by the exporter and the
+schema alike. A static target MUST NOT set a scope of its own.
+
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
 replaces an earlier one's. With `otlp.probe_attributes: true`, every point a
@@ -29911,6 +30074,59 @@ kept by (§ 42.1), and its resource's points MUST be exported in the order
 of their series' keys still. With `otlp.probe_attributes`, the points of one
 probe MUST share one copy of its target attribute, and MUST NOT keep any
 more of the probe's request than that copy.
+
+### 42.1b The exporter's own log
+
+With `otlp.logs.enabled` true in an `otlp` block switched on, the exporter
+MUST export its own log lines as OTLP log records, besides writing them to
+stderr as it does without it, and MUST NOT add a dependency for it.
+`otlp.logs` is a block `enabled` switches (§ 42.1): one that sets another key
+without it MUST be refused, and one switched off, or in an `otlp` block
+switched off, MUST be kept unchecked, by the exporter and the schema alike.
+
+- The records MUST be sent as OTLP/HTTP JSON `ExportLogsServiceRequest`s to
+  `otlp.logs.endpoint`, which left out MUST be `otlp.endpoint` with its
+  trailing `/v1/metrics` made `/v1/logs`; an `otlp.endpoint` without that
+  path and no `otlp.logs.endpoint` MUST be refused when the configuration
+  loads. The requests MUST carry the `otlp` block's headers, TLS and
+  compression, be bounded by its timeout, be retried, refused and dropped by
+  the rules of § 42.1a, and be split by `otlp.batch_max_size` records and
+  `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
+- Each record MUST be under the resource the exporter's own metrics are
+  under (`otlp.service_name` and `otlp.resource_attributes`), and the scope
+  they are under (`otlp.scope`, § 42.1), and carry the
+  line's time, the time it was taken as its observed time, the OTLP severity
+  number of its slog level — DEBUG 5, INFO 9, WARN 13, ERROR 17, a level
+  between them as far from theirs, within 1 to 24 — with the level's name as
+  the severity text, the message as its body, and the line's attributes,
+  each a string, an int, a double or a bool as its value is, and an
+  attribute of a group named after the group and a dot. A value JSON has no
+  number for, a whole number past an int, a duration, a time and an error
+  MUST be strings.
+- Only the lines at or above `otlp.logs.level` — `debug`, `info`, `warn` or
+  `error`, in any case, `info` by default, any other value refused — MUST be
+  exported, whatever `--log.level` writes to stderr.
+- Logging MUST NOT wait for the export: the records waiting MUST be bounded
+  by `otlp.logs.max_pending_records`, 10000 by default, a negative value
+  refused, and a line that finds the bound reached MUST be dropped and
+  counted (§ 22.0c). They MUST be sent every `otlp.logs.interval`, 5 seconds
+  by default and at least 1 second, in the background. What an export could
+  not deliver for a reason worth retrying MUST wait for the next export,
+  before the lines logged since, the oldest dropped past the bound.
+- What the export logs of itself MUST NOT be exported, so that a failing
+  collector cannot feed the export lines about itself: it MUST be written to
+  stderr alone, and logged as a repeated failure (§ 25), once and then at
+  most every five minutes, with a recovery line when an export gets through
+  again.
+- A reload that switches `otlp.logs` off MUST stop taking lines at once and
+  drop those waiting; one that switches it on MUST take the lines logged
+  from then on.
+- At shutdown, after the metrics' last export (§ 42.1a), the records waiting
+  MUST be sent in a last export within what is left of the same
+  `otlp.timeout`, and at least a second; when it fails its records MUST be
+  dropped and counted. No line logged after it is exported.
+- The log export MUST NOT change readiness (§ 23), and its state MUST be on
+  the status page (§ 42.14a).
 
 ## 42.2 CSV transformation
 
@@ -30084,7 +30300,7 @@ checks on its own endpoints MUST be compared the same way.
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
-when enabled, `/debug` and `/debug/run`. The
+when enabled, `/debug`, `/debug/run` and `/debug/collector`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -31560,11 +31776,33 @@ then one of the OTLP export. Of the static targets:
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
-- Every value MUST be HTML-escaped, the page MUST NOT refresh itself or run
-  a script, and it MUST be served as the other pages are (no caching, the
-  pages' Content-Security-Policy).
-- `?format=json` MUST serve the same rows and summary as JSON; another
+- Every value MUST be HTML-escaped, and the page MUST be served as the
+  other pages are (no caching, the pages' Content-Security-Policy).
+- `?format=json` MUST serve the same rows and summary as JSON, and
+  `?format=fragment` the page's content section alone, rendered by the
+  page's template, with no controls or script, with the page's headers
+  (`Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, the
+  pages' Content-Security-Policy and `X-Frame-Options: DENY`), behind the
+  same Basic Auth and refusal of requests from other sites; another
   `format` MUST be answered `400`.
+- The page MUST have a Refresh button, which without JavaScript MUST be a
+  link reloading the page, and an auto-refresh selector offering `Off`,
+  `5s`, `10s`, `30s`, `1m`, `5m`, `15m`, `30m` and `1h`. Its inline script
+  MUST refresh by fetching the page's URL with `?format=fragment`,
+  same-origin with credentials, and putting the answer in place of the
+  content section; it MUST NOT start a refresh while one is waiting for its
+  answer, MUST NOT refresh while the tab is hidden, MUST say when it last
+  refreshed, and when a refresh fails MUST say so and keep the data shown.
+- The interval MUST be `?refresh=` when that is `off` or a duration in whole
+  seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
+  `?refresh=` MUST be ignored. An interval none of the selector's MUST be
+  listed in it in its place by length. Choosing an interval MUST put it in
+  the URL as `?refresh=`. With an interval, the page MUST reload itself on
+  it without JavaScript (a `<meta http-equiv="refresh">` in `<noscript>`),
+  and the selector MUST put the interval chosen in the URL through a form.
+- `--web.status-refresh` MUST take `off` or a duration in whole seconds from
+  5s to 24h, by default `off`; any other value, `0s` and the empty value
+  among them, MUST be a command-line error, exit `2`.
 - In allocator mode the page MUST say that it shows the targets the
   allocator gave this replica, and the probes this replica answered.
 - The page MUST be served with or without static targets in force; without
@@ -31680,6 +31918,19 @@ Of the OTLP export:
   export is failing, with the failed exports in a row and whether the
   exporter is unready.
 - In allocator mode the section MUST say the exports are this replica's.
+- With `otlp.logs` on, the section MUST show the log export (§ 42.1b): its
+  endpoint with its credentials withheld as `otlp.endpoint`'s are, its level
+  and interval, when the last log export began with its result and the
+  records it carried, the last that got through, the failed log exports in
+  a row, the last failure's error with when that export began, shown as an
+  export's error is, the records waiting and `otlp.logs.max_pending_records`,
+  and since the start the records dropped, in all and by why (over the
+  bound, refused or rejected, of the last export at shutdown), the records
+  sent and the log exports that succeeded and failed, from the counters of
+  § 22.0c; nothing of readiness. In the JSON it MUST be the `otlp` object's
+  `logs`, `{"enabled": false}` alone while `otlp.logs` is off, as the
+  section MUST then say in one line. A reload that changes
+  `otlp.logs.endpoint` MUST start its record again.
 - Every value MUST be HTML-escaped, and `?format=json` MUST give the section
   as `otlp`.
 
@@ -31719,6 +31970,26 @@ over OTLP — the collector's metrics and the health result — MUST carry
 `static_target`, as on the endpoint: targets sharing a resource, such as two
 of one collector under the exporter-wide identity, would otherwise export the
 same series, and one target's values would replace the other's.
+
+A target MAY set `otlp.labels_as_resource`, a list of names of its own
+`labels`, and `otlp.instance_id`, a boolean defaulting to `false`, only with
+`export_via_otlp` like the rest of its `otlp` block. Each label named with a
+value that is not empty MUST be an attribute of the target's resource, and
+MUST be left out of every data point of the target exported over OTLP — its
+collector's series and its health series — where the point's label of that
+name has the target's value; a point whose own label of the name has another
+value MUST keep it. `otlp.instance_id: true` MUST give the resource the
+attribute `service.instance.id` with the target's name. Both MUST be part of
+the resource's identity (§ 42.1): targets whose resources are alike in every
+attribute MUST be one `resourceMetrics` entry, and targets that differ in one
+MUST be two. The static targets endpoint MUST serve the labels as before.
+The file MUST be refused, naming the target, for a name that is not among the
+target's `labels`, a name given twice, a name that is an attribute of the
+resource already — from the target's `otlp.resource_attributes` or the
+exporter-wide ones, an attribute written `""` being none — and
+`instance_id` beside a `service.instance.id` attribute; the static target
+schema MUST refuse a name given twice. With neither key the export MUST be
+what it was without them, byte for byte.
 
 ### 42.14c Static target self-metrics
 
@@ -32914,6 +33185,34 @@ included, at `edit` as at `full`: its scripts are the operator's, and read
 what a target sends on every probe, as they read a pasted body here. Its
 scripts MUST run in its own workers and count in its Python worker series,
 as a debug probe's do.
+
+The page's editor MUST show the collector that runs: the one written on the
+page while no configured collector is chosen, starting from the example,
+and the configured one chosen, from the list or from the `collector` its URL
+names, in its place, read-only, with the label saying which runs. A
+configured collector MUST be shown as YAML that its file writes: the
+collector's mapping as written, its keys in the file's order, its `${NAME}`
+references unexpanded whatever `--config.expand-env` says, the keys aliases
+and merge keys give it written out as the decoder reads them, without the
+file's comments, and with each key it takes from its file's `defaults`
+added where it would write it, marked `# from the file's defaults`. A
+collector the exporter holds without a file MUST be shown as it holds it,
+its empty keys left out. At `edit` as at `full` the YAML MUST NOT show a
+credential: a scalar value whose key reads as a credential's, by the rule above —
+but where a login's answer holds its token and how it authenticates, and a
+redis key — MUST be shown as `<redacted>`, and so MUST every value of a key
+ending in `_file` or `_files`; a URL's userinfo and the values of its query
+parameters whose names read as credentials MUST be withheld, and a header's
+value in which text reads as a credential; a Python script MUST be shown
+with what reads as a credential in it masked, as text the exporter did not
+write is. The page MUST offer *Edit a copy*, which puts the YAML shown in
+the editor as a collector written on the page, which then runs. The YAML
+shown, with the lines that hold what was withheld left out and written on
+the page, MUST be read as a collector and give the series the configured
+collector gives. `GET /debug/collector?name=<name>`, served and
+authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
+`yaml` and `from_defaults`, the keys taken from defaults, and a name the
+configuration in force does not have `404` with `error`.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a

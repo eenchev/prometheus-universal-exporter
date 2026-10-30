@@ -7,6 +7,8 @@ metrics to publish — and, optionally, the exporter's own settings under `web`
 and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
+`otlp` exports probe results, the exporter's own metrics and, with
+`otlp.logs`, its own log over [OTLP](OTLP.md).
 
 The top-level keys are `collectors`, `collector_files`,
 [`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
@@ -3609,7 +3611,8 @@ written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
 `otlp` block with `enabled: false`, which is kept unchecked, do both take a
 negative one. Unchecked is of the whole block, to both: switched off, it may
-hold a `compression` that is neither `gzip` nor `none`, a negative
+hold a `compression` that is neither `gzip` nor `none`, a `metric_names`
+that is neither `prometheus` nor `otel`, a `scope` without a name, a negative
 `max_pending_points`, `unready_after_failures` or `batch_max_size`, an
 `unready_after_failures` over 1000, and a `batch_max_bytes` under its least, as it may an endpoint that
 is no URL, and only what is not of a key's type at all — text for a number, a
@@ -3655,7 +3658,8 @@ values or text of a pattern, `""` is its default: `decoder.type: ""` is
 `auto`, `name_escaping: ""` is `fail`, `request.method: ""` is `GET`, an
 error policy or a rule's `error_mode` written `""` is the one it defaults
 to, a rule's `type: ""` is `gauge`, or under a `prometheus` transform the
-type of the series it passes through, `otlp.compression: ""` is `gzip`, and
+type of the series it passes through, `otlp.compression: ""` is `gzip`,
+`otlp.metric_names: ""` is `prometheus`, and
 `metrics_prefix: ""`, `response.graphite.value: ""`,
 `response.graphite.invalid_lines: ""` and a static target's `name: ""` and
 `request.method: ""` are those keys left out. A key that belongs to another
@@ -5383,6 +5387,34 @@ The collector run is one of two:
   reads whatever a target sends on every probe, which is what a pasted body
   stands for.
 
+The editor shows the collector that runs. While none of the configuration
+is chosen it holds the one written on the page — the example to start with,
+then what was written, kept in the browser between visits. A configured
+collector chosen, in the list or by the link from `/collectors`, is shown
+in its place, read-only, since it runs as configured:
+
+- **As its file writes it**: its keys in the order the file has them, its
+  `${NAME}` references as written, not what they expand to, the keys an
+  anchor or a merge key (`<<`) gives it written out, as the loader reads
+  them, and the file's comments left out. The keys it takes from its file's
+  [defaults](#defaults-for-the-collectors-of-a-file) are added where it
+  would write them, each marked `# from the file's defaults`.
+- **Without its credentials**, at `edit` as at `full`: a value whose key
+  reads as a credential's — `bearer_token`, `basic_auth`'s `password`, a
+  header, a query parameter or a login field named like one, by the rule
+  a debug report withholds a header by — is shown as `<redacted>`, and so
+  is every path a `*_file` key names, which no page shows; a URL's userinfo
+  and the values of its query parameters named like credentials are
+  withheld. A Python script is shown as written, but for what reads as a
+  credential in it, which is masked as an error's text is; keep a script's
+  credentials in a file it reads.
+
+*Edit a copy* puts that YAML in the editor as a collector written on the
+page, which then runs in its place, under the rules for one: what was
+withheld has to be left out or written again, and a collector of another
+request type than `http`, with Python or with a file, is refused as any
+written there is.
+
 It reads one of three responses:
 
 - **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
@@ -5440,6 +5472,12 @@ curl -s http://exporter:8080/debug/run \
   -H 'Content-Type: application/json' -H 'X-Debug-Run: run' \
   -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
 ```
+
+The editor reads a configured collector from `GET
+/debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
+YAML as the page shows it, and `from_defaults`, the keys it took from its
+file's defaults; a name the configuration does not have is answered `404`
+with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `request_from`, the
@@ -5664,7 +5702,9 @@ when the exporter should be sent probes, and `503` when it should not, with one
   current endpoint failed in a row, retries included (see
   [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
   is off by default, since an exporter whose exports fail still answers
-  probes, and at most 1000.
+  probes, and at most 1000. It counts the metrics' exports alone: failing
+  exports of the exporter's own log ([`otlp.logs`](OTLP.md#the-exporters-own-log))
+  never make the exporter unready.
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.
@@ -5740,6 +5780,8 @@ through the delay.
 Then it stops accepting connections, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
+followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
+export of its own log within the same `otlp.timeout`,
 and exits `0`. It logs that it is shutting down, and, when the timeout runs
 out with probes still in progress, that it closed them — Prometheus records
 those as failed scrapes. Keep the timeout at least as long as the longest

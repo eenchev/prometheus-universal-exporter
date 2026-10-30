@@ -8,7 +8,7 @@ the [command-line flags](FLAGS.md).
 | --- | --- |
 | `/` | A landing page: the build, links to the endpoints, and when the last reload put something in force and [what it changed](CONFIGURATION.md#what-a-reload-changed). |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.debug`, a link into the debug page. See [Probing from the browser](AUTHENTICATION.md#probing-from-the-browser). |
-| `/debug` | With `--web.debug`: run a collector, written there or configured, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
+| `/debug` | With `--web.debug`: run a collector, configured or written there in the playground, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/collector` | With `--web.debug`: a configured collector as the debug page shows it, `?name=<name>`, with `GET`: its YAML as its file writes it, credentials and file paths withheld, as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). |
@@ -24,7 +24,9 @@ The HTML pages — `/`, `/collectors`, `/debug` and the status page — share
 one bar at the top: the way back to the landing page, a link to each of the
 other pages, the one shown marked, and the documentation. Its links are
 relative to the page, as every link of the pages is, so they hold behind a
-reverse proxy that serves the exporter under a path of its own.
+reverse proxy that serves the exporter under a path of its own. Each page's
+browser-tab icon is the project's logo, [`docs/logo.svg`](logo.svg), carried
+in the page itself as a `data:` URL, so it costs no request of its own.
 
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`

@@ -1,15 +1,14 @@
 package exporter
 
-// The debug page (debugpage.go): a collector, written in an editor or chosen
-// from the configuration in force, the response it is run on — pasted, or at
-// --web.debug=full a target fetched through a configured collector or a
-// static target's scrape — and what the run gave: the series a probe would
-// answer, the requests, the response, the stages, the metric lint's advice,
-// what was logged and the whole debug report. It runs on demand and, while
-// Run as you type is on, a moment after each edit; a run cancels the one
-// before it. The collectors page links each collector here as
-// ?collector=<name>, with &target=<target> at full, and the page starts from
-// what the link names.
+// The debug page (debugpage.go): a collector, the playground, one written in
+// an editor, or one chosen from the configuration in force, the response it
+// is run on — pasted, or at --web.debug=full a target fetched through a
+// configured collector or a static target's scrape — and what the run gave:
+// the series a probe would answer, the requests, the response, the stages,
+// the metric lint's advice, what was logged and the whole debug report. It
+// runs when Run is pressed, and only then; a run cancels the one before it.
+// The collectors page links each collector here as ?collector=<name>, with
+// &target=<target> at full, and the page starts from what the link names.
 
 type debugPage struct {
 	// Chrome is the bar at the top of the page (pagechrome.go).
@@ -17,10 +16,8 @@ type debugPage struct {
 	// Full offers fetching a target and scraping a static target,
 	// --web.debug=full.
 	Full bool
-	// Collectors are the configured collectors, which can be run by name;
-	// HTTPCollectors those a written collector can fetch a target through.
-	Collectors     []debugPageCollector
-	HTTPCollectors []string
+	// Collectors are the configured collectors, which can be run by name.
+	Collectors []debugPageCollector
 	// ProbeTimeoutSeconds is the timeout a run starts with, sent as the
 	// scrape timeout Prometheus would send.
 	ProbeTimeoutSeconds  int
@@ -60,6 +57,7 @@ var debugPageTemplate = pageTemplate("debug", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug · Prometheus Universal Exporter</title>
+`+pageIcon+`
 <style>`+pageStyle+`
 main { max-width: 1200px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
@@ -83,12 +81,6 @@ textarea[readonly] { background: var(--code); }
 button { padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
 button.secondary { padding: 3px 12px; margin-top: 6px; background: transparent; color: var(--accent); font-size: 13px; }
 [hidden] { display: none !important; }
-.switch { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; cursor: pointer; }
-.switch input { appearance: none; -webkit-appearance: none; position: relative; width: 36px; height: 20px; flex: none; margin: 0; padding: 0; border-radius: 10px; border: 1px solid var(--muted); background: transparent; cursor: pointer; transition: background .15s; }
-.switch input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s; }
-.switch input:checked { background: var(--accent); border-color: var(--accent); }
-.switch input:checked::before { transform: translateX(16px); background: var(--on-accent); }
-.switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .status { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .status.ok { color: var(--good); }
 .status.failed { color: var(--bad); }
@@ -105,15 +97,15 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <main>
 {{template "chrome" .Chrome}}
 <h1>Debug</h1>
-<p class="meta">Run one collector — written here, as it is written under <code>collectors:</code>, or one of the configuration — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
-<p class="note">A collector written here never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Fetching a target needs <code>--web.debug=full</code>.{{end}}</p>
+<p class="meta">Run one collector — one of the configuration, or the playground, a collector written on the page as it is written under <code>collectors:</code> — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
+<p class="note">The playground never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Fetching a target needs <code>--web.debug=full</code>.{{end}}</p>
 <noscript><p class="note">The debug page needs JavaScript.</p></noscript>
 <div class="grid">
 <section class="panel">
 <h2>Collector</h2>
 <label for="configured">Collector to run</label>
 <select id="configured">
-<option value="">The one written on this page</option>
+<option value="">Playground</option>
 {{- if .Collectors}}
 <optgroup label="Configured, run as configured">
 {{- range .Collectors}}
@@ -123,10 +115,10 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 {{- end}}
 </select>
 <div class="collector-head">
-<label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}YAML of the collector written here, which runs{{end}}</label>
+<label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}Playground: the YAML of a collector, which runs{{end}}</label>
 <button type="button" class="secondary" id="edit-copy"{{if not .Chosen}} hidden{{end}}>Edit a copy</button>
 </div>
-<p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> writes it on this page, where the copy runs in its place.</p>
+<p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> makes the playground a copy of it, which runs in its place and fetches a target through it.</p>
 <textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
 </section>
 <section class="panel">
@@ -134,9 +126,10 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 {{- if .Full}}
 <div class="modes" role="radiogroup" aria-label="Response">
 <label><input type="radio" name="mode" value="paste" checked> Paste a response</label>
-<label><input type="radio" name="mode" value="fetch"> Fetch a target</label>
+<label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not .Chosen}} disabled{{end}}> Fetch a target</label>
 <label><input type="radio" name="mode" value="static"> Scrape a static target</label>
 </div>
+<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target.</p>
 {{- end}}
 <div data-mode="paste">
 <div class="row">
@@ -148,32 +141,25 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <label for="headers">Other headers, one <code>Name: value</code> a line</label>
 <textarea id="headers" rows="2" spellcheck="false" autocomplete="off"></textarea>
 <label for="body">Body</label>
-<textarea id="body" rows="14" spellcheck="false" autocomplete="off">{{.ExampleBody}}</textarea>
+<textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="Paste what the target answers" data-example="{{.ExampleBody}}">{{if not .Chosen}}{{.ExampleBody}}{{end}}</textarea>
 </div>
 {{- if .Full}}
 <div data-mode="fetch" hidden>
-<p class="note">The target is fetched as <code>/probe?debug=true</code> fetches it: through a configured collector's request, target policy and credentials. A collector written here makes no request of its own; it reads what the collector chosen here fetched.</p>
-<label for="request-from">Fetch through</label>
-<select id="request-from">
-<option value="">The configured collector run</option>
-{{- range .HTTPCollectors}}
-<option value="{{.}}">{{.}}</option>
-{{- end}}
-</select>
+<p class="note">The target is fetched as <code>/probe?debug=true</code> fetches it: through a configured collector's request, target policy and credentials. The playground makes no request of its own; it reads what the collector it was copied from fetched.</p>
+<p class="note" id="fetched-through">{{if .Chosen}}Fetched through {{.Chosen}}, the collector chosen.{{end}}</p>
 <label for="target">Target</label>
 <input id="target" type="text" placeholder="http://host:port" autocomplete="off">
 <label for="params">Probe parameters, one <code>name=value</code> a line</label>
 <textarea id="params" rows="3" spellcheck="false" autocomplete="off" placeholder="param_tenant=a"></textarea>
 </div>
 <div data-mode="static" hidden>
-<p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, and read by the collector run. Nothing is published.</p>
+<p class="note">The static target is scraped once as its schedule scrapes it, through its own collector, with its own settings and credentials, and read by the collector chosen. Nothing is published.</p>
 <label for="static-target">Static target name</label>
 <input id="static-target" type="text" autocomplete="off">
 </div>
 {{- end}}
 <div class="actions">
 <button type="button" id="run">Run</button>
-<label class="switch"><input type="checkbox" id="live" role="switch" checked> Run as you type</label>
 <div class="narrow"><label for="timeout">Timeout, seconds</label>
 <input id="timeout" type="number" min="1" max="600" step="any" value="{{.ProbeTimeoutSeconds}}"></div>
 </div>
@@ -212,15 +198,18 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 "use strict";
 const $ = (id) => document.getElementById(id);
 const store = (() => { try { return window.localStorage; } catch (error) { return null; } })();
-// The collector written here and the body are kept in this browser between
-// visits; written is the collector written here, which the editor shows
-// while no configured collector is chosen.
-let written = $("collector").dataset.example;
-for (const id of ["collector", "body"]) {
+// The playground and the body are kept in this browser between visits, and
+// so is the configured collector the playground is a copy of, if it is one:
+// written is the playground, which the editor shows while no configured
+// collector is chosen, and copiedFrom the collector Edit a copy copied it
+// from, which a target is fetched through while the playground runs.
+let written = $("collector").dataset.example, copiedFrom = "";
+for (const id of ["collector", "body", "copied"]) {
   try {
     const kept = store && store.getItem("debug." + id);
     if (kept === null || kept === undefined) continue;
     if (id === "collector") written = kept;
+    else if (id === "copied") copiedFrom = kept;
     else $(id).value = kept;
   } catch (error) { /* storage refused: start from the example */ }
 }
@@ -231,6 +220,9 @@ const pick = (select, value) => {
   for (const option of select.options) if (option.value === value) { select.value = value; return true; }
   return false;
 };
+// A copy of a collector a reload has since taken away fetches through
+// nothing.
+if (copiedFrom !== "" && ![...$("configured").options].some((option) => option.value !== "" && option.value === copiedFrom)) copiedFrom = "";
 if (asked.get("collector")) pick($("configured"), asked.get("collector"));
 const choose = (value) => {
   const radio = document.querySelector('input[name="mode"][value="' + value + '"]');
@@ -245,9 +237,33 @@ const mode = () => {
 const showMode = () => {
   for (const part of document.querySelectorAll("[data-mode]")) part.hidden = part.dataset.mode !== mode();
 };
-// The editor shows what runs: the collector written here, or the configured
-// one chosen, as /debug/collector shows it, read-only, since it runs as
-// configured. Edit a copy writes that one here, where the copy runs.
+// fetcher is the collector a target is fetched through: the configured one
+// chosen, or the one the playground was copied from; the playground makes
+// no request of its own, so without either nothing can be fetched.
+const fetcher = () => $("configured").value || copiedFrom;
+function showFetch() {
+  const radio = $("mode-fetch");
+  if (!radio) return;
+  const through = fetcher();
+  radio.disabled = through === "";
+  $("fetch-unavailable").hidden = through !== "";
+  if (radio.disabled && radio.checked) choose("paste");
+  $("fetched-through").textContent = through === "" ? "" : $("configured").value !== ""
+    ? "Fetched through " + through + ", the collector chosen."
+    : "Fetched through " + through + ", the collector this playground was copied from.";
+  showMode();
+}
+// The example body fits the example collector alone: with a configured
+// collector, or a copy of one, the body starts empty, waiting for what its
+// target answers. A body the visitor wrote is left as it is.
+function fitBody() {
+  const body = $("body"), example = body.dataset.example;
+  if (body.value !== example && body.value !== "") return;
+  body.value = $("configured").value === "" && copiedFrom === "" ? example : "";
+}
+// The editor shows what runs: the playground, or the configured collector
+// chosen, as /debug/collector shows it, read-only, since it runs as
+// configured. Edit a copy makes the playground a copy of that one.
 const configuredYAML = new Map();
 if ($("collector").dataset.shown) configuredYAML.set($("collector").dataset.shown, $("collector").value);
 async function showCollector() {
@@ -255,7 +271,11 @@ async function showCollector() {
   area.readOnly = name !== "";
   $("edit-copy").hidden = name === "";
   $("collector-note").hidden = name === "";
-  $("collector-label").textContent = name === "" ? "YAML of the collector written here, which runs" : "The configuration of " + name + ", which runs as configured (read-only)";
+  $("collector-label").textContent = name !== "" ? "The configuration of " + name + ", which runs as configured (read-only)"
+    : copiedFrom !== "" ? "Playground, a copy of " + copiedFrom + ": the YAML of a collector, which runs"
+    : "Playground: the YAML of a collector, which runs";
+  showFetch();
+  fitBody();
   if (name === "") { area.value = written; return; }
   if (configuredYAML.has(name)) { area.value = configuredYAML.get(name); return; }
   area.value = "# Reading the configuration of " + name + "…";
@@ -272,15 +292,26 @@ async function showCollector() {
   }
   if ($("configured").value === name) area.value = text;
 }
-$("collector").addEventListener("input", () => { if (!$("collector").readOnly) written = $("collector").value; });
+function keep() {
+  try {
+    if (store) {
+      store.setItem("debug.collector", written);
+      store.setItem("debug.copied", copiedFrom);
+      store.setItem("debug.body", $("body").value);
+    }
+  } catch (error) { /* not kept */ }
+}
+$("collector").addEventListener("input", () => { if (!$("collector").readOnly) { written = $("collector").value; keep(); } });
+$("body").addEventListener("input", keep);
 $("edit-copy").addEventListener("click", () => {
   written = $("collector").value;
+  copiedFrom = $("configured").value;
   $("configured").value = "";
   showCollector();
+  keep();
   $("collector").focus();
-  schedule();
 });
-for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", () => { showMode(); schedule(); });
+for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", showMode);
 $("configured").addEventListener("change", showCollector);
 showMode();
 showCollector();
@@ -306,7 +337,7 @@ async function run() {
   else request.collector = $("collector").value;
   try {
     if (mode() === "fetch") {
-      if ($("request-from").value !== "") request.request_from = $("request-from").value;
+      if (request.collector !== undefined) request.request_from = copiedFrom;
       request.target = $("target").value;
       request.params = lines($("params").value, "=");
     } else if (mode() === "static") {
@@ -399,27 +430,10 @@ function show(answer, response, took) {
   }
   $("report").textContent = answer.report || "";
 }
-let timer = null;
-function schedule() {
-  try {
-    if (store) {
-      store.setItem("debug.collector", written);
-      store.setItem("debug.body", $("body").value);
-    }
-  } catch (error) { /* not kept */ }
-  if (!$("live").checked) return;
-  clearTimeout(timer);
-  timer = setTimeout(run, 600);
-}
-for (const field of document.querySelectorAll("textarea, input, select")) {
-  if (field.id === "live" || field.name === "mode") continue;
-  field.addEventListener(field.tagName === "SELECT" ? "change" : "input", schedule);
-}
 $("run").addEventListener("click", run);
-// Nothing runs until the visitor presses Run or edits a field: the page
-// takes its collector and target from its URL, which a link on any page
-// can set, and running on opening would make that link a run the visitor
-// never asked for.
+// Nothing runs until the visitor presses Run: the page takes its collector
+// and target from its URL, which a link on any page can set, and running on
+// opening would make that link a run the visitor never asked for.
 </script>
 </body>
 </html>

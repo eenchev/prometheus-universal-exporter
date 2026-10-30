@@ -8115,6 +8115,12 @@ Recommended behavior:
   page under a static targets path of several segments. A part of a page
   that a page's script swaps in, as the status page's `?format=fragment`,
   MUST NOT carry the bar.
+- Every HTML page the exporter serves MUST have one icon, in its head: the
+  project's logo, `docs/logo.svg`, byte for byte, as an `image/svg+xml`
+  `data:` URL, which its `Content-Security-Policy` MUST let it load
+  (`img-src data:`) and which needs no request. The copy the build embeds
+  MUST be checked against `docs/logo.svg` by a test, so the two cannot
+  drift apart.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -26926,8 +26932,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   same-site requests (§ 42.5).
 - The debug page opened at `full` with a collector and a target in its URL
   fills in the target, and its script, its strings and comments taken out,
-  names `run` only where it defines it, in the click handler of *Run* and in
-  the run-as-you-type timer, so nothing runs when the page opens; a call of
+  names `run` only where it defines it and in the click handler of *Run*,
+  so nothing runs when the page opens or after an edit; a call of
   `run()` on opening fails the test (§ 42.17).
 - A reload of an unchanged configuration and static target file logs
   `configuration reloaded` and `static targets reloaded` at `INFO` with
@@ -29435,6 +29441,17 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestSchemaAndExporterAgreeOnAStaticTargetsResourceKeys`: the static target schema and the loader with a configuration of the exporter-wide attribute `region` take `labels_as_resource` of `[city]`, `[city, site]` with `instance_id`, `[]`, `instance_id: false`, `[city]` beside a target attribute `region: ''` and beside one `service.instance.id`; refuse both `[city, city]`, a text, a list in the list and `instance_id: maybe`; the exporter alone refuses `[town]`, not a label, `[region]`, an exporter-wide attribute, `[site]` beside the target's attribute `site`, `instance_id` beside the target's `service.instance.id`, and either key without `export_via_otlp`.
 - `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` (the `metric_names` and `scope` rows): `metric_names` of `OTel`, `openmetrics` and `5` and `scope` of `{}`, `{version: "1"}`, `{name: ""}`, a name with a tab and a version with a line break are taken switched off and refused by both switched on; `[otel]`, a mapping, text, a list, an unknown key and a list for a name are refused off and on; `otel`, `prometheus`, `""`, a scope with a name, with a name and a version, and the name `"1"` are taken off and on.
 - `TestSchemaAndExporterAgreeOnEnabled` (the `scope` key): `scope: {name: x}` without `enabled`, or beside an empty one, is refused by both, and taken by both with `enabled: false`.
+
+## 34.239 The pages' icon, and the debug page's playground
+
+- `TestThePagesIconIsTheProjectsLogo`: `internal/exporter/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
+- `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
+- `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
+- `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
+- `TestTheDebugPagesBodyFitsTheCollectorChosen`: the body has the placeholder `Paste what the target answers` and the example in `data-example`; `/debug` starts it as the example, `/debug?collector=rooms` empty, and the script changes it on a change of collector only while it is empty or the example.
+- `TestTheDebugPageNeverRunsOnOpening` (changed): `run` is named only where it is defined and by *Run*'s click handler, with no timer.
+- `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note.
 
 # 35. Documentation requirements
 
@@ -33136,14 +33153,15 @@ authenticated like a probe (§ 42.5). The page MUST be one document whose
 style and script are inline, loading nothing from anywhere, with the
 headers, escaping and layout of the other pages (§ 23), and MUST post its
 runs relative to itself, so it works under a proxy's path prefix. It MUST
-run a collector on demand and a moment after an edit, a run cancelling the
-one before it, and MUST start from the collector, and at `full` the target
-or the static target, its URL names (`collector`, `target`,
-`static_target`), as the collectors page links it. It MUST NOT run anything
-when it opens, whatever its URL names, until the visitor asks for a run or
-edits a field: a link on any page can set the URL. It MUST offer the
-configured collectors at every level, and the fetch and the static target's
-scrape at `full` only.
+run a collector when the visitor presses *Run*, and at no other time — not
+after an edit, and with no setting that would run one as the visitor types
+— a run cancelling the one before it, and MUST start from the collector,
+and at `full` the target or the static target, its URL names (`collector`,
+`target`, `static_target`), as the collectors page links it. It MUST NOT run
+anything when it opens, whatever its URL names: a link on any page can set
+the URL. It MUST offer the configured collectors at every level, beside the
+playground, the collector written on the page, which the page MUST call
+*Playground*, and the fetch and the static target's scrape at `full` only.
 
 A run MUST be a JSON object of the collector — `collector`, the YAML of one
 collector as it is written under `collectors:`, or `configured`, the name of
@@ -33188,8 +33206,8 @@ what a target sends on every probe, as they read a pasted body here. Its
 scripts MUST run in its own workers and count in its Python worker series,
 as a debug probe's do.
 
-The page's editor MUST show the collector that runs: the one written on the
-page while no configured collector is chosen, starting from the example,
+The page's editor MUST show the collector that runs: the playground while no
+configured collector is chosen, starting from the example,
 and the configured one chosen, from the list or from the `collector` its URL
 names, in its place, read-only, with the label saying which runs. A
 configured collector MUST be shown as YAML that its file writes: the
@@ -33207,8 +33225,10 @@ ending in `_file` or `_files`; a URL's userinfo and the values of its query
 parameters whose names read as credentials MUST be withheld, and a header's
 value in which text reads as a credential; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
-write is. The page MUST offer *Edit a copy*, which puts the YAML shown in
-the editor as a collector written on the page, which then runs. The YAML
+write is. The page MUST offer *Edit a copy*, which makes the playground a
+copy of the YAML shown, which then runs, and MUST remember, through edits
+and between visits, the configured collector the playground was copied
+from. The YAML
 shown, with the lines that hold what was withheld left out and written on
 the page, MUST be read as a collector and give the series the configured
 collector gives. `GET /debug/collector?name=<name>`, served and
@@ -33227,8 +33247,17 @@ target policy (§ 26.1), credentials, `accept_status`, forwarded
 `header_<name>` parameters and trip limits (§ 42.13b), and with nothing of
 the browser's request — its `Authorization`, cookies or other headers —
 forwarded; a target missing or a parameter wrong MUST be answered as
-`/probe` answers them. A static target's scrape, at `full` only, MUST be
-made as `/static-targets?debug=<name>` makes it, and answered as what the
+`/probe` answers them. The page MUST fetch through the configured
+collector chosen, or, with the playground, through the configured collector
+it was copied from, sent as `request_from`, saying which, and MUST NOT offer
+another collector to fetch through; while the playground was copied from
+none, the page MUST offer *Fetch a target* disabled, saying to choose a
+configured collector or *Edit a copy* of one. The pasted body MUST start as
+the example's answer with the example playground and empty with a
+configured collector or a copy of one, and a change of collector MUST NOT
+replace a body the visitor wrote. A static target's scrape, at `full` only, MUST be
+made as `/static-targets?debug=<name>` makes it, through the target's own
+collector, and answered as what the
 scrape would have published, its series with the target's labels and
 `static_target`; nothing MUST be published. A collector run on what
 another collector fetched — a written one, or one other than the static

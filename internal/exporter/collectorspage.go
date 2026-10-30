@@ -123,6 +123,7 @@ var collectorsTemplate = pageTemplate("collectors", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collectors · Prometheus Universal Exporter</title>
+`+pageIcon+`
 <style>`+pageStyle+`
 section.collector { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; background: var(--panel); }
 section.collector h2 { margin: 0; font-size: 17px; }

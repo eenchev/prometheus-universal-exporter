@@ -405,6 +405,7 @@ var staticStatusTemplate = pageTemplate("static-status", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Status · Prometheus Universal Exporter</title>
+`+pageIcon+`
 <style>`+pageStyle+`
 main { max-width: 1200px; }
 .scroll { overflow-x: auto; }

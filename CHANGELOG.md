@@ -48,6 +48,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `healthy` while the exporter is ready. A container started with another
   `--web.listen-address` needs `--health-cmd` with it, and the target
   allocator run from the image needs `--no-healthcheck`.
+- The debug page calls the collector written on it the playground, and runs
+  only when *Run* is pressed: *Run as you type* is gone. *Fetch a target*
+  fetches through the configured collector chosen, or, with the playground,
+  through the one it was copied from with *Edit a copy*; the *Fetch through*
+  list is gone, and a playground copied from none cannot fetch. The pasted
+  body starts empty with a configured collector, the example's answer only
+  with the example.
+- The exporter's pages show the project's logo as their browser-tab icon.
 
 ### New
 

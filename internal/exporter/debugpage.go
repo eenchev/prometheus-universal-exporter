@@ -47,8 +47,9 @@ import (
 //     through a configured collector's request block, its target policy,
 //     its credentials, its accept_status and its max_concurrent_probes, with
 //     the probe parameters it takes. That collector is the one run, when it
-//     is configured, or the one request_from names. A collector written on
-//     the page never makes a request with its own request block;
+//     is configured, or the one request_from names, which the page fills
+//     with the collector its playground was copied from. A collector
+//     written on the page never makes a request with its own request block;
 //   - at full, one scrape of a static target, as /static-targets?debug=<name>
 //     makes it, read by the target's collector or by the one run.
 //
@@ -360,9 +361,6 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
-		if onDebugPage(c.Request.Type) {
-			page.HTTPCollectors = append(page.HTTPCollectors, c.Name)
-		}
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
 		if chosen := r.URL.Query().Get("collector"); chosen != "" && chosen == c.Name {

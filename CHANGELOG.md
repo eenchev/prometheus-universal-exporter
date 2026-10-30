@@ -33,6 +33,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   one otherwise is refused, naming the words taken: write them in lower case.
   The static target file's schema now takes a `method` in lower case, as the
   exporter does.
+- An entry of `accept_status` or `retry.statuses` written in quotes is taken
+  only as the schemas take it: a status's three digits (`"503"`) or a class
+  (`"5xx"`). Text with a sign, leading zeros or blanks, such as `"+503"`,
+  `"0503"` or `" 503 "`, is refused when the configuration loads; write
+  `503`. An unquoted number is read as before.
+- The schemas refuse an entry of a `grpc` collector's or target's
+  `retry.codes` and `accept_codes` that names no gRPC status code, or `OK`,
+  as the exporter does, so an editor now marks it.
 - `starttls` on an `ldap` collector is refused as a key `ldap` does not take,
   pointing to `start_tls: true`; `start_tls` on a `tcp` or `tlscert` collector
   points to `starttls` and its protocols.
@@ -52,7 +60,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `request.unix_socket` sends an `http` collector's requests over a Unix
   domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
   socket, as `curl --unix-socket` does; the URL's host is still the `Host`
-  header.
+  header. A path longer than the system allows (107 bytes on Linux, 103 on
+  macOS) is refused when the configuration loads.
+- `--dry-run` lists how each `http` and `graphite` collector connects under
+  `request_policies`: its `unix_socket`, or the `proxy` in force — its
+  `proxy_url`, from its own request or its file's `defaults`, `direct`, or
+  `environment` when it follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` —
+  with the paths of `proxy_basic_auth_file`, never the credentials.
 
 ### Fixed
 

@@ -58,12 +58,7 @@ const grpcHealthService = "grpc.health.v1.Health"
 
 // grpcCodeNames are the gRPC status codes by number, as a configuration
 // names them.
-var grpcCodeNames = []string{
-	"OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED",
-	"NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED",
-	"FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED",
-	"INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED",
-}
+var grpcCodeNames = model.GRPCCodeNames
 
 // grpcDefaultRetryCodes are retried when retry.codes is left out: the server
 // did not start the call, so repeating it cannot repeat what it did.
@@ -653,6 +648,6 @@ func grpcKeyRules() map[string]map[string]any {
 		"protoset_file":      {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
 		"proto_files":        {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
 		"proto_import_paths": {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
-		"accept_codes":       {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
+		"accept_codes":       {"items": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(model.GRPCCodeNames[1:]...)}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 	}
 }

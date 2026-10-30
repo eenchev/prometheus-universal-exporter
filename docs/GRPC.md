@@ -441,7 +441,8 @@ retry:
 ```
 
 Codes are named as gRPC names them, in any case; an unknown name, and `OK`,
-are refused when the configuration loads. `backoff`, and the bounds a probe's
+are refused when the configuration loads, and by the
+[schema](CONFIGURATION.md#editor-support) in an editor. `backoff`, and the bounds a probe's
 budget and a static target's interval put on retries, work as for `http`.
 `retry.non_idempotent`, `retry.statuses`, the HTTP statuses retried, and
 `retry.retry_after`, which reads an HTTP answer's `Retry-After`, are

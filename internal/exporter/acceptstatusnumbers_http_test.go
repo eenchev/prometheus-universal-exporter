@@ -19,9 +19,9 @@ import (
 // collector and a scrape of a static target, each read from its file as the
 // exporter reads it, decode the answer of that status, and fail on another,
 // as the schemas, which are handed the number, say. 503.0 and 0x1F7 were
-// refused at load, and +503 and 0503 taken there and matched no status; so
-// were "0503" and '+503' in quotes, which are text, taken as the status they
-// read as, and now accept it.
+// refused at load, and +503 and 0503 taken there and matched no status.
+// Quoted, "503" is text the schemas take; "0503" and '+503' are text they
+// refuse, and the load refuses them too.
 func TestAStatusWrittenAsANumberIsTheStatusARequestAccepts(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -36,7 +36,7 @@ func TestAStatusWrittenAsANumberIsTheStatusARequestAccepts(t *testing.T) {
 	}
 	for written, accepted := range map[string]bool{
 		"503": true, "503.0": true, "5.03e2": true, "0x1F7": true, "0o767": true, "5_03": true, "+503": true, "0503": true,
-		`"0503"`: true, `'+503'`: true, `" 0503 "`: true,
+		`"503"`:  true,
 		"5.04e2": false, "0x1F8": false, "200.0": false, "5_04": false,
 	} {
 		cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", collector(written)))

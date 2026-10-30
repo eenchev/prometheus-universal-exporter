@@ -478,7 +478,9 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	check := runCheckCLI(t, "--config.file="+config)
 	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
 	guarded, _ := policies["guarded"].(map[string]any)
-	if check.code != 0 || len(policies) != 1 || !reflect.DeepEqual(guarded["accept_status"], []any{"2xx", "503"}) || !reflect.DeepEqual(guarded["denied_targets"], []any{"169.254.169.254"}) {
+	// A collector that sets none of them is listed with how it connects
+	// alone.
+	if check.code != 0 || len(policies) != 2 || !reflect.DeepEqual(policies["open"], map[string]any{"proxy": "environment"}) || !reflect.DeepEqual(guarded["accept_status"], []any{"2xx", "503"}) || !reflect.DeepEqual(guarded["denied_targets"], []any{"169.254.169.254"}) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 }
@@ -540,13 +542,72 @@ func TestDryRunReportsRetryStatuses(t *testing.T) {
 	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
 	starting, _ := policies["starting"].(map[string]any)
 	connectionsOnly, _ := policies["connections_only"].(map[string]any)
-	if check.code != 0 || len(policies) != 2 || !reflect.DeepEqual(starting["retry_statuses"], []any{"404", "5xx", "429"}) || !reflect.DeepEqual(connectionsOnly["retry_statuses"], []any{}) {
+	if check.code != 0 || !reflect.DeepEqual(policies["default"], map[string]any{"proxy": "environment"}) || !reflect.DeepEqual(starting["retry_statuses"], []any{"404", "5xx", "429"}) || !reflect.DeepEqual(connectionsOnly["retry_statuses"], []any{}) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 	refused := testutil.WriteFile(t, "refused.yaml", "collectors:\n  - name: health\n    request:\n      type: http\n      accept_status: [2xx, 503]\n      retry: {attempts: 1, statuses: [503]}\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
 	out := runCheckCLI(t, "--config.file="+refused)
 	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "health" request.retry.statuses entry "503" is never retried: request.accept_status accepts it`) {
 		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}
+
+// --dry-run lists how each http and graphite collector connects: the Unix
+// socket it sends its requests over, with no proxy beside it, or the proxy
+// in force, its own proxy_url, the one its file's defaults give it, direct,
+// or environment for one that names none and follows HTTP_PROXY,
+// HTTPS_PROXY and NO_PROXY; and the files its proxy's credentials are read
+// from, never what they hold, nor what the environment's proxy is. A
+// collector of a type that takes no proxy is listed with none.
+func TestDryRunReportsHowACollectorConnects(t *testing.T) {
+	dir := t.TempDir()
+	username, password := testutil.WriteIn(t, dir, "proxy-user", "proxy-user-secret"), testutil.WriteIn(t, dir, "proxy-password", "proxy-password-secret")
+	t.Setenv("HTTPS_PROXY", "http://env-user:env-secret@env-proxy.example:3128")
+	config := testutil.WriteIn(t, dir, "config.yaml", `collectors:
+  - name: docker
+    request: {type: http, unix_socket: /var/run/docker.sock}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: proxied
+    request:
+      type: http
+      proxy_url: http://proxy.example:3128
+      proxy_basic_auth_file: {username: `+username+`, password: `+password+`}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: direct
+    request: {type: http, proxy_url: direct}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: environment
+    request: {type: http}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+collector_files: [`+testutil.WriteIn(t, dir, "defaulted.yaml", `defaults:
+  request: {proxy_url: socks5://defaults-proxy.example:1080}
+collectors:
+  - name: defaulted
+    request: {type: http}
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+`)+`]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	want := map[string]any{
+		"docker":      map[string]any{"unix_socket": "/var/run/docker.sock"},
+		"proxied":     map[string]any{"proxy": "http://proxy.example:3128", "proxy_basic_auth_file": map[string]any{"username": username, "password": password}},
+		"direct":      map[string]any{"proxy": "direct"},
+		"environment": map[string]any{"proxy": "environment"},
+		"defaulted":   map[string]any{"proxy": "socks5://defaults-proxy.example:1080"},
+	}
+	if check.code != 0 || !reflect.DeepEqual(policies, want) {
+		t.Fatalf("exit=%d, request_policies %v, want %v\n%s", check.code, policies, want, check.stdout)
+	}
+	for _, secret := range []string{"proxy-user-secret", "proxy-password-secret", "env-secret", "env-user", "env-proxy"} {
+		if strings.Contains(check.stdout, secret) {
+			t.Errorf("the report shows %q:\n%s", secret, check.stdout)
+		}
 	}
 }
 
@@ -571,7 +632,7 @@ func TestDryRunReportsRetryAfter(t *testing.T) {
 	check := runCheckCLI(t, "--config.file="+config)
 	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
 	limited, _ := policies["limited"].(map[string]any)
-	if check.code != 0 || len(policies) != 1 || limited["retry_after"] != true {
+	if check.code != 0 || !reflect.DeepEqual(policies["plain"], map[string]any{"proxy": "environment"}) || limited["retry_after"] != true {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 }
@@ -658,7 +719,7 @@ func TestDryRunTakesAStatusWrittenAsANumberOfAnySpelling(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 	out := runCheckCLI(t, "--config.file="+accepting("503.5"))
-	if result := out.result(t, "config"); out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "tolerant" request.accept_status entry "503.5" is not an HTTP status from 100 to 599 or a class such as 2xx`) {
+	if result := out.result(t, "config"); out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "tolerant" request.accept_status entry "503.5" is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx`) {
 		t.Fatalf("accept_status: [503.5]: exit=%d config=%+v", out.code, result)
 	}
 }

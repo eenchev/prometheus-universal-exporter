@@ -230,6 +230,7 @@
               "accept_codes": {
                 "description": "grpc: replaces the collector's request.accept_codes for this target.",
                 "items": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Cc][Aa][Nn][Cc][Ee][Ll][Ll][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Ii][Nn][Vv][Aa][Ll][Ii][Dd]_[Aa][Rr][Gg][Uu][Mm][Ee][Nn][Tt]|[Dd][Ee][Aa][Dd][Ll][Ii][Nn][Ee]_[Ee][Xx][Cc][Ee][Ee][Dd][Ee][Dd]|[Nn][Oo][Tt]_[Ff][Oo][Uu][Nn][Dd]|[Aa][Ll][Rr][Ee][Aa][Dd][Yy]_[Ee][Xx][Ii][Ss][Tt][Ss]|[Pp][Ee][Rr][Mm][Ii][Ss][Ss][Ii][Oo][Nn]_[Dd][Ee][Nn][Ii][Ee][Dd]|[Rr][Ee][Ss][Oo][Uu][Rr][Cc][Ee]_[Ee][Xx][Hh][Aa][Uu][Ss][Tt][Ee][Dd]|[Ff][Aa][Ii][Ll][Ee][Dd]_[Pp][Rr][Ee][Cc][Oo][Nn][Dd][Ii][Tt][Ii][Oo][Nn]|[Aa][Bb][Oo][Rr][Tt][Ee][Dd]|[Oo][Uu][Tt]_[Oo][Ff]_[Rr][Aa][Nn][Gg][Ee]|[Uu][Nn][Ii][Mm][Pp][Ll][Ee][Mm][Ee][Nn][Tt][Ee][Dd]|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Dd][Aa][Tt][Aa]_[Ll][Oo][Ss][Ss]|[Uu][Nn][Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee][Dd])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                   "type": "string"
                 },
                 "type": "array"
@@ -1229,6 +1230,7 @@
                   "codes": {
                     "description": "grpc: replaces the collector's request.retry.codes for this target.",
                     "items": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Cc][Aa][Nn][Cc][Ee][Ll][Ll][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Ii][Nn][Vv][Aa][Ll][Ii][Dd]_[Aa][Rr][Gg][Uu][Mm][Ee][Nn][Tt]|[Dd][Ee][Aa][Dd][Ll][Ii][Nn][Ee]_[Ee][Xx][Cc][Ee][Ee][Dd][Ee][Dd]|[Nn][Oo][Tt]_[Ff][Oo][Uu][Nn][Dd]|[Aa][Ll][Rr][Ee][Aa][Dd][Yy]_[Ee][Xx][Ii][Ss][Tt][Ss]|[Pp][Ee][Rr][Mm][Ii][Ss][Ss][Ii][Oo][Nn]_[Dd][Ee][Nn][Ii][Ee][Dd]|[Rr][Ee][Ss][Oo][Uu][Rr][Cc][Ee]_[Ee][Xx][Hh][Aa][Uu][Ss][Tt][Ee][Dd]|[Ff][Aa][Ii][Ll][Ee][Dd]_[Pp][Rr][Ee][Cc][Oo][Nn][Dd][Ii][Tt][Ii][Oo][Nn]|[Aa][Bb][Oo][Rr][Tt][Ee][Dd]|[Oo][Uu][Tt]_[Oo][Ff]_[Rr][Aa][Nn][Gg][Ee]|[Uu][Nn][Ii][Mm][Pp][Ll][Ee][Mm][Ee][Nn][Tt][Ee][Dd]|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Dd][Aa][Tt][Aa]_[Ll][Oo][Ss][Ss]|[Uu][Nn][Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee][Dd])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                       "type": "string"
                     },
                     "type": "array"

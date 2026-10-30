@@ -92,18 +92,19 @@ func TestRetryStatusesReplaceTheDefaultSet(t *testing.T) {
 }
 
 // retry.statuses is written and checked as accept_status is: statuses from
-// 100 to 599 and classes, normalized, the rest refused in accept_status's
-// words. An entry every status of which is accepted could never be retried
+// 100 to 599 by their three digits and classes, a class in lower case, the
+// rest, a status with blanks, a sign or leading zeros among them, refused in
+// accept_status's words. An entry every status of which is accepted could never be retried
 // and is refused, naming it; a class only some of whose statuses are
 // accepted is taken, and the accepted ones are still not retried.
 func TestRetryStatusesAreCheckedAsAcceptStatusIs(t *testing.T) {
-	for _, bad := range []string{"600", "99", "6xx", "2x", "ok", ""} {
+	for _, bad := range []string{"600", "99", "6xx", "2x", "ok", "", " 4xx", "+0503", "0429"} {
 		c := model.Collector{Name: "web", Request: model.RequestConfig{Type: RequestTypeHTTP, Retry: model.RetryConfig{Statuses: []string{bad}}}}
-		if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), `collector "web" request.retry.statuses entry "`+bad+`" is not an HTTP status from 100 to 599 or a class such as 2xx`) {
+		if err := ValidateRequest(&c); err == nil || !strings.Contains(err.Error(), `collector "web" request.retry.statuses entry "`+bad+`" is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx`) {
 			t.Errorf("%q: %v", bad, err)
 		}
 	}
-	c := httpCollector(t, func(c *model.Collector) { c.Request.Retry.Statuses = []string{" 4XX ", "+0503", "0429"} })
+	c := httpCollector(t, func(c *model.Collector) { c.Request.Retry.Statuses = []string{"4XX", "503", "429"} })
 	if !reflect.DeepEqual(c.Request.Retry.Statuses, []string{"4xx", "503", "429"}) {
 		t.Errorf("normalized: %q", c.Request.Retry.Statuses)
 	}
@@ -161,7 +162,7 @@ func TestAStaticTargetsRetryStatuses(t *testing.T) {
 		c.Request.AcceptStatus = []string{"2xx", "503"}
 		c.Request.Retry = model.RetryConfig{Attempts: 1, Statuses: []string{"502"}}
 	})
-	target := &model.StaticTarget{Name: "t", Collector: c.Name, Target: "http://x", Request: model.TargetRequestConfig{Retry: &model.TargetRetryConfig{Statuses: []string{" 4XX "}}}}
+	target := &model.StaticTarget{Name: "t", Collector: c.Name, Target: "http://x", Request: model.TargetRequestConfig{Retry: &model.TargetRetryConfig{Statuses: []string{"4XX"}}}}
 	NormalizeTargetRequest(target)
 	if !reflect.DeepEqual(target.Request.Retry.Statuses, []string{"4xx"}) {
 		t.Fatalf("normalized: %q", target.Request.Retry.Statuses)
@@ -183,7 +184,7 @@ func TestAStaticTargetsRetryStatuses(t *testing.T) {
 		}
 	}
 	for request, want := range map[*model.TargetRequestConfig]string{
-		{Retry: &model.TargetRetryConfig{Statuses: []string{"600"}}}:                                       `target "t" request.retry.statuses entry "600" is not an HTTP status from 100 to 599 or a class such as 2xx`,
+		{Retry: &model.TargetRetryConfig{Statuses: []string{"600"}}}:                                       `target "t" request.retry.statuses entry "600" is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx`,
 		{Retry: &model.TargetRetryConfig{Statuses: []string{"503"}}}:                                       `target "t" request.retry.statuses entry "503" is never retried: request.accept_status accepts it`,
 		{AcceptStatus: []string{"5xx"}}:                                                                    `target "t" request.retry.statuses entry "502" is never retried`,
 		{AcceptStatus: []string{"404"}, Retry: &model.TargetRetryConfig{Statuses: []string{"404", "500"}}}: `target "t" request.retry.statuses entry "404" is never retried`,

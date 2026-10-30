@@ -77,12 +77,10 @@ func TestAStatusWrittenAsANumberIsTheStatusItIsHoweverItIsWritten(t *testing.T) 
 			}
 		}
 	}
-	// Text is held to what it was held to: a status's digits, with blanks
-	// around them, or a class. Digits with a sign or leading zeros, which
-	// the load took as a status, are the status by its digits alone, as
-	// AcceptedStatus compares it, where they passed the load and matched no
-	// status.
-	for written, want := range map[string]string{`"503"`: "503", `'2XX'`: "2xx", `" 503 "`: "503", `'+503'`: "503", `"0503"`: "503", `" +0503 "`: "503"} {
+	// Text is held to what the schemas' pattern takes: a status's three
+	// digits or a class (TestANumberThatIsNoStatusIsRefusedAtRequestAcceptStatus
+	// has the text refused).
+	for written, want := range map[string]string{`"503"`: "503", `'2XX'`: "2xx", `"5xX"`: "5xx"} {
 		for file, load := range acceptStatusLoads(t, written) {
 			if load.err != nil || !slices.Equal(load.statuses, []string{want}) {
 				t.Errorf("%s: accept_status: [%s] is %q, %v; want [%s]", file, written, load.statuses, load.err, want)
@@ -95,16 +93,22 @@ func TestAStatusWrittenAsANumberIsTheStatusItIsHoweverItIsWritten(t *testing.T) 
 // entry as it is written and what an entry is: a number with a fraction, out
 // of the range of a status however it is written, a boolean, and a number
 // with a point or an exponent in quotes, which is text that is no status, and
-// quoted digits with a sign or leading zeros out of the range of a status.
+// quoted digits with a sign, leading zeros or blanks around them, which the
+// schemas' pattern refuses: the exporter took '+503', "0503" and " 503 " as
+// the status 503.
 func TestANumberThatIsNoStatusIsRefusedAtRequestAcceptStatus(t *testing.T) {
-	for _, written := range []string{"503.5", "5.035e2", "6e2", "600.0", "0x258", "9.9e1", "-5.03e2", "1e19", "-200", "0700", "true", "'503.0'", `"5e2"`, "'0xc8'", ".inf", "'-503'", "'0700'"} {
-		entry := strings.Trim(written, `'"`)
+	for _, written := range []string{"503.5", "5.035e2", "6e2", "600.0", "0x258", "9.9e1", "-5.03e2", "1e19", "-200", "0700", "true", "'503.0'", `"5e2"`, "'0xc8'", ".inf", "'-503'", "'0700'",
+		"'+503'", `"0503"`, `" 503 "`, `"503 "`, `" +0503 "`, `"+0200"`, `" 2xx"`, `"5xx "`} {
+		entry := written
+		if len(entry) > 1 && (entry[0] == '\'' || entry[0] == '"') {
+			entry = entry[1 : len(entry)-1]
+		}
 		for file, load := range acceptStatusLoads(t, written) {
 			who := `collector "a"`
 			if file == "the static target file" {
 				who = `target "t"`
 			}
-			want := who + ` request.accept_status entry "` + entry + `" is not an HTTP status from 100 to 599 or a class such as 2xx`
+			want := who + ` request.accept_status entry "` + entry + `" is not an HTTP status from 100 to 599 written with its three digits, such as 503, or a class such as 2xx`
 			if load.err == nil || !strings.Contains(load.err.Error(), want) {
 				t.Errorf("%s: accept_status: [%s] is %q, %v; want %q", file, written, load.statuses, load.err, want)
 			}
@@ -134,11 +138,11 @@ func TestAStatusFromTheEnvironmentIsReadAsItWouldBeWritten(t *testing.T) {
 }
 
 // A static target's request.accept_status merged in from an anchor is read
-// as one written out, a number as the status it is, and quoted digits with
-// leading zeros beside a number in hex are the status both are, once the
-// file is checked as the exporter checks it.
+// as one written out, a number as the status it is, and quoted digits beside
+// a number in hex are the status both are, once the file is checked as the
+// exporter checks it.
 func TestAStaticTargetsStatusesMergedInAreTheStatusesTheyAre(t *testing.T) {
-	file, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", "interval: 1m\nx-r: &r {accept_status: [5.03e2, +404]}\ntargets:\n  - {name: t, collector: a, target: 'http://x', request: {<<: *r}}\n  - {name: u, collector: a, target: 'http://x', request: {accept_status: [\"0503\", 0x1F7]}}\n"))
+	file, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", "interval: 1m\nx-r: &r {accept_status: [5.03e2, +404]}\ntargets:\n  - {name: t, collector: a, target: 'http://x', request: {<<: *r}}\n  - {name: u, collector: a, target: 'http://x', request: {accept_status: [\"503\", 0x1F7]}}\n"))
 	if err == nil {
 		err = ValidateStaticTargets(file)
 	}

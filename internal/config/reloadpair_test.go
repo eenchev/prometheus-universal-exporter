@@ -37,7 +37,7 @@ func (h onReloadLog) Handle(_ context.Context, r slog.Record) error {
 
 func (onReloadLog) Enabled(context.Context, slog.Level) bool { return true }
 
-const acceptingTargets = "interval: 1m\ntargets:\n  - name: t\n    collector: a\n    target: http://a.invalid\n    request:\n      accept_status: [200, ' 5XX ']\n"
+const acceptingTargets = "interval: 1m\ntargets:\n  - name: t\n    collector: a\n    target: http://a.invalid\n    request:\n      accept_status: [200, '5XX']\n"
 
 // A reload that renames a collector in the configuration and in the target
 // using it is put in force as one pair: at no moment does a reader find the
@@ -108,25 +108,25 @@ func TestTheCheckAgainstTheConfigurationWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := file.Targets[0].Request.AcceptStatus; !slices.Equal(got, []string{"200", " 5XX "}) {
+	if got := file.Targets[0].Request.AcceptStatus; !slices.Equal(got, []string{"200", "5XX"}) {
 		t.Fatalf("as read: %q", got)
 	}
 	if err := ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
 	if got := file.Targets[0].Request.AcceptStatus; !slices.Equal(got, []string{"200", "5xx"}) {
-		t.Fatalf("after the file's own validation: %q, want the entries trimmed and in lower case", got)
+		t.Fatalf("after the file's own validation: %q, want the class in lower case", got)
 	}
 	if err := ValidateStaticTargetsAgainst(file, cfg); err != nil {
 		t.Fatal(err)
 	}
 	// A file that skipped its own validation is still only read.
 	unwritten := &model.StaticTargetFile{Targets: []model.StaticTarget{{Name: "t", Collector: "a", Target: "http://a.invalid", Interval: model.Duration(60e9),
-		Request: model.TargetRequestConfig{AcceptStatus: []string{" 5XX "}}}}}
+		Request: model.TargetRequestConfig{AcceptStatus: []string{"5XX"}}}}}
 	if err := ValidateStaticTargetsAgainst(unwritten, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := unwritten.Targets[0].Request.AcceptStatus; !slices.Equal(got, []string{" 5XX "}) {
+	if got := unwritten.Targets[0].Request.AcceptStatus; !slices.Equal(got, []string{"5XX"}) {
 		t.Fatalf("the check against the configuration rewrote accept_status to %q", got)
 	}
 	// It still refuses an entry that is no status, naming the target.

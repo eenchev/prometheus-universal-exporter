@@ -1013,7 +1013,7 @@ and the source MUST list the opt-in types.
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
-| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
+| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
@@ -8989,7 +8989,10 @@ or lower case; any other spelling MUST be refused at load naming the values
 taken. A key whose values the exporter matches in any case, as a standard or
 its own documentation has them — `request.driver`, `request.record_type`, a
 header name, an `allowed_schemes` entry, a gRPC status code of
-`retry.codes` — MUST be taken in any case by the schemas too.
+`retry.codes` or `accept_codes` — MUST be taken in any case by the schemas
+too, and the schemas MUST refuse what the exporter refuses there: a gRPC
+status code's entry that names no code, or `OK`, MUST be refused by the
+schemas' pattern as by the load.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads free text, since YAML reads `expression: 1`
@@ -10109,7 +10112,13 @@ The steps MUST be:
   `rate_limit` with its `burst` filled in, a `login` with the header
   and prefix its token is sent with filled in and the values of its
   `fields` and `endpoint_params` whose names read as credentials' withheld
-  (§ 42.6a);
+  (§ 42.6a); every collector whose type takes `proxy_url` (`http`,
+  `graphite`) MUST be listed there with how it connects: `unix_socket`, the
+  socket's path, when it sets one, and else `proxy`, the proxy in force —
+  its `proxy_url`, its own or from its file's `defaults`, `direct`, or
+  `environment` when it names none — with `proxy_basic_auth_file`'s paths
+  and never the contents of its files; the environment's proxy settings
+  MUST NOT be printed, since a proxy URL there may hold credentials;
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check; the metric
   lint's findings on the configuration (§ 30.1a) are listed under
@@ -13464,8 +13473,8 @@ Tests MUST show:
   apart or together, the targets in force name a collector the configuration
   in force has; a file reloaded alone keeps the other of the pair, and
   without a target file the pair is the configuration alone.
-- A static target's `accept_status` is trimmed and written in lower case,
-  and a `grpc` target's `accept_codes` and `retry.codes` in upper case, when
+- A static target's `accept_status` is written in lower case, a class such
+  as `5XX` becoming `5xx`, and a `grpc` target's `accept_codes` and `retry.codes` in upper case, when
   the file is validated on its own; the check against the configuration
   leaves a file not written so exactly as it is, and still refuses an entry
   that is no status or code.
@@ -23403,13 +23412,15 @@ Found by the review of these, and fixed:
   collector file and the static target file, and a probe of a collector and
   a scrape of a static target decode a 503 answer with it; `'-503'` and
   `'0700'` are refused naming the entry as written; a static target's
-  statuses merged in with `<<` are read as written out.
+  statuses merged in with `<<` are read as written out. (§ 34.235 replaced this: such quoted text is now refused, as the
+  schemas refuse it.)
 - `normalizeAcceptStatus` and `NormalizeTargetRequest` write a status with a
   sign or leading zeros by its digits alone, which `AcceptedStatus` then
   accepts; over 20,000 generated lists (4,000 under the race detector) of
   digits, signs, blanks, points, letters and classes they take, refuse and
   write every other entry as the code before, kept as the oracle, and stop
-  at the entry refused.
+  at the entry refused. (§ 34.235 replaced this test with one whose oracle is the
+  schemas' pattern.)
 - A rule's label and a `transform.labels` key of 201 bytes load when
   `transform.rename_labels` renames them or `transform.remove_labels`
   removes them, and the probe serves the renamed label (`n{short="v"} 1`) or
@@ -29233,6 +29244,66 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - A server answering `302` to the ready exporter's `/ready` fails the check
   with status 302: the redirect is not followed.
 
+## 34.235 Status lists held to the schemas, a Unix socket's length, and how --dry-run says a collector connects
+
+- `normalizeAcceptStatus` refuses `"0503"`, `"+503"`, `" 503 "`, `"503 "`,
+  `"+0200"`, `" 2xx"` and a status with a tab or a line break, naming the
+  entry and the form an entry takes (`written with its three digits, such as
+  503, or a class such as 2xx`), for a collector's `accept_status` and
+  `retry.statuses` and a static target's `accept_status`, and takes `503`,
+  `2XX` and `4xX`, the classes in lower case
+  (`TestAStatusWithASignLeadingZerosOrBlanksIsRefused`).
+- Over 20,000 generated lists (4,000 under the race detector) of digits,
+  signs, blanks, tabs, points, letters and classes, `normalizeAcceptStatus`
+  takes a list exactly when the schemas' pattern takes every entry, writes
+  the entries up to the one refused in lower case, and refuses the first
+  entry the pattern refuses in its words
+  (`TestAnAcceptStatusEntryIsTakenExactlyWhenTheSchemaTakesIt`).
+- Loading the configuration, a collector file and the static target file
+  refuses quoted `'+503'`, `"0503"`, `" 503 "`, `"503 "`, `" +0503 "`,
+  `"+0200"`, `" 2xx"` and `"5xx "` at `request.accept_status`, naming the
+  collector or the target and the entry, and takes `"503"`, `'2XX'` and
+  `"5xX"` (`TestANumberThatIsNoStatusIsRefusedAtRequestAcceptStatus`,
+  `TestAStatusWrittenAsANumberIsTheStatusItIsHoweverItIsWritten`).
+- The schemas and the exporter agree on quoted `accept_status` and
+  `retry.statuses` entries of a collector and a static target: `'503'` and
+  `'4XX'` taken by both, `'+503'`, `'0503'`, `' 503 '` and `'5xx '` refused
+  by both (`TestSchemaAndExporterAgreeOnKeysWrittenEmpty` rows).
+- The schemas and the exporter agree on `grpc` `retry.codes` (a collector's,
+  the defaults' and a static target's) and `accept_codes` (a collector's and
+  a static target's): a code's name in any case and with blanks around it
+  (`UNAVAILABLE`, `' aborted'`, `Data_Loss`, `'not_found '`) taken by both,
+  and `UNAVAILABLY`, `'aborted x'`, `NOT-FOUND`, `NOPE`, `OK`, `ok` and
+  `' OK'` refused by both, where the schemas took any text
+  (`TestSchemaAndExporterAgreeOnGRPCKeysWrittenEmpty` rows;
+  `TestEveryConstrainedKeyOfTheSchemasIsInATable` requires them).
+- `retry.statuses` refuses `" 4xx"`, `"+0503"` and `"0429"` in
+  `accept_status`'s words, and writes `4XX` as `4xx`
+  (`TestRetryStatusesAreCheckedAsAcceptStatusIs`).
+- A `request.unix_socket` of the system's limit, `len(sun_path) - 1` (107
+  bytes on Linux, 103 on macOS and the BSDs, checked against
+  `runtime.GOOS`), is taken, and one a byte longer is refused when the
+  collector is validated with `request.unix_socket is 108 bytes long, and a
+  Unix socket's path may be at most 107 bytes on linux`
+  (`TestAUnixSocketPathTooLongIsRefusedWhenItLoads`).
+- The schema takes such a path and the loader alone refuses it, naming the
+  length and the limit, while one of the limit's length is taken by both
+  (`TestTheExporterAloneHoldsAUnixSocketToTheSystemsLength`).
+- `--dry-run` lists under `request_policies` an `http` collector's
+  `unix_socket` with no `proxy`, `proxy: http://proxy.example:3128` with the
+  paths of its `proxy_basic_auth_file`, `proxy: direct`, `proxy:
+  environment` for an `http` collector that names none, and the `socks5://`
+  proxy a collector file's `defaults` gives a collector; the contents of the
+  credential files and the `HTTPS_PROXY` the test sets, with its user and
+  password, appear nowhere in the report
+  (`TestDryRunReportsHowACollectorConnects`); a `graphite` collector naming
+  no proxy is listed with `proxy: environment` and one naming `direct` with
+  `proxy: direct`, in a build with `graphite` whether or not it has `http`
+  (`TestDryRunReportsHowAGraphiteCollectorConnects`).
+- A collector that sets no other request policy is listed with `proxy:
+  environment` alone (`TestDryRunReportsRequestPolicies`,
+  `TestDryRunReportsRetryStatuses`, `TestDryRunReportsRetryAfter`).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -32191,7 +32262,12 @@ environment's included, MUST apply to such a collector. The socket MUST be
 an absolute path; one of nothing but blanks, a relative one, one with a
 placeholder or a control character, and one beside `proxy_url` or
 `proxy_basic_auth_file` MUST be refused when the configuration loads, and
-`""` MUST be the key left out, by the exporter and the schema alike. The
+`""` MUST be the key left out, by the exporter and the schema alike. A path
+longer than the `sun_path` of the system the exporter runs on holds, less
+its closing NUL — 107 bytes on Linux, 103 on macOS and the BSDs — MUST be
+refused when the configuration loads, by the exporter alone, with a message
+giving the path's length and the limit; the schema MUST NOT bound the
+length, which no one value would state for every system. The
 socket MUST be part of the pool's settings, so collectors with different
 sockets never share a connection, and none shares one with a collector
 that dials TCP. The socket is configuration: no probe parameter, no static

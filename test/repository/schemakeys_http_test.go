@@ -4,6 +4,7 @@ package repository
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -204,6 +205,10 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.accept_status[]", of: "in octal", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "with an underscore", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "quoted, with a sign", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "'503'", invalid: "'+503'", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "quoted, with leading zeros", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "'4XX'", invalid: "'0503'", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "quoted, with blanks", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "'503'", invalid: "' 503 '", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "quoted, a class with a blank", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "'5xx'", invalid: "'5xx '", absent: true},
 		{key: "collectors[].request.retry.statuses[]", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "collectors[].request.retry.statuses[]", of: "written with a point", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
 		{key: "collectors[].request.retry.statuses[]", of: "with an exponent", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
@@ -211,6 +216,10 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.retry.statuses[]", of: "in octal", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "collectors[].request.retry.statuses[]", of: "with an underscore", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "collectors[].request.retry.statuses[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "quoted, with a sign", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "'503'", invalid: "'+503'", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "quoted, with leading zeros", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "'4XX'", invalid: "'0503'", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "quoted, with blanks", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "'503'", invalid: "' 503 '", absent: true},
+		{key: "collectors[].request.retry.statuses[]", of: "quoted, a class with a blank", document: jqCollector, at: request, setting: "      retry:\n        statuses: [%s]\n", valid: "'5xx'", invalid: "'5xx '", absent: true},
 		{key: "collectors[].request.allowed_targets[]", document: jqCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.denied_targets[]", document: jqCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		// A collector's proxy: both refuse a scheme no proxy is reached
@@ -299,6 +308,10 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].request.accept_status[]", of: "in octal", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "targets[].request.accept_status[]", of: "with an underscore", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "targets[].request.accept_status[]", of: "with a sign and leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "targets[].request.accept_status[]", of: "quoted, with a sign", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "'503'", invalid: "'+503'", absent: true},
+		{key: "targets[].request.accept_status[]", of: "quoted, with leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "'4XX'", invalid: "'0503'", absent: true},
+		{key: "targets[].request.accept_status[]", of: "quoted, with blanks", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "'503'", invalid: "' 503 '", absent: true},
+		{key: "targets[].request.accept_status[]", of: "quoted, a class with a blank", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "'5xx'", invalid: "'5xx '", absent: true},
 		{key: "targets[].request.retry.statuses[]", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "targets[].request.retry.statuses[]", of: "written with a point", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
 		{key: "targets[].request.retry.statuses[]", of: "with an exponent", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
@@ -306,6 +319,10 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].request.retry.statuses[]", of: "in octal", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
 		{key: "targets[].request.retry.statuses[]", of: "with an underscore", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
 		{key: "targets[].request.retry.statuses[]", of: "with a sign and leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "quoted, with a sign", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "'503'", invalid: "'+503'", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "quoted, with leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "'4XX'", invalid: "'0503'", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "quoted, with blanks", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "'503'", invalid: "' 503 '", absent: true},
+		{key: "targets[].request.retry.statuses[]", of: "quoted, a class with a blank", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      retry:\n        statuses: [%s]\n", valid: "'5xx'", invalid: "'5xx '", absent: true},
 		{key: "targets[].params{}", file: inTargetFile, document: oneTarget, at: target, setting: "    params: {%s: one}\n", valid: "param_id", invalid: "tenant", absent: true},
 		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken, numberAlone: `has invalid label name "1"`},
 		{key: "interval", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "30s", invalid: "soon", duration: true, zero: "interval is required"},
@@ -411,6 +428,26 @@ func defaultsSchemaKeys(rows []schemaKey, collector, request string) []schemaKey
 // size key takes a whole number of bytes however YAML writes the number.
 func TestSchemaAndExporterAgreeOnKeysWrittenEmpty(t *testing.T) {
 	checkSchemaKeys(t, httpSchemaKeys())
+}
+
+// request.unix_socket is held to the length a socket's path may have on the
+// system the exporter runs on by the exporter alone: 107 bytes on Linux and
+// 103 on macOS and the BSDs, which no one maxLength of the schema could say
+// for both. A path of the limit's length is taken by both, and one a byte
+// longer is past the schema and refused by the exporter, naming its length
+// and the limit; it loaded, and every request failed when it dialed.
+func TestTheExporterAloneHoldsAUnixSocketToTheSystemsLength(t *testing.T) {
+	limit, known := map[string]int{"linux": 107, "darwin": 103, "freebsd": 103, "netbsd": 103, "openbsd": 103, "dragonfly": 103}[runtime.GOOS]
+	if !known {
+		t.Skipf("no known limit on %s", runtime.GOOS)
+	}
+	schema := loadSchema(t)
+	socket := func(n int) string {
+		return strings.Replace(jqCollector, "      # request\n", "      unix_socket: /"+strings.Repeat("s", n-1)+"\n", 1)
+	}
+	agree(t, schema, fmt.Sprintf("unix_socket of %d bytes", limit), socket(limit), true)
+	loadersAlone(t, schema, fmt.Sprintf("unix_socket of %d bytes", limit+1), socket(limit+1),
+		fmt.Sprintf("request.unix_socket is %d bytes long, and a Unix socket's path may be at most %d bytes on %s", limit+1, limit, runtime.GOOS))
 }
 
 // A rule about a key being written goes by the key being written, not by

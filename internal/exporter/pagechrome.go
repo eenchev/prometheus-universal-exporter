@@ -102,7 +102,9 @@ var logoSVG []byte
 // since html/template would refuse a data: URL put in an href.
 var pageIcon = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString(logoSVG) + `">`
 
-// pageTemplate parses a page's template, text, with the bar it places.
+// pageTemplate parses a page's template, text, with the bar it places and
+// the template for a cell's long text (longtext.go).
 func pageTemplate(name, text string) *template.Template {
-	return template.Must(template.Must(template.New(name).Parse(chromeTemplate)).Parse(text))
+	t := template.Must(template.New(name).Funcs(pageFuncs).Parse(chromeTemplate))
+	return template.Must(template.Must(t.Parse(longTemplate)).Parse(text))
 }

@@ -29442,7 +29442,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` (the `metric_names` and `scope` rows): `metric_names` of `OTel`, `openmetrics` and `5` and `scope` of `{}`, `{version: "1"}`, `{name: ""}`, a name with a tab and a version with a line break are taken switched off and refused by both switched on; `[otel]`, a mapping, text, a list, an unknown key and a list for a name are refused off and on; `otel`, `prometheus`, `""`, a scope with a name, with a name and a version, and the name `"1"` are taken off and on.
 - `TestSchemaAndExporterAgreeOnEnabled` (the `scope` key): `scope: {name: x}` without `enabled`, or beside an empty one, is refused by both, and taken by both with `enabled: false`.
 
-## 34.239 The pages' icon, and the debug page's playground
+## 34.239 The pages' icon, the debug page's playground, and long texts and aligned controls on the pages
 
 - `TestThePagesIconIsTheProjectsLogo`: `internal/exporter/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
@@ -29456,6 +29456,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector`: `/debug?collector=lonely` offers the radio and an empty list disabled with `No static target uses lonely.`, and `/debug/collector?name=lonely` answers `static_targets: []`; `/debug` offers it disabled under `… to fetch a target or scrape a static target.`; without static targets `/debug` and `/debug?collector=rooms` say `No static target is configured.`
 - `TestTheDebugPagePreselectsTheStaticTargetItsAddressNames`: `/debug?static_target=varna` and `/debug?collector=halls&static_target=varna` choose `rooms`, `varna`'s collector, and `varna` in the list; a name no target has leaves `halls` chosen.
 - `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
+- `TestALongTextIsPreviewedByItsStart`: a text of 160 characters (`é` each) or three lines is not cut; one of 161 characters is previewed as its first 160 and `…`, one of four lines as its first three and `…`, the whole text kept.
+- `TestTheStatusPageShowsALongErrorsStartAndTheWholeOne`: a static target's error past 160 characters, quoting `<script>alert(1)</script>`, is shown in its cell as `<details class="long">` with the summary `aria-label="Show the whole error"`, its preview and the whole error in `<pre class="whole">`, both escaped and no markup; a short error, `received HTTP status 500`, is shown whole with no `<details>`.
+- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*; `?format=fragment` has the `<details>` and no dialog.
+- `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh`: the script listens for clicks on the content element for `details.long > summary`, puts the whole text in the dialog with `textContent`, opens it with `showModal()`, skips a refresh while it is open (`if (inFlight || whole.open) return;`), closes it on a click on the backdrop, and on its close gives focus back to the control and calls `schedule()`; its one `innerHTML` is the swap of the fragment.
+- `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
+- `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
 
 # 35. Documentation requirements
 
@@ -31816,6 +31822,28 @@ then one of the OTLP export. Of the static targets:
   data shown is of once (beside the controls, hiding the content's own
   as-of line, which a page without JavaScript shows), and when a refresh
   fails MUST say so and keep the data shown.
+- A value of free text past 160 characters or three lines — an error of a
+  static target, of a probe, of the OTLP export or of the log export, a
+  target, a static target's labels, a probe's parameters — MUST be shown as
+  its start, ending in `…`, in a `<details>` whose summary is a control
+  labelled `Show the whole <what it is>` and whose body is the whole text,
+  so that without JavaScript the whole text is on the page; a shorter value
+  MUST be shown whole, with no control. Both MUST be escaped as every value
+  is. With JavaScript the control MUST open the whole text in a modal
+  `<dialog>` outside the content a refresh swaps, by a listener on the
+  content element, so that controls a refresh brings open it too; the text
+  MUST be put in the dialog with `textContent`, never parsed as HTML; the
+  dialog MUST close on its Close button, on Esc and on a click on its
+  backdrop, MUST give focus back to the control that opened it, and MUST say
+  the time its text is of. No refresh MUST swap the content while the
+  dialog is open; closing it MUST resume the refresh, at once if one fell
+  due. `?format=fragment` MUST have the `<details>` and no dialog, and the
+  JSON MUST be as it is, every value whole.
+- Controls on one line MUST line up: the Refresh button, the auto-refresh
+  selector and its label MUST be centred on one line at one height; on the
+  debug page *Run* MUST have the height of the timeout box beside it and
+  stand on its line, under the box's label, and on the debug and collectors
+  pages the fields of a row MUST stand on one line when one label wraps.
 - The interval MUST be `?refresh=` when that is `off` or a duration in whole
   seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
   `?refresh=` MUST be ignored. An interval none of the selector's MUST be

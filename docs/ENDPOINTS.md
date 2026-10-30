@@ -54,6 +54,16 @@ refused. It has three sections:
 While the last OTLP export failed, a line at the top of the page says so,
 with the failed exports in a row and whether they made the exporter unready.
 
+An error, a target, a static target's labels or a probe's parameters
+longer than 160 characters or three lines shows as its start, ending in `…`,
+with *Show all* under it, so one long error does not make its table as tall
+as the text. *Show all* opens the whole text in a box over the page, with
+the time it is of, *Copy* where the browser allows it, and *Close*; Esc or a
+click beside the box closes it too. The page is not refreshed while the box
+is open, so the text does not change under you; it refreshes when the box
+closes, at once if a refresh fell due meanwhile. Without JavaScript *Show
+all* opens the whole text in place. The JSON has every value whole.
+
 ### Refreshing
 
 The page refreshes as a Grafana dashboard does. Its Refresh button fetches

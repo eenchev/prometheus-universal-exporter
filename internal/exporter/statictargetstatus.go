@@ -420,8 +420,17 @@ td.err { font-family: ui-monospace, monospace; font-size: 13px; max-width: 420px
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
 form.refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0; }
-form.refresh a.button, form.refresh button, form.refresh select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; text-decoration: none; }
+form.refresh label { display: inline-flex; align-items: center; gap: 6px; }
+form.refresh a.button, form.refresh button, form.refresh select { display: inline-flex; align-items: center; height: 30px; font: inherit; line-height: 1; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; text-decoration: none; }
 form.refresh a.button { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+dialog#whole::backdrop { background: rgb(0 0 0 / 0.5); }
+dialog#whole .box { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 34px); padding: 16px; }
+dialog#whole h2 { margin: 0; }
+dialog#whole pre { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+dialog#whole .buttons { display: flex; justify-content: flex-end; gap: 8px; }
+dialog#whole button { height: 32px; padding: 0 14px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+dialog#whole button#whole-close { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 </style>
 {{- if .Refresh.Seconds}}
 <noscript><meta http-equiv="refresh" content="{{.Refresh.Seconds}}"></noscript>
@@ -444,6 +453,14 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 <div id="status-content">
 {{- template "content" .}}
 </div>
+<dialog id="whole" aria-labelledby="whole-title">
+<div class="box">
+<h2 id="whole-title">The whole text</h2>
+<p class="meta" id="whole-as-of"></p>
+<pre id="whole-text"></pre>
+<div class="buttons"><button type="button" id="whole-copy" hidden>Copy</button><button type="button" id="whole-close">Close</button></div>
+</div>
+</dialog>
 <script>
 "use strict";
 // The Refresh button and the auto-refresh fetch this page's content section
@@ -454,7 +471,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 // refresh above reloads the page on it.
 (() => {
   const $ = (id) => document.getElementById(id);
-  const content = $("status-content"), every = $("refresh-every"), state = $("refresh-state");
+  const content = $("status-content"), every = $("refresh-every"), state = $("refresh-state"), whole = $("whole");
   let timer = 0, inFlight = false, refreshedAt = Date.now(), dataAt = "";
   const clock = (ms) => new Date(ms).toLocaleTimeString();
   const seconds = () => Number(every.selectedOptions[0].dataset.seconds) || 0;
@@ -474,8 +491,9 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
   state.textContent = "As of " + dataClock();
   async function refresh() {
     // A refresh still waiting for its answer is not overlapped: a tick
-    // that finds one is skipped.
-    if (inFlight) return;
+    // that finds one is skipped. Nor is the content swapped while the
+    // dialog shows a text of it: its close refreshes, if a tick fell due.
+    if (inFlight || whole.open) return;
     inFlight = true;
     const url = new URL(location.href);
     url.searchParams.set("format", "fragment");
@@ -483,7 +501,13 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
     try {
       const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
       if (!response.ok) throw new Error("HTTP " + response.status);
+      // A swap takes away what had focus in the content, such as a long
+      // text's control the dialog gave focus back to; the control at the
+      // same place in the new content takes it.
+      const summaries = () => [...content.querySelectorAll("details.long > summary")];
+      const focused = summaries().indexOf(document.activeElement);
       content.innerHTML = await response.text();
+      if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
       refreshedAt = Date.now();
       state.className = "muted";
       asOf();
@@ -520,6 +544,45 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
   $("refresh").addEventListener("submit", (event) => event.preventDefault());
   document.addEventListener("visibilitychange", schedule);
   schedule();
+  // A long text in the content is its start, in a <details> that opens in
+  // place without JavaScript; with it, the whole text opens in the dialog
+  // instead. The listener is on the content element, which a refresh keeps,
+  // so the rows a refresh swaps in open too, and the dialog is outside it,
+  // so a swap cannot take it away. The text is copied with textContent,
+  // never parsed: it is the target's, or quotes it.
+  let opener = null;
+  const copy = $("whole-copy");
+  copy.hidden = !(navigator.clipboard && window.isSecureContext);
+  content.addEventListener("click", (event) => {
+    const summary = event.target.closest("details.long > summary");
+    if (!summary || typeof whole.showModal !== "function") return;
+    event.preventDefault();
+    opener = summary;
+    $("whole-title").textContent = "The whole " + summary.dataset.kind;
+    $("whole-as-of").textContent = "As of " + dataClock();
+    $("whole-text").textContent = summary.parentElement.querySelector("pre.whole").textContent;
+    copy.textContent = "Copy";
+    whole.showModal();
+    $("whole-close").focus();
+  });
+  $("whole-close").addEventListener("click", () => whole.close());
+  // A click on the backdrop lands on the dialog itself, outside its box.
+  whole.addEventListener("click", (event) => { if (event.target === whole) whole.close(); });
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("whole-text").textContent);
+      copy.textContent = "Copied";
+    } catch (error) {
+      copy.textContent = "Copy failed";
+    }
+  });
+  // Esc closes the dialog too. Focus goes back to what opened it, and the
+  // refresh held while it was open resumes.
+  whole.addEventListener("close", () => {
+    if (opener && opener.isConnected) opener.focus();
+    opener = null;
+    schedule();
+  });
 })();
 </script>
 </main>
@@ -544,12 +607,12 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 <tbody>
 {{- range .Rows}}
 <tr>
-<td><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{.Target}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{.LabelText}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td>{{.Interval}}</td>
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
 <td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
-<td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
+<td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
 </tr>
 {{- end}}
 </tbody>
@@ -568,11 +631,11 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 <tbody>
 {{- range .Probes}}
 <tr>
-<td><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{.Target}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{.Params}}{{end}}</td>
+<td><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
 <td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
 <td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
-<td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
+<td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
 </tr>
 {{- end}}
 </tbody>
@@ -596,7 +659,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 {{- if .UnreadyAfter}}
 <tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
 {{- end}}
-<tr><th>Last error</th><td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
 <tr><th>Dropped since start</th><td>{{.Dropped}} data point{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.Refused}} refused, {{.DroppedBy.Rejected}} rejected, {{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
 <tr><th>Since start</th><td>{{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</td></tr>
@@ -614,7 +677,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 <tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}, {{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
-<tr><th>Last error</th><td class="err">{{if .LastError}}{{.LastError}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} log record{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
 <tr><th>Dropped since start</th><td>{{.Dropped}} log record{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
 <tr><th>Since start</th><td>{{.Sent}} log record{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>

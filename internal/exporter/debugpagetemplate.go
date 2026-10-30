@@ -79,13 +79,15 @@ textarea#collector { min-height: 360px; }
 textarea[readonly] { background: var(--code); }
 .collector-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
 .collector-head label { flex: 1 1 200px; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
 .row > div { flex: 1 1 160px; min-width: 0; }
 .row > div.narrow { flex: 0 1 120px; }
 .modes { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; margin: 4px 0 8px; }
 .modes label { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
 .modes input { width: auto; }
-.actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+.actions { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+.actions > div { flex: 0 1 140px; }
+.actions button, .actions input { height: 36px; }
 button { padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
 button.secondary { padding: 3px 12px; margin-top: 6px; background: transparent; color: var(--accent); font-size: 13px; }
 [hidden] { display: none !important; }

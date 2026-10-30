@@ -59,6 +59,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   target and its collector. The pasted body starts empty with a configured
   collector, the example's answer only with the example.
 - The exporter's pages show the project's logo as their browser-tab icon.
+- The status page shows a long error — and a long target, labels or probe
+  parameters — as its first 160 characters or three lines with *Show all*,
+  which opens the whole text in a box over the page; the page does not
+  refresh while the box is open. On the debug page *Run* stands level with
+  the timeout box beside it, and the status page's Refresh button and
+  auto-refresh selector are one height, centred on one line.
 
 ### New
 

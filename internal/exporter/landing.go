@@ -32,7 +32,7 @@ p.meta { color: var(--muted); margin: 0; }
 a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
-` + chromeStyle
+` + chromeStyle + longStyle
 
 // pagePolicy is the pages' Content-Security-Policy. Its img-src is for the
 // icon (pageIcon), which is a data: URL.

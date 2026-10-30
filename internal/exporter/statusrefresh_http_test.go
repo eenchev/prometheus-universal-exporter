@@ -65,7 +65,7 @@ func TestTheStatusPageHasRefreshControls(t *testing.T) {
 		`url.searchParams.set("format", "fragment")`,
 		`credentials: "same-origin"`,
 		`cache: "no-store"`,
-		`if (inFlight) return;`,
+		`if (inFlight || whole.open) return;`,
 		`document.visibilityState === "hidden"`,
 		`document.addEventListener("visibilitychange", schedule)`,
 		`url.searchParams.set("refresh", every.value)`,
@@ -171,7 +171,7 @@ func TestTheStatusFragmentIsThePageContentAlone(t *testing.T) {
 	// taken out before they are compared.
 	asOf := regexp.MustCompile(`<time datetime="[^"]*">[^<]*</time>`)
 	start := strings.Index(page, `<div id="status-content">`) + len(`<div id="status-content">`)
-	end := strings.Index(page, "\n</div>\n<script>")
+	end := strings.Index(page, "\n</div>\n<dialog")
 	if start < len(`<div id="status-content">`) || end < start {
 		t.Fatalf("the page has no content element:\n%s", page)
 	}

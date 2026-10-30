@@ -5424,7 +5424,17 @@ It reads one of three responses:
   configured collector or a copy of one; a body that has been written in is
   kept whichever collector is chosen. The status must be
   one the collector's `request.accept_status` accepts, and the body is held
-  to its response limit, as a fetched response would be.
+  to its response limit, as a fetched response would be. The page asks for
+  a status and headers only for an `http` or `graphite` collector, whose
+  answers are HTTP responses, and for a `Content-Type` only where it can
+  choose the decoder; the body's placeholder says what to paste: what the
+  target answers, a file's content, or, for the types that make their
+  answer, the JSON document a run's *Response* shows. A `sql` collector's
+  response is its rows, pasted as JSON as a run's *Response* shows them, a
+  list of objects of each row's columns by name,
+  `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
+  `true` and `false` as 1 and 0, and `null` leaves the column out of its
+  row, as `NULL` does; anything else is refused with `400`.
 - **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
   it, through a configured collector — the one chosen, or the one the
   playground was copied from — with its request block,
@@ -5432,7 +5442,8 @@ It reads one of three responses:
   credentials, `accept_status` and
   [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
   parameters entered on the page. The playground decodes and transforms what
-  the collector it was copied from fetched; one not copied from a configured
+  the collector it was copied from fetched; see below for what the page asks
+  for; one not copied from a configured
   collector, as the example, has nothing to fetch through, so *Fetch a
   target* is not offered with it. A collector run on what another fetched
   reads what an `http` collector fetches only.
@@ -5455,6 +5466,39 @@ It reads one of three responses:
   own, or by the playground, a copy of it that may have been edited.
   `/debug?static_target=<name>` opens the page with that target chosen and
   its collector chosen on the left.
+
+What the page asks for follows the request type of the collector it is
+for — the collector run, for a pasted response, the playground being an
+`http` collector, and the one a target is probed through, for a target —
+as each type says it, so a build without a type has nothing of it:
+
+| Request type | Target, as the page labels and hints it |
+| --- | --- |
+| `http` | URL: `https://host:port` |
+| `graphite` | Graphite URL: `https://graphite:8080` |
+| `grpc` | Server: `host:port, grpc://host:port or grpcs://host:port` |
+| `sql` | Database server: `host or host:<the driver's port>`, such as `host:5432`; Account for `snowflake` |
+| `dns` | Name to resolve: `example.com`, the server being `request.server` or the system's resolver; Address to resolve for `PTR` |
+| `ntp` | NTP server: `host or host:123` |
+| `tlscert` | Server: `host or host:443`, or the `starttls` protocol's port |
+| `sshfile`, `sshexec` | SSH host: `host or host:22` |
+| `localfile` | File, or Directory when `request.path` names the file or `files` reads a directory: under its root, optional |
+| `kubernetes` | none: the field is left out, and the page says *This collector names its own target.* |
+| `s3file` | Bucket: `the bucket, or s3://bucket` |
+| `redis` | Server: `host, host:port or rediss://host:port` |
+| `tcp` | Server: `host:port` |
+| `ldap` | LDAP server: `host, host:port or ldaps://host:port` |
+
+The probe parameters' placeholder lists the collector's own
+`{{param_<name>}}` placeholders, one `param_<name>=<default>` a line, with
+nothing after `=` for one without a default, and then the other parameters
+its type takes from a probe, `header_<name>` for each header it forwards;
+a collector that takes none, such as a `dns` collector without a
+placeholder, is offered no field, and the page says *This collector takes
+no probe parameters.* The page reads the form of each collector again with
+its YAML from `/debug/collector`, so it follows a reload. The target is
+probed as `/probe?debug=true` probes it, and the page says through which
+collector: *Probed through status_json, the collector chosen.*
 
 The playground may do nothing past the response, since what it is given
 runs on the server:
@@ -5495,10 +5539,14 @@ curl -s http://exporter:8080/debug/run \
 The editor reads a configured collector from `GET
 /debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
 YAML as the page shows it, `from_defaults`, the keys it took from its
-file's defaults, and at `full` `static_targets`, the static targets scraped
+file's defaults, at `full` `static_targets`, the static targets scraped
 through it, each a `name` and its `target` as the list shows it, `[]` for
-none; a name the configuration does not have is answered `404` with
-`error`.
+none, and `form`, what the page asks a run of it for: `request_type`,
+`answer`, the body's placeholder, `content_type` and `http_answer`, whether
+it asks for a `Content-Type` and for a status and headers, `target_label`
+and `target_hint`, or `no_target`, and `params`, the probe parameters'
+placeholder, left out when it takes none; a name the configuration does not
+have is answered `404` with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for

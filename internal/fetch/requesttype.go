@@ -252,13 +252,22 @@ type RequestType struct {
 	// Revalidates says an expired cached response of the type may be
 	// revalidated with a conditional request (Revalidable).
 	Revalidates bool
-	// TargetHint says what a target of the type is, for the collectors
-	// page. Unset, "target".
-	TargetHint func(c *model.Collector) string
+	// TargetHint names what a target of a collector of the type is, and
+	// shows the forms it takes, as the collectors page and the debug page
+	// ask for one: "URL" and "https://host:port", "Name to resolve" and
+	// "the name to resolve, such as example.com". Each type says its own,
+	// so a form never asks another type for an http target, and a type a
+	// build leaves out takes its words with it. Required unless NoTarget
+	// is set (registerRequestType).
+	TargetHint func(c *model.Collector) (label, hint string)
 	// NoTarget says the type takes no target at all: it reads what its
-	// configuration names, and the collectors page says to leave the
-	// target out.
+	// configuration names, and the collectors page and the debug page say
+	// so in place of asking for one.
 	NoTarget bool
+	// AnswerHint says what a response of the type pasted on the debug page
+	// is, as the body's field there asks for it: what the target answers,
+	// for http; the rows as JSON, for sql. Required.
+	AnswerHint string
 	// DebugPage says a collector written on the debug page may be of this
 	// type, and that another collector may read what one of this type
 	// fetches (request_from).
@@ -524,6 +533,12 @@ func registerRequestType(rt *RequestType) {
 	}
 	if rt.Requester == nil {
 		panic(fmt.Sprintf("request type %q registered without its Requester", rt.Name))
+	}
+	if !rt.NoTarget && rt.TargetHint == nil {
+		panic(fmt.Sprintf("request type %q registered without saying what its target is (TargetHint), nor that it takes none (NoTarget)", rt.Name))
+	}
+	if rt.AnswerHint == "" {
+		panic(fmt.Sprintf("request type %q registered without saying what a pasted response of it is (AnswerHint)", rt.Name))
 	}
 	if rt.Config != nil && reflect.TypeOf(rt.Config).Kind() != reflect.Struct {
 		panic(fmt.Sprintf("request type %q registered with a Config that is no struct", rt.Name))
@@ -898,6 +913,46 @@ func FetchStage(c *model.Collector) string {
 		return rt.Stage
 	}
 	return "http"
+}
+
+// TargetPrompt is how a form asks for the target of a collector: Label and
+// Hint as its type says them (RequestType.TargetHint), or None
+// for a type that takes no target.
+type TargetPrompt struct {
+	Label, Hint string
+	None        bool
+}
+
+// TargetPromptOf is how a form asks for the target of c; nothing for a
+// type this build lacks.
+func TargetPromptOf(c *model.Collector) TargetPrompt {
+	rt := requestTypeOf(c)
+	switch {
+	case rt == nil:
+		return TargetPrompt{}
+	case rt.NoTarget:
+		return TargetPrompt{None: true}
+	}
+	label, hint := rt.TargetHint(c)
+	return TargetPrompt{Label: label, Hint: hint}
+}
+
+// AnswerHintOf says what a response of c pasted on the debug page is
+// (RequestType.AnswerHint); "" for a type this build lacks.
+func AnswerHintOf(c *model.Collector) string {
+	if rt := requestTypeOf(c); rt != nil {
+		return rt.AnswerHint
+	}
+	return ""
+}
+
+// AnswersHTTP reports whether the answers of c are HTTP responses, with a
+// status and headers of their own: those of a type whose stage is http's
+// (FetchStage), http's and graphite's. Another type's answer, a file, rows
+// or a document the exporter makes, has neither.
+func AnswersHTTP(c *model.Collector) bool {
+	rt := requestTypeOf(c)
+	return rt != nil && rt.Stage == ""
 }
 
 // setKeys returns the yaml keys of a struct's fields that hold a non-zero

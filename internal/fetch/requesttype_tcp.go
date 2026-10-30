@@ -115,7 +115,8 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout", "tls"},
 		Requester:    tcpRequester{},
-		TargetHint:   func(*model.Collector) string { return "host:port" },
+		TargetHint:   func(*model.Collector) (string, string) { return "Server", "host:port" },
+		AnswerHint:   "Paste what the service answers, or the JSON document the exporter makes of it with request.document, as the Response of a run shows it",
 		Templates:    tcpTemplates,
 		// start_tls is ldap's StartTLS, a boolean: this type's names the
 		// protocol that asks for TLS.

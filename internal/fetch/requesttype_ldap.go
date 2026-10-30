@@ -134,7 +134,8 @@ func init() {
 		JSONAnswer:   true,
 		// ldap is said letter by letter.
 		Article:    "an",
-		TargetHint: func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
+		TargetHint: func(*model.Collector) (string, string) { return "LDAP server", "host, host:port or ldaps://host:port" },
+		AnswerHint: "Paste the entries found as the JSON document the exporter makes of them, as the Response of a run shows it",
 		Templates:  ldapTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the base or filter of its request.searches or its label values")

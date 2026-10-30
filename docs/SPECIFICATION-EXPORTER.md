@@ -8076,7 +8076,10 @@ Recommended behavior:
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
   that probes a target through it and shows the answer in place. The form MUST
-  offer a field for the target, required when the request type needs one; a
+  offer a field for the target, required when the request type needs one,
+  labelled and hinted as its request type names a target and shows its forms
+  (§ 42.17), and disabled with the hint `none: leave it out` for a type that
+  takes none; a
   timeout, 10 seconds to start with, sent as the
   `X-Prometheus-Scrape-Timeout-Seconds` header so the probe answers with its
   own error, with the page giving up a few seconds after it; for each
@@ -29466,6 +29469,20 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheLogExportsLastRecordsAreMutedUnderItsResult`: the log export's last export says its result, and under it, muted as the metrics export's counts are, `1 log record`.
 - `TestTheStatusPagesShortColumnsKeepTheirWordsWhole`: the status page's headers do not wrap, its cells keep their words whole but for the target's and the error's, which break anywhere within bounds, and a facts table's error cell sets no least width, so a phone shows the OTLP sections without scrolling sideways.
 
+## 34.240 The debug page and the collectors page ask for what each request type takes
+
+- `TestEveryBuiltRequestTypeSaysWhatItsTargetAndItsAnswerAre` (fetch, every build): every request type built says what a pasted response of it is, and either takes no target or names one with a label and a hint, which hints a URL for `http` and `graphite` alone.
+- `TestARequestTypeMustSayWhatItsTargetAndItsAnswerAre` (fetch): registering a type without a target hint and without `NoTarget`, or without an answer hint, panics, and the type is not in `RequestTypes`.
+- `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`: `/debug?collector=weather`, an `http` collector with `{{param_city:sofia}}`, `{{param_days}}` and `forward_headers: [X-Tenant]`, and `/debug/collector?name=weather` give the form `URL`, `https://host:port`, the parameters `param_city=sofia`, `param_days=` and `also: method, path, body, insecure_skip_verify, follow_redirects, enable_http2, retry_attempts, retry_backoff, header_X-Tenant`, and a pasted body with its `Content-Type`, status and headers; the page says `Probed through weather, the collector chosen.` and that the target is probed as `/probe?debug=true` probes it; the playground shows the `Content-Type`, status and headers.
+- `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`: a postgres collector with `{{param_min:0}}` is asked for `Database server`, `host or host:5432` and `param_min=0`, and of a pasted response for the rows as JSON alone, its `Content-Type`, status and headers hidden.
+- `TestTheDebugPageReadsAPastedSQLResponseAsTheRows`: rows pasted for that collector, with a `null` column and `true`, give `demo_jobs{state="open"} 3`, `{state="done"} 40` and `{state="late"} 1`; an object, a row with an object for a value, a second list after the first and `[null]` are refused `400`, saying to paste a list of objects.
+- `TestTheDebugPageAsksADNSCollectorForTheNameToResolve`: a dns collector of `A` is asked for `Name to resolve`, `example.com`, one of `PTR` for `Address to resolve`, `192.0.2.1 or 2001:db8::1`; neither takes probe parameters, which the page says in place of the field, nor shows a `Content-Type`, status or headers.
+- `TestTheDebugPageProbesAKubernetesCollectorWithNoTarget`: a kubernetes collector's form has no target, the page hiding the field and saying `This collector names its own target.` and `This collector takes no probe parameters.`, its script sending an empty target for it; a run with an empty target is made, answered `200` with a report, not refused.
+- `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`: localfile collectors are asked for `Directory`, `a directory under its root that holds app.prom (optional)` with `path` among their parameters, for `Directory`, `a directory under its root (optional)` reading `files`, and for `File`, `a file under its root, such as app.prom (optional)`; a pasted body is the file's content, with a `Content-Type` and no status or headers.
+- `TestTheDebugPageAsksAnSSHFileCollectorForTheHost`: an sshfile collector is asked for `SSH host`, `host or host:22`, its parameters `also: path`, and of a pasted response for the file's content.
+- `TestTheCollectorsPageHasAProbeFormPerCollector`, `TestTheCollectorsPageNamesADNSTarget`, `TestTheCollectorsPageShowsAGraphiteTarget` and `TestTheCollectorsPageHintsALocalfileTarget` (changed): the collectors page labels the target `URL` with `https://host:port`, `Name to resolve` with `example.com`, `Graphite URL` with `https://graphite:8080`, and `Directory` with `a directory under its root that holds batch.prom (optional)`; the kubernetes test's form offers the target disabled.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`, `TestTheDebugPagesBodyFitsTheCollectorChosen`, `TestTheDebugPageIsSelfContained` and `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen` (changed): the note reads `Probed through …`, the body's placeholder is the http type's answer hint, the page names no URL but `https://host:port`, and the script takes the form `/debug/collector` answers.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33273,13 +33290,56 @@ authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
 only, `static_targets`, the static targets in force scraped through that
 collector, each with its `name` and its `target` shown as the status page
 shows it (§ 42.14a), with any credential in it withheld, an empty list when
-there is none; a name the configuration in force does not have `404` with
+there is none; and `form`, what the page asks a run of the collector for
+(below); a name the configuration in force does not have `404` with
 `error`.
+
+What the page asks for MUST follow the request type of the collector it is
+for, as the type says it in its own registration, so a type a build leaves
+out takes its words with it and every type MUST say them (a type that does
+not MUST fail to build): the collector run reads what is pasted, the
+playground being an `http` collector, and a target is probed through the
+collector a target would be fetched through. The page MUST hold the form of
+the playground and of each configured collector, and MUST take the one
+`/debug/collector` answers with a collector when it reads it again:
+
+- the target MUST be asked for by its type's name for it and an example of
+  its forms — `URL` and `https://host:port` for `http`, `Name to resolve` and
+  `example.com` for `dns`, `Database server` and `host or host:<the
+  driver's port>` for `sql`, `SSH host` and `host or host:22` for `sshfile`
+  and `sshexec`, `host or host:123` for `ntp`, `host or host:443` (or the
+  `starttls` protocol's port) for `tlscert` — said to be optional where the
+  type may leave it out (`localfile`). A collector of a type that takes no
+  target (`kubernetes`) MUST be offered no target field, the page saying
+  `This collector names its own target.`, and its run MUST send an empty
+  target, which is not refused for want of one;
+- the probe parameters MUST be hinted as the collector's own `{{param_<name>}}`
+  placeholders, one `param_<name>=<default>` a line, nothing after `=` for
+  one without a default, followed by the other parameters its type takes
+  from a probe, `header_<name>` for each header it forwards, `timeout` left
+  out; a collector that takes none MUST be offered no field, the page saying
+  `This collector takes no probe parameters.`;
+- a pasted response's body MUST be asked for as what an answer of the type
+  is — what the target answers for `http`, the rows as JSON for `sql`, the
+  JSON document the exporter makes for the types that make one, the file's
+  content for the types that read files — with a status and headers only
+  for a type whose answers are HTTP responses (`http`, `graphite`), and a
+  `Content-Type` only where it can choose the decoder: not for a type that
+  makes its answer, reads rows or has a decoder of its own. The page MUST
+  send no status, headers or `Content-Type` it does not ask for;
+- the page MUST NOT say that a target of another type than `http` is
+  fetched: it is probed as `/probe?debug=true` probes it, through the
+  collector named (`Probed through <name>, …`).
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a
 body over fails as a fetched one does, the decode, the transform and the
-validation under the collector's limits. A fetch, at `full` only, MUST be
+validation under the collector's limits. A response pasted for a `sql`
+collector MUST be read as its rows, as its driver's are handed on (§ 5.1,
+`sql`): a JSON list of objects, each a row's columns by name, a whole
+number an integer, `true` and `false` 1 and 0, and `null` leaving the
+column out of its row; anything else, and a value that is a list or an
+object, MUST be refused with `400` saying what to paste. A fetch, at `full` only, MUST be
 made exactly as a debug probe of the collector that fetches would make it:
 the configured collector run, or the one `request_from` names, which a
 written collector MUST name (`400` otherwise) — through its request block,

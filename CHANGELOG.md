@@ -110,6 +110,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- The debug page asks for what the chosen collector's request type takes,
+  not for an HTTP target: the target as the type names it, with an example
+  of its forms (`SSH host`, `host or host:22`; `Name to resolve`,
+  `example.com`), no target field for a collector that names its own
+  (`kubernetes`), the collector's own `{{param_...}}` parameters with their
+  defaults, or a note that it takes none, and, for a pasted response, what
+  the type's answer is, with a status and headers only for `http` and
+  `graphite`. A response pasted for a `sql` collector is read as its rows,
+  a JSON list of objects, where it gave no series before. The collectors
+  page labels and hints each target the same way.
 - The problems of a one-line block (`defaults: {...}`, a collector's
   `request`, `otlp`, `web.basic_auth`) are said in the order of the keys on
   the line.

@@ -99,7 +99,8 @@ func init() {
 		TargetFields: []string{"timeout", "username", "password_file", "tls"},
 		Requester:    redisRequester{},
 		JSONAnswer:   true,
-		TargetHint:   func(*model.Collector) string { return "host, host:port or rediss://host:port" },
+		TargetHint:   func(*model.Collector) (string, string) { return "Server", "host, host:port or rediss://host:port" },
+		AnswerHint:   "Paste the commands' answers as the JSON document the exporter makes of them, as the Response of a run shows it",
 		Templates:    redisTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the arguments of its request.commands or its label values")

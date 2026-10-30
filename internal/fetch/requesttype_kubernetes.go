@@ -104,6 +104,7 @@ func init() {
 		// A kubernetes collector lists what its configuration names, and
 		// takes no target at all.
 		NoTarget:   true,
+		AnswerHint: "Paste the objects listed as the JSON document the exporter makes of them, as the Response of a run shows it",
 		JSONAnswer: true,
 		Stage:      "kubernetes",
 		CheckFiles: checkKubernetesFiles,

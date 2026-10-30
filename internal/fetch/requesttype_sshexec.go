@@ -116,6 +116,7 @@ func init() {
 		},
 		Requester:  sshExecRequester{},
 		TargetHint: sshTargetHint,
+		AnswerHint: "Paste what the command writes to its standard output",
 		Templates:  sshExecTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the arguments of its request.command or its label values")

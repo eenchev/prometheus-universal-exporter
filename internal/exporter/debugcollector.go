@@ -58,7 +58,10 @@ type debugCollectorAnswer struct {
 	// at full alone, where the page scrapes them: empty, not left out, when
 	// none is.
 	StaticTargets *[]debugStaticTarget `json:"static_targets,omitempty"`
-	Error         string               `json:"error,omitempty"`
+	// Form is what the page asks a run of the collector to fill
+	// (debugForm), read again with the collector so it follows a reload.
+	Form  *debugForm `json:"form,omitempty"`
+	Error string     `json:"error,omitempty"`
 }
 
 // debugStaticTarget is a static target as the debug page offers it: its
@@ -285,7 +288,8 @@ func (s *Server) debugCollectorHandler(w http.ResponseWriter, r *http.Request) {
 		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
 		return
 	}
-	a := debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults}
+	form := debugFormOf(x)
+	a := debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults, Form: &form}
 	if s.debug == DebugFull {
 		// The page offers them when this collector is chosen or the
 		// playground is a copy of it, read at each change of collector, so

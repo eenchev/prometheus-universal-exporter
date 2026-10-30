@@ -400,6 +400,12 @@ files named in `field_files`, `client_id_file` or `client_secret_file`.
 it and shows the answer in place. What the form asks for follows the
 collector:
 
+- **The target** is labelled and hinted as the collector's request type
+  names it — *URL* and `https://host:port` for `http`, *SSH host* and
+  `host or host:22` for `sshfile`, *Name to resolve* and `example.com` for
+  `dns`, as the [debug page](CONFIGURATION.md#the-debug-page) lists them —
+  marked optional where the type may leave it out, and offered disabled,
+  `none: leave it out`, for a `kubernetes` collector, which takes none.
 - **A credential in the collector's configuration** — `basic_auth`,
   `basic_auth_file`, `bearer_token`, `bearer_token_file`, a
   [`login`](#logging-in-to-a-target), a TLS client certificate — is the

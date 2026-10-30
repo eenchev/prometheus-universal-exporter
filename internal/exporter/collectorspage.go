@@ -29,8 +29,13 @@ type collectorEntry struct {
 	// TargetRequired is whether a probe must name a target; a collector whose
 	// request type reads a fixed source may leave it out.
 	TargetRequired bool
-	TargetHint     string
-	Params         []fetch.RequestParam
+	// TargetLabel and TargetHint are what the form asks for as the target
+	// (targetHint).
+	TargetLabel, TargetHint string
+	// NoTarget is a collector whose type takes no target: the field is
+	// offered disabled.
+	NoTarget bool
+	Params   []fetch.RequestParam
 	// Credentials names the credentials the collector's configuration sends
 	// the target, without their values.
 	Credentials          []string
@@ -80,22 +85,21 @@ func configuredCredentials(c *model.Collector) []string {
 	return out
 }
 
-// targetHint says what a target of the collector is, as its request type
-// says it (fetch.RequestType.TargetHint), and whether it may be left out.
-func targetHint(c *model.Collector, required bool) string {
-	hint := "target"
-	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
-		if rt.NoTarget {
-			return "none: leave it out"
-		}
-		if rt.TargetHint != nil {
-			hint = rt.TargetHint(c)
-		}
+// targetHint names what a target of the collector is and says the forms it
+// takes, as its request type says them (fetch.RequestType.TargetHint), and
+// whether it may be left out.
+func targetHint(c *model.Collector, required bool) (label, hint string) {
+	prompt := fetch.TargetPromptOf(c)
+	switch {
+	case prompt.None:
+		return "Target", "none: leave it out"
+	case prompt.Label == "":
+		prompt.Label, prompt.Hint = "Target", "target"
 	}
 	if !required {
-		hint += " (optional)"
+		prompt.Hint += " (optional)"
 	}
-	return hint
+	return prompt.Label, prompt.Hint
 }
 
 func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
@@ -104,10 +108,13 @@ func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
+		label, hint := targetHint(c, required)
 		page.Collectors = append(page.Collectors, collectorEntry{
 			Name: c.Name, RequestType: c.Request.Type, Transform: c.Transform.Type,
 			TargetRequired:       required,
-			TargetHint:           targetHint(c, required),
+			TargetLabel:          label,
+			NoTarget:             fetch.TargetPromptOf(c).None,
+			TargetHint:           hint,
 			Params:               fetch.RequestParams(c),
 			Credentials:          configuredCredentials(c),
 			ForwardAuthorization: c.Request.ForwardAuthorization,
@@ -168,8 +175,8 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 <form class="probe" action="probe" method="get" autocomplete="off">
 <input type="hidden" name="collector" value="{{.Name}}">
 <div class="row">
-<div><label for="{{.Name}}-target">Target</label>
-<input id="{{.Name}}-target" type="text" name="target" placeholder="{{.TargetHint}}"{{if .TargetRequired}} required{{end}}></div>
+<div><label for="{{.Name}}-target">{{.TargetLabel}}</label>
+<input id="{{.Name}}-target" type="text" name="target" placeholder="{{.TargetHint}}"{{if .TargetRequired}} required{{end}}{{if .NoTarget}} disabled{{end}}></div>
 <div class="narrow"><label for="{{.Name}}-timeout">Timeout, seconds</label>
 <input id="{{.Name}}-timeout" type="number" data-timeout min="1" max="600" step="any" value="{{$.ProbeTimeoutSeconds}}" required></div>
 </div>

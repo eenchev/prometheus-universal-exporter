@@ -75,7 +75,8 @@ func statusRefreshText(d time.Duration) string {
 		name string
 	}{{time.Hour, "h"}, {time.Minute, "m"}, {time.Second, "s"}} {
 		if n := d / unit.size; n > 0 {
-			b.WriteString(strconv.FormatInt(int64(n), 10) + unit.name)
+			b.WriteString(strconv.FormatInt(int64(n), 10))
+			b.WriteString(unit.name)
 			d -= n * unit.size
 		}
 	}

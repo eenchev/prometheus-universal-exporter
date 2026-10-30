@@ -82,7 +82,12 @@ func TestTheStatusPagesDialogIsOutsideTheSwappedContent(t *testing.T) {
 	if content < 0 || end < content || script < end || strings.Count(page, "<dialog") != 1 {
 		t.Fatalf("the dialog does not follow the content element, before the script:\n%s", page)
 	}
-	requireContains(t, page[end:script], `<dialog id="whole" aria-labelledby="whole-title">`, `<pre id="whole-text"></pre>`, `<button type="button" id="whole-close">Close</button>`)
+	requireContains(t, page[end:script], `<dialog id="whole" aria-label="The whole text">`, `<pre id="whole-text"></pre>`, `<button type="button" id="whole-close">Close</button>`)
+	// The dialog has no heading; its label names the text for a screen
+	// reader, set to the kind of text it opens.
+	if strings.Contains(page[end:script], "<h2") || !strings.Contains(page, `whole.setAttribute("aria-label", "The whole " + summary.dataset.kind);`) {
+		t.Error("the dialog has a heading, or its label does not name the text it holds")
+	}
 	fragment := getPage(t, server, "/static-targets/status?format=fragment")
 	if strings.Contains(fragment, "<dialog") || !strings.Contains(fragment, `<details class="long">`) {
 		t.Errorf("the fragment has a dialog, or no long text's markup:\n%s", fragment)

@@ -29458,7 +29458,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
 - `TestALongTextIsPreviewedByItsStart`: a text of 160 characters (`é` each) or three lines is not cut; one of 161 characters is previewed as its first 160 and `…`, one of four lines as its first three and `…`, the whole text kept.
 - `TestTheStatusPageShowsALongErrorsStartAndTheWholeOne`: a static target's error past 160 characters, quoting `<script>alert(1)</script>`, is shown in its cell as `<details class="long">` with the summary `aria-label="Show the whole error"`, its preview and the whole error in `<pre class="whole">`, both escaped and no markup; a short error, `received HTTP status 500`, is shown whole with no `<details>`.
-- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*; `?format=fragment` has the `<details>` and no dialog.
+- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*, without a heading and labelled `The whole text`, the script setting the label to the kind of text it opens; `?format=fragment` has the `<details>` and no dialog.
 - `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh`: the script listens for clicks on the content element for `details.long > summary`, puts the whole text in the dialog with `textContent`, opens it with `showModal()`, skips a refresh while it is open (`if (inFlight || whole.open) return;`), closes it on a click on the backdrop, and on its close gives focus back to the control and calls `schedule()`; its one `innerHTML` is the swap of the fragment.
 - `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
 - `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
@@ -31838,7 +31838,8 @@ then one of the OTLP export. Of the static targets:
   MUST be put in the dialog with `textContent`, never parsed as HTML; the
   dialog MUST close on its Close button, on Esc and on a click on its
   backdrop, MUST give focus back to the control that opened it, and MUST say
-  the time its text is of. No refresh MUST swap the content while the
+  the time its text is of. It MUST have no heading, its label naming the
+  kind of text it holds (`The whole error`) for a screen reader. No refresh MUST swap the content while the
   dialog is open; closing it MUST resume the refresh, at once if one fell
   due. `?format=fragment` MUST have the `<details>` and no dialog, and the
   JSON MUST be as it is, every value whole.

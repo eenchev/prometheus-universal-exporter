@@ -176,7 +176,7 @@ metrics:
 	if text != debugExample || strings.Contains(attributes, "readonly") || !strings.Contains(attributes, `data-example="`+html.EscapeString(debugExample)) {
 		t.Errorf("the page opened on no collector shows %q (%s)", text, attributes)
 	}
-	requireContains(t, page, `id="edit-copy" hidden`, "YAML of the collector written here, which runs", `new URL("debug/collector", document.baseURI)`)
+	requireContains(t, page, `id="edit-copy" hidden`, "Playground: the YAML of a collector, which runs", `new URL("debug/collector", document.baseURI)`)
 	if answer := getCollectorYAML(t, server, "nothing", http.StatusNotFound); !strings.Contains(answer.Error, `unknown collector "nothing"`) {
 		t.Errorf("an unknown collector: %+v", answer)
 	}

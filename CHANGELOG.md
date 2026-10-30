@@ -48,6 +48,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `healthy` while the exporter is ready. A container started with another
   `--web.listen-address` needs `--health-cmd` with it, and the target
   allocator run from the image needs `--no-healthcheck`.
+- The debug page calls the collector written on it the playground, and runs
+  only when *Run* is pressed: *Run as you type* is gone. *Fetch a target*
+  fetches through the configured collector chosen, or, with the playground,
+  through the one it was copied from with *Edit a copy*; the *Fetch through*
+  list is gone, and a playground copied from none cannot fetch. *Scrape a
+  static target* is a list of the static targets of that same collector,
+  each shown with its address, credentials withheld, in place of a name to
+  type, and follows reloads; `/debug?static_target=<name>` chooses the
+  target and its collector. The pasted body starts empty with a configured
+  collector, the example's answer only with the example.
+- The exporter's pages show the project's logo as their browser-tab icon.
+- The status page shows a long error — and a long target, labels or probe
+  parameters — as its first 160 characters or three lines with *Show all*,
+  which opens the whole text in a box over the page; the page does not
+  refresh while the box is open. On the debug page *Run* stands level with
+  the timeout box beside it, and the status page's Refresh button and
+  auto-refresh selector are one height, centred on one line.
 
 ### New
 
@@ -76,7 +93,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - The status page has a Refresh button and an auto-refresh selector, as a
   Grafana dashboard has: `Off`, or every `5s` to `1h`, kept in the URL as
   `?refresh=30s`, refreshing the page's content in place, pausing while the
-  tab is hidden, and saying when it last refreshed or that a refresh failed.
+  tab is hidden, and saying once, beside the controls and in the browser's
+  time, the time the data shown is of, or that a refresh failed.
   `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
   interval a URL without one gets; off by default.
 - `otlp.metric_names: otel` names the OTLP export's metrics as OpenTelemetry

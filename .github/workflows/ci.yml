@@ -66,6 +66,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -666,6 +669,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -897,6 +903,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1122,6 +1131,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1287,6 +1299,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1486,6 +1501,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1680,6 +1698,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1892,6 +1913,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -2119,6 +2143,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
+              # The pages' icon, which the exporter package embeds: a copy
+              # of docs/logo.svg, which a test holds it to.
+              - 'internal/exporter/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.

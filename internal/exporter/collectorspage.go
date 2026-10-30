@@ -123,6 +123,7 @@ var collectorsTemplate = pageTemplate("collectors", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collectors · Prometheus Universal Exporter</title>
+`+pageIcon+`
 <style>`+pageStyle+`
 section.collector { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; background: var(--panel); }
 section.collector h2 { margin: 0; font-size: 17px; }
@@ -133,7 +134,7 @@ fieldset { border: 0; padding: 0; margin: 14px 0 0; min-width: 0; }
 legend { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0; margin-bottom: 4px; }
 label { display: block; font-size: 13px; margin: 6px 0 2px; }
 input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
 .row > div { flex: 1 1 200px; min-width: 0; }
 .row > div.narrow { flex: 0 1 130px; }
 .actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }

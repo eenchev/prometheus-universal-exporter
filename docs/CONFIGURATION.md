@@ -5338,7 +5338,7 @@ logged and the series a probe would have answered. One flag, `--web.debug`
 | `--web.debug` | What is served |
 |---------------|----------------|
 | `off`, the default | Nothing: `/debug` is not there (`404`), and `debug=true` on `/probe` and `debug=<name>` on `/static-targets` are answered `403`. |
-| `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
+| `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — the playground, written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
 | `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). The [status page](ENDPOINTS.md#status-page) shows each error whole, with the values of the answer it quotes and what it holds for the operator alone, such as an [`sshexec`](SSHEXEC.md) command's stderr, which below `full` it leaves out as a probe's caller is answered ([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)). |
 
 Any other value stops the exporter at startup, as any wrong flag does
@@ -5363,17 +5363,17 @@ a visitor of the exporter's pages do.
 `/debug` runs one collector and shows the series a probe would answer, the
 stages, the [metric lint](#metric-lint)'s advice, what was logged, the
 requests sent and the response read and,
-folded away, the whole [report](#debug-probes). It runs when *Run* is pressed
-and, with *Run as you type* on, a moment after each edit, and never when it
-opens: the collector and the target its address names are filled in and
-wait for *Run*, since a link on any page can name them. The landing page
+folded away, the whole [report](#debug-probes). It runs when *Run* is
+pressed, and at no other time: not after an edit, and never when it opens,
+where the collector and the target its address names are filled in and wait
+for *Run*, since a link on any page can name them. The landing page
 links it, and `/collectors` links each collector into it, the collector
 chosen and, at `full`, with the target entered in the collector's form.
 
 The collector run is one of two:
 
-- **Written on the page**: the YAML of one collector, as it is written under
-  `collectors:` — a mapping that starts with `name`, without the dash. It is
+- **The playground**, a collector written on the page: the YAML of one
+  collector, as it is written under `collectors:` — a mapping that starts with `name`, without the dash. It is
   read as a configuration's collectors are: the same keys, the same checks,
   and a mistake is reported in the words a load would use, with line numbers
   counted from the collector's first line. `${NAME}` references are left as
@@ -5388,8 +5388,8 @@ The collector run is one of two:
   stands for.
 
 The editor shows the collector that runs. While none of the configuration
-is chosen it holds the one written on the page — the example to start with,
-then what was written, kept in the browser between visits. A configured
+is chosen, *Playground* in the list, it holds the playground — the example to
+start with, then what was written, kept in the browser between visits. A configured
 collector chosen, in the list or by the link from `/collectors`, is shown
 in its place, read-only, since it runs as configured:
 
@@ -5409,36 +5409,55 @@ in its place, read-only, since it runs as configured:
   credential in it, which is masked as an error's text is; keep a script's
   credentials in a file it reads.
 
-*Edit a copy* puts that YAML in the editor as a collector written on the
-page, which then runs in its place, under the rules for one: what was
-withheld has to be left out or written again, and a collector of another
-request type than `http`, with Python or with a file, is refused as any
-written there is.
+*Edit a copy* makes the playground a copy of that YAML, which then runs in
+its place, under the rules for the playground: what was withheld has to be
+left out or written again, and a collector of another request type than
+`http`, with Python or with a file, is refused as any playground is. The
+page remembers the collector the playground was copied from, through edits
+and between visits, and fetches a target through it.
 
 It reads one of three responses:
 
 - **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
-  200 unless given, and other headers. No request is made. The status must be
+  200 unless given, and other headers. No request is made. The body starts
+  as the example's answer with the example playground, and empty with a
+  configured collector or a copy of one; a body that has been written in is
+  kept whichever collector is chosen. The status must be
   one the collector's `request.accept_status` accepts, and the body is held
   to its response limit, as a fetched response would be.
 - **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
-  it, through a configured collector — the one run, when it is configured,
-  or the one chosen to fetch through — with its request block,
+  it, through a configured collector — the one chosen, or the one the
+  playground was copied from — with its request block,
   [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
   credentials, `accept_status` and
   [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
-  parameters entered on the page. A collector written on the page decodes
-  and transforms what the chosen one fetched. A collector run on what
-  another fetched reads what an `http` collector fetches only.
+  parameters entered on the page. The playground decodes and transforms what
+  the collector it was copied from fetched; one not copied from a configured
+  collector, as the example, has nothing to fetch through, so *Fetch a
+  target* is not offered with it. A collector run on what another fetched
+  reads what an `http` collector fetches only.
 - **A static target's scrape**, at `full` only: made once as its schedule
   makes it, with the target's own settings and credentials, its interval as
   the budget and its labels on the series, as
   [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target)
-  makes it. Nothing is published. It is read by the collector run, the
-  target's own when that is chosen.
+  makes it, through the target's own collector. Nothing is published. The
+  target is chosen from a list of the static targets scraped through the
+  collector a target is fetched through — the configured one chosen, or the
+  one the playground was copied from — each shown as its name and its
+  target, `sofia — https://api.open-meteo.com`, with any
+  credential in the address withheld as the
+  [status page](ENDPOINTS.md#status-page) withholds it. The list is read
+  again whenever that collector changes, so it follows a reload of the
+  static target file. With no static target of that collector, or none at
+  all, *Scrape a static target* is offered disabled with a note saying so;
+  the example playground, copied from no collector, scrapes none, as it
+  fetches none. The scrape is read by the collector chosen, the target's
+  own, or by the playground, a copy of it that may have been edited.
+  `/debug?static_target=<name>` opens the page with that target chosen and
+  its collector chosen on the left.
 
-A collector written on the page may do nothing past the response, since what
-it is given runs on the server:
+The playground may do nothing past the response, since what it is given
+runs on the server:
 
 - **Python is never run.** A collector with `transform.type: python` or a
   `pre_script` is refused, at `full` as at `edit`; put it in the
@@ -5475,13 +5494,17 @@ curl -s http://exporter:8080/debug/run \
 
 The editor reads a configured collector from `GET
 /debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
-YAML as the page shows it, and `from_defaults`, the keys it took from its
-file's defaults; a name the configuration does not have is answered `404`
-with `error`.
+YAML as the page shows it, `from_defaults`, the keys it took from its
+file's defaults, and at `full` `static_targets`, the static targets scraped
+through it, each a `name` and its `target` as the list shows it, `[]` for
+none; a name the configuration does not have is answered `404` with
+`error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
-`content_type`, `status` and `headers`, or `target` with `request_from`, the
-collector to fetch through, and `params`, or `static_target`. It answers
+`content_type`, `status` and `headers`, or `target` with `params` and, for
+`collector`, `request_from`, the configured collector to fetch through, which
+the page fills with the one the playground was copied from; or
+`static_target`. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
 (Prometheus text), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,

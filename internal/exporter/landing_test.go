@@ -219,6 +219,9 @@ func TestThePagesWorkUnderAPathPrefix(t *testing.T) {
 			if strings.HasPrefix(ref, "https://") {
 				continue // the documentation
 			}
+			if strings.HasPrefix(ref, "data:") {
+				continue // the icon, in the page itself
+			}
 			target, err := from.Parse(html.UnescapeString(ref))
 			if err != nil {
 				t.Fatal(err)

@@ -616,8 +616,9 @@ func TestTheDebugPageBoundsTheRunsInProgress(t *testing.T) {
 // or a static target's scrape at full alone.
 func TestTheDebugPageIsSelfContained(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
-	page := getPage(t, server, "/debug")
-	requireContains(t, page, "<title>Debug · Prometheus Universal Exporter</title>", `new URL("debug/run", document.baseURI)`, `"X-Debug-Run": "run"`, "room_temperature_celsius", "never runs Python", `<option value="rooms">rooms (http)</option>`, `asked.get("collector")`)
+	// The icon is the logo, as a data: URL (TestEveryPageHasTheLogoAsItsIcon).
+	page := strings.Replace(getPage(t, server, "/debug"), pageIcon, "", 1)
+	requireContains(t, page, "<title>Debug · Prometheus Universal Exporter</title>", `new URL("debug/run", document.baseURI)`, `"X-Debug-Run": "run"`, "room_temperature_celsius", "never runs Python", `<option value="rooms">rooms (http)</option>`, `pick($("configured"), $("configured").dataset.chosen);`)
 	for _, pattern := range []string{`<link`, `src=`, `@import`, `url\(`, `(?:href|action)="/`, `fetch\("/`} {
 		if found := regexp.MustCompile(pattern).FindString(page); found != "" {
 			t.Errorf("the page has %q", found)
@@ -632,7 +633,7 @@ func TestTheDebugPageIsSelfContained(t *testing.T) {
 		t.Error("the page offers fetching at edit")
 	}
 	server.SetDebug(DebugFull)
-	requireContains(t, getPage(t, server, "/debug"), `value="fetch"`, `value="static"`, `<option value="rooms">rooms</option>`)
+	requireContains(t, getPage(t, server, "/debug"), `value="fetch"`, `value="static"`, `id="fetched-through"`)
 }
 
 // The debug page's paths are the exporter's own, which the self-metrics and
@@ -663,8 +664,7 @@ func TestTheDebugPageNotesTheLoadsWarningsAndTheRunsLogs(t *testing.T) {
 
 // The page takes its collector and target from its URL, which a link on any
 // page can set, so it runs nothing when it opens: run is called when Run is
-// pressed and by the run-as-you-type timer, which only an edit sets, and
-// nowhere else.
+// pressed, and nowhere else: not on opening, nor after an edit.
 func TestTheDebugPageNeverRunsOnOpening(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
 	server.SetDebug(DebugFull)
@@ -677,8 +677,8 @@ func TestTheDebugPageNeverRunsOnOpening(t *testing.T) {
 	for _, use := range regexp.MustCompile(`(?:^|[^\w.$])run\b.{0,6}`).FindAllString(code, -1) {
 		uses = append(uses, strings.TrimSpace(use))
 	}
-	want := []string{"run() {", "(run, 600)", "run);"}
+	want := []string{"run() {", "run);"}
 	if !slices.Equal(uses, want) {
-		t.Errorf("the page's script uses run at %q, want only its definition, the click handler and the timer: %q", uses, want)
+		t.Errorf("the page's script uses run at %q, want only its definition and the click handler: %q", uses, want)
 	}
 }

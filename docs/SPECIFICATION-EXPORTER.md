@@ -8115,6 +8115,12 @@ Recommended behavior:
   page under a static targets path of several segments. A part of a page
   that a page's script swaps in, as the status page's `?format=fragment`,
   MUST NOT carry the bar.
+- Every HTML page the exporter serves MUST have one icon, in its head: the
+  project's logo, `docs/logo.svg`, byte for byte, as an `image/svg+xml`
+  `data:` URL, which its `Content-Security-Policy` MUST let it load
+  (`img-src data:`) and which needs no request. The copy the build embeds
+  MUST be checked against `docs/logo.svg` by a test, so the two cannot
+  drift apart.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -26926,8 +26932,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   same-site requests (§ 42.5).
 - The debug page opened at `full` with a collector and a target in its URL
   fills in the target, and its script, its strings and comments taken out,
-  names `run` only where it defines it, in the click handler of *Run* and in
-  the run-as-you-type timer, so nothing runs when the page opens; a call of
+  names `run` only where it defines it and in the click handler of *Run*,
+  so nothing runs when the page opens or after an edit; a call of
   `run()` on opening fails the test (§ 42.17).
 - A reload of an unchanged configuration and static target file logs
   `configuration reloaded` and `static targets reloaded` at `INFO` with
@@ -29341,7 +29347,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.236 The status page's refresh, and the exporter's own log over OTLP
 
-- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says when it last refreshed or that a refresh failed.
+- `TestTheStatusPageHasRefreshControls`: the status page has a Refresh link reloading the page (`href=""`), a GET form with an auto-refresh selector offering Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m and 1h in that order with Off selected, a `<noscript>` Apply button, a status line and the content element, and no meta refresh; its script fetches `?format=fragment` same-origin with credentials and `no-store`, skips a tick while a fetch is in flight, stops while the tab is hidden and listens for `visibilitychange`, puts the interval in the URL with `history.replaceState`, swaps the answer into the content element and says the time the data is of once, hiding the content's as-of line, or that a refresh failed with the time the data shown is of; it says neither "Loaded at" nor "Last refreshed at", and the page's as-of line carries its time in a `<time datetime>` element.
 - `TestTheStatusPageAutoRefreshDefaultsToTheFlag`: with `--web.status-refresh` 30s (`SetStatusRefresh`) and no `?refresh=`, 30s is the one choice selected and the page carries `<noscript><meta http-equiv="refresh" content="30"></noscript>`.
 - `TestTheStatusPageReadsTheRefreshParameter`: `?refresh=` of `5m`, `300s`, `off`, `20s`, `90s`, `2h` and `24h` is the one choice selected over the flag's 1m; `1s`, `4s`, `0s`, `-30s`, `1500ms`, `25h`, `often`, `<b>` and `Off` are ignored and 1m stays selected; `20s` is listed between 10s and 30s and reloads the page every 20 seconds without JavaScript, and `off` leaves the meta refresh out.
 - `TestTheStatusFragmentIsThePageContentAlone`: `?format=fragment` is HTML, `no-store`, `X-Frame-Options: DENY` and the pages' Content-Security-Policy, holds the as-of line and the three sections and no document, head, body, main, script, form, style, heading, content element or meta refresh, and is, its as-of time aside, the page's content element byte for byte; an unknown `format` is answered 400 naming html, json and fragment.
@@ -29435,6 +29441,30 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestSchemaAndExporterAgreeOnAStaticTargetsResourceKeys`: the static target schema and the loader with a configuration of the exporter-wide attribute `region` take `labels_as_resource` of `[city]`, `[city, site]` with `instance_id`, `[]`, `instance_id: false`, `[city]` beside a target attribute `region: ''` and beside one `service.instance.id`; refuse both `[city, city]`, a text, a list in the list and `instance_id: maybe`; the exporter alone refuses `[town]`, not a label, `[region]`, an exporter-wide attribute, `[site]` beside the target's attribute `site`, `instance_id` beside the target's `service.instance.id`, and either key without `export_via_otlp`.
 - `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock` (the `metric_names` and `scope` rows): `metric_names` of `OTel`, `openmetrics` and `5` and `scope` of `{}`, `{version: "1"}`, `{name: ""}`, a name with a tab and a version with a line break are taken switched off and refused by both switched on; `[otel]`, a mapping, text, a list, an unknown key and a list for a name are refused off and on; `otel`, `prometheus`, `""`, a scope with a name, with a name and a version, and the name `"1"` are taken off and on.
 - `TestSchemaAndExporterAgreeOnEnabled` (the `scope` key): `scope: {name: x}` without `enabled`, or beside an empty one, is refused by both, and taken by both with `enabled: false`.
+
+## 34.239 The pages' icon, the debug page's playground, and long texts and aligned controls on the pages
+
+- `TestThePagesIconIsTheProjectsLogo`: `internal/exporter/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
+- `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
+- `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
+- `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
+- `TestTheDebugPagesBodyFitsTheCollectorChosen`: the body has the placeholder `Paste what the target answers` and the example in `data-example`; `/debug` starts it as the example, `/debug?collector=rooms` empty, and the script changes it on a change of collector only while it is empty or the example.
+- `TestTheDebugPageNeverRunsOnOpening` (changed): `run` is named only where it is defined and by *Run*'s click handler, with no timer.
+- `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note; its script chooses the collector the server chose (`data-chosen`).
+- `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen`: at `full`, `/debug?collector=rooms` offers *Scrape a static target* enabled with a `<select id="static-target">` of `rooms`'s two static targets, each as `<name> — <target>`, the one with a password and a `token` in its URL shown `https://redacted:redacted@…?token=<redacted>`, and neither `halls`'s target nor a text input; `/debug/collector?name=rooms` answers the same two in `static_targets`; the script reads `static_targets` from `/debug/collector` for `fetcher()` on every change of collector; at `edit` neither `/debug/collector` nor the page names a static target.
+- `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector`: `/debug?collector=lonely` offers the radio and an empty list disabled with `No static target uses lonely.`, and `/debug/collector?name=lonely` answers `static_targets: []`; `/debug` offers it disabled under `… to fetch a target or scrape a static target.`; without static targets `/debug` and `/debug?collector=rooms` say `No static target is configured.`
+- `TestTheDebugPagePreselectsTheStaticTargetItsAddressNames`: `/debug?static_target=varna` and `/debug?collector=halls&static_target=varna` choose `rooms`, `varna`'s collector, and `varna` in the list; a name no target has leaves `halls` chosen.
+- `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
+- `TestALongTextIsPreviewedByItsStart`: a text of 160 characters (`é` each) or three lines is not cut; one of 161 characters is previewed as its first 160 and `…`, one of four lines as its first three and `…`, the whole text kept.
+- `TestTheStatusPageShowsALongErrorsStartAndTheWholeOne`: a static target's error past 160 characters, quoting `<script>alert(1)</script>`, is shown in its cell as `<details class="long">` with the summary `aria-label="Show the whole error"`, its preview and the whole error in `<pre class="whole">`, both escaped and no markup; a short error, `received HTTP status 500`, is shown whole with no `<details>`.
+- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*; `?format=fragment` has the `<details>` and no dialog.
+- `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh`: the script listens for clicks on the content element for `details.long > summary`, puts the whole text in the dialog with `textContent`, opens it with `showModal()`, skips a refresh while it is open (`if (inFlight || whole.open) return;`), closes it on a click on the backdrop, and on its close gives focus back to the control and calls `schedule()`; its one `innerHTML` is the swap of the fragment.
+- `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
+- `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
+
+- `TestTheLogExportsLastRecordsAreMutedUnderItsResult`: the log export's last export says its result, and under it, muted as the metrics export's counts are, `1 log record`.
+- `TestTheStatusPagesShortColumnsKeepTheirWordsWhole`: the status page's headers do not wrap, its cells keep their words whole but for the target's and the error's, which break anywhere within bounds, and a facts table's error cell sets no least width, so a phone shows the OTLP sections without scrolling sideways.
 
 # 35. Documentation requirements
 
@@ -31791,8 +31821,32 @@ then one of the OTLP export. Of the static targets:
   MUST refresh by fetching the page's URL with `?format=fragment`,
   same-origin with credentials, and putting the answer in place of the
   content section; it MUST NOT start a refresh while one is waiting for its
-  answer, MUST NOT refresh while the tab is hidden, MUST say when it last
-  refreshed, and when a refresh fails MUST say so and keep the data shown.
+  answer, MUST NOT refresh while the tab is hidden, MUST say the time the
+  data shown is of once (beside the controls, hiding the content's own
+  as-of line, which a page without JavaScript shows), and when a refresh
+  fails MUST say so and keep the data shown.
+- A value of free text past 160 characters or three lines — an error of a
+  static target, of a probe, of the OTLP export or of the log export, a
+  target, a static target's labels, a probe's parameters — MUST be shown as
+  its start, ending in `…`, in a `<details>` whose summary is a control
+  labelled `Show the whole <what it is>` and whose body is the whole text,
+  so that without JavaScript the whole text is on the page; a shorter value
+  MUST be shown whole, with no control. Both MUST be escaped as every value
+  is. With JavaScript the control MUST open the whole text in a modal
+  `<dialog>` outside the content a refresh swaps, by a listener on the
+  content element, so that controls a refresh brings open it too; the text
+  MUST be put in the dialog with `textContent`, never parsed as HTML; the
+  dialog MUST close on its Close button, on Esc and on a click on its
+  backdrop, MUST give focus back to the control that opened it, and MUST say
+  the time its text is of. No refresh MUST swap the content while the
+  dialog is open; closing it MUST resume the refresh, at once if one fell
+  due. `?format=fragment` MUST have the `<details>` and no dialog, and the
+  JSON MUST be as it is, every value whole.
+- Controls on one line MUST line up: the Refresh button, the auto-refresh
+  selector and its label MUST be centred on one line at one height; on the
+  debug page *Run* MUST have the height of the timeout box beside it and
+  stand on its line, under the box's label, and on the debug and collectors
+  pages the fields of a row MUST stand on one line when one label wraps.
 - The interval MUST be `?refresh=` when that is `off` or a duration in whole
   seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
   `?refresh=` MUST be ignored. An interval none of the selector's MUST be
@@ -33134,14 +33188,15 @@ authenticated like a probe (§ 42.5). The page MUST be one document whose
 style and script are inline, loading nothing from anywhere, with the
 headers, escaping and layout of the other pages (§ 23), and MUST post its
 runs relative to itself, so it works under a proxy's path prefix. It MUST
-run a collector on demand and a moment after an edit, a run cancelling the
-one before it, and MUST start from the collector, and at `full` the target
-or the static target, its URL names (`collector`, `target`,
-`static_target`), as the collectors page links it. It MUST NOT run anything
-when it opens, whatever its URL names, until the visitor asks for a run or
-edits a field: a link on any page can set the URL. It MUST offer the
-configured collectors at every level, and the fetch and the static target's
-scrape at `full` only.
+run a collector when the visitor presses *Run*, and at no other time — not
+after an edit, and with no setting that would run one as the visitor types
+— a run cancelling the one before it, and MUST start from the collector,
+and at `full` the target or the static target, its URL names (`collector`,
+`target`, `static_target`), as the collectors page links it. It MUST NOT run
+anything when it opens, whatever its URL names: a link on any page can set
+the URL. It MUST offer the configured collectors at every level, beside the
+playground, the collector written on the page, which the page MUST call
+*Playground*, and the fetch and the static target's scrape at `full` only.
 
 A run MUST be a JSON object of the collector — `collector`, the YAML of one
 collector as it is written under `collectors:`, or `configured`, the name of
@@ -33186,8 +33241,8 @@ what a target sends on every probe, as they read a pasted body here. Its
 scripts MUST run in its own workers and count in its Python worker series,
 as a debug probe's do.
 
-The page's editor MUST show the collector that runs: the one written on the
-page while no configured collector is chosen, starting from the example,
+The page's editor MUST show the collector that runs: the playground while no
+configured collector is chosen, starting from the example,
 and the configured one chosen, from the list or from the `collector` its URL
 names, in its place, read-only, with the label saying which runs. A
 configured collector MUST be shown as YAML that its file writes: the
@@ -33205,14 +33260,20 @@ ending in `_file` or `_files`; a URL's userinfo and the values of its query
 parameters whose names read as credentials MUST be withheld, and a header's
 value in which text reads as a credential; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
-write is. The page MUST offer *Edit a copy*, which puts the YAML shown in
-the editor as a collector written on the page, which then runs. The YAML
+write is. The page MUST offer *Edit a copy*, which makes the playground a
+copy of the YAML shown, which then runs, and MUST remember, through edits
+and between visits, the configured collector the playground was copied
+from. The YAML
 shown, with the lines that hold what was withheld left out and written on
 the page, MUST be read as a collector and give the series the configured
 collector gives. `GET /debug/collector?name=<name>`, served and
 authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
-`yaml` and `from_defaults`, the keys taken from defaults, and a name the
-configuration in force does not have `404` with `error`.
+`yaml` and `from_defaults`, the keys taken from defaults, and, at `full`
+only, `static_targets`, the static targets in force scraped through that
+collector, each with its `name` and its `target` shown as the status page
+shows it (§ 42.14a), with any credential in it withheld, an empty list when
+there is none; a name the configuration in force does not have `404` with
+`error`.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a
@@ -33225,8 +33286,30 @@ target policy (§ 26.1), credentials, `accept_status`, forwarded
 `header_<name>` parameters and trip limits (§ 42.13b), and with nothing of
 the browser's request — its `Authorization`, cookies or other headers —
 forwarded; a target missing or a parameter wrong MUST be answered as
-`/probe` answers them. A static target's scrape, at `full` only, MUST be
-made as `/static-targets?debug=<name>` makes it, and answered as what the
+`/probe` answers them. The page MUST fetch through the configured
+collector chosen, or, with the playground, through the configured collector
+it was copied from, sent as `request_from`, saying which, and MUST NOT offer
+another collector to fetch through; while the playground was copied from
+none, the page MUST offer *Fetch a target* disabled, saying to choose a
+configured collector or *Edit a copy* of one. The pasted body MUST start as
+the example's answer with the example playground and empty with a
+configured collector or a copy of one, and a change of collector MUST NOT
+replace a body the visitor wrote. A static target's scrape, at `full` only, MUST be
+made as `/static-targets?debug=<name>` makes it, through the target's own
+collector. The page MUST offer it as a list of the static targets in force
+scraped through the collector a target would be fetched through — the
+configured collector chosen, or the one the playground was copied from —
+each by its name and its target as `/debug/collector` shows it, never as a
+name to type; it MUST open with those of the collector its address chooses
+and read them from `/debug/collector` again whenever that collector
+changes, so that they follow a reload. With none, the page MUST offer
+*Scrape a static target* disabled, saying that no static target uses the
+collector, that none is configured, or, for a playground copied from none,
+to choose a configured collector or *Edit a copy* of one. `?static_target=<name>`
+MUST open the page with that target chosen and the collector it is scraped
+through chosen on the left, whatever collector the address names besides; a
+name no static target in force has MUST be ignored. A scrape MUST be
+answered as what the
 scrape would have published, its series with the target's labels and
 `static_target`; nothing MUST be published. A collector run on what
 another collector fetched — a written one, or one other than the static

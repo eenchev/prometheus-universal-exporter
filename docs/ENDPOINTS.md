@@ -8,9 +8,9 @@ the [command-line flags](FLAGS.md).
 | --- | --- |
 | `/` | A landing page: the build, links to the endpoints, and when the last reload put something in force and [what it changed](CONFIGURATION.md#what-a-reload-changed). |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.debug`, a link into the debug page. See [Probing from the browser](AUTHENTICATION.md#probing-from-the-browser). |
-| `/debug` | With `--web.debug`: run a collector, written there or configured, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
+| `/debug` | With `--web.debug`: run a collector, configured or written there in the playground, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
-| `/debug/collector` | With `--web.debug`: a configured collector as the debug page shows it, `?name=<name>`, with `GET`: its YAML as its file writes it, credentials and file paths withheld, as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
+| `/debug/collector` | With `--web.debug`: a configured collector as the debug page shows it, `?name=<name>`, with `GET`: its YAML as its file writes it, credentials and file paths withheld, and at `full` the static targets scraped through it, as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
@@ -24,7 +24,9 @@ The HTML pages — `/`, `/collectors`, `/debug` and the status page — share
 one bar at the top: the way back to the landing page, a link to each of the
 other pages, the one shown marked, and the documentation. Its links are
 relative to the page, as every link of the pages is, so they hold behind a
-reverse proxy that serves the exporter under a path of its own.
+reverse proxy that serves the exporter under a path of its own. Each page's
+browser-tab icon is the project's logo, [`docs/logo.svg`](logo.svg), carried
+in the page itself as a `data:` URL, so it costs no request of its own.
 
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
@@ -52,15 +54,27 @@ refused. It has three sections:
 While the last OTLP export failed, a line at the top of the page says so,
 with the failed exports in a row and whether they made the exporter unready.
 
+An error, a target, a static target's labels or a probe's parameters
+longer than 160 characters or three lines shows as its start, ending in `…`,
+with *Show all* under it, so one long error does not make its table as tall
+as the text. *Show all* opens the whole text in a box over the page, with
+the time it is of, *Copy* where the browser allows it, and *Close*; Esc or a
+click beside the box closes it too. The page is not refreshed while the box
+is open, so the text does not change under you; it refreshes when the box
+closes, at once if a refresh fell due meanwhile. Without JavaScript *Show
+all* opens the whole text in place. The JSON has every value whole.
+
 ### Refreshing
 
 The page refreshes as a Grafana dashboard does. Its Refresh button fetches
 the page's content again and puts it in place, without reloading the page;
 its auto-refresh selector does so every `5s`, `10s`, `30s`, `1m`, `5m`, `15m`,
-`30m` or `1h`, or not at all, `Off`. Beside them the page says when it was
-last refreshed, or, when a refresh fails — the exporter is restarting, or
-answers an error — that it failed, why, and how old the data still shown is;
-the next refresh tries again.
+`30m` or `1h`, or not at all, `Off`. Beside them the page says the time the data
+shown is of, once, in the browser's time, with the UTC time as its tooltip:
+the content's own "As of" line, in UTC, is for a page without JavaScript, and
+the script hides it. When a refresh fails — the exporter is restarting, or
+answers an error — the page says that it failed, why, and the time the data
+still shown is of; the next refresh tries again.
 
 The interval chosen is kept in the page's URL, `?refresh=30s`, so a bookmark
 or a shared link opens the page with it. A URL without one takes

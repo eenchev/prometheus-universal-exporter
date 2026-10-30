@@ -65,15 +65,27 @@ func TestTheStatusPageHasRefreshControls(t *testing.T) {
 		`url.searchParams.set("format", "fragment")`,
 		`credentials: "same-origin"`,
 		`cache: "no-store"`,
-		`if (inFlight) return;`,
+		`if (inFlight || whole.open) return;`,
 		`document.visibilityState === "hidden"`,
 		`document.addEventListener("visibilitychange", schedule)`,
 		`url.searchParams.set("refresh", every.value)`,
 		`history.replaceState(null, "", url)`,
 		`content.innerHTML = await response.text()`,
-		`"Last refreshed at "`,
+		`line.hidden = true;`,
+		`dataAt = time.getAttribute("datetime");`,
+		`state.textContent = "As of " + dataClock();`,
 		`"Refresh failed at "`,
+		`"); showing the data as of "`,
 	)
+	// The time the data is of is said once: the content's own UTC line is
+	// for a page without JavaScript, and the script hides it and says it
+	// beside the controls instead, never as a second time of another kind.
+	for _, twice := range []string{"Loaded at", "Last refreshed at"} {
+		if strings.Contains(script, twice) {
+			t.Errorf("the script says %q beside the content's as-of line", twice)
+		}
+	}
+	requireContains(t, page, `<p class="meta" id="as-of">As of <time datetime="`)
 }
 
 // --web.status-refresh is the interval a URL without ?refresh= has, chosen
@@ -153,13 +165,13 @@ func TestTheStatusFragmentIsThePageContentAlone(t *testing.T) {
 			t.Errorf("the fragment has %q:\n%s", unwanted, fragment)
 		}
 	}
-	requireContains(t, fragment, `<p class="meta">As of `, "<h2>Static targets</h2>", "<h2>Recent probes</h2>", `<h2 id="otlp">OTLP export</h2>`)
+	requireContains(t, fragment, `<p class="meta" id="as-of">As of <time datetime="`, "<h2>Static targets</h2>", "<h2>Recent probes</h2>", `<h2 id="otlp">OTLP export</h2>`)
 	page := getPage(t, server, "/static-targets/status")
 	// The two are rendered a moment apart, so the time each is as of is
 	// taken out before they are compared.
-	asOf := regexp.MustCompile(`As of [^.<]*\.`)
+	asOf := regexp.MustCompile(`<time datetime="[^"]*">[^<]*</time>`)
 	start := strings.Index(page, `<div id="status-content">`) + len(`<div id="status-content">`)
-	end := strings.Index(page, "\n</div>\n<script>")
+	end := strings.Index(page, "\n</div>\n<dialog")
 	if start < len(`<div id="status-content">`) || end < start {
 		t.Fatalf("the page has no content element:\n%s", page)
 	}

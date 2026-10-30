@@ -54,7 +54,41 @@ type debugCollectorAnswer struct {
 	Name         string   `json:"name,omitempty"`
 	YAML         string   `json:"yaml,omitempty"`
 	FromDefaults []string `json:"from_defaults,omitempty"`
-	Error        string   `json:"error,omitempty"`
+	// StaticTargets are the static targets scraped through the collector,
+	// at full alone, where the page scrapes them: empty, not left out, when
+	// none is.
+	StaticTargets *[]debugStaticTarget `json:"static_targets,omitempty"`
+	Error         string               `json:"error,omitempty"`
+}
+
+// debugStaticTarget is a static target as the debug page offers it: its
+// name, which a run sends, and its target as the status page shows it, with
+// any credential in it withheld (fetch.DisplayTarget).
+type debugStaticTarget struct {
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"`
+}
+
+// debugStaticTargets are the static targets in force that are scraped
+// through the collector named name, in the order of their file; none for
+// no name. The page offers these alone: the collector chosen, or the one the
+// playground was copied from, is the one a response comes through, as a
+// fetched target's does, so a static target is scraped through it.
+func debugStaticTargets(followed *followedConfig, name string) []debugStaticTarget {
+	out := []debugStaticTarget{}
+	if name == "" {
+		return out
+	}
+	c := followed.collectorOf(followed.config, name)
+	if c == nil {
+		return out
+	}
+	for _, target := range staticTargetsOf(followed.targets) {
+		if target.Collector == name {
+			out = append(out, debugStaticTarget{Name: target.Name, Target: fetch.DisplayTarget(c, target.Target)})
+		}
+	}
+	return out
 }
 
 // shownCollectorYAML is the configured collector x as the page shows it.
@@ -251,5 +285,13 @@ func (s *Server) debugCollectorHandler(w http.ResponseWriter, r *http.Request) {
 		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
 		return
 	}
-	answer(http.StatusOK, debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults})
+	a := debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults}
+	if s.debug == DebugFull {
+		// The page offers them when this collector is chosen or the
+		// playground is a copy of it, read at each change of collector, so
+		// they follow a reload of the static target file.
+		targets := debugStaticTargets(followed, x.Name)
+		a.StaticTargets = &targets
+	}
+	answer(http.StatusOK, a)
 }

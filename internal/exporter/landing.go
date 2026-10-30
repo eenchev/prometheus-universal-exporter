@@ -32,10 +32,11 @@ p.meta { color: var(--muted); margin: 0; }
 a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
-` + chromeStyle
+` + chromeStyle + longStyle
 
-// pagePolicy is the pages' Content-Security-Policy.
-const pagePolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+// pagePolicy is the pages' Content-Security-Policy. Its img-src is for the
+// icon (pageIcon), which is a data: URL.
+const pagePolicy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 // renderPage executes t with data, a page with its bar (pagechrome.go), and
 // writes it as HTML. The page is rendered whole before anything is written,
@@ -106,6 +107,7 @@ var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prometheus Universal Exporter</title>
+`+pageIcon+`
 <style>`+pageStyle+`</style>
 </head>
 <body>

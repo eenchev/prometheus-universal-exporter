@@ -1,6 +1,10 @@
 package exporter
 
-import "html/template"
+import (
+	_ "embed"
+	"encoding/base64"
+	"html/template"
+)
 
 // Every HTML page of the exporter — the landing page, the collectors page,
 // the debug page and the status page — is framed alike: the bar at the top
@@ -83,7 +87,24 @@ header.site a:hover { text-decoration: underline; }
 header.site [aria-current="page"] { color: var(--fg); font-weight: 600; }
 `
 
-// pageTemplate parses a page's template, text, with the bar it places.
+// logoSVG is the project's logo, docs/logo.svg, which the go:embed pattern
+// cannot reach from here: logo.svg is a copy of it, and
+// TestThePagesIconIsTheProjectsLogo fails the moment the two differ.
+//
+//go:embed logo.svg
+var logoSVG []byte
+
+// pageIcon is the pages' browser-tab icon, the logo as a data: URL in the
+// page itself, so it needs no request: none that the exporter's Basic Auth
+// would ask a credential for, nor one a reverse proxy's path prefix would
+// have to be reckoned with. pagePolicy's img-src allows data: for it. It is
+// written into each page's template text rather than given to it as data,
+// since html/template would refuse a data: URL put in an href.
+var pageIcon = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString(logoSVG) + `">`
+
+// pageTemplate parses a page's template, text, with the bar it places and
+// the template for a cell's long text (longtext.go).
 func pageTemplate(name, text string) *template.Template {
-	return template.Must(template.Must(template.New(name).Parse(chromeTemplate)).Parse(text))
+	t := template.Must(template.New(name).Funcs(pageFuncs).Parse(chromeTemplate))
+	return template.Must(template.Must(t.Parse(longTemplate)).Parse(text))
 }

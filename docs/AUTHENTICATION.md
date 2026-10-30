@@ -466,12 +466,12 @@ is kept from reaching further than that:
   marks as coming from another site (`Sec-Fetch-Site`) too, as every
   endpoint refuses it ([Requests from other sites](#requests-from-other-sites)).
   The page fills in the collector and the target its address names, which a
-  link on any page can set, and runs nothing until *Run* is pressed or a
-  field edited, so following such a link fetches nothing. The page cannot
+  link on any page can set, and runs nothing until *Run* is pressed, so
+  following such a link fetches nothing. The page cannot
   be framed. The debug URLs only read, with `GET`, and answer `text/plain`
   with `nosniff`, which a browser never runs as a page.
-- **The server's files and credentials.** A collector written on the page
-  that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file, a
+- **The server's files and credentials.** The playground, a collector
+  written on the page, that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file, a
   `login` — is refused, and so is any request type but `http`, since the others read
   files, hosts and databases with the server's keys. `${NAME}` references in
   it are not expanded, so the environment stays unseen. A pasted response
@@ -483,11 +483,11 @@ is kept from reaching further than that:
   script masked ([The debug page](CONFIGURATION.md#the-debug-page)): it
   shows how the collector is configured, not what it is configured with.
 - **Requests to anywhere.** A target is only fetched, at `full`, through a
-  collector of the configuration in force, with its target policy and its
-  credentials, as a debug probe of it would be — nothing a probe could not
+  collector of the configuration in force — the one chosen, or the one the
+  playground was copied from — with its target policy and its credentials, as a debug probe of it would be — nothing a probe could not
   already reach. Nothing of the browser's request, its `Authorization` or
   cookies, is forwarded.
-- **Code.** A collector written on the page never runs Python, at either
+- **Code.** The playground never runs Python, at either
   level. A configured collector runs its own script, as it does on every
   probe, on whatever the visitor pasted: input chosen by someone else, as a
   target's answer is on every probe. An expression of the other transforms

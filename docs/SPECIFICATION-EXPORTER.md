@@ -31560,11 +31560,33 @@ then one of the OTLP export. Of the static targets:
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
-- Every value MUST be HTML-escaped, the page MUST NOT refresh itself or run
-  a script, and it MUST be served as the other pages are (no caching, the
-  pages' Content-Security-Policy).
-- `?format=json` MUST serve the same rows and summary as JSON; another
+- Every value MUST be HTML-escaped, and the page MUST be served as the
+  other pages are (no caching, the pages' Content-Security-Policy).
+- `?format=json` MUST serve the same rows and summary as JSON, and
+  `?format=fragment` the page's content section alone, rendered by the
+  page's template, with no controls or script, with the page's headers
+  (`Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, the
+  pages' Content-Security-Policy and `X-Frame-Options: DENY`), behind the
+  same Basic Auth and refusal of requests from other sites; another
   `format` MUST be answered `400`.
+- The page MUST have a Refresh button, which without JavaScript MUST be a
+  link reloading the page, and an auto-refresh selector offering `Off`,
+  `5s`, `10s`, `30s`, `1m`, `5m`, `15m`, `30m` and `1h`. Its inline script
+  MUST refresh by fetching the page's URL with `?format=fragment`,
+  same-origin with credentials, and putting the answer in place of the
+  content section; it MUST NOT start a refresh while one is waiting for its
+  answer, MUST NOT refresh while the tab is hidden, MUST say when it last
+  refreshed, and when a refresh fails MUST say so and keep the data shown.
+- The interval MUST be `?refresh=` when that is `off` or a duration in whole
+  seconds from 5s to 24h, and otherwise `--web.status-refresh`; another
+  `?refresh=` MUST be ignored. An interval none of the selector's MUST be
+  listed in it in its place by length. Choosing an interval MUST put it in
+  the URL as `?refresh=`. With an interval, the page MUST reload itself on
+  it without JavaScript (a `<meta http-equiv="refresh">` in `<noscript>`),
+  and the selector MUST put the interval chosen in the URL through a form.
+- `--web.status-refresh` MUST take `off` or a duration in whole seconds from
+  5s to 24h, by default `off`; any other value, `0s` and the empty value
+  among them, MUST be a command-line error, exit `2`.
 - In allocator mode the page MUST say that it shows the targets the
   allocator gave this replica, and the probes this replica answered.
 - The page MUST be served with or without static targets in force; without

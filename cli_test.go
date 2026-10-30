@@ -275,10 +275,17 @@ func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
 
 func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 	for flag, message := range map[string]string{
-		"--probe.max-concurrent=-1":        "--probe.max-concurrent must not be negative",
-		"--web.gzip-level=10":              "--web.gzip-level must be from 0, which answers uncompressed, to 9, got 10",
-		"--web.gzip-level=-1":              "--web.gzip-level must be from 0, which answers uncompressed, to 9, got -1",
-		"--web.gzip-level=fast":            "for flag -web.gzip-level: parse error",
+		"--probe.max-concurrent=-1": "--probe.max-concurrent must not be negative",
+		"--web.gzip-level=10":       "--web.gzip-level must be from 0, which answers uncompressed, to 9, got 10",
+		"--web.gzip-level=-1":       "--web.gzip-level must be from 0, which answers uncompressed, to 9, got -1",
+		"--web.gzip-level=fast":     "for flag -web.gzip-level: parse error",
+		// A page refreshing faster than Grafana's least, or past what a
+		// browser's timer holds, is refused rather than taken.
+		"--web.status-refresh=1s":          `--web.status-refresh \"1s\" must be off or a duration in whole seconds from 5s to 24h`,
+		"--web.status-refresh=0s":          `--web.status-refresh \"0s\" must be off`,
+		"--web.status-refresh=48h":         `--web.status-refresh \"48h\" must be off`,
+		"--web.status-refresh=2.5s":        `--web.status-refresh \"2.5s\" must be off`,
+		"--web.status-refresh=":            `--web.status-refresh \"\" must be off`,
 		"--python.max-workers=-1":          "--python.max-workers must not be negative",
 		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
 		// A soft limit of a few kilobytes would have the Go runtime collect
@@ -306,6 +313,16 @@ func TestEveryGzipLevelIsNoCommandLineError(t *testing.T) {
 		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--web.gzip-level="+level)
 		if out.code == 2 || strings.Contains(out.stderr, "gzip-level") {
 			t.Errorf("level %s: exit=%d stderr=%s", level, out.code, out.stderr)
+		}
+	}
+}
+
+// --web.status-refresh takes off and whole seconds from 5s to 24h.
+func TestEveryStatusRefreshFromFiveSecondsIsNoCommandLineError(t *testing.T) {
+	for _, refresh := range []string{"off", "5s", "30s", "1m", "90s", "24h"} {
+		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--web.status-refresh="+refresh)
+		if out.code == 2 || strings.Contains(out.stderr, "status-refresh") {
+			t.Errorf("refresh %s: exit=%d stderr=%s", refresh, out.code, out.stderr)
 		}
 	}
 }

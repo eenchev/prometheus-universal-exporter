@@ -89,7 +89,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 	}{
 		"defaults": {
 			want:  []string{"replicas: 1\n", "runAsUser: 65532", `"--runtime.memory-limit-ratio=0.8"`, "timeoutSeconds: 3", "failureThreshold: 5", "failureThreshold: 3"},
-			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.debug", "--web.gzip-level", "kind: ServiceMonitor", "kind: NetworkPolicy"},
+			avoid: []string{"kind: HorizontalPodAutoscaler", "kind: PodDisruptionBudget", "--probe.max-concurrent", "--python.max-workers", "GOMEMLIMIT", "terminationGracePeriodSeconds", "sessionAffinity", "--web.debug", "--web.gzip-level", "--web.status-refresh", "kind: ServiceMonitor", "kind: NetworkPolicy"},
 		},
 		"limits": {
 			args: []string{"--set", "server.probeMaxConcurrent=64", "--set", "server.pythonMaxWorkers=8", "--set", "goMemLimit.ratio=0.6"},
@@ -201,6 +201,18 @@ func TestChartRendersItsOptions(t *testing.T) {
 		"a gzip level as a string": {
 			args: []string{"--set-string", "server.gzipLevel=6"},
 			want: []string{"- \"--web.gzip-level=6\"\n"},
+		},
+		"the status page refreshing every 30s": {
+			args: []string{"--set", "server.statusRefresh=30s"},
+			want: []string{"- \"--web.status-refresh=30s\"\n"},
+		},
+		"the status page refreshing at the bounds": {
+			args: []string{"--set", "server.statusRefresh=5s"},
+			want: []string{"- \"--web.status-refresh=5s\"\n"},
+		},
+		"the status page not refreshing": {
+			args: []string{"--set", "server.statusRefresh=off"},
+			want: []string{"- \"--web.status-refresh=off\"\n"},
 		},
 		"session affinity": {
 			args: []string{"--set", "service.sessionAffinity=ClientIP"},
@@ -339,6 +351,13 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"a fractional gzip level":                      {[]string{"--set", "server.gzipLevel=1.5"}, "server.gzipLevel"},
 		"a gzip level that is a word":                  {[]string{"--set", "server.gzipLevel=fast"}, "server.gzipLevel"},
 		"the gzip level as an extra":                   {[]string{"--set", "extraArgs[0]=--web.gzip-level=9"}, "server.gzipLevel"},
+		"a status refresh below 5s":                    {[]string{"--set", "server.statusRefresh=4s"}, "server.statusRefresh"},
+		"a status refresh of nothing":                  {[]string{"--set", "server.statusRefresh=0s"}, "server.statusRefresh"},
+		"a status refresh above a day":                 {[]string{"--set", "server.statusRefresh=25h"}, "server.statusRefresh"},
+		"a fractional status refresh":                  {[]string{"--set", "server.statusRefresh=7.5s"}, "server.statusRefresh"},
+		"a status refresh that is a word":              {[]string{"--set", "server.statusRefresh=never"}, "server.statusRefresh"},
+		"a status refresh without a unit":              {[]string{"--set-string", "server.statusRefresh=30"}, "server.statusRefresh"},
+		"the status refresh as an extra":               {[]string{"--set", "extraArgs[0]=--web.status-refresh=30s"}, "server.statusRefresh"},
 		"a pod label the chart sets":                   {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
 		"a spread without a topology key":              {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
 		// The chart renders the collector and target parameters itself; a
@@ -432,6 +451,36 @@ func TestChartHoldsTheGzipLevelWithTheSchemaSkipped(t *testing.T) {
 		want := "- \"--web.gzip-level=" + args[1][len("server.gzipLevel="):] + "\"\n"
 		if !ok || !strings.Contains(out, want) {
 			t.Errorf("%v: ok=%v, want %q rendered:\n%s", args, ok, want, out)
+		}
+	}
+}
+
+// The template holds server.statusRefresh to off or 5s to 24h as the
+// exporter's flag does, beyond the schema's pattern, which cannot count, so
+// neither a render nor one that skips the schema can start an exporter that
+// refuses its flag; the bounds themselves render.
+func TestChartHoldsTheStatusRefreshToTheExportersBounds(t *testing.T) {
+	helm := requireHelm(t)
+	requireSchemaSkipping(t, helm)
+	for _, value := range []string{"4s", "0s", "0m0s", "24h1s", "25h", "1.5s", "500ms", "30", "never", "OFF"} {
+		for _, skip := range []bool{false, true} {
+			args := []string{"--set-string", "server.statusRefresh=" + value}
+			if skip {
+				args = append([]string{"--skip-schema-validation"}, args...)
+			}
+			out, ok := helmTemplate(t, helm, chartDir, args...)
+			if ok || !namesInHelmError(out, "server.statusRefresh") {
+				t.Errorf("%s (schema skipped %v): ok=%v, want an error naming server.statusRefresh:\n%s", value, skip, ok, out)
+			}
+			if skip && !strings.Contains(out, fmt.Sprintf("server.statusRefresh %q must be off or whole hours, minutes and seconds from 5s to 24h", value)) {
+				t.Errorf("%s: the template's own refusal is not the one given:\n%s", value, out)
+			}
+		}
+	}
+	for _, value := range []string{"off", "5s", "1m30s", "1h", "24h"} {
+		out, ok := helmTemplate(t, helm, chartDir, "--skip-schema-validation", "--set-string", "server.statusRefresh="+value)
+		if want := "- \"--web.status-refresh=" + value + "\"\n"; !ok || !strings.Contains(out, want) {
+			t.Errorf("%s: ok=%v, want %q rendered:\n%s", value, ok, want, out)
 		}
 	}
 }

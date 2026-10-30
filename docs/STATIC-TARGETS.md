@@ -677,7 +677,11 @@ target:
 
 A summary line above says how many targets there are, how many are failing
 and how many have not been scraped yet; the failing targets come first. The
-page shows the moment it was served and does not refresh itself: reload it.
+page shows the moment it was served; its Refresh button and auto-refresh
+selector fetch it again without reloading it (see
+[Refreshing](ENDPOINTS.md#refreshing) in Endpoints), and
+`--web.status-refresh` sets how often it refreshes itself when its URL does
+not say.
 
 `?format=json` serves the same as JSON, for a script:
 

@@ -26,6 +26,7 @@
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.debug" "set server.debug instead"
   "--web.gzip-level" "set server.gzipLevel instead"
+  "--web.status-refresh" "set server.statusRefresh instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead"
   "--allocator.url" "set allocator.enabled instead, which points the exporter at the chart's allocator"
@@ -507,6 +508,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- $text -}}
 {{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.statusRefresh" -}}
+{{- /* Empty leaves the flag out, and the exporter's default, off, applies.
+       Whole hours, minutes and seconds, so the chart can hold it to the
+       exporter's bounds, 5s to 24h: anything else would stop the exporter
+       at startup, so it fails rendering here instead. */ -}}
+{{- $refresh := .Values.server.statusRefresh | default "" | toString -}}
+{{- if and $refresh (ne $refresh "off") -}}
+{{- $seconds := 0 -}}
+{{- if regexMatch "^([0-9]+h)?([0-9]+m)?([0-9]+s)?$" $refresh -}}
+{{- $seconds = include "prometheus-universal-exporter.durationSeconds" $refresh | atoi -}}
+{{- end -}}
+{{- if or (lt $seconds 5) (gt $seconds 86400) -}}
+{{- fail (printf "server.statusRefresh %q must be off or whole hours, minutes and seconds from 5s to 24h, for example \"30s\" or \"1m\"" $refresh) -}}
+{{- end -}}
+{{- end -}}
+{{- $refresh -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.probeTimeoutOffset" -}}
 {{- /* Empty leaves the flag out: the exporter's default applies, and an image

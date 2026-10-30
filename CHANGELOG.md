@@ -67,6 +67,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `proxy_url`, from its own request or its file's `defaults`, `direct`, or
   `environment` when it follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` —
   with the paths of `proxy_basic_auth_file`, never the credentials.
+- The status page has a Refresh button and an auto-refresh selector, as a
+  Grafana dashboard has: `Off`, or every `5s` to `1h`, kept in the URL as
+  `?refresh=30s`, refreshing the page's content in place, pausing while the
+  tab is hidden, and saying when it last refreshed or that a refresh failed.
+  `--web.status-refresh`, and the chart's `server.statusRefresh`, set the
+  interval a URL without one gets; off by default.
 
 ### Fixed
 

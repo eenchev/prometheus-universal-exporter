@@ -3,7 +3,6 @@ package exporter
 import (
 	"encoding/json"
 	"errors"
-	"html/template"
 	"net/http"
 	"sort"
 	"strings"
@@ -211,11 +210,11 @@ type staticStatusPage struct {
 	// says them.
 	PerKey  int `json:"-"`
 	MaxKeys int `json:"-"`
-	// StaticTargetsPath is the static targets endpoint; HomeHref the
-	// landing page, as a link relative to this page, so it holds behind a
-	// reverse proxy that serves the exporter under a path of its own.
+	// StaticTargetsPath is the static targets endpoint.
 	StaticTargetsPath string `json:"-"`
-	HomeHref          string `json:"-"`
+	// Chrome is the page's bar (pagechrome.go); the content section, which
+	// a refresh swaps in, has none.
+	Chrome pageChrome `json:"-"`
 	// Refresh is the page's refresh controls (statusrefresh.go).
 	Refresh statusRefreshControl `json:"-"`
 }
@@ -232,7 +231,6 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		Allocator:         s.allocatorStatus != nil,
 		Total:             len(targets),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
-		HomeHref:          rootLink(s.staticTargetsStatusEndpoint()),
 		PerKey:            recentProbesPerKey,
 		MaxKeys:           recentProbeKeys,
 	}
@@ -393,20 +391,21 @@ func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Reque
 		// What a refresh swaps in: the content section, rendered by the
 		// page's own template, with the page's headers, so it is never
 		// cached either.
-		s.renderPage(w, staticStatusContentTemplate, page)
+		s.renderFragment(w, staticStatusContentTemplate, page)
 		return
 	}
+	page.Chrome = s.chromeFor(s.staticTargetsStatusEndpoint())
 	page.Refresh = s.statusRefreshControlFor(r.URL.Query().Get("refresh"))
 	s.renderPage(w, staticStatusTemplate, page)
 }
 
-var staticStatusTemplate = template.Must(template.New("static-status").Parse(`<!DOCTYPE html>
+var staticStatusTemplate = pageTemplate("static-status", `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Status · Prometheus Universal Exporter</title>
-<style>` + pageStyle + `
+<style>`+pageStyle+`
 main { max-width: 1200px; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
@@ -429,6 +428,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 </head>
 <body>
 <main>
+{{template "chrome" .Chrome}}
 <h1>Status</h1>
 <form class="refresh" id="refresh" method="get">
 <a class="button" id="refresh-now" href="">Refresh</a>
@@ -439,7 +439,6 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 </select></label>
 <noscript><button type="submit">Apply</button></noscript>
 <span id="refresh-state" class="muted" role="status" aria-live="polite"></span>
-<a href="{{.HomeHref}}">Home</a>
 </form>
 <div id="status-content">
 {{- template "content" .}}
@@ -615,7 +614,7 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 <p class="muted">OTLP export is off.</p>
 {{- end}}
 {{- end}}
-{{end}}`))
+{{end}}`)
 
 // staticStatusContentTemplate is the page's content section alone, which a
 // refresh swaps in.

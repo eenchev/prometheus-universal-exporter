@@ -178,6 +178,12 @@ type Collector struct {
 	// a value itself is the same collector as one that takes it from
 	// defaults.
 	FromDefaults []string `yaml:"-"`
+	// Written is the mapping the collector's file writes it as, its
+	// references unexpanded, its aliases and merge keys resolved and the
+	// keys it took from defaults added (config.recordWritten), for the
+	// debug page to show; nil for a collector not read from a file. It is
+	// no key of the configuration, and no part of what the collector is.
+	Written *yaml.Node `yaml:"-" json:"-"`
 }
 
 // RequestConfig is a collector's request block: how the target is reached.

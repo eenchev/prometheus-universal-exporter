@@ -1192,18 +1192,26 @@ func WithoutNamedFiles() LoadOption {
 // target file. A file it cannot read is a readError, which the watch tries
 // again at every tick (Manager.configUnread).
 func readDocument(path string, opts []LoadOption) ([]byte, error) {
+	b, _, err := readDocumentSource(path, opts)
+	return b, err
+}
+
+// readDocumentSource is readDocument, which also gives the file as it is
+// written, before its references were expanded (recordWritten).
+func readDocumentSource(path string, opts []LoadOption) (document, raw []byte, err error) {
 	var options loadOptions
 	for _, apply := range opts {
 		apply(&options)
 	}
-	b, err := readFile(path)
+	raw, err = readFile(path)
 	if err != nil {
-		return nil, &readError{err: err}
+		return nil, nil, &readError{err: err}
 	}
 	if !options.expandEnv {
-		return b, nil
+		return raw, raw, nil
 	}
-	return expandEnvironment(path, b, options.flag)
+	document, err = expandEnvironment(path, raw, options.flag)
+	return document, raw, err
 }
 
 // readFile reads the file at path for readDocument; tests set it to make a
@@ -1240,7 +1248,7 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 // validation is what opens the files the configuration names (namedFiles),
 // so a reload that stamps them stamps them before they are read.
 func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.Config, error) {
-	b, err := readDocument(path, opts)
+	b, raw, err := readDocumentSource(path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1262,6 +1270,7 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	// The configuration's defaults are its own collectors', given before
 	// the collector files' join them.
 	ownDefaultsErr := applyOwnDefaults(&c, b)
+	recordWritten(raw, c.Collectors)
 	err = model.JoinProblems(ownDefaultsErr, mergeCollectorFiles(&c, path, opts))
 	if decoded != nil {
 		decoded(&c)

@@ -206,7 +206,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath:
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -281,7 +281,7 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
 // targets path and its status page, /health, /ready and /-/reload, and with --web.debug on
-// /debug and /debug/run. Whatever answers, its client has
+// /debug, /debug/run and /debug/collector. Whatever answers, its client has
 // AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -308,6 +308,7 @@ func (s *Server) Handler() http.Handler {
 	if s.debug != DebugOff {
 		mux.HandleFunc("GET "+debugPagePath, protected(s.debugPageHandler))
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
+		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
 	}
 	return s.writeBounded(mux)
 }

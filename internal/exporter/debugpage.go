@@ -354,14 +354,23 @@ type debugPageCollector struct {
 	Name, RequestType string
 }
 
-func (s *Server) debugPageHandler(w http.ResponseWriter, _ *http.Request) {
-	page := debugPage{Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Docs: landingDocs, Example: debugExample, ExampleBody: debugExampleBody}
+func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
+	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
 	cfg := s.manager.Get()
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
 		if onDebugPage(c.Request.Type) {
 			page.HTTPCollectors = append(page.HTTPCollectors, c.Name)
+		}
+		// A link that names a configured collector opens the page with it
+		// shown, as choosing it would show it.
+		if chosen := r.URL.Query().Get("collector"); chosen != "" && chosen == c.Name {
+			if shown, err := shownCollectorYAML(c); err == nil {
+				page.Chosen, page.ChosenYAML = c.Name, shown
+			} else {
+				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", err)
+			}
 		}
 	}
 	s.renderPage(w, debugPageTemplate, page)

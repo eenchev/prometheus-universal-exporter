@@ -97,6 +97,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   scrape.
 - GitHub Releases are described from `CHANGELOG.md` instead of a list of pull
   requests.
+- The status page has the bar the other pages have at their top: back to the
+  landing page, the other pages and the documentation. Every HTML page now
+  carries the same bar, the page shown marked.
+- The debug page shows the configured collector chosen as YAML, as its file
+  writes it, read-only, with its credentials and file paths withheld and the
+  keys it takes from its file's defaults marked, instead of the example,
+  which it does not run; *Edit a copy* writes it on the page. A link from
+  `/collectors` opens the page with it shown.
 
 ## exporter 1.8.0
 

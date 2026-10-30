@@ -117,6 +117,17 @@ func TestAnEmptyVariableAsAWholeValueIsTheValueWrittenEmpty(t *testing.T) {
 			}
 			written, writtenErr := load(`""`)
 			expanded, err := load("${DEMO_EMPTY}")
+			// Each keeps the text its file writes it as, which differs as
+			// the two files do (Collector.Written); what the collectors are
+			// is the rest.
+			for _, c := range []*model.Config{written, expanded} {
+				if c == nil {
+					continue
+				}
+				for i := range c.Collectors {
+					c.Collectors[i].Written = nil
+				}
+			}
 			if fmt.Sprint(err) != fmt.Sprint(writtenErr) || !reflect.DeepEqual(expanded, written) {
 				t.Fatalf("the empty variable gives %+v, %v; written \"\" the value gives %+v, %v", expanded, err, written, writtenErr)
 			}

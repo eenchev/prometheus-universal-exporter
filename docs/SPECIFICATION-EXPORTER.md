@@ -8093,8 +8093,9 @@ Recommended behavior:
   as `debug?collector=<name>`, and at `full` the link MUST carry the target
   entered in the form as `target`; no form MUST ask `/probe` for a debug
   report.
-- `/debug`, with `--web.debug` at `edit` or `full` only, and `/debug/run`,
-  which its runs post to: § 42.17. With the flag, `/` and `/collectors` MUST
+- `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
+  which its runs post to, and `/debug/collector`, which shows it a
+  configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
   link the page; without it, neither path is served (`404`) and neither page
   links it.
 - Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
@@ -8104,6 +8105,16 @@ Recommended behavior:
   `frame-ancestors 'none'`), since the collectors page takes credentials, and
   MUST lay out at phone width and
   follow the browser's light or dark preference.
+- Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
+  status page (§ 42.14a) — MUST carry the same bar at its top, once, with
+  the same style: a link back to `/` (on `/` itself, the exporter's name
+  marked as the page shown), a link to each of the other pages, the debug
+  page only with `--web.debug` at `edit` or `full`, the page shown marked
+  rather than linked, and the documentation. Its links MUST be relative to
+  the page, so they hold behind a proxy's path prefix and from the status
+  page under a static targets path of several segments. A part of a page
+  that a page's script swaps in, as the status page's `?format=fragment`,
+  MUST NOT carry the bar.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -29400,6 +29411,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   the Secret, and the exporter loads the rendered configuration with the log
   export on at `/v1/logs` and the header expanded.
 
+## 34.237 One bar on every page, and the debug page's configured collector as YAML
+
+- `TestEveryPageCarriesTheBar`: at `--web.debug` `off`, `edit` and `full`, and with the static targets path `/static-targets` and `/static/targets/deep`, every page reached by following the links of `/` behind a proxy prefix that answers HTML — `/`, `/collectors`, the status page and, with debugging on, `/debug` — and no other, carries the bar once, first in its `main` element; it marks the page shown and links each other page, resolving under the prefix, with a `← ` link back to `/` on every page but `/`; the status page's `?format=fragment` holds its content without `header`, `nav`, `html` or `main`.
+- `TestTheDebugPageShowsTheConfiguredCollectorChosen`: `/debug?collector=rooms` of a configuration loaded from a file opens with `rooms` selected and its YAML in a read-only editor, the label saying it runs as configured and *Edit a copy* shown: the keys in the file's order, the alias resolved, the comments left out, `max_metrics` and `max_response_bytes` from the file's defaults marked `# from the file's defaults`, the collector's own `max_label_value_length` kept, and its credentials `<redacted>`; `/debug/collector?name=rooms` answers the same YAML with `from_defaults`; `/debug` opens on the example, editable, with the example in `data-example` and *Edit a copy* hidden; an unknown name is answered `404` with `unknown collector`, and opens the page on the example; with debugging off `/debug/collector` is `404`.
+- `TestTheDebugPageWithholdsAConfiguredCollectorsCredentials`: at `edit` and `full`, neither the page nor `/debug/collector` shows a bearer token, a header or query parameter named like a credential, a login field `password`, a login URL's `api_key`, nor the paths of `bearer_token_file` and `login.field_files`; the login's `username` and `token` expression are shown, and the page's editor holds what `/debug/collector` answers.
+- `TestTheDebugPageShowsAScriptWithItsCredentialsMasked`: a `pre_script` holding an `Authorization: Bearer` value and a password literal is shown as a literal block without either, the rest of the script as written; a collector held without a file is shown without its empty keys.
+- `TestTheShownYAMLOfAConfiguredCollectorRunsWrittenOnThePage`: the YAML `/debug/collector` answers for `rooms`, its `<redacted>` lines left out, posted as a collector written on the page with a pasted body, runs and gives the series the configured collector gives on it.
+- `TestTheDebugCollectorPathIsReserved`: `/debug/collector` is refused as `--web.self-metrics-path`.
+- `TestACollectorKeepsTheMappingItsFileWritesItAs` (config): with `--config.expand-env`, a collector of the configuration keeps `${WRITTEN_TOKEN}` as written though it loaded the variable's value, the keys a merge key gives its request after its own, no comment of the file, and the keys of the configuration's defaults it does not write, marked; a collector of a collector file takes that file's defaults alone, marked on the key.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -29710,7 +29731,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`, `/debug`, `/debug/run`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -30232,7 +30253,7 @@ checks on its own endpoints MUST be compared the same way.
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, the configured self-health metrics endpoint, the static targets
 endpoint, the landing page at `/`, the collectors page at `/collectors` and,
-when enabled, `/debug` and `/debug/run`. The
+when enabled, `/debug`, `/debug/run` and `/debug/collector`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -33097,6 +33118,34 @@ included, at `edit` as at `full`: its scripts are the operator's, and read
 what a target sends on every probe, as they read a pasted body here. Its
 scripts MUST run in its own workers and count in its Python worker series,
 as a debug probe's do.
+
+The page's editor MUST show the collector that runs: the one written on the
+page while no configured collector is chosen, starting from the example,
+and the configured one chosen, from the list or from the `collector` its URL
+names, in its place, read-only, with the label saying which runs. A
+configured collector MUST be shown as YAML that its file writes: the
+collector's mapping as written, its keys in the file's order, its `${NAME}`
+references unexpanded whatever `--config.expand-env` says, the keys aliases
+and merge keys give it written out as the decoder reads them, without the
+file's comments, and with each key it takes from its file's `defaults`
+added where it would write it, marked `# from the file's defaults`. A
+collector the exporter holds without a file MUST be shown as it holds it,
+its empty keys left out. At `edit` as at `full` the YAML MUST NOT show a
+credential: a scalar value whose key reads as a credential's, by the rule above —
+but where a login's answer holds its token and how it authenticates, and a
+redis key — MUST be shown as `<redacted>`, and so MUST every value of a key
+ending in `_file` or `_files`; a URL's userinfo and the values of its query
+parameters whose names read as credentials MUST be withheld, and a header's
+value in which text reads as a credential; a Python script MUST be shown
+with what reads as a credential in it masked, as text the exporter did not
+write is. The page MUST offer *Edit a copy*, which puts the YAML shown in
+the editor as a collector written on the page, which then runs. The YAML
+shown, with the lines that hold what was withheld left out and written on
+the page, MUST be read as a collector and give the series the configured
+collector gives. `GET /debug/collector?name=<name>`, served and
+authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
+`yaml` and `from_defaults`, the keys taken from defaults, and a name the
+configuration in force does not have `404` with `error`.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a

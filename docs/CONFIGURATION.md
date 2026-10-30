@@ -5385,6 +5385,34 @@ The collector run is one of two:
   reads whatever a target sends on every probe, which is what a pasted body
   stands for.
 
+The editor shows the collector that runs. While none of the configuration
+is chosen it holds the one written on the page — the example to start with,
+then what was written, kept in the browser between visits. A configured
+collector chosen, in the list or by the link from `/collectors`, is shown
+in its place, read-only, since it runs as configured:
+
+- **As its file writes it**: its keys in the order the file has them, its
+  `${NAME}` references as written, not what they expand to, the keys an
+  anchor or a merge key (`<<`) gives it written out, as the loader reads
+  them, and the file's comments left out. The keys it takes from its file's
+  [defaults](#defaults-for-the-collectors-of-a-file) are added where it
+  would write them, each marked `# from the file's defaults`.
+- **Without its credentials**, at `edit` as at `full`: a value whose key
+  reads as a credential's — `bearer_token`, `basic_auth`'s `password`, a
+  header, a query parameter or a login field named like one, by the rule
+  a debug report withholds a header by — is shown as `<redacted>`, and so
+  is every path a `*_file` key names, which no page shows; a URL's userinfo
+  and the values of its query parameters named like credentials are
+  withheld. A Python script is shown as written, but for what reads as a
+  credential in it, which is masked as an error's text is; keep a script's
+  credentials in a file it reads.
+
+*Edit a copy* puts that YAML in the editor as a collector written on the
+page, which then runs in its place, under the rules for one: what was
+withheld has to be left out or written again, and a collector of another
+request type than `http`, with Python or with a file, is refused as any
+written there is.
+
 It reads one of three responses:
 
 - **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
@@ -5442,6 +5470,12 @@ curl -s http://exporter:8080/debug/run \
   -H 'Content-Type: application/json' -H 'X-Debug-Run: run' \
   -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
 ```
+
+The editor reads a configured collector from `GET
+/debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
+YAML as the page shows it, and `from_defaults`, the keys it took from its
+file's defaults; a name the configuration does not have is answered `404`
+with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `request_from`, the

@@ -32,15 +32,26 @@ p.meta { color: var(--muted); margin: 0; }
 a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
-`
+` + chromeStyle
 
 // pagePolicy is the pages' Content-Security-Policy.
 const pagePolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
-// renderPage executes t with data and writes it as HTML. The page is rendered
-// whole before anything is written, so a failure is a clean 500 rather than
-// half a page.
-func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data any) {
+// renderPage executes t with data, a page with its bar (pagechrome.go), and
+// writes it as HTML. The page is rendered whole before anything is written,
+// so a failure is a clean 500 rather than half a page.
+func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data framedPage) {
+	s.renderHTML(w, t, data)
+}
+
+// renderFragment is renderPage for a part of a page, which a page's script
+// swaps in, and which has no bar of its own.
+func (s *Server) renderFragment(w http.ResponseWriter, t *template.Template, data any) {
+	s.renderHTML(w, t, data)
+}
+
+// renderHTML is renderPage and renderFragment.
+func (s *Server) renderHTML(w http.ResponseWriter, t *template.Template, data any) {
 	var body bytes.Buffer
 	if err := t.Execute(&body, data); err != nil {
 		s.logger.Error("rendering a page failed", "page", t.Name(), "error", err)
@@ -65,6 +76,8 @@ func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data an
 // paths shown as text stay absolute: they are what the exporter answers.
 
 type landingPage struct {
+	// Chrome is the bar at the top of the page (pagechrome.go).
+	Chrome                       pageChrome
 	Version, Revision, GoVersion string
 	SelfMetricsPath              string
 	// SelfMetricsHref and StaticTargetsHref are the paths as relative links.
@@ -87,16 +100,17 @@ type landingPage struct {
 	Docs                      string
 }
 
-var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE html>
+var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prometheus Universal Exporter</title>
-<style>` + pageStyle + `</style>
+<style>`+pageStyle+`</style>
 </head>
 <body>
 <main>
+{{template "chrome" .Chrome}}
 <h1>Prometheus Universal Exporter</h1>
 <p class="meta">Version {{.Version}}, revision {{.Revision}}, {{.GoVersion}}</p>
 
@@ -136,12 +150,13 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 </main>
 </body>
 </html>
-`))
+`)
 
 func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg, file := s.manager.InForce()
 	build := BuildVersion()
 	page := landingPage{
+		Chrome:  s.chromeFor(pageHome),
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
 		SelfMetricsPath:   s.selfMetricsEndpoint(),
 		SelfMetricsHref:   relativeLink(s.selfMetricsEndpoint()),

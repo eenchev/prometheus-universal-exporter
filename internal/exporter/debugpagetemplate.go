@@ -81,7 +81,7 @@ var debugPageTemplate = pageTemplate("debug", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug · Prometheus Universal Exporter</title>
-`+pageIcon+`
+`+pageIcon+"\n"+themeHead+`
 <style>`+pageStyle+`
 main { max-width: 1200px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }

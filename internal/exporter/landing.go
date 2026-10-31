@@ -18,11 +18,14 @@ import (
 // landingDocs is where the pages point for documentation.
 const landingDocs = "https://github.com/eenchev/prometheus-universal-exporter"
 
-// pageStyle is the pages' shared stylesheet. The colours follow the browser's
+// pageStyle is the pages' shared stylesheet. The colours follow the theme
+// chosen in the bar (themeHead), or with Auto, the default, the browser's
 // light or dark preference, and the layout works at phone width.
 const pageStyle = `
-:root { color-scheme: light dark; --fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; }
-@media (prefers-color-scheme: dark) { :root { --fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; } }
+:root { color-scheme: light dark; ` + lightColours + ` }
+:root[data-theme="light"] { color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; ` + darkColours + ` } }
+:root[data-theme="dark"] { color-scheme: dark; ` + darkColours + ` }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 32px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
 main { max-width: 860px; margin: 0 auto; }
@@ -33,6 +36,15 @@ a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
 ` + selectStyle + chromeStyle + longStyle
+
+// lightColours and darkColours are the pages' colours in each theme. The
+// dark ones apply when the browser prefers dark and no theme is chosen, and
+// when Dark is; color-scheme follows, so the browser's own parts of the page,
+// its scrollbars and form controls, match.
+const (
+	lightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d;"
+	darkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80;"
+)
 
 // selectStyle draws the pages' dropdowns' arrow itself: the browser's own
 // sits against the field's right edge, and its place differs between
@@ -118,7 +130,7 @@ var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prometheus Universal Exporter</title>
-`+pageIcon+`
+`+pageIcon+"\n"+themeHead+`
 <style>`+pageStyle+`</style>
 </head>
 <body>

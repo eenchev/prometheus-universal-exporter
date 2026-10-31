@@ -20,7 +20,7 @@ import (
 func refreshChoices(t *testing.T, page string) []string {
 	t.Helper()
 	start := strings.Index(page, `<select name="refresh" id="refresh-every">`)
-	end := strings.Index(page, "</select>")
+	end := start + strings.Index(page[max(start, 0):], "</select>")
 	if start < 0 || end < start {
 		t.Fatalf("the page has no auto-refresh selector:\n%s", page)
 	}

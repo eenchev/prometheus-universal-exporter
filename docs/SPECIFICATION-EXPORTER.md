@@ -8106,8 +8106,19 @@ Recommended behavior:
   what they show, MUST NOT be cached, MUST NOT be framed by another site
   (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
   `frame-ancestors 'none'`), since the collectors page takes credentials, and
-  MUST lay out at phone width and
-  follow the browser's light or dark preference.
+  MUST lay out at phone width.
+- Every HTML page the exporter serves MUST offer in its bar a theme picker
+  of *Auto*, the default, *Light* and *Dark*. *Auto* MUST follow the
+  browser's light or dark preference, and *Light* and *Dark* MUST hold
+  whatever the browser prefers, `color-scheme` included, so the browser's
+  own controls match. The choice MUST be kept in the browser's local
+  storage and hold on every page; where the storage cannot be used, the page
+  MUST still work and the choice MUST hold until the page is left. Each page
+  MUST set the choice kept, as the `data-theme` attribute of its `html`
+  element, from a script in its head, before it is first drawn, and a part
+  of a page a script swaps in, as the status page's fragment, MUST NOT touch
+  it. Without JavaScript the picker MUST be hidden and the pages MUST follow
+  the browser.
 - Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
   status page (§ 42.14a) — MUST carry the same bar at its top, once, with
   the same style: a link back to `/` (on `/` itself, the exporter's name
@@ -29547,6 +29558,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageOpensWithTheExamplePlayground`: `/debug` opens with the example in the editor and *Back to the example* hidden; the script keeps nothing of the playground, the body or the collector copied from in the browser (no `debug.collector`, `debug.body`, `debug.copied` or `sessionStorage`), shows *Back to the example* while the playground is a copy, which puts the example back, and still keeps the choice of table or text.
 - `TestTheDebugPageSaysWhoseStaticTargetsItOffers`: `/debug?collector=rooms` says `Static targets of rooms, the collector chosen.`; `/debug`, with *Scrape a static target* disabled, says nothing, and the script says `…, the collector this playground was copied from.` of a copy.
 - `TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector`, `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageIsSelfContained` (changed): a localfile playground is no longer refused; the collector copied from is no longer kept in the browser; the targets' placeholders the forms hold are not URLs the page loads.
+
+## 34.245 The pages' theme picker: Auto, Light or Dark
+
+- `TestEveryPageOffersTheThemeAndSetsItBeforeItIsDrawn`: `/`, `/collectors`, `/debug` and the status page each set the theme kept in local storage (`theme`, `light` or `dark`) on the `html` element from a script in their head, before their style, and carry once in their bar the picker of *Auto*, *Light* and *Dark*, hidden until its script shows it, which shows the theme set, sets or removes it on a change and keeps it, or removes what is kept for *Auto*; the status page's fragment does not touch the theme.
+- `TestThePagesStyleHasBothThemesChosen`: the pages' style has the light colours with `color-scheme: light dark`, `color-scheme: light` for `data-theme="light"`, the dark colours under `prefers-color-scheme: dark` only where Light is not chosen and again for `data-theme="dark"`, each with its `color-scheme`, and no other rule following the browser's preference; a hidden picker is not shown.
+- `TestTheStatusPageHasRefreshControls` and the other status page refresh tests (changed): the auto-refresh selector's options are read up to its own `</select>`, the bar now holding one before it.
 
 # 35. Documentation requirements
 

@@ -84,6 +84,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The pages' bar has a *Theme* picker: *Auto*, the default, follows the
+  browser's light or dark preference, and *Light* or *Dark* holds whatever it
+  prefers, kept in the browser for every page.
 - `--healthcheck` asks a running exporter whether it is ready (`/ready`), or
   with `--healthcheck=health` alive (`/health`), and exits 0 or 1, for a
   container health check in an image without `curl`.

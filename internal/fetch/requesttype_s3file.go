@@ -92,7 +92,8 @@ func init() {
 		TargetFields:   []string{"path", "timeout"},
 		Requester:      s3FileRequester{},
 		FileExtensions: true,
-		TargetHint:     func(*model.Collector) string { return "the bucket, or s3://bucket" },
+		TargetHint:     func(*model.Collector) (string, string) { return "Bucket", "the bucket, or s3://bucket" },
+		AnswerHint:     "Paste the object's content",
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},

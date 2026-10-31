@@ -140,7 +140,7 @@ func TestAGraphiteStaticTarget(t *testing.T) {
 func TestTheCollectorsPageShowsAGraphiteTarget(t *testing.T) {
 	server := graphiteExporter(t, graphiteExporterConfig)
 	recorder := probeOnce(t, server, "/collectors", nil)
-	if !strings.Contains(recorder.Body.String(), "http://graphite:8080") {
+	if !strings.Contains(recorder.Body.String(), `>Graphite URL</label>`) || !strings.Contains(recorder.Body.String(), `placeholder="https://graphite:8080"`) {
 		t.Fatalf("%s", recorder.Body)
 	}
 }

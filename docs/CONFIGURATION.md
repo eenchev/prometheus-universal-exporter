@@ -5424,7 +5424,17 @@ It reads one of three responses:
   configured collector or a copy of one; a body that has been written in is
   kept whichever collector is chosen. The status must be
   one the collector's `request.accept_status` accepts, and the body is held
-  to its response limit, as a fetched response would be.
+  to its response limit, as a fetched response would be. The page asks for
+  a status and headers only for an `http` or `graphite` collector, whose
+  answers are HTTP responses, and for a `Content-Type` only where it can
+  choose the decoder; the body's placeholder says what to paste: what the
+  target answers, a file's content, or, for the types that make their
+  answer, the JSON document a run's *Response* shows. A `sql` collector's
+  response is its rows, pasted as JSON as a run's *Response* shows them, a
+  list of objects of each row's columns by name,
+  `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
+  `true` and `false` as 1 and 0, and `null` leaves the column out of its
+  row, as `NULL` does; anything else is refused with `400`.
 - **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
   it, through a configured collector — the one chosen, or the one the
   playground was copied from — with its request block,
@@ -5432,7 +5442,8 @@ It reads one of three responses:
   credentials, `accept_status` and
   [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
   parameters entered on the page. The playground decodes and transforms what
-  the collector it was copied from fetched; one not copied from a configured
+  the collector it was copied from fetched; see below for what the page asks
+  for; one not copied from a configured
   collector, as the example, has nothing to fetch through, so *Fetch a
   target* is not offered with it. A collector run on what another fetched
   reads what an `http` collector fetches only.
@@ -5455,6 +5466,39 @@ It reads one of three responses:
   own, or by the playground, a copy of it that may have been edited.
   `/debug?static_target=<name>` opens the page with that target chosen and
   its collector chosen on the left.
+
+What the page asks for follows the request type of the collector it is
+for — the collector run, for a pasted response, the playground being an
+`http` collector, and the one a target is probed through, for a target —
+as each type says it, so a build without a type has nothing of it:
+
+| Request type | Target, as the page labels and hints it |
+| --- | --- |
+| `http` | URL: `https://host:port` |
+| `graphite` | Graphite URL: `https://graphite:8080` |
+| `grpc` | Server: `host:port, grpc://host:port or grpcs://host:port` |
+| `sql` | Database server: `host or host:<the driver's port>`, such as `host:5432`; Account for `snowflake` |
+| `dns` | Name to resolve: `example.com`, the server being `request.server` or the system's resolver; Address to resolve for `PTR` |
+| `ntp` | NTP server: `host or host:123` |
+| `tlscert` | Server: `host or host:443`, or the `starttls` protocol's port |
+| `sshfile`, `sshexec` | SSH host: `host or host:22` |
+| `localfile` | File, or Directory when `request.path` names the file or `files` reads a directory: under its root, optional |
+| `kubernetes` | none: the field is left out, and the page says *This collector names its own target.* |
+| `s3file` | Bucket: `the bucket, or s3://bucket` |
+| `redis` | Server: `host, host:port or rediss://host:port` |
+| `tcp` | Server: `host:port` |
+| `ldap` | LDAP server: `host, host:port or ldaps://host:port` |
+
+The probe parameters' placeholder lists the collector's own
+`{{param_<name>}}` placeholders, one `param_<name>=<default>` a line, with
+nothing after `=` for one without a default, and then the other parameters
+its type takes from a probe, `header_<name>` for each header it forwards;
+a collector that takes none, such as a `dns` collector without a
+placeholder, is offered no field, and the page says *This collector takes
+no probe parameters.* The page reads the form of each collector again with
+its YAML from `/debug/collector`, so it follows a reload. The target is
+probed as `/probe?debug=true` probes it, and the page says through which
+collector: *Probed through status_json, the collector chosen.*
 
 The playground may do nothing past the response, since what it is given
 runs on the server:
@@ -5495,10 +5539,14 @@ curl -s http://exporter:8080/debug/run \
 The editor reads a configured collector from `GET
 /debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
 YAML as the page shows it, `from_defaults`, the keys it took from its
-file's defaults, and at `full` `static_targets`, the static targets scraped
+file's defaults, at `full` `static_targets`, the static targets scraped
 through it, each a `name` and its `target` as the list shows it, `[]` for
-none; a name the configuration does not have is answered `404` with
-`error`.
+none, and `form`, what the page asks a run of it for: `request_type`,
+`answer`, the body's placeholder, `content_type` and `http_answer`, whether
+it asks for a `Content-Type` and for a status and headers, `target_label`
+and `target_hint`, or `no_target`, and `params`, the probe parameters'
+placeholder, left out when it takes none; a name the configuration does not
+have is answered `404` with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for
@@ -5800,16 +5848,39 @@ scrapes on every rollout. The Helm chart sets it to 5 seconds. Static targets
 keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
 through the delay.
 
-Then it stops accepting connections, lets the
+Then it stops accepting connections, cuts short the
+[static target](STATIC-TARGETS.md) scrapes in flight, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
 followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
 export of its own log within the same `otlp.timeout`,
-and exits `0`. It logs that it is shutting down, and, when the timeout runs
-out with probes still in progress, that it closed them — Prometheus records
-those as failed scrapes. Keep the timeout at least as long as the longest
-scrape timeout of the monitors that probe the exporter, so a rollout does not
-cut probes off:
+and exits `0`. The static target scrapes are not waited for: their results are
+served by this exporter alone, which is stopping, so a target that does not
+answer would only hold the shutdown up. A scrape cut short publishes nothing
+and logs nothing above `debug`; the target's last result stands, and the last
+OTLP export goes without what that scrape would have queued. Nothing else the
+exporter runs on its own holds the shutdown up: the configuration watch stops
+as the shutdown begins, and the [allocator](ALLOCATOR.md) client, which keeps
+saying the replica is shutting down, once the probes are done.
+
+The log says what the shutdown waits for, and for how long at most:
+
+```json
+{"level":"INFO","msg":"shutting down: waiting for 2 probes in progress, at most 15s; a second signal exits at once","probes":2,"other_requests":0,"shutdown_timeout":"15s"}
+{"level":"INFO","msg":"shutting down: still waiting for 1 probe in progress, 10s left","probes":1,"other_requests":0,"time_left":"10s"}
+```
+
+`other_requests` counts the requests in progress that are not probes, such as
+a scrape of the self-metrics, which the shutdown waits for as well. While it
+waits it says every 5 seconds what it still waits for; with nothing in
+progress it says `shutting down: no probes in progress; exiting`, or that it
+sends the last OTLP export, and does not wait. When the timeout runs out with
+probes still in progress it logs an error saying it gave up on them and closed
+their connections — Prometheus records those as failed scrapes — and still
+exits `0`: the exporter stopped as asked, and a probe cut off is Prometheus's
+failed scrape, not the exporter's. Keep the timeout at least as long as the
+longest scrape timeout of the monitors that probe the exporter, so a rollout
+does not cut probes off:
 
 ```sh
 prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
@@ -5818,9 +5889,16 @@ prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 In Kubernetes the pod must also be allowed to run that long: its
 `terminationGracePeriodSeconds`, 30 by default, has to cover the delay, the
 timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
-`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time
-ends the process at once — the second Ctrl-C of an impatient operator, or a
-supervisor that signals twice — without waiting for the probes or the export.
+`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
+included, ends the process at once — the second Ctrl-C of an impatient
+operator, or a supervisor that signals twice — without waiting for the probes
+or the export. It logs one line first,
+`second signal: exiting now, 1 probe in progress left unfinished`, and the
+process is then ended by that signal, as an exporter that did not catch it
+would be: a shell reports `130` for `SIGINT` and `143` for `SIGTERM`, and
+Kubernetes the same exit codes. An exporter started with the signal ignored,
+as a script's background job is with `SIGINT`, exits with that same status
+instead, a second later. `SIGTERM` and `SIGINT` do the same throughout.
 A `SIGHUP` in that time [reloads](#reloading-on-demand) as at any other, and
 does not end the process.
 

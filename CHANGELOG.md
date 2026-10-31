@@ -65,6 +65,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   refresh while the box is open. On the debug page *Run* stands level with
   the timeout box beside it, and the status page's Refresh button and
   auto-refresh selector are one height, centred on one line.
+- A `SIGTERM` or `SIGINT` no longer waits for the static target scrapes in
+  flight: they are cut short at once, logging nothing above `debug`, so a
+  target that does not answer no longer holds Ctrl-C up for all of
+  `--web.shutdown-timeout`. The last OTLP export goes without what those
+  scrapes would have queued. Probes in progress are still waited for, and the
+  log now says how many, for how long at most, what is still awaited every 5
+  seconds, and what it gave up on when the timeout runs out. A second signal
+  logs `second signal: exiting now, …` before the process ends by it, as
+  before. The line the shutdown begins with now reads
+  `shutting down: waiting for 1 probe in progress, at most 15s; …`, or
+  `shutting down: no probes in progress; exiting`.
 
 ### New
 
@@ -110,6 +121,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- The debug page asks for what the chosen collector's request type takes,
+  not for an HTTP target: the target as the type names it, with an example
+  of its forms (`SSH host`, `host or host:22`; `Name to resolve`,
+  `example.com`), no target field for a collector that names its own
+  (`kubernetes`), the collector's own `{{param_...}}` parameters with their
+  defaults, or a note that it takes none, and, for a pasted response, what
+  the type's answer is, with a status and headers only for `http` and
+  `graphite`. A response pasted for a `sql` collector is read as its rows,
+  a JSON list of objects, where it gave no series before. The collectors
+  page labels and hints each target the same way.
 - The problems of a one-line block (`defaults: {...}`, a collector's
   `request`, `otlp`, `web.basic_auth`) are said in the order of the keys on
   the line.

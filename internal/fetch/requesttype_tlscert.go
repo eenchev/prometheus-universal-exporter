@@ -67,7 +67,8 @@ func init() {
 		TargetFields: []string{"timeout"},
 		Requester:    tlsCertRequester{},
 		JSONAnswer:   true,
-		TargetHint:   func(*model.Collector) string { return "host or host:port" },
+		TargetHint:   tlsCertTargetHint,
+		AnswerHint:   "Paste the handshake as the JSON document the exporter makes of it, as the Response of a run shows it",
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},
@@ -115,6 +116,17 @@ func (tlsCertRequester) Method(*model.Collector, RequestOverrides) string { retu
 // Display renders a tlscert target for logs and labels.
 func (tlsCertRequester) Display(target string) string {
 	return tlsCertDisplay(target)
+}
+
+// tlsCertTargetHint is what the collectors page and the debug page say of a
+// target: host or host:port, the port the one a target that names none is
+// reached on, 443 or request.starttls's protocol's.
+func tlsCertTargetHint(c *model.Collector) (string, string) {
+	port := tlsCertDefaultPort
+	if p, ok := tlsCertStartTLSPorts[c.Request.StartTLS]; ok {
+		port = p
+	}
+	return "Server", "host or host:" + port
 }
 
 // tlsCertMethod is the http_method label of a handshake.

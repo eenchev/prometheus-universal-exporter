@@ -625,7 +625,7 @@ func TestTheDebugPageIsSelfContained(t *testing.T) {
 		}
 	}
 	for _, found := range regexp.MustCompile(`https?://[^"\s<]*`).FindAllString(page, -1) {
-		if found != landingDocs && found != "http://host:port" {
+		if found != landingDocs && found != "https://host:port" {
 			t.Errorf("the page names %s", found)
 		}
 	}

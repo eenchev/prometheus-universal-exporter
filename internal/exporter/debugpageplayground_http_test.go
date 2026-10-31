@@ -70,7 +70,7 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 		`<p class="note" id="fetched-through"></p>`)
 	chosen := getPage(t, server, "/debug?collector=rooms")
 	requireContains(t, chosen, `<input type="radio" name="mode" value="fetch" id="mode-fetch"> Fetch a target`,
-		`<p class="note" id="fetch-unavailable" hidden>`, `<p class="note" id="fetched-through">Fetched through rooms, the collector chosen.</p>`)
+		`<p class="note" id="fetch-unavailable" hidden>`, `<p class="note" id="fetched-through">Probed through rooms, the collector chosen.</p>`)
 	script := debugPageScript(chosen)
 	// The playground's fetch names the collector it was copied from, which
 	// Edit a copy remembers, kept with the playground between visits; the
@@ -82,7 +82,7 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 		`store.setItem("debug.copied", copiedFrom);`,
 		`const fetcher = () => $("configured").value || copiedFrom;`,
 		`radio.disabled = through === "";`,
-		`"Fetched through " + through + ", the collector this playground was copied from."`)
+		`"Probed through " + through + ", the collector this playground was copied from."`)
 	if n := strings.Count(script, "request_from"); n != 1 {
 		t.Errorf("the script sets request_from %d times, want once, from copiedFrom", n)
 	}
@@ -95,7 +95,7 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 func TestTheDebugPagesBodyFitsTheCollectorChosen(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
 	body := regexp.MustCompile(`<textarea id="body"[^>]*>([^<]*)</textarea>`)
-	attributes := `<textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="Paste what the target answers" data-example="` + html.EscapeString(debugExampleBody) + `">`
+	attributes := `<textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="Paste what the target answers: the body, with its Content-Type, status and headers" data-example="` + html.EscapeString(debugExampleBody) + `">`
 	playground := getPage(t, server, "/debug")
 	requireContains(t, playground, attributes)
 	if got := body.FindStringSubmatch(playground); got == nil || html.UnescapeString(got[1]) != debugExampleBody {

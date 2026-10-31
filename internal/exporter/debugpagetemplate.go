@@ -34,6 +34,17 @@ type debugPage struct {
 	StaticTargets []debugStaticTarget
 	StaticTarget  string
 	StaticNote    string
+	// Forms are what the page asks a run of each collector to fill, and
+	// Form that of the collector it opens with: Chosen, or the playground.
+	Forms debugForms
+	Form  debugForm
+}
+
+// debugForms are the forms of the playground and of each configured
+// collector by name (debugForm), which the page's script reads.
+type debugForms struct {
+	Playground debugForm            `json:"playground"`
+	Collectors map[string]debugForm `json:"collectors"`
 }
 
 // debugExample and debugExampleBody are what the page starts with: a
@@ -144,24 +155,32 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 {{- end}}
 <div data-mode="paste">
 <div class="row">
-<div><label for="content-type">Content-Type</label>
+<div id="content-type-part"{{if not .Form.ContentType}} hidden{{end}}><label for="content-type">Content-Type</label>
 <input id="content-type" type="text" value="application/json" autocomplete="off"></div>
-<div class="narrow"><label for="status">Status</label>
+<div class="narrow" id="status-part"{{if not .Form.HTTPAnswer}} hidden{{end}}><label for="status">Status</label>
 <input id="status" type="number" min="100" max="599" value="200"></div>
 </div>
+<div id="headers-part"{{if not .Form.HTTPAnswer}} hidden{{end}}>
 <label for="headers">Other headers, one <code>Name: value</code> a line</label>
 <textarea id="headers" rows="2" spellcheck="false" autocomplete="off"></textarea>
+</div>
 <label for="body">Body</label>
-<textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="Paste what the target answers" data-example="{{.ExampleBody}}">{{if not .Chosen}}{{.ExampleBody}}{{end}}</textarea>
+<textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="{{.Form.Answer}}" data-example="{{.ExampleBody}}">{{if not .Chosen}}{{.ExampleBody}}{{end}}</textarea>
 </div>
 {{- if .Full}}
 <div data-mode="fetch" hidden>
-<p class="note">The target is fetched as <code>/probe?debug=true</code> fetches it: through a configured collector's request, target policy and credentials. The playground makes no request of its own; it reads what the collector it was copied from fetched.</p>
-<p class="note" id="fetched-through">{{if .Chosen}}Fetched through {{.Chosen}}, the collector chosen.{{end}}</p>
-<label for="target">Target</label>
-<input id="target" type="text" placeholder="http://host:port" autocomplete="off">
+<p class="note">The target is probed as <code>/probe?debug=true</code> probes it: through a configured collector's request, target policy and credentials. The playground makes no request of its own; it reads what the collector it was copied from answered.</p>
+<p class="note" id="fetched-through">{{if .Chosen}}Probed through {{.Chosen}}, the collector chosen.{{end}}</p>
+<div id="target-part"{{if .Form.NoTarget}} hidden{{end}}>
+<label for="target" id="target-label">{{or .Form.TargetLabel "Target"}}</label>
+<input id="target" type="text" placeholder="{{.Form.TargetHint}}" autocomplete="off">
+</div>
+<p class="note" id="no-target"{{if not .Form.NoTarget}} hidden{{end}}>This collector names its own target.</p>
+<div id="params-part"{{if not .Form.Params}} hidden{{end}}>
 <label for="params">Probe parameters, one <code>name=value</code> a line</label>
-<textarea id="params" rows="3" spellcheck="false" autocomplete="off" placeholder="param_tenant=a"></textarea>
+<textarea id="params" rows="3" spellcheck="false" autocomplete="off" placeholder="{{.Form.Params}}"></textarea>
+</div>
+<p class="note" id="no-params"{{if .Form.Params}} hidden{{end}}>This collector takes no probe parameters.</p>
 </div>
 <div data-mode="static" hidden>
 <p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, through the collector chosen, or the one the playground was copied from, and read by the collector chosen. Nothing is published.</p>
@@ -209,6 +228,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 </details>
 </section>
 </main>
+<script type="application/json" id="forms">{{.Forms}}</script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -258,6 +278,33 @@ const showMode = () => {
 // chosen, or the one the playground was copied from; the playground makes
 // no request of its own, so without either nothing can be fetched.
 const fetcher = () => $("configured").value || copiedFrom;
+// What a run asks for follows the request type of the collector it is for
+// (debugForm): the one run reads what is pasted, the playground being an
+// http collector, and a target is probed through fetcher().
+const forms = JSON.parse($("forms").textContent);
+const formOf = (name) => (name !== "" && forms.collectors[name]) || forms.playground;
+const readerForm = () => formOf($("configured").value);
+function showForm() {
+  const reads = readerForm();
+  $("content-type-part").hidden = !reads.content_type;
+  $("status-part").hidden = !reads.http_answer;
+  $("headers-part").hidden = !reads.http_answer;
+  $("body").placeholder = reads.answer;
+  if (!$("target")) return;
+  const through = formOf(fetcher());
+  $("target-part").hidden = !!through.no_target;
+  $("no-target").hidden = !through.no_target;
+  $("target-label").textContent = through.target_label || "Target";
+  $("target").placeholder = through.target_hint || "";
+  $("params-part").hidden = !through.params;
+  $("no-params").hidden = !!through.params;
+  $("params").placeholder = through.params || "";
+}
+// A collector read again from /debug/collector brings its form with it,
+// which a reload may have changed.
+const learnForm = (name, answer) => {
+  if (answer && answer.form) { forms.collectors[name] = answer.form; showForm(); }
+};
 function showFetch() {
   const radio = $("mode-fetch");
   if (!radio) return;
@@ -266,8 +313,8 @@ function showFetch() {
   $("fetch-unavailable").hidden = through !== "";
   if (radio.disabled && radio.checked) choose("paste");
   $("fetched-through").textContent = through === "" ? "" : $("configured").value !== ""
-    ? "Fetched through " + through + ", the collector chosen."
-    : "Fetched through " + through + ", the collector this playground was copied from.";
+    ? "Probed through " + through + ", the collector chosen."
+    : "Probed through " + through + ", the collector this playground was copied from.";
   showMode();
 }
 // The static targets offered are those scraped through fetcher(), read from
@@ -288,7 +335,7 @@ async function showStaticTargets() {
       const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
       const answer = await response.json();
       if (answer.error) note = answer.error;
-      else targets = answer.static_targets || [];
+      else { targets = answer.static_targets || []; learnForm(through, answer); }
     } catch (error) {
       note = "The static targets could not be read: " + error.message;
     }
@@ -327,6 +374,7 @@ async function showCollector() {
     : copiedFrom !== "" ? "Playground, a copy of " + copiedFrom + ": the YAML of a collector, which runs"
     : "Playground: the YAML of a collector, which runs";
   showFetch();
+  showForm();
   showStaticTargets();
   fitBody();
   if (name === "") { area.value = written; return; }
@@ -339,7 +387,7 @@ async function showCollector() {
     const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
     const answer = await response.json();
     if (answer.error) text = "# " + answer.error;
-    else configuredYAML.set(name, text = answer.yaml);
+    else { configuredYAML.set(name, text = answer.yaml); learnForm(name, answer); }
   } catch (error) {
     text = "# The configuration could not be read: " + error.message;
   }
@@ -390,16 +438,20 @@ async function run() {
   else request.collector = $("collector").value;
   try {
     if (mode() === "fetch") {
+      // A field the collector's form leaves out is sent empty: a collector
+      // that names its own target is probed with none.
+      const through = formOf(fetcher());
       if (request.collector !== undefined) request.request_from = copiedFrom;
-      request.target = $("target").value;
-      request.params = lines($("params").value, "=");
+      request.target = through.no_target ? "" : $("target").value;
+      request.params = through.params ? lines($("params").value, "=") : {};
     } else if (mode() === "static") {
       request.static_target = $("static-target").value;
     } else {
+      const reads = readerForm();
       request.body = $("body").value;
-      request.content_type = $("content-type").value;
-      request.status = Number($("status").value) || 0;
-      request.headers = lines($("headers").value, ":");
+      request.content_type = reads.content_type ? $("content-type").value : "";
+      request.status = reads.http_answer ? Number($("status").value) || 0 : 0;
+      request.headers = reads.http_answer ? lines($("headers").value, ":") : {};
     }
   } catch (error) {
     statusLine.className = "status failed";

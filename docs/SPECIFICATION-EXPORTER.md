@@ -8076,7 +8076,10 @@ Recommended behavior:
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
   that probes a target through it and shows the answer in place. The form MUST
-  offer a field for the target, required when the request type needs one; a
+  offer a field for the target, required when the request type needs one,
+  labelled and hinted as its request type names a target and shows its forms
+  (§ 42.17), and disabled with the hint `none: leave it out` for a type that
+  takes none; a
   timeout, 10 seconds to start with, sent as the
   `X-Prometheus-Scrape-Timeout-Seconds` header so the probe answers with its
   own error, with the page giving up a few seconds after it; for each
@@ -10046,12 +10049,34 @@ garbage: such a limit leaves the Go heap almost nothing.
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
 probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
-refused as a malformed command line. When it runs out, the connections still
-open MUST be closed, which MUST be logged with the timeout, before the last
-OTLP export (§ 42.1a) and a clean exit.
-The line logged as the graceful shutdown begins MUST name the last OTLP
+refused as a malformed command line. The wait MUST be for the requests to the
+exporter in progress alone — the probes, and any other request being
+answered — and not for work the exporter started on its own: the static
+target scrapes in flight are cut short as it begins (below), and the
+configuration watch, the reload loop and the Python worker reaping stop then
+and are not waited for. When it runs out, the connections still
+open MUST be closed, which MUST be logged at `error` with the timeout and the
+number of probes and of other requests given up on, before the last
+OTLP export (§ 42.1a) and a clean exit, `0`.
+The line logged as the graceful shutdown begins MUST say what it waits for —
+the number of probes in progress, and of other requests when there are any,
+in words and as the attributes `probes` and `other_requests` — and the
+timeout, or, with nothing in progress, that there is nothing to wait for, in
+which case the exporter MUST NOT wait. It MUST name the last OTLP
 export only when OTLP export is enabled with an endpoint, the only case in
-which one is sent.
+which one is sent. While the wait goes on, the exporter MUST log, every 5
+seconds and no more often, what it still waits for and the time left, so a
+shutdown run from a terminal never looks hung.
+
+A second `SIGTERM` or `SIGINT`, from the first signal on, the delay below
+included, MUST end the process at once, without waiting for the probes or
+the last OTLP export, after logging one line that says so and how many probes
+and other requests it leaves unfinished. The process MUST then end by that
+signal's default action, so it reports itself killed by the signal (a shell's
+`130` for `SIGINT`, `143` for `SIGTERM`) rather than exiting `0`; a process
+started with that signal ignored, which the default action does not end, MUST
+exit with that status, 128 and the signal's number, within a second. `SIGTERM` and
+`SIGINT` MUST behave the same throughout.
 
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
@@ -10062,17 +10087,20 @@ sending probes before the listener closes rather than having them refused.
 Connections MUST NOT be kept alive past their current request during the
 delay, so clients reconnect to another instance. The exporter MUST log the
 delay when it starts one. A second signal during the delay MUST end the process
-at once, as during the shutdown timeout. A negative value MUST be refused as a
+at once, as during the shutdown timeout, with the same line. A negative value MUST be refused as a
 malformed command line.
 
 Static targets (§ 42.14) MUST keep being scraped during the delay, while their
 endpoint is still served. When the delay ends no static target scrape MUST
 start, and one waiting for a slot MUST give up without logging advice about
 `concurrency`; one that comes by a slot as the delay ends, or after, MUST NOT
-begin either. Those in flight MUST be allowed to finish within
-`--web.shutdown-timeout`, and publish as usual. One the timeout cuts short
-MUST publish nothing — on the endpoint or over OTLP — and MUST NOT be logged as
-a failure: the target did not fail, so it MUST NOT be reported down, and its
+begin either. Those in flight MUST be cut short as the delay ends, and MUST NOT
+be waited for: what they would publish is served by this process alone, which
+is stopping, and a target that does not answer would hold the shutdown for
+all of `--web.shutdown-timeout`. One cut short
+MUST publish nothing — on the endpoint or over OTLP, so the last OTLP export
+goes without it — and MUST NOT be logged as
+a failure, or at any level above `debug`: the target did not fail, so it MUST NOT be reported down, and its
 last result stands.
 
 `--version` prints the build information of § 22.0d and exits 0.
@@ -29458,13 +29486,38 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
 - `TestALongTextIsPreviewedByItsStart`: a text of 160 characters (`é` each) or three lines is not cut; one of 161 characters is previewed as its first 160 and `…`, one of four lines as its first three and `…`, the whole text kept.
 - `TestTheStatusPageShowsALongErrorsStartAndTheWholeOne`: a static target's error past 160 characters, quoting `<script>alert(1)</script>`, is shown in its cell as `<details class="long">` with the summary `aria-label="Show the whole error"`, its preview and the whole error in `<pre class="whole">`, both escaped and no markup; a short error, `received HTTP status 500`, is shown whole with no `<details>`.
-- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*; `?format=fragment` has the `<details>` and no dialog.
+- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*, without a heading and labelled `The whole text`, the script setting the label to the kind of text it opens; `?format=fragment` has the `<details>` and no dialog.
 - `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh`: the script listens for clicks on the content element for `details.long > summary`, puts the whole text in the dialog with `textContent`, opens it with `showModal()`, skips a refresh while it is open (`if (inFlight || whole.open) return;`), closes it on a click on the backdrop, and on its close gives focus back to the control and calls `schedule()`; its one `innerHTML` is the swap of the fragment.
 - `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
 - `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
 
 - `TestTheLogExportsLastRecordsAreMutedUnderItsResult`: the log export's last export says its result, and under it, muted as the metrics export's counts are, `1 log record`.
 - `TestTheStatusPagesShortColumnsKeepTheirWordsWhole`: the status page's headers do not wrap, its cells keep their words whole but for the target's and the error's, which break anywhere within bounds, and a facts table's error cell sets no least width, so a phone shows the OTLP sections without scrolling sideways.
+
+## 34.240 The debug page and the collectors page ask for what each request type takes
+
+- `TestEveryBuiltRequestTypeSaysWhatItsTargetAndItsAnswerAre` (fetch, every build): every request type built says what a pasted response of it is, and either takes no target or names one with a label and a hint, which hints a URL for `http` and `graphite` alone.
+- `TestARequestTypeMustSayWhatItsTargetAndItsAnswerAre` (fetch): registering a type without a target hint and without `NoTarget`, or without an answer hint, panics, and the type is not in `RequestTypes`.
+- `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`: `/debug?collector=weather`, an `http` collector with `{{param_city:sofia}}`, `{{param_days}}` and `forward_headers: [X-Tenant]`, and `/debug/collector?name=weather` give the form `URL`, `https://host:port`, the parameters `param_city=sofia`, `param_days=` and `also: method, path, body, insecure_skip_verify, follow_redirects, enable_http2, retry_attempts, retry_backoff, header_X-Tenant`, and a pasted body with its `Content-Type`, status and headers; the page says `Probed through weather, the collector chosen.` and that the target is probed as `/probe?debug=true` probes it; the playground shows the `Content-Type`, status and headers.
+- `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`: a postgres collector with `{{param_min:0}}` is asked for `Database server`, `host or host:5432` and `param_min=0`, and of a pasted response for the rows as JSON alone, its `Content-Type`, status and headers hidden.
+- `TestTheDebugPageReadsAPastedSQLResponseAsTheRows`: rows pasted for that collector, with a `null` column and `true`, give `demo_jobs{state="open"} 3`, `{state="done"} 40` and `{state="late"} 1`; an object, a row with an object for a value, a second list after the first and `[null]` are refused `400`, saying to paste a list of objects.
+- `TestTheDebugPageAsksADNSCollectorForTheNameToResolve`: a dns collector of `A` is asked for `Name to resolve`, `example.com`, one of `PTR` for `Address to resolve`, `192.0.2.1 or 2001:db8::1`; neither takes probe parameters, which the page says in place of the field, nor shows a `Content-Type`, status or headers.
+- `TestTheDebugPageProbesAKubernetesCollectorWithNoTarget`: a kubernetes collector's form has no target, the page hiding the field and saying `This collector names its own target.` and `This collector takes no probe parameters.`, its script sending an empty target for it; a run with an empty target is made, answered `200` with a report, not refused.
+- `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`: localfile collectors are asked for `Directory`, `a directory under its root that holds app.prom (optional)` with `path` among their parameters, for `Directory`, `a directory under its root (optional)` reading `files`, and for `File`, `a file under its root, such as app.prom (optional)`; a pasted body is the file's content, with a `Content-Type` and no status or headers.
+- `TestTheDebugPageAsksAnSSHFileCollectorForTheHost`: an sshfile collector is asked for `SSH host`, `host or host:22`, its parameters `also: path`, and of a pasted response for the file's content.
+- `TestTheCollectorsPageHasAProbeFormPerCollector`, `TestTheCollectorsPageNamesADNSTarget`, `TestTheCollectorsPageShowsAGraphiteTarget` and `TestTheCollectorsPageHintsALocalfileTarget` (changed): the collectors page labels the target `URL` with `https://host:port`, `Name to resolve` with `example.com`, `Graphite URL` with `https://graphite:8080`, and `Directory` with `a directory under its root that holds batch.prom (optional)`; the kubernetes test's form offers the target disabled.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`, `TestTheDebugPagesBodyFitsTheCollectorChosen`, `TestTheDebugPageIsSelfContained` and `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen` (changed): the note reads `Probed through …`, the body's placeholder is the http type's answer hint, the page names no URL but `https://host:port`, and the script takes the form `/debug/collector` answers.
+
+## 34.241 The shutdown cuts static target scrapes short and says what it waits for
+
+- `TestAShutdownDoesNotWaitForStaticTargetScrapes`: with a static target on a listener that accepts the connection and never answers, its scrape in flight, an interval of a minute and `--web.shutdown-timeout=15s`, a `SIGINT` ends the exporter with exit status `0` within 5 seconds, where waiting for the scrape took the whole 15; the log says `shutting down: no probes in progress; exiting` with `probes` `0`, and has no `ERROR` or `WARN` line.
+- `TestAShutdownSaysWhatItWaitsFor`: with a probe of a target that never answers in progress, a static target scrape on a silent listener in flight and `--web.shutdown-timeout=7s`, a `SIGINT` exits `0` no sooner than 7 seconds, having logged `shutting down: waiting for 1 probe in progress, at most 7s; a second signal exits at once` with `probes` `1`, `other_requests` `0` and the timeout, exactly one `shutting down: still waiting for 1 probe in progress, <n>s left` line with `time_left`, and the `ERROR` line `shutting down: gave up waiting for 1 probe in progress; --web.shutdown-timeout ran out and their connections are closed` with `probes` `1`; no `static target scrape failed`.
+- `TestASecondSignalInTheShutdownDelayExitsAtOnce`: a second `SIGTERM` in a `--web.shutdown-delay` held open ends the process killed by `SIGTERM`, having logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `terminated`.
+- `TestASecondSignalEndsAnExporterStartedWithItIgnored`: an exporter started with `SIGINT` ignored, through a shell's `trap "" INT`, with a probe in progress and `--web.shutdown-timeout=10m`, exits with status `130` on a second `SIGINT`, having logged the second signal, where it used to ignore it and wait out the probe.
+- `TestSecondSignalExitsAtOnce` (changed): the process the second `SIGINT` ends is killed by `SIGINT`, and logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `interrupt` and `probes` `1` first.
+- `TestTheShutdownSaysWhatItWaitsFor`: the line the shutdown begins with is `shutting down: waiting for 1 probe in progress, at most 15s; a second signal exits at once` for one probe, `2 probes`, `2 probes and 1 other request` and `3 requests` for those counts, and `shutting down: no probes in progress; exiting` for none.
+- `TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent` (changed): so with nothing in progress as with a probe.
+- `TestShutdownTimeoutBoundsTheWait`, `TestTheExporterForwardsItsOwnLogOverOTLP`, `TestOTLPExportsThroughTheShutdownDelay` and the other shutdown tests (changed): they look for the new wording of the shutdown's first line and of its giving up.
 
 # 35. Documentation requirements
 
@@ -31838,7 +31891,8 @@ then one of the OTLP export. Of the static targets:
   MUST be put in the dialog with `textContent`, never parsed as HTML; the
   dialog MUST close on its Close button, on Esc and on a click on its
   backdrop, MUST give focus back to the control that opened it, and MUST say
-  the time its text is of. No refresh MUST swap the content while the
+  the time its text is of. It MUST have no heading, its label naming the
+  kind of text it holds (`The whole error`) for a screen reader. No refresh MUST swap the content while the
   dialog is open; closing it MUST resume the refresh, at once if one fell
   due. `?format=fragment` MUST have the `<details>` and no dialog, and the
   JSON MUST be as it is, every value whole.
@@ -33272,13 +33326,56 @@ authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
 only, `static_targets`, the static targets in force scraped through that
 collector, each with its `name` and its `target` shown as the status page
 shows it (§ 42.14a), with any credential in it withheld, an empty list when
-there is none; a name the configuration in force does not have `404` with
+there is none; and `form`, what the page asks a run of the collector for
+(below); a name the configuration in force does not have `404` with
 `error`.
+
+What the page asks for MUST follow the request type of the collector it is
+for, as the type says it in its own registration, so a type a build leaves
+out takes its words with it and every type MUST say them (a type that does
+not MUST fail to build): the collector run reads what is pasted, the
+playground being an `http` collector, and a target is probed through the
+collector a target would be fetched through. The page MUST hold the form of
+the playground and of each configured collector, and MUST take the one
+`/debug/collector` answers with a collector when it reads it again:
+
+- the target MUST be asked for by its type's name for it and an example of
+  its forms — `URL` and `https://host:port` for `http`, `Name to resolve` and
+  `example.com` for `dns`, `Database server` and `host or host:<the
+  driver's port>` for `sql`, `SSH host` and `host or host:22` for `sshfile`
+  and `sshexec`, `host or host:123` for `ntp`, `host or host:443` (or the
+  `starttls` protocol's port) for `tlscert` — said to be optional where the
+  type may leave it out (`localfile`). A collector of a type that takes no
+  target (`kubernetes`) MUST be offered no target field, the page saying
+  `This collector names its own target.`, and its run MUST send an empty
+  target, which is not refused for want of one;
+- the probe parameters MUST be hinted as the collector's own `{{param_<name>}}`
+  placeholders, one `param_<name>=<default>` a line, nothing after `=` for
+  one without a default, followed by the other parameters its type takes
+  from a probe, `header_<name>` for each header it forwards, `timeout` left
+  out; a collector that takes none MUST be offered no field, the page saying
+  `This collector takes no probe parameters.`;
+- a pasted response's body MUST be asked for as what an answer of the type
+  is — what the target answers for `http`, the rows as JSON for `sql`, the
+  JSON document the exporter makes for the types that make one, the file's
+  content for the types that read files — with a status and headers only
+  for a type whose answers are HTTP responses (`http`, `graphite`), and a
+  `Content-Type` only where it can choose the decoder: not for a type that
+  makes its answer, reads rows or has a decoder of its own. The page MUST
+  send no status, headers or `Content-Type` it does not ask for;
+- the page MUST NOT say that a target of another type than `http` is
+  fetched: it is probed as `/probe?debug=true` probes it, through the
+  collector named (`Probed through <name>, …`).
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a
 body over fails as a fetched one does, the decode, the transform and the
-validation under the collector's limits. A fetch, at `full` only, MUST be
+validation under the collector's limits. A response pasted for a `sql`
+collector MUST be read as its rows, as its driver's are handed on (§ 5.1,
+`sql`): a JSON list of objects, each a row's columns by name, a whole
+number an integer, `true` and `false` 1 and 0, and `null` leaving the
+column out of its row; anything else, and a value that is a list or an
+object, MUST be refused with `400` saying what to paste. A fetch, at `full` only, MUST be
 made exactly as a debug probe of the collector that fetches would make it:
 the configured collector run, or the one `request_from` names, which a
 written collector MUST name (`400` otherwise) — through its request block,

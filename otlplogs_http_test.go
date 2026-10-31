@@ -44,7 +44,7 @@ func TestTheExporterForwardsItsOwnLogOverOTLP(t *testing.T) {
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 	exported := logs.String()
-	for _, line := range []string{"shutting down: finishing the probes in progress and sending the last OTLP export", "sending the last OTLP export before exiting"} {
+	for _, line := range []string{"shutting down: waiting for 1 probe in progress, at most 1s, then sending the last OTLP export", "sending the last OTLP export before exiting"} {
 		if !strings.Contains(exported, `"stringValue":"`+line) {
 			t.Errorf("the line %q of the shutdown was not exported:\n%s", line, exported)
 		}

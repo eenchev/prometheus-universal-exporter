@@ -219,6 +219,12 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Requester:    @name@Requester{},
+		// TargetHint names what a target of the type is and shows its
+		// forms, as the collectors page and the debug page ask for one, or
+		// NoTarget says it takes none; AnswerHint says what a response of
+		// it pasted on the debug page is. Both are required. TODO(@name@)
+		TargetHint: func(*model.Collector) (string, string) { return "Server", "host:port" },
+		AnswerHint: "Paste the JSON document the exporter makes of the answer, as the Response of a run shows it",
 		// UnusedParams words the refusal of a probe parameter nothing
 		// uses, naming where a placeholder can stand: the label values
 		// alone until a key of the type takes one, which joins them here
@@ -229,8 +235,7 @@ func init() {
 		// The optional hooks and the settings of what the rest of the
 		// exporter knows of the type are left at their zero values, which
 		// say the type has none of them (RequestType): Stage, the stage
-		// named in logs, "http" unset; TargetHint and NoTarget, what the
-		// collectors page says of a target; JSONAnswer, Decoder, Rows and
+		// named in logs, "http" unset; JSONAnswer, Decoder, Rows and
 		// FileExtensions, how its answer is decoded; Families, its own
 		// self-metric families; SchemaRule, its required keys in the
 		// configuration schema; Templates, the keys that take a

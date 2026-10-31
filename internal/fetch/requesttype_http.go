@@ -79,7 +79,8 @@ func init() {
 			}
 			return checkHTTPTargetTLS(t)
 		},
-		TargetHint: func(*model.Collector) string { return "http://host:port" },
+		TargetHint: func(*model.Collector) (string, string) { return "URL", "https://host:port" },
+		AnswerHint: "Paste what the target answers: the body, with its Content-Type, status and headers",
 		// The files of a login and of a target's own tls block; the
 		// tokens request.login keeps, and its counts (login.go).
 		CheckFiles:       checkHTTPFiles,

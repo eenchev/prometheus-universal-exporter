@@ -433,7 +433,6 @@ form.refresh a.button { color: var(--on-accent); background: var(--accent); bord
 dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
 dialog#whole::backdrop { background: rgb(0 0 0 / 0.5); }
 dialog#whole .box { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 34px); padding: 16px; }
-dialog#whole h2 { margin: 0; }
 dialog#whole pre { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 dialog#whole .buttons { display: flex; justify-content: flex-end; gap: 8px; }
 dialog#whole button { height: 32px; padding: 0 14px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
@@ -460,9 +459,8 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <div id="status-content">
 {{- template "content" .}}
 </div>
-<dialog id="whole" aria-labelledby="whole-title">
+<dialog id="whole" aria-label="The whole text">
 <div class="box">
-<h2 id="whole-title">The whole text</h2>
 <p class="meta" id="whole-as-of"></p>
 <pre id="whole-text"></pre>
 <div class="buttons"><button type="button" id="whole-copy" hidden>Copy</button><button type="button" id="whole-close">Close</button></div>
@@ -565,7 +563,9 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
     if (!summary || typeof whole.showModal !== "function") return;
     event.preventDefault();
     opener = summary;
-    $("whole-title").textContent = "The whole " + summary.dataset.kind;
+    // The dialog has no heading: the text speaks for itself, and a screen
+    // reader is told what it is by the dialog's label.
+    whole.setAttribute("aria-label", "The whole " + summary.dataset.kind);
     $("whole-as-of").textContent = "As of " + dataClock();
     $("whole-text").textContent = summary.parentElement.querySelector("pre.whole").textContent;
     copy.textContent = "Copy";

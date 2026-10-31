@@ -355,8 +355,98 @@ type debugPageCollector struct {
 	Name, RequestType string
 }
 
+// debugForm is what the page asks for a run of a collector, as its request
+// type says it, so a form never asks a collector of another type for what
+// an http collector takes: for a pasted response, the body, with a
+// Content-Type where the decoder is left to choose by it, and a status and
+// headers for an answer that is an HTTP response (fetch.AnswersHTTP); for a
+// target, what the type takes as one (fetch.TargetPromptOf), or nothing for
+// a type that takes none, and the collector's probe parameters
+// (debugParamsHint). The page holds the form of each configured collector
+// and of the playground, and GET /debug/collector answers it again with the
+// collector, so it follows a reload.
+type debugForm struct {
+	RequestType string `json:"request_type"`
+	// Answer is the body's placeholder (fetch.AnswerHintOf).
+	Answer      string `json:"answer"`
+	ContentType bool   `json:"content_type,omitempty"`
+	HTTPAnswer  bool   `json:"http_answer,omitempty"`
+	TargetLabel string `json:"target_label,omitempty"`
+	TargetHint  string `json:"target_hint,omitempty"`
+	NoTarget    bool   `json:"no_target,omitempty"`
+	// Params is the probe parameters' placeholder, "" for a collector that
+	// takes none.
+	Params string `json:"params,omitempty"`
+}
+
+// debugFormOf is the form the page asks a run of c to fill.
+func debugFormOf(c *model.Collector) debugForm {
+	f := debugForm{RequestType: c.Request.Type, Answer: fetch.AnswerHintOf(c), HTTPAnswer: fetch.AnswersHTTP(c), Params: debugParamsHint(c)}
+	if f.Answer == "" {
+		f.Answer = "Paste what the target answers"
+	}
+	// The decoder of a type that makes its answer, or reads rows, is its
+	// own: a Content-Type would choose nothing.
+	if rt := fetch.RequestTypes[c.Request.Type]; rt == nil || f.HTTPAnswer || !rt.JSONAnswer && !rt.Rows && rt.Decoder == "" {
+		f.ContentType = true
+	}
+	required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
+	f.NoTarget = fetch.TargetPromptOf(c).None
+	if !f.NoTarget {
+		f.TargetLabel, f.TargetHint = targetHint(c, required)
+	}
+	return f
+}
+
+// playgroundForm is the form of the playground, a collector of the type the
+// debug page writes (onDebugPage), http's; a build without one has a
+// playground that runs nothing, whose form asks for a response as http's.
+func playgroundForm() debugForm {
+	for _, name := range fetch.BuiltRequestTypes() {
+		if onDebugPage(name) {
+			return debugFormOf(&model.Collector{Request: model.RequestConfig{Type: name}})
+		}
+	}
+	return debugForm{Answer: "Paste what the target answers", ContentType: true, HTTPAnswer: true}
+}
+
+// debugParamsHint is the placeholder of the probe parameters of c: a line
+// param_<name>=<default> of each {{param_<name>}} placeholder of its request
+// and its labels (fetch.RequestParams), with nothing after = for one
+// without a default, and the other parameters its type takes from a probe,
+// header_<name> those of the headers it forwards; "" when it takes none.
+// timeout is left out: the page's own timeout bounds the run.
+func debugParamsHint(c *model.Collector) string {
+	var lines []string
+	for _, p := range fetch.RequestParams(c) {
+		lines = append(lines, p.Name+"="+p.Default)
+	}
+	var others []string
+	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
+		for _, key := range rt.Overrides {
+			switch {
+			case key == "timeout" || key == fetch.PathParamPrefix:
+				continue
+			case key == "header_":
+				for _, name := range forwardableHeaders(c.Request) {
+					others = append(others, "header_"+name)
+				}
+				continue
+			case rt.CheckOverride != nil && rt.CheckOverride(c, key) != nil:
+				continue
+			}
+			others = append(others, key)
+		}
+	}
+	if len(others) > 0 {
+		lines = append(lines, "also: "+strings.Join(others, ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
+	page.Forms = debugForms{Playground: playgroundForm(), Collectors: map[string]debugForm{}}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).
 	followed := s.reconcile()
@@ -376,6 +466,7 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
+		page.Forms.Collectors[c.Name] = debugFormOf(c)
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
 		if chosen != "" && chosen == c.Name && page.Chosen == "" {
@@ -385,6 +476,10 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", err)
 			}
 		}
+	}
+	page.Form = page.Forms.Playground
+	if page.Chosen != "" {
+		page.Form = page.Forms.Collectors[page.Chosen]
 	}
 	if page.Full {
 		page.StaticTargets = debugStaticTargets(followed, page.Chosen)
@@ -614,6 +709,16 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			status = http.StatusOK
 		}
 		p.pasted = &fetch.HTTPResponse{StatusCode: status, Headers: headers, Body: []byte(*req.Body), Collector: c.Name}
+		if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
+			// A sql collector's answer is the rows its driver read, which
+			// its decoder hands on as they are: what is pasted is those
+			// rows, as a run's response shows them.
+			rows, columns, err := pastedRows(*req.Body)
+			if err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("collector %q is a %s collector, whose answer is the rows its statement returned: paste them as JSON, a list of objects of each row's columns by name, such as [{\"state\": \"open\", \"jobs\": 3}]; %w", c.Name, c.Request.Type, err)
+			}
+			p.pasted.Rows, p.pasted.Columns = rows, columns
+		}
 		p.source = "a pasted response"
 		return p, notes, 0, nil
 	}
@@ -642,6 +747,63 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		}
 	}
 	return p, notes, 0, nil
+}
+
+// pastedRows reads a pasted body as the rows of a statement: a JSON list of
+// objects, each a row's columns by name, as a driver's rows are handed on
+// (fetch.HTTPResponse.Rows). A whole number is an int and another a
+// float64, as a driver's are; true and false are 1 and 0; null leaves the
+// column out of its row, as NULL does. The columns are every name a row
+// has, sorted.
+func pastedRows(body string) ([]any, []string, error) {
+	dec := json.NewDecoder(strings.NewReader(body))
+	dec.UseNumber()
+	var list []map[string]any
+	if err := dec.Decode(&list); err != nil {
+		return nil, nil, fmt.Errorf("it is not: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, nil, errors.New("more follows the list")
+	}
+	seen := map[string]bool{}
+	var columns []string
+	rows := make([]any, 0, len(list))
+	for i, pastedRow := range list {
+		if pastedRow == nil {
+			return nil, nil, fmt.Errorf("row %d is not an object", i+1)
+		}
+		row := make(map[string]any, len(pastedRow))
+		for name, v := range pastedRow {
+			switch x := v.(type) {
+			case nil:
+				continue
+			case json.Number:
+				if n, err := x.Int64(); err == nil {
+					row[name] = int(n)
+				} else if f, err := x.Float64(); err == nil {
+					row[name] = f
+				} else {
+					return nil, nil, fmt.Errorf("row %d's %s, %s, is no number a column holds", i+1, name, x)
+				}
+			case bool:
+				row[name] = 0
+				if x {
+					row[name] = 1
+				}
+			case string:
+				row[name] = x
+			default:
+				return nil, nil, fmt.Errorf("row %d's %s is a list or an object; a column holds a number, text or null", i+1, name)
+			}
+			if !seen[name] {
+				seen[name] = true
+				columns = append(columns, name)
+			}
+		}
+		rows = append(rows, row)
+	}
+	sort.Strings(columns)
+	return rows, columns, nil
 }
 
 // pastedResponse is a copy of a pasted response for a trip to decode, held

@@ -73,12 +73,15 @@ func init() {
 		TargetFields: []string{"timeout"},
 		Requester:    dnsRequester{},
 		JSONAnswer:   true,
-		TargetHint: func(c *model.Collector) string {
-			if dnsRequest(c).RecordType == "PTR" {
-				return "the IP address to resolve"
+		// The server is request.server, or the system's resolver: the
+		// target is the name alone.
+		TargetHint: func(c *model.Collector) (string, string) {
+			if dnsRecordType(c) == "PTR" {
+				return "Address to resolve", "192.0.2.1 or 2001:db8::1"
 			}
-			return "the name to resolve"
+			return "Name to resolve", "example.com"
 		},
+		AnswerHint: "Paste the lookup's answer as the JSON document the exporter makes of it, as the Response of a run shows it",
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},

@@ -146,10 +146,10 @@ func TestADebugProbeOfADNSCollector(t *testing.T) {
 }
 
 // The collectors page says what a dns collector's target is: the name to
-// resolve.
+// resolve, such as example.com.
 func TestTheCollectorsPageNamesADNSTarget(t *testing.T) {
 	server, _ := dnsExporter(t)
-	if body := probeOnce(t, server, "/collectors", nil).Body.String(); !strings.Contains(body, "the name to resolve") {
+	if body := probeOnce(t, server, "/collectors", nil).Body.String(); !strings.Contains(body, ">Name to resolve</label>") || !strings.Contains(body, `placeholder="example.com"`) {
 		t.Errorf("the page does not say what the target is:\n%s", body)
 	}
 }

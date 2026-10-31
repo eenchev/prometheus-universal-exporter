@@ -202,8 +202,11 @@ func sshTargetElsewhere(requestType string) string {
 	return "the file request.root and request.path"
 }
 
-// sshTargetHint is what the collectors page says of a target.
-func sshTargetHint(*model.Collector) string { return "host or host:port" }
+// sshTargetHint is what the collectors page and the debug page say of a
+// target: the account is request.username, never part of it.
+func sshTargetHint(*model.Collector) (string, string) {
+	return "SSH host", "host or host:" + sshDefaultPort
+}
 
 // sshDisplay renders a target for logs and labels: as written, since an
 // SSH target holds no credentials, when it is one at all.

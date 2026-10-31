@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 	// The IANA time zones, for a rule's time_zone: carried in the binary, so
@@ -58,10 +59,12 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 // paths that terminate early, and taking the arguments and output streams as
 // parameters lets the command line be tested end to end.
 //
-// Exit statuses: 0 on a clean shutdown, a passing --dry-run or a passing
-// --healthcheck, 1 when the configuration is invalid, a --dry-run or a
-// --healthcheck fails or the server stops with an error, and 2 when the
-// command line itself cannot be parsed.
+// Exit statuses: 0 on a clean shutdown, one whose --web.shutdown-timeout ran
+// out included, a passing --dry-run or a passing --healthcheck, 1 when the
+// configuration is invalid, a --dry-run or a --healthcheck fails or the
+// server stops with an error, and 2 when the command line itself cannot be
+// parsed. A second SIGTERM or SIGINT during the shutdown ends the process by
+// that signal instead (exitOnSecondSignal).
 func run(args []string, stdout, stderr io.Writer) int {
 	// SIGHUP is caught before anything else, and until run returns. Its
 	// default action ends the process, and a start can take seconds — the
@@ -412,9 +415,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case <-ctx.Done():
-		// From here a second SIGTERM or Ctrl-C takes the default action and
-		// ends the process at once, rather than being swallowed while the
-		// probes finish and the last OTLP export is sent.
+		// From here a second SIGTERM or Ctrl-C ends the process at once,
+		// saying so, rather than being swallowed while the probes finish and
+		// the last OTLP export is sent. It is caught before the first
+		// signal's handler is let go, so none falls between the two.
+		exitOnSecondSignal(server, logger)
 		stop()
 		// /ready answers 503 from now, and connections are no longer kept
 		// alive, so whatever still routes probes here moves away while this
@@ -433,22 +438,46 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
 			waitOutShutdownDelay(*shutdownDelay)
 		}
-		logger.Info(shutdownMessage(manager.Get().OTLP), "shutdown_timeout", shutdownTimeout.String())
+		// No static target scrape and no periodic export starts from here,
+		// and the scrapes in flight are cut short at once, without
+		// publishing anything, so a target is never reported down only
+		// because the exporter stopped. They are not waited for: what they
+		// would publish is served by this process alone, which is stopping,
+		// and a target that does not answer would hold the shutdown for
+		// all of --web.shutdown-timeout. The last OTLP export goes without
+		// them, with what the scrapes before them queued.
+		stopLoops()
+		server.AbortStaticScrapes()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
-		// No static target scrape and no periodic export starts from here;
-		// the scrapes in flight finish within --web.shutdown-timeout, or are
-		// cut short without publishing anything, so a target is never
-		// reported down only because the exporter stopped.
-		stopLoops()
-		go func() {
-			<-shutdownCtx.Done()
-			server.AbortStaticScrapes()
-		}()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		probes, others := server.InProgress()
+		logger.Info(shutdownMessage(manager.Get().OTLP, probes, others, *shutdownTimeout), "probes", probes, "other_requests", others, "shutdown_timeout", shutdownTimeout.String())
+		// The probes in progress are waited for: Prometheus is waiting for
+		// their answers. The log says every shutdownProgressInterval what
+		// is still awaited, so a wait from a terminal does not look hung.
+		shutdownDone := make(chan error, 1)
+		go func() { shutdownDone <- httpServer.Shutdown(shutdownCtx) }()
+		progress := time.NewTicker(shutdownProgressInterval)
+		var shutdownErr error
+	waiting:
+		for {
+			select {
+			case shutdownErr = <-shutdownDone:
+				break waiting
+			case <-progress.C:
+				if probes, others := server.InProgress(); probes+others > 0 {
+					deadline, _ := shutdownCtx.Deadline()
+					left := max(time.Until(deadline), 0).Round(time.Second)
+					logger.Info("shutting down: still waiting for "+inProgressText(probes, others)+", "+left.String()+" left", "probes", probes, "other_requests", others, "time_left", left.String())
+				}
+			}
+		}
+		progress.Stop()
+		if shutdownErr != nil {
 			// The wait ran out: the probes still in progress are cut off, and
 			// Prometheus records them as failed scrapes.
-			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
+			probes, others := server.InProgress()
+			logger.Error("shutting down: gave up waiting for "+inProgressText(probes, others)+"; --web.shutdown-timeout ran out and their connections are closed", "probes", probes, "other_requests", others, "shutdown_timeout", shutdownTimeout.String(), "error", shutdownErr)
 			_ = httpServer.Close()
 		}
 		// The probes have finished, and the export and static target scrape loops
@@ -513,13 +542,83 @@ func newExporterLogger(level string, out io.Writer) (*slog.Logger, *exporter.OTL
 	return logger, logs
 }
 
-// shutdownMessage is the line the graceful shutdown begins with: the probes in
-// progress are finished, and, when OTLP export is on, the last export is sent.
-// It names the export only then, as FlushOTLP sends one only then: an exporter
-// without OTLP said it would send an export it never sends.
-func shutdownMessage(otlp model.OTLPConfig) string {
-	if otlp.Enabled && otlp.Endpoint != "" {
-		return "shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once"
+// shutdownMessage is the line the graceful shutdown begins with: what it
+// waits for, the probes and the other requests in progress, for at most
+// timeout, and, when OTLP export is on, that the last export is sent. It
+// names the export only then, as FlushOTLP sends one only then: an exporter
+// without OTLP said it would send an export it never sends. With nothing to
+// wait for and no export to send the exporter exits at once, and says only
+// that.
+func shutdownMessage(otlp model.OTLPConfig, probes, others int, timeout time.Duration) string {
+	export := otlp.Enabled && otlp.Endpoint != ""
+	switch {
+	case probes+others > 0 && export:
+		return "shutting down: waiting for " + inProgressText(probes, others) + ", at most " + timeout.String() + ", then sending the last OTLP export; a second signal exits at once"
+	case probes+others > 0:
+		return "shutting down: waiting for " + inProgressText(probes, others) + ", at most " + timeout.String() + "; a second signal exits at once"
+	case export:
+		return "shutting down: no probes in progress; sending the last OTLP export; a second signal exits at once"
 	}
-	return "shutting down: finishing the probes in progress; a second signal exits at once"
+	return "shutting down: no probes in progress; exiting"
+}
+
+// inProgressText is what is in progress, in words: "1 probe", "2 probes and
+// 1 other request", "1 request".
+func inProgressText(probes, others int) string {
+	counted := func(n int, one, many string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return strconv.Itoa(n) + " " + many
+	}
+	switch {
+	case probes > 0 && others > 0:
+		return counted(probes, "probe", "probes") + " and " + counted(others, "other request", "other requests") + " in progress"
+	case others > 0:
+		return counted(others, "request", "requests") + " in progress"
+	}
+	return counted(probes, "probe", "probes") + " in progress"
+}
+
+// shutdownProgressInterval is how often a shutdown waiting for requests in
+// progress says what it is still waiting for.
+const shutdownProgressInterval = 5 * time.Second
+
+// signalExitStatus is the status a shell reports for a process killed by
+// sig, 128 and the signal's number, for a process that has to exit on the
+// signal rather than be killed by it.
+func signalExitStatus(sig os.Signal) int {
+	if n, ok := sig.(syscall.Signal); ok {
+		return 128 + int(n)
+	}
+	return 1
+}
+
+// exitOnSecondSignal ends the process on the next SIGTERM or SIGINT, after
+// logging what that leaves unfinished. The process is ended by that signal,
+// with the signal's default action, as it was before it logged: a shell
+// reports 130 for SIGINT and 143 for SIGTERM, and a supervisor sees a
+// process killed by the signal rather than one that exited 0. One that
+// started with the signal ignored exits with that same status instead.
+func exitOnSecondSignal(server *exporter.Server, logger *slog.Logger) {
+	second := make(chan os.Signal, 1)
+	signal.Notify(second, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-second
+		probes, others := server.InProgress()
+		line := "second signal: exiting now"
+		if probes+others > 0 {
+			line += ", " + inProgressText(probes, others) + " left unfinished"
+		}
+		logger.Warn(line, "signal", sig.String(), "probes", probes, "other_requests", others)
+		signal.Reset(sig)
+		if self, err := os.FindProcess(os.Getpid()); err == nil && self.Signal(sig) == nil {
+			// The signal ends the process as soon as it is delivered; this
+			// goroutine only waits for that. A process started with the
+			// signal ignored, as a shell starts a background job with
+			// SIGINT, goes back to ignoring it, and exits below instead.
+			time.Sleep(time.Second)
+		}
+		os.Exit(signalExitStatus(sig))
+	}()
 }

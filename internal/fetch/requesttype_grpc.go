@@ -120,10 +120,13 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_codes", "tls",
 		},
-		Requester:          grpcRequester{},
-		StatusCodes:        true,
-		JSONAnswer:         true,
-		TargetHint:         func(*model.Collector) string { return "host:port" },
+		Requester:   grpcRequester{},
+		StatusCodes: true,
+		JSONAnswer:  true,
+		TargetHint: func(*model.Collector) (string, string) {
+			return "Server", "host:port, grpc://host:port or grpcs://host:port"
+		},
+		AnswerHint:         "Paste the response message as JSON, in the protobuf JSON mapping, as the Response of a run shows it",
 		CheckTargetRequest: checkGRPCTargetRequest,
 		Stage:              "grpc",
 		Templates:          grpcTemplates,

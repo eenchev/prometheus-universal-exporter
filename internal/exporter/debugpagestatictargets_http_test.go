@@ -83,7 +83,7 @@ func TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen(t *testing.T) {
 	requireContains(t, debugPageScript(page),
 		`const select = $("static-target"), through = fetcher();`,
 		`url.searchParams.set("name", through);`,
-		`else targets = answer.static_targets || [];`,
+		`else { targets = answer.static_targets || []; learnForm(through, answer); }`,
 		`new Option(target.target ? target.name + " — " + target.target : target.name, target.name)`,
 		"  showStaticTargets();\n")
 	// At edit nothing is scraped, so neither the page nor /debug/collector

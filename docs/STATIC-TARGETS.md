@@ -859,10 +859,13 @@ what the earlier scrape made is not published.
 On `SIGTERM` or `SIGINT` the targets keep being scraped through
 `--web.shutdown-delay`, while their endpoint is still served. Then no scrape
 starts, not one that was waiting for a slot and gets it then either, and
-those in flight finish within `--web.shutdown-timeout`; one it
-cuts short publishes nothing and logs no failure, so a restart never reports
-a target down, over OTLP or anywhere else, and the target's last result
-stands.
+those in flight are cut short at once rather than waited for: what they would
+publish is served by this exporter alone, which is stopping, and a target that
+does not answer would hold the shutdown for all of `--web.shutdown-timeout`.
+A scrape cut short publishes nothing and logs no failure, so a restart never
+reports a target down, over OTLP or anywhere else, and the target's last
+result stands. With `export_via_otlp`, the last OTLP export carries what the
+scrapes before it queued, not what the scrapes cut short would have.
 
 ## Self-metrics
 

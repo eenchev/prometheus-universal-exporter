@@ -65,6 +65,22 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 // such as an otlp block, after its collectors.
 func startHeldExporterWith(t *testing.T, config string, args ...string) *exporterProcess {
 	t.Helper()
+	return startExporterProcess(t, config, childOptions{holdProbe: true}, args...)
+}
+
+// childOptions is how startExporterProcess starts the exporter.
+type childOptions struct {
+	// holdProbe has a probe to a target that never answers in progress.
+	holdProbe bool
+	// ignoreSIGINT starts the process with SIGINT ignored, as a shell
+	// starts a background job.
+	ignoreSIGINT bool
+}
+
+// startExporterProcess starts the exporter in a child process with the
+// collector slow and more of the configuration, as options say.
+func startExporterProcess(t *testing.T, config string, options childOptions, args ...string) *exporterProcess {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("no signals on Windows")
 	}
@@ -90,7 +106,13 @@ func startHeldExporterWith(t *testing.T, config string, args ...string) *exporte
 		}
 		address := listener.Addr().String()
 		_ = listener.Close()
-		p = &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), ended: make(chan struct{}), logs: &syncBuffer{}, address: address}
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$")
+		if options.ignoreSIGINT {
+			// The shell's trap with no command ignores the signal, and the
+			// exporter it runs in its place starts with it ignored.
+			cmd = exec.Command("/bin/sh", "-c", `trap "" INT; exec "$0" "$@"`, os.Args[0], "-test.run=^TestRunHelperProcess$")
+		}
+		p = &exporterProcess{cmd: cmd, exited: make(chan error, 1), ended: make(chan struct{}), logs: &syncBuffer{}, address: address}
 		p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...), "\x1f"), helperHoldsDelayEnv+"=1")
 		p.cmd.Stderr = p.logs
 		held, err := p.cmd.StdinPipe()
@@ -133,6 +155,9 @@ func startHeldExporterWith(t *testing.T, config string, args ...string) *exporte
 		}
 	}
 	address := p.address
+	if !options.holdProbe {
+		return p
+	}
 	// A probe that will not finish keeps the graceful shutdown waiting.
 	go func() {
 		resp, err := http.Get("http://" + address + "/probe?collector=slow&target=" + target.URL)
@@ -183,8 +208,15 @@ func TestSecondSignalExitsAtOnce(t *testing.T) {
 		if err == nil || !errors.As(err, &exit) {
 			t.Fatalf("the process ended with %v, want it killed by the signal", err)
 		}
+		if status, ok := exit.Sys().(syscall.WaitStatus); !ok || !status.Signaled() || status.Signal() != syscall.SIGINT {
+			t.Errorf("the process ended with %v, want it killed by SIGINT", err)
+		}
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the second signal did not end the process\n%s", p.logs.String())
+	}
+	// It says so, and what it leaves unfinished, before it goes.
+	if !strings.Contains(p.logs.String(), `"msg":"second signal: exiting now, 1 probe in progress left unfinished","signal":"interrupt","probes":1`) {
+		t.Errorf("the second signal was not logged:\n%s", p.logs.String())
 	}
 }
 
@@ -210,7 +242,7 @@ func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
-	for _, want := range []string{`"shutdown_timeout":"1s"`, "probes were still in progress when --web.shutdown-timeout ran out"} {
+	for _, want := range []string{`"shutdown_timeout":"1s"`, "shutting down: gave up waiting for 1 probe in progress; --web.shutdown-timeout ran out"} {
 		if !strings.Contains(p.logs.String(), want) {
 			t.Errorf("the log is missing %s:\n%s", want, p.logs.String())
 		}
@@ -255,7 +287,7 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 	if code, _, err := read("/health"); err != nil || code != http.StatusOK {
 		t.Errorf("/health during the delay: %d %v", code, err)
 	}
-	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+	if strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe in progress") {
 		t.Errorf("the graceful shutdown began while the delay was held:\n%s", p.logs.String())
 	}
 	p.endDelay()
@@ -312,7 +344,7 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	testutil.WaitFor(t, "the delay to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: /ready answers 503") })
 	inDelay := scrapes.Load()
 	testutil.WaitFor(t, "a scrape during the delay", func() bool { return scrapes.Load() > inDelay })
-	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+	if strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe in progress") {
 		t.Errorf("the graceful shutdown began while the delay was held:\n%s", p.logs.String())
 	}
 	p.endDelay()
@@ -364,7 +396,7 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
-	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+	if !strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe in progress") {
 		t.Fatalf("the process ended before the graceful shutdown:\n%s", p.logs.String())
 	}
 	// Without OTLP export, the shutdown names no export it will not send.
@@ -393,7 +425,7 @@ func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 	testutil.WaitFor(t, "the delay to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: /ready answers 503") })
 	inDelay := exports.Load()
 	testutil.WaitFor(t, "an export during the delay", func() bool { return exports.Load() > inDelay })
-	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+	if strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe in progress") {
 		t.Errorf("no export arrived at a 1s interval before the delay ended\n%s", p.logs.String())
 	}
 	p.endDelay()
@@ -406,7 +438,7 @@ func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 	// With OTLP export on, the shutdown says it sends the last export.
-	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress and sending the last OTLP export") {
+	if !strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe in progress, at most 1s, then sending the last OTLP export") {
 		t.Errorf("the shutdown did not say it sends the last OTLP export:\n%s", p.logs.String())
 	}
 }

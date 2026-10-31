@@ -4,7 +4,7 @@ package exporter
 // an editor, or one chosen from the configuration in force, the response it
 // is run on — pasted, or at --web.debug=full a target fetched through a
 // configured collector or a static target's scrape — and what the run gave:
-// the series a probe would answer, the requests, the response, the stages,
+// the series a probe would answer, as a table and as text, the requests, the response, the stages,
 // the metric lint's advice, what was logged and the whole debug report. It
 // runs when Run is pressed, and only then; a run cancels the one before it.
 // The collectors page links each collector here as ?collector=<name>, with
@@ -112,6 +112,30 @@ ul.stages { margin: 0; padding-left: 18px; font-size: 13px; }
 ul.stages .failed { color: var(--bad); }
 details { margin-top: 14px; }
 summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.series-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin: 14px 0 4px; }
+.series-head h3 { margin: 0; }
+.views { display: inline-flex; border: 1px solid var(--accent); border-radius: 6px; overflow: hidden; }
+.views button { padding: 3px 12px; border: 0; border-radius: 0; background: transparent; color: var(--accent); font-size: 13px; }
+.views button[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.series-filters { margin-bottom: 6px; }
+.series-filters label { margin-top: 0; }
+.series-filters input, .series-filters select { height: 34px; }
+.table-box { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+table.series { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.series th, table.series td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.series th { position: sticky; top: 0; background: var(--code); white-space: nowrap; z-index: 1; }
+table.series th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+table.series th button::after { content: " \2195"; color: var(--muted); }
+table.series th[aria-sort="ascending"] button::after { content: " \2191"; color: var(--accent); }
+table.series th[aria-sort="descending"] button::after { content: " \2193"; color: var(--accent); }
+table.series td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: break-word; max-width: 32em; }
+table.series td.value { text-align: right; white-space: nowrap; }
+table.series td.type { color: var(--muted); font-family: inherit; }
+table.series td.lint { font-family: inherit; min-width: 9em; }
+table.series details { margin: 0; }
+table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600; color: var(--accent); }
+.lint-advice { margin: 4px 0 0; font-size: 12px; white-space: normal; }
+.lint-unplaced { margin: 0 0 8px; padding-left: 18px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -119,7 +143,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 {{template "chrome" .Chrome}}
 <h1>Debug</h1>
 <p class="meta">Run one collector — one of the configuration, or the playground, a collector written on the page as it is written under <code>collectors:</code> — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
-<p class="note">The playground never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Fetching a target needs <code>--web.debug=full</code>.{{end}}</p>
+<p class="note">The playground never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Probing a target needs <code>--web.debug=full</code>.{{end}}</p>
 <noscript><p class="note">The debug page needs JavaScript.</p></noscript>
 <div class="grid">
 <section class="panel">
@@ -147,10 +171,10 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 {{- if .Full}}
 <div class="modes" role="radiogroup" aria-label="Response">
 <label><input type="radio" name="mode" value="paste" checked> Paste a response</label>
-<label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not .Chosen}} disabled{{end}}> Fetch a target</label>
+<label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not .Chosen}} disabled{{end}}> Probe a target</label>
 <label><input type="radio" name="mode" value="static" id="mode-static"{{if not .StaticTargets}} disabled{{end}}> Scrape a static target</label>
 </div>
-<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>
+<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to probe a target or scrape a static target.</p>
 <p class="note" id="static-unavailable"{{if not .StaticNote}} hidden{{end}}>{{.StaticNote}}</p>
 {{- end}}
 <div data-mode="paste">
@@ -202,8 +226,28 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 <section class="panel" style="margin-top:16px" aria-live="polite">
 <h2>Output</h2>
 <div class="status" id="status-line">Not run yet.</div>
-<h3>Series a probe would answer</h3>
+<div class="series-head">
+<h3 id="series-heading">Series a probe would answer</h3>
+<div class="views" id="views" role="tablist" aria-labelledby="series-heading">
+<button type="button" role="tab" id="view-table" data-view="table" aria-controls="series-table-part" aria-selected="true">Table</button>
+<button type="button" role="tab" id="view-text" data-view="text" aria-controls="series-text-part" aria-selected="false">Text</button>
+</div>
+</div>
+<div id="series-table-part" role="tabpanel" aria-labelledby="view-table">
+<div class="row series-filters">
+<div><label for="series-filter">Filter: name, label or value</label>
+<input id="series-filter" type="search" autocomplete="off" spellcheck="false"></div>
+<div><label for="series-metric">Metric</label>
+<select id="series-metric"><option value="">Every metric</option></select></div>
+</div>
+<ul class="lint-unplaced" id="lint-unplaced" hidden></ul>
+<p class="note" id="series-count">Not run yet.</p>
+<div class="table-box" id="series-box" hidden><table class="series" id="series-table"><thead><tr id="series-columns"></tr></thead><tbody id="series-rows"></tbody></table></div>
+<p class="note" id="series-cap" hidden></p>
+</div>
+<div id="series-text-part" role="tabpanel" aria-labelledby="view-text" hidden>
 <pre id="series"></pre>
+</div>
 <h3>Stages</h3>
 <ul class="stages" id="stages"></ul>
 <div id="lint-part" hidden>
@@ -482,16 +526,174 @@ async function run() {
     if (running === controller) running = null;
   }
 }
+// The series are shown as a table, by default, or as the text a probe
+// answers, which stays whole whatever the table shows; the choice is kept
+// in this browser. A refused run's error is text, and shown as text.
+let view = "table", refused = false;
+try { if (store && store.getItem("debug.view") === "text") view = "text"; } catch (error) { /* the table, then */ }
+function showView() {
+  const shown = refused ? "text" : view;
+  $("views").hidden = refused;
+  for (const tab of document.querySelectorAll("#views [data-view]")) tab.setAttribute("aria-selected", String(tab.dataset.view === shown));
+  $("series-table-part").hidden = shown !== "table";
+  $("series-text-part").hidden = shown !== "text";
+}
+for (const tab of document.querySelectorAll("#views [data-view]")) {
+  tab.addEventListener("click", () => {
+    view = tab.dataset.view;
+    try { if (store) store.setItem("debug.view", view); } catch (error) { /* not kept */ }
+    showView();
+  });
+}
+showView();
+// The table has a row for each sample of answer.samples, which the server
+// makes from the series themselves: the name, a column for each label name
+// any sample has, alphabetically, the value as the text writes it and the
+// type. A lint finding is shown on the rows of the metric it names, and one
+// about a metric no row is of above the table. What a target sent is put
+// in with textContent alone, never as HTML. At most tableRows rows are
+// drawn, so a large answer keeps the page quick; the text has them all.
+const tableRows = 2000;
+let samples = [], labelNames = [], findingsOf = new Map(), sortBy = null, sortDown = false;
+// A number as the text writes it: +Inf and -Inf, which Number does not read.
+const numberOf = (text) => text === "+Inf" ? Infinity : text === "-Inf" ? -Infinity : Number(text);
+const numericLabels = new Set(["le", "quantile"]);
+function cellOf(sample, column) {
+  if (column === "name") return sample.name;
+  if (column === "value") return sample.value;
+  if (column === "type") return sample.type;
+  return (sample.labels && sample.labels[column.slice(6)]) || "";
+}
+// Ascending or descending by the column, a value and le or quantile as
+// numbers, NaN after every number; a label a sample lacks sorts last
+// either way.
+function compareBy(column, down) {
+  const numeric = column === "value" || (column.startsWith("label:") && numericLabels.has(column.slice(6)));
+  return (a, b) => {
+    const x = cellOf(a, column), y = cellOf(b, column);
+    if (x === "" || y === "") return (x === "") - (y === "");
+    let order;
+    if (numeric) {
+      const p = numberOf(x), q = numberOf(y);
+      order = Number.isNaN(p) || Number.isNaN(q) ? Number.isNaN(p) - Number.isNaN(q) : p < q ? -1 : p > q ? 1 : 0;
+    } else {
+      order = x < y ? -1 : x > y ? 1 : 0;
+    }
+    return down ? -order : order;
+  };
+}
+const haystackOf = (sample) => [sample.name, ...Object.entries(sample.labels || {}).map(([k, v]) => k + "=" + v), sample.value].join("\n").toLowerCase();
+function adviceOf(findings) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "\u26a0 " + findings.map((f) => f.rule).join(", ");
+  summary.title = findings.map((f) => "[" + f.rule + "] " + f.message).join("\n");
+  details.append(summary);
+  for (const f of findings) {
+    const advice = document.createElement("p");
+    advice.className = "lint-advice";
+    advice.textContent = "[" + f.rule + "] " + f.message;
+    details.append(advice);
+  }
+  return details;
+}
+function fillTable(answer) {
+  samples = (answer.samples || []).map((sample) => ({ ...sample, haystack: haystackOf(sample) }));
+  const names = new Set();
+  for (const sample of samples) for (const name of Object.keys(sample.labels || {})) names.add(name);
+  labelNames = [...names].sort();
+  findingsOf = new Map();
+  const metrics = new Set(samples.map((sample) => sample.metric));
+  const unplaced = [];
+  for (const f of answer.lint || []) {
+    if (!metrics.has(f.metric)) { unplaced.push(f); continue; }
+    if (!findingsOf.has(f.metric)) findingsOf.set(f.metric, []);
+    findingsOf.get(f.metric).push(f);
+  }
+  const list = $("lint-unplaced");
+  list.replaceChildren(...unplaced.map((f) => {
+    const item = document.createElement("li");
+    item.textContent = "\u26a0 [" + f.rule + "] metric " + JSON.stringify(f.metric) + ", which no series is of: " + f.message;
+    return item;
+  }));
+  list.hidden = unplaced.length === 0;
+  const select = $("series-metric"), kept = select.value;
+  select.replaceChildren(new Option("Every metric", ""), ...[...metrics].map((metric) => new Option(metric, metric)));
+  if (!pick(select, kept)) select.value = "";
+  const columns = ["name", ...labelNames.map((name) => "label:" + name), "value", "type"];
+  if (sortBy !== null && !columns.includes(sortBy)) sortBy = null;
+  const head = $("series-columns");
+  head.replaceChildren(...columns.map((column) => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.dataset.column = column;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = column.startsWith("label:") ? column.slice(6) : column;
+    button.addEventListener("click", () => {
+      sortDown = sortBy === column ? !sortDown : false;
+      sortBy = column;
+      drawRows();
+    });
+    th.append(button);
+    return th;
+  }));
+  if (findingsOf.size > 0) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = "lint";
+    head.append(th);
+  }
+  drawRows();
+}
+function drawRows() {
+  const needle = $("series-filter").value.trim().toLowerCase(), metric = $("series-metric").value;
+  let rows = samples.filter((sample) => (metric === "" || sample.metric === metric) && (needle === "" || sample.haystack.includes(needle)));
+  if (sortBy !== null) rows = rows.slice().sort(compareBy(sortBy, sortDown));
+  for (const th of $("series-columns").children) {
+    if (th.dataset.column) th.setAttribute("aria-sort", th.dataset.column === sortBy ? (sortDown ? "descending" : "ascending") : "none");
+  }
+  const drawn = rows.slice(0, tableRows);
+  $("series-rows").replaceChildren(...drawn.map((sample) => {
+    const tr = document.createElement("tr");
+    const cell = (text, className) => {
+      const td = document.createElement("td");
+      if (className) td.className = className;
+      td.textContent = text;
+      tr.append(td);
+      return td;
+    };
+    cell(sample.name);
+    for (const name of labelNames) cell((sample.labels && sample.labels[name]) || "");
+    cell(sample.value, "value");
+    cell(sample.type, "type");
+    if (findingsOf.size > 0) {
+      const td = cell("", "lint");
+      const findings = findingsOf.get(sample.metric);
+      if (findings) td.append(adviceOf(findings));
+    }
+    return tr;
+  }));
+  $("series-box").hidden = samples.length === 0;
+  $("series-count").textContent = samples.length === 0 ? "(no series)" : rows.length + " of " + samples.length + " series";
+  $("series-cap").hidden = rows.length <= tableRows;
+  $("series-cap").textContent = "Showing the first " + tableRows + " of " + rows.length + "; filter to narrow. The text view has them all.";
+}
+$("series-filter").addEventListener("input", drawRows);
+$("series-metric").addEventListener("change", drawRows);
 function show(answer, response, took) {
   const statusLine = $("status-line");
   const series = $("series");
   const stages = $("stages");
   stages.replaceChildren();
+  refused = !!answer.error;
+  showView();
   if (answer.error) {
     statusLine.className = "status failed";
     statusLine.textContent = response.status + ": refused in " + took + " ms";
     series.className = "error";
     series.textContent = answer.error;
+    fillTable({});
     for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
@@ -500,6 +702,7 @@ function show(answer, response, took) {
   statusLine.textContent = "Ran in " + took + " ms: " + answer.verdict;
   series.className = "";
   series.textContent = answer.series === "" ? "(no series)" : answer.series;
+  fillTable(answer);
   for (const stage of answer.stages || []) {
     const item = document.createElement("li");
     item.className = stage.outcome === "ok" ? "" : "failed";

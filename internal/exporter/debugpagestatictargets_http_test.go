@@ -116,7 +116,7 @@ func TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector(t *testing.T) {
 	playground := getPage(t, server, "/debug")
 	requireContains(t, playground,
 		`<input type="radio" name="mode" value="static" id="mode-static" disabled> Scrape a static target`,
-		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>`,
+		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to probe a target or scrape a static target.</p>`,
 		`<p class="note" id="static-unavailable" hidden></p>`)
 
 	none := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})

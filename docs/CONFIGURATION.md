@@ -5435,8 +5435,8 @@ It reads one of three responses:
   `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
   `true` and `false` as 1 and 0, and `null` leaves the column out of its
   row, as `NULL` does; anything else is refused with `400`.
-- **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
-  it, through a configured collector — the one chosen, or the one the
+- **A target**, *Probe a target* on the page, at `full` only: fetched
+  exactly as `/probe?debug=true` fetches it, through a configured collector — the one chosen, or the one the
   playground was copied from — with its request block,
   [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
   credentials, `accept_status` and
@@ -5444,7 +5444,7 @@ It reads one of three responses:
   parameters entered on the page. The playground decodes and transforms what
   the collector it was copied from fetched; see below for what the page asks
   for; one not copied from a configured
-  collector, as the example, has nothing to fetch through, so *Fetch a
+  collector, as the example, has nothing to fetch through, so *Probe a
   target* is not offered with it. A collector run on what another fetched
   reads what an `http` collector fetches only.
 - **A static target's scrape**, at `full` only: made once as its schedule
@@ -5500,6 +5500,34 @@ its YAML from `/debug/collector`, so it follows a reload. The target is
 probed as `/probe?debug=true` probes it, and the page says through which
 collector: *Probed through status_json, the collector chosen.*
 
+The series a run gave are shown as a table, or as the Prometheus text a probe
+would answer; *Table* and *Text* switch between them, and the browser keeps
+the choice. The text is the whole answer, to the byte. The table has a row
+for each sample — a histogram's buckets, `_sum` and `_count` and a summary's
+quantiles each a row of their own, `le` and `quantile` among the labels — and
+the columns `name`, one for each label name any row has, in alphabetical
+order, `value`, as the text writes it (`NaN`, `+Inf`), and `type`, from the
+metric's `# TYPE`:
+
+- **Sorting**: a column's header sorts by it, and again reverses the order;
+  `value`, `le` and `quantile` sort as numbers, and a row without the label
+  sorts last either way.
+- **Filtering**: the filter box keeps the rows whose name, a `label=value`
+  or value holds its text, whatever the case, and *Metric* keeps one metric's
+  rows; the page says how many rows of how many are left, `3 of 12 series`.
+- **Lint**: a [metric lint](#metric-lint) finding is shown on the rows of
+  the metric it names, in a `lint` column, as its rule, which opens to its
+  advice. A series does not record the rule that made it, so a finding is
+  put by the metric's name: every row of that metric has it. A finding about
+  a metric no row is of — a rule that gave no series — is listed above the
+  table. The *Lint* section below lists every finding as before.
+- **Size**: at most 2000 rows are drawn, so a large answer leaves the page
+  quick; past them the page says so, and the filter narrows them. The text
+  has them all.
+
+What a target sent is put in the table as text, never as HTML. On a narrow
+screen the table scrolls sideways in its own box.
+
 The playground may do nothing past the response, since what it is given
 runs on the server:
 
@@ -5554,7 +5582,11 @@ A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 the page fills with the one the playground was copied from; or
 `static_target`. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
-(Prometheus text), `requests`, `response`, `stages`, `notes`, `lint`, the
+(Prometheus text), `samples`, the same series one sample at a time as the
+table shows them, each with its `name` (a histogram's or summary's with its
+suffix), `metric` (the metric's name, as a lint finding names it), `type`,
+`labels` and `value` (as the text writes it, so `NaN` and `+Inf` are
+strings), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
 `metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`

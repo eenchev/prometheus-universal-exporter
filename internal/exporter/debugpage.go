@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -166,7 +168,8 @@ func (req debugRunRequest) sources() (debugSource, int) {
 
 // debugAnswer is what /debug/run answers: the run's report as JSON. Error
 // alone is a run refused before it ran; otherwise Series is what a probe
-// would have served, as Prometheus text, Verdict what it would have
+// would have served, as Prometheus text, Samples the same series one by one
+// for the page's table (debugSamples), Verdict what it would have
 // answered, Requests and Response what was sent and what came back, Stages
 // and Notes the stages and what was logged, Lint the metric lint's advice,
 // and Report the whole report as /probe?debug=true writes it.
@@ -174,6 +177,7 @@ type debugAnswer struct {
 	OK       bool                    `json:"ok"`
 	Verdict  string                  `json:"verdict,omitempty"`
 	Series   string                  `json:"series"`
+	Samples  []debugSample           `json:"samples,omitempty"`
 	Requests []debugShownRequest     `json:"requests,omitempty"`
 	Response *debugShownResponse     `json:"response,omitempty"`
 	Stages   []debugStage            `json:"stages,omitempty"`
@@ -223,6 +227,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	out := debugAnswer{OK: report.ok, Verdict: report.verdict, Lint: report.lint, Report: string(report.text())}
 	if report.answer != nil {
 		out.Series = string(appendMetricSet(nil, report.answer))
+		out.Samples = debugSamples(report.answer)
 	}
 	t, p := report.trace, report.probe
 	t.mu.Lock()
@@ -269,6 +274,81 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	for _, line := range strings.Split(strings.TrimRight(t.logs.String(), "\n"), "\n") {
 		if line != "" {
 			out.Notes = append(out.Notes, shownStart(line, debugLineLimit))
+		}
+	}
+	return out
+}
+
+// debugSample is one line of a probe's answer as the page's table shows it:
+// Name, the sample's name, a histogram's or a summary's with its suffix;
+// Metric, the name of the metric it is of, which the metric lint's findings
+// name (transform.LintFinding.Metric), so the page puts a finding beside the
+// series it is about; Type, the metric's type, as its TYPE line says it;
+// Labels, a bucket's le and a quantile's quantile among them; and Value as
+// the text format writes it, NaN, +Inf and a count's whole number included.
+// A series does not carry the rule that made it, so the page can tie a
+// finding to a series by the metric's name alone.
+type debugSample struct {
+	Name   string            `json:"name"`
+	Metric string            `json:"metric"`
+	Type   string            `json:"type"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Value  string            `json:"value"`
+}
+
+// debugSamples are the samples of set in the order appendMetricSet writes
+// them: metric by metric, a histogram's buckets ascending, its +Inf bucket,
+// _sum and _count, a summary's quantiles ascending, _sum and _count. They
+// are made from the set itself, as the text is, never by reading the text
+// again.
+func debugSamples(set *model.MetricSet) []debugSample {
+	var e expositionWriter
+	var out []debugSample
+	add := func(m model.Metric, suffix, own, ownValue, value string) {
+		labels := make(map[string]string, len(m.Labels)+1)
+		for k, v := range m.Labels {
+			labels[k] = v
+		}
+		if own != "" {
+			labels[own] = ownValue
+		}
+		if len(labels) == 0 {
+			labels = nil
+		}
+		out = append(out, debugSample{Name: m.Name + suffix, Metric: m.Name, Type: string(m.Type), Labels: labels, Value: value})
+	}
+	float := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+	count := func(n uint64) string { return strconv.FormatUint(n, 10) }
+	for _, i := range seriesByFamily(set) {
+		m := set.Metrics[i]
+		switch {
+		case m.Histogram != nil:
+			for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
+				if !math.IsInf(x.UpperBound, 1) {
+					add(m, "_bucket", "le", float(x.UpperBound), count(x.CumulativeCount))
+				}
+			}
+			if inf, has := m.Histogram.InfBucket(); has {
+				add(m, "_bucket", "le", "+Inf", count(inf))
+			}
+			if !m.Histogram.NoSum {
+				add(m, "_sum", "", "", float(m.Histogram.Sum))
+			}
+			if !m.Histogram.NoCount {
+				add(m, "_count", "", "", count(m.Histogram.Count))
+			}
+		case m.Summary != nil:
+			for _, x := range e.ascendingQuantiles(m.Summary.Quantiles) {
+				add(m, "", "quantile", float(x.Quantile), float(x.Value))
+			}
+			if !m.Summary.NoSum {
+				add(m, "_sum", "", "", float(m.Summary.Sum))
+			}
+			if !m.Summary.NoCount {
+				add(m, "_count", "", "", count(m.Summary.Count))
+			}
+		default:
+			add(m, "", "", "", float(m.Value))
 		}
 	}
 	return out

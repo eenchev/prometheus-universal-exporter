@@ -51,7 +51,7 @@ func TestTheDebugPageHasNoRunAsYouType(t *testing.T) {
 // A target is fetched through the collector chosen on the left, or through
 // the one the playground was copied from, and through no collector picked
 // apart from it: there is no Fetch through list. A playground copied from
-// nothing makes no request, so Fetch a target is offered disabled, with a
+// nothing makes no request, so Probe a target is offered disabled, with a
 // note saying how to make it available.
 func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
@@ -65,11 +65,11 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 		}
 	}
 	playground := getPage(t, server, "/debug")
-	requireContains(t, playground, `<input type="radio" name="mode" value="fetch" id="mode-fetch" disabled> Fetch a target`,
-		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>`,
+	requireContains(t, playground, `<input type="radio" name="mode" value="fetch" id="mode-fetch" disabled> Probe a target`,
+		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to probe a target or scrape a static target.</p>`,
 		`<p class="note" id="fetched-through"></p>`)
 	chosen := getPage(t, server, "/debug?collector=rooms")
-	requireContains(t, chosen, `<input type="radio" name="mode" value="fetch" id="mode-fetch"> Fetch a target`,
+	requireContains(t, chosen, `<input type="radio" name="mode" value="fetch" id="mode-fetch"> Probe a target`,
 		`<p class="note" id="fetch-unavailable" hidden>`, `<p class="note" id="fetched-through">Probed through rooms, the collector chosen.</p>`)
 	script := debugPageScript(chosen)
 	// The playground's fetch names the collector it was copied from, which

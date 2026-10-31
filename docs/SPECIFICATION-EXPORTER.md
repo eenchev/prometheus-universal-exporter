@@ -29519,6 +29519,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent` (changed): so with nothing in progress as with a probe.
 - `TestShutdownTimeoutBoundsTheWait`, `TestTheExporterForwardsItsOwnLogOverOTLP`, `TestOTLPExportsThroughTheShutdownDelay` and the other shutdown tests (changed): they look for the new wording of the shutdown's first line and of its giving up.
 
+## 34.242 The debug page's series as a table, and Probe a target
+
+- `TestTheDebugPageAnswersEachSampleOfARun`: a pasted Prometheus text with a gauge, `NaN`, a counter, a histogram, a summary with its quantiles out of order and an untyped `+Inf` is answered with `samples` whose `name`, `labels` and `value`, written as sample lines, are the lines of `series` in its order, each with its metric's `metric` and `type`: the histogram's `le="0.5"` and `le="+Inf"` buckets, `_sum` and `_count`, the summary's `quantile="0.5"` before `0.9`, `_sum` and `_count`; a refused run has none.
+- `TestTheDebugPagesLintFindingsNameTheMetricOfTheirSamples`: a written collector's `jobs` counter and a counter `idle` whose items select nothing give `counter-total` findings on `jobs`, which samples are of, and on `idle`, which none is, and none on `queue_length`; the page's script puts a finding on the rows of the metric it names, lists one of no row's metric above the table, `which no series is of`, and writes the advice as a summary's title and as the text it opens to.
+- `TestTheDebugPageShowsTheSeriesAsATable`: `/debug` has the *Table* tab selected and the *Text* tab, the text's `<pre id="series"></pre>` unchanged in its own panel, a filter box, a metric list and the table in a box that scrolls; the script sorts by a clicked header, again reversed, `value`, `le` and `quantile` as numbers with `+Inf` read, a missing label last, filters case-insensitively and by metric, says `<n> of <m> series`, draws at most 2000 rows with `Showing the first 2000 of <n>; filter to narrow.`, fills cells by `textContent`, keeps the view in the browser and shows a refused run as text; it writes no HTML (`innerHTML`, `outerHTML`, `insertAdjacentHTML`).
+- `TestTheDebugPageSaysProbeATarget`: at `full`, with and without a collector chosen and a `target` in the address, the radio says *Probe a target* and the note `to probe a target or scrape a static target.`, its value `fetch` and id `mode-fetch` and the `target` the address names read as before, and the page says *Fetch a target* nowhere; at `edit` it says `Probing a target needs --web.debug=full`.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector` (changed): they look for *Probe a target* and `to probe a target or scrape a static target.`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33387,7 +33395,7 @@ forwarded; a target missing or a parameter wrong MUST be answered as
 collector chosen, or, with the playground, through the configured collector
 it was copied from, sent as `request_from`, saying which, and MUST NOT offer
 another collector to fetch through; while the playground was copied from
-none, the page MUST offer *Fetch a target* disabled, saying to choose a
+none, the page MUST offer *Probe a target* disabled, saying to choose a
 configured collector or *Edit a copy* of one. The pasted body MUST start as
 the example's answer with the example playground and empty with a
 configured collector or a copy of one, and a change of collector MUST NOT
@@ -33420,7 +33428,13 @@ run past them answered `503`. A run MUST be answered `200` with a JSON
 object of `ok`, true when every stage succeeded and none carried on;
 `verdict`, what a probe or the scrape would have answered, as the text
 report says it; `series`, the exposition a probe would have served, to the
-byte; `requests` and `response`, what was sent and read, redacted and
+byte; `samples`, the same series one sample at a time, in the order
+`series` writes them, made from the series and not by reading the text
+again, each an object of `name`, the sample's name with a histogram's or a
+summary's suffix, `metric`, the metric's name, `type`, the metric's type,
+`labels`, a bucket's `le` and a quantile's `quantile` among them, and
+`value`, a string as the exposition writes it (`NaN`, `+Inf`, a count as a
+whole number); `requests` and `response`, what was sent and read, redacted and
 bounded as the text report redacts and bounds them; `stages` and `notes`,
 the stages and the warnings the load would give with every line the run
 logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
@@ -33428,6 +33442,26 @@ logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
 `report`, the text report of a debug probe, whose first line names it a
 debug run, the collector, whether it was written on the page, and what it
 read.
+
+The page MUST show a run's series both as a table, by default, and as
+`series` unchanged, switched between by *Table* and *Text*, MAY keep the
+choice in the browser, and MUST show a refused run's error as text. The
+table MUST have a row for each of `samples` and the columns `name`, one for
+each label name any sample has, in alphabetical order, `value` and `type`,
+and MUST put every text a run answers in it as text, never as HTML.
+Clicking a column's header MUST sort the rows by it, ascending and then
+descending; `value`, `le` and `quantile` MUST sort as numbers, `+Inf` and
+`-Inf` included, and a sample without the label MUST sort last either way.
+A filter MUST keep the rows whose name, a `label=value` or value holds its
+text, case-insensitively, and a list of the metrics MUST keep one metric's;
+the page MUST say how many rows are left of how many, `<n> of <m> series`.
+It MUST draw at most 2000 rows, saying when there are more that it shows
+the first 2000 and that a filter narrows them, and the text MUST stay whole.
+A lint finding MUST be shown on the rows of the metric it names, by
+`metric`, a series recording no rule, as its rule opening to its advice by
+click or keyboard, not by hover alone; one about a metric no row is of MUST
+be listed above the table. On a narrow screen the table MUST scroll in its
+own box and the page not.
 
 The collector MUST NOT be put in force. A run MUST NOT be answered from or
 fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log

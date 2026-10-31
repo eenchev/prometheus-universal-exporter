@@ -49,8 +49,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `--web.listen-address` needs `--health-cmd` with it, and the target
   allocator run from the image needs `--no-healthcheck`.
 - The debug page calls the collector written on it the playground, and runs
-  only when *Run* is pressed: *Run as you type* is gone. *Fetch a target*
-  fetches through the configured collector chosen, or, with the playground,
+  only when *Run* is pressed: *Run as you type* is gone. *Probe a target*
+  probes through the configured collector chosen, or, with the playground,
   through the one it was copied from with *Edit a copy*; the *Fetch through*
   list is gone, and a playground copied from none cannot fetch. *Scrape a
   static target* is a list of the static targets of that same collector,
@@ -118,6 +118,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A static target's `otlp.labels_as_resource` moves labels of its own from
   every exported data point to its OTLP resource, and `otlp.instance_id: true`
   gives the resource `service.instance.id`, the target's name.
+- The debug page shows a run's series as a table, beside the Prometheus
+  text: a row for each sample, a column for each label, the value and the
+  type, sorted by a column's header, filtered by text and by metric, and the
+  metric lint's advice on the rows of the metric it is about. The text view
+  is the whole answer, as before, and `/debug/run` answers the series one
+  sample at a time as `samples`. The response radio that probes a target is
+  now called *Probe a target*.
 
 ### Fixed
 

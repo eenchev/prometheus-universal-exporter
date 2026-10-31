@@ -32,7 +32,18 @@ p.meta { color: var(--muted); margin: 0; }
 a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
-` + chromeStyle + longStyle
+` + selectStyle + chromeStyle + longStyle
+
+// selectStyle draws the pages' dropdowns' arrow itself: the browser's own
+// sits against the field's right edge, and its place differs between
+// browsers. The arrow is two gradients in the muted text colour, so it
+// follows the light or dark theme with no image, 14px in from the edge, and
+// the text stops before it. The selector outweighs each page's own rule for
+// its fields, whose background shorthand would otherwise take the arrow off.
+const selectStyle = `
+:root select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-right: 34px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 19px) 50%, calc(100% - 14px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+:root select:not([multiple]):disabled { opacity: 0.6; }
+`
 
 // pagePolicy is the pages' Content-Security-Policy. Its img-src is for the
 // icon (pageIcon), which is a data: URL.

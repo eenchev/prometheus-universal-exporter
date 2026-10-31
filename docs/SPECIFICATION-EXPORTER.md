@@ -29536,6 +29536,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageCopiesNoCredential`: with `web.basic_auth` on, the page, fetched with the credential, is marked `data-basic-auth`, says that curl gets `-u USER` and the job a `basic_auth` to fill in, writes that `basic_auth` commented, and has neither the user nor the password anywhere.
 - `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the check that a row with a value needs a name is now `messageOf`'s `return`, which `wrong()` shares.
 
+- `TestEveryPagesDropdownsHaveTheirArrowInFromTheEdge`: the pages' shared style draws a dropdown's arrow itself, 14px and 19px in from the field's right edge with 34px of padding before it, under a selector that outweighs each page's own rule for its fields.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

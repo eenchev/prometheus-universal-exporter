@@ -132,3 +132,20 @@ func TestEveryPageCarriesTheBar(t *testing.T) {
 		}
 	}
 }
+
+// Every page draws its dropdowns' arrow itself, in from the field's right
+// edge with the text stopping before it, rather than the browser's own,
+// which sits against the edge; the rule outweighs each page's own rule for
+// its fields, which sets the background with its shorthand.
+func TestEveryPagesDropdownsHaveTheirArrowInFromTheEdge(t *testing.T) {
+	for _, page := range []string{pageStyle} {
+		for _, want := range []string{
+			":root select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-right: 34px;",
+			"background-position: calc(100% - 19px) 50%, calc(100% - 14px) 50%;",
+		} {
+			if !strings.Contains(page, want) {
+				t.Errorf("the pages' style lacks %q", want)
+			}
+		}
+	}
+}

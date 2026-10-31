@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestTheDebugPageProbesAKubernetesCollectorWithNoTarget(t *testing.T) {
 `)
 	page, form := debugFormPage(t, server, "pods")
 	want := debugForm{RequestType: "kubernetes", Answer: "Paste the objects listed as the JSON document the exporter makes of them, as the Response of a run shows it", NoTarget: true}
-	if form != want {
+	if !reflect.DeepEqual(form, want) {
 		t.Errorf("the form is %+v, want %+v", form, want)
 	}
 	requireDebugForm(t, page, form)

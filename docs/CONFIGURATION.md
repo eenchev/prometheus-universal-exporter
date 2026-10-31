@@ -5435,6 +5435,16 @@ It reads one of three responses:
   `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
   `true` and `false` as 1 and 0, and `null` leaves the column out of its
   row, as `NULL` does; anything else is refused with `400`.
+
+  The other headers are rows of a name and a value, starting with one
+  empty row; *+ Add header* adds a row and *×* removes one. A row left blank
+  is not sent. A name may be given again, in any case, as a response may
+  repeat a header: the run has each value, in the order of the rows. A row
+  with a value and no name, or with a name that is not an HTTP token
+  (letters, digits and ``!#$%&'*+.^_`|~-``), is marked on the row with why,
+  `Header name "Bad Name" is not one HTTP allows.`, and the run is not
+  sent; the server checks again what it is sent. The rows are kept when
+  another collector is chosen.
 - **A target**, *Probe a target* on the page, at `full` only: fetched
   exactly as `/probe?debug=true` fetches it, through a configured collector — the one chosen, or the one the
   playground was copied from — with its request block,
@@ -5489,13 +5499,21 @@ as each type says it, so a build without a type has nothing of it:
 | `tcp` | Server: `host:port` |
 | `ldap` | LDAP server: `host, host:port or ldaps://host:port` |
 
-The probe parameters' placeholder lists the collector's own
-`{{param_<name>}}` placeholders, one `param_<name>=<default>` a line, with
-nothing after `=` for one without a default, and then the other parameters
-its type takes from a probe, `header_<name>` for each header it forwards;
-a collector that takes none, such as a `dns` collector without a
-placeholder, is offered no field, and the page says *This collector takes
-no probe parameters.* The page reads the form of each collector again with
+The probe parameters are rows of a name and a value, as the headers are:
+a row for each of the collector's own `{{param_<name>}}` placeholders, its
+name filled in and its value empty, which takes the default, shown greyed
+in the box (none for one without a default); *+ Add parameter* adds a row,
+whose name box suggests the other parameters its type takes from a probe,
+`header_<name>` for each header it forwards. A blank row is not sent, and
+one with an empty value is sent empty, which a `param_<name>` takes as not
+given. The page marks on its row what `/probe` would refuse: a value with
+no name, `target`, `collector` or `debug`, which the page sets itself, and
+a parameter given again, `Probe parameter path is given 2 times; give it
+once.`, but for a `header_<name>`, each value of which is forwarded; the
+run is not sent then. Choosing another collector makes the rows again,
+keeping what was typed for a name the new one takes too. A collector that
+takes none, such as a `dns` collector without a placeholder, is offered no
+rows, and the page says *This collector takes no probe parameters.* The page reads the form of each collector again with
 its YAML from `/debug/collector`, so it follows a reload. The target is
 probed as `/probe?debug=true` probes it, and the page says through which
 collector: *Probed through status_json, the collector chosen.*
@@ -5572,15 +5590,21 @@ through it, each a `name` and its `target` as the list shows it, `[]` for
 none, and `form`, what the page asks a run of it for: `request_type`,
 `answer`, the body's placeholder, `content_type` and `http_answer`, whether
 it asks for a `Content-Type` and for a status and headers, `target_label`
-and `target_hint`, or `no_target`, and `params`, the probe parameters'
-placeholder, left out when it takes none; a name the configuration does not
+and `target_hint`, or `no_target`, `params`, its own probe parameters, each
+a `name` and its `default`, and `other_params`, the names of the others it
+takes, each left out when it takes none; a name the configuration does not
 have is answered `404` with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for
 `collector`, `request_from`, the configured collector to fetch through, which
 the page fills with the one the playground was copied from; or
-`static_target`. It answers
+`static_target`. `headers` and `params` are objects of names, each with a
+string, or a list of strings for a name given more than once,
+`{"X-Trace": ["one", "two"]}`: a pasted response then has the header once
+for each value, at most 100 values in all, a `header_<name>` parameter
+forwards each, and any other parameter given twice is refused, as `/probe`
+refuses it. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
 (Prometheus text), `samples`, the same series one sample at a time as the
 table shows them, each with its `name` (a histogram's or summary's with its

@@ -2,7 +2,10 @@
 
 package exporter
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // The debug page asks a run of an sshfile collector for the host, its port
 // 22 unless written, the account being request.username; a pasted response
@@ -20,8 +23,8 @@ func TestTheDebugPageAsksAnSSHFileCollectorForTheHost(t *testing.T) {
     transform: {type: prometheus}
 `)
 	page, form := debugFormPage(t, server, "remote")
-	want := debugForm{RequestType: "sshfile", Answer: "Paste the file's content", ContentType: true, TargetLabel: "SSH host", TargetHint: "host or host:22", Params: "also: path"}
-	if form != want {
+	want := debugForm{RequestType: "sshfile", Answer: "Paste the file's content", ContentType: true, TargetLabel: "SSH host", TargetHint: "host or host:22", OtherParams: []string{"path"}}
+	if !reflect.DeepEqual(form, want) {
 		t.Errorf("the form is %+v, want %+v", form, want)
 	}
 	requireDebugForm(t, page, form)

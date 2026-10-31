@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,16 +131,61 @@ var debugHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 // pasted response; Target with RequestFrom, a fetch; or StaticTarget, a
 // static target's scrape.
 type debugRunRequest struct {
-	Collector    *string           `json:"collector"`
-	Configured   string            `json:"configured"`
-	Body         *string           `json:"body"`
-	ContentType  string            `json:"content_type"`
-	Status       int               `json:"status"`
-	Headers      map[string]string `json:"headers"`
-	RequestFrom  string            `json:"request_from"`
-	Target       *string           `json:"target"`
-	StaticTarget string            `json:"static_target"`
-	Params       map[string]string `json:"params"`
+	Collector    *string     `json:"collector"`
+	Configured   string      `json:"configured"`
+	Body         *string     `json:"body"`
+	ContentType  string      `json:"content_type"`
+	Status       int         `json:"status"`
+	Headers      debugValues `json:"headers"`
+	RequestFrom  string      `json:"request_from"`
+	Target       *string     `json:"target"`
+	StaticTarget string      `json:"static_target"`
+	Params       debugValues `json:"params"`
+}
+
+// debugValues are a run's headers or probe parameters, each name with a
+// string, or a list of strings for a name given more than once: a response
+// may repeat a header, as HTTP lets it, and a probe a header_<name>
+// parameter, each value of which is forwarded. A JSON object cannot hold a
+// name twice, and a value joined with commas is not what a response with
+// the header twice gives a decoder, which reads the first.
+type debugValues map[string][]string
+
+func (v *debugValues) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make(debugValues, len(raw))
+	for name, value := range raw {
+		var one string
+		if err := json.Unmarshal(value, &one); err == nil {
+			out[name] = []string{one}
+			continue
+		}
+		var many []string
+		if err := json.Unmarshal(value, &many); err != nil {
+			return fmt.Errorf("%q has neither a string nor a list of strings", name)
+		}
+		out[name] = many
+	}
+	*v = out
+	return nil
+}
+
+// count is the number of values, every value of a name counted.
+func (v debugValues) count() int {
+	n := 0
+	for _, values := range v {
+		n += len(values)
+	}
+	return n
+}
+
+// names are v's names in order, so that values are added, and a run
+// refused, the same way each time.
+func (v debugValues) names() []string {
+	return slices.Sorted(maps.Keys(v))
 }
 
 // debugSource is what a run reads.
@@ -442,7 +489,7 @@ type debugPageCollector struct {
 // headers for an answer that is an HTTP response (fetch.AnswersHTTP); for a
 // target, what the type takes as one (fetch.TargetPromptOf), or nothing for
 // a type that takes none, and the collector's probe parameters
-// (debugParamsHint). The page holds the form of each configured collector
+// (debugParamsOf). The page holds the form of each configured collector
 // and of the playground, and GET /debug/collector answers it again with the
 // collector, so it follows a reload.
 type debugForm struct {
@@ -454,14 +501,25 @@ type debugForm struct {
 	TargetLabel string `json:"target_label,omitempty"`
 	TargetHint  string `json:"target_hint,omitempty"`
 	NoTarget    bool   `json:"no_target,omitempty"`
-	// Params is the probe parameters' placeholder, "" for a collector that
-	// takes none.
-	Params string `json:"params,omitempty"`
+	// Params are the collector's own probe parameters, a row of each, and
+	// OtherParams the names of the others it takes, offered as names to
+	// choose (debugParamsOf); both are empty for a collector that takes
+	// none.
+	Params      []debugParam `json:"params,omitempty"`
+	OtherParams []string     `json:"other_params,omitempty"`
+}
+
+// debugParam is a {{param_<name>}} placeholder of a collector: its name,
+// param_<name>, and its default, "" for one without.
+type debugParam struct {
+	Name    string `json:"name"`
+	Default string `json:"default"`
 }
 
 // debugFormOf is the form the page asks a run of c to fill.
 func debugFormOf(c *model.Collector) debugForm {
-	f := debugForm{RequestType: c.Request.Type, Answer: fetch.AnswerHintOf(c), HTTPAnswer: fetch.AnswersHTTP(c), Params: debugParamsHint(c)}
+	f := debugForm{RequestType: c.Request.Type, Answer: fetch.AnswerHintOf(c), HTTPAnswer: fetch.AnswersHTTP(c)}
+	f.Params, f.OtherParams = debugParamsOf(c)
 	if f.Answer == "" {
 		f.Answer = "Paste what the target answers"
 	}
@@ -490,16 +548,16 @@ func playgroundForm() debugForm {
 	return debugForm{Answer: "Paste what the target answers", ContentType: true, HTTPAnswer: true}
 }
 
-// debugParamsHint is the placeholder of the probe parameters of c: a line
-// param_<name>=<default> of each {{param_<name>}} placeholder of its request
-// and its labels (fetch.RequestParams), with nothing after = for one
-// without a default, and the other parameters its type takes from a probe,
-// header_<name> those of the headers it forwards; "" when it takes none.
-// timeout is left out: the page's own timeout bounds the run.
-func debugParamsHint(c *model.Collector) string {
-	var lines []string
+// debugParamsOf is what the page offers of the probe parameters of c: a
+// row of each {{param_<name>}} placeholder of its request and its labels
+// (fetch.RequestParams), with its default, and as names to choose, the other
+// parameters its type takes from a probe, header_<name> those of the
+// headers it forwards; none when it takes none. timeout is left out: the
+// page's own timeout bounds the run.
+func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
+	var own []debugParam
 	for _, p := range fetch.RequestParams(c) {
-		lines = append(lines, p.Name+"="+p.Default)
+		own = append(own, debugParam{Name: p.Name, Default: p.Default})
 	}
 	var others []string
 	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
@@ -518,10 +576,7 @@ func debugParamsHint(c *model.Collector) string {
 			others = append(others, key)
 		}
 	}
-	if len(others) > 0 {
-		lines = append(lines, "also: "+strings.Join(others, ", "))
-	}
-	return strings.Join(lines, "\n")
+	return own, others
 }
 
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
@@ -660,18 +715,20 @@ func readDebugRunRequest(w http.ResponseWriter, r *http.Request) (debugRunReques
 		return req, http.StatusBadRequest, errors.New("params are not taken with static_target: a static target's scrape is made with the target's own settings")
 	case req.Status != 0 && (req.Status < 100 || req.Status > 599):
 		return req, http.StatusBadRequest, fmt.Errorf("status %d is no HTTP status; give one from 100 to 599", req.Status)
-	case len(req.Headers) > debugMaxHeaders:
-		return req, http.StatusBadRequest, fmt.Errorf("%d headers; a pasted response may have at most %d", len(req.Headers), debugMaxHeaders)
+	case req.Headers.count() > debugMaxHeaders:
+		return req, http.StatusBadRequest, fmt.Errorf("%d headers; a pasted response may have at most %d", req.Headers.count(), debugMaxHeaders)
 	}
-	for name, value := range req.Headers {
+	for _, name := range req.Headers.names() {
 		if !debugHeaderName.MatchString(name) {
 			return req, http.StatusBadRequest, fmt.Errorf("header name %q is not one HTTP allows", name)
 		}
-		if err := fetch.CheckHeaderValue(value); err != nil {
-			return req, http.StatusBadRequest, fmt.Errorf("header %s %w", name, err)
+		for _, value := range req.Headers[name] {
+			if err := fetch.CheckHeaderValue(value); err != nil {
+				return req, http.StatusBadRequest, fmt.Errorf("header %s %w", name, err)
+			}
 		}
 	}
-	for key := range req.Params {
+	for _, key := range req.Params.names() {
 		if probeIdentityParam(key) || key == probeDebugParam {
 			return req, http.StatusBadRequest, fmt.Errorf("params holds %s, which the debug page sets itself: give the target as target, and the collector as collector, configured or request_from", key)
 		}
@@ -724,8 +781,12 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		return static, notes, 0, nil
 	}
 	query := url.Values{}
-	for key, value := range req.Params {
-		query.Set(key, value)
+	// Every value is given, so a parameter given twice is refused as
+	// /probe refuses it, and a header_<name> given twice forwards both.
+	for _, key := range req.Params.names() {
+		for _, value := range req.Params[key] {
+			query.Add(key, value)
+		}
 	}
 	requester := c
 	if source == debugSourceTarget {
@@ -778,8 +839,10 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 	p.overrides, p.budget, p.budgetSource = overrides, budget, budgetSource
 	if source == debugSourcePasted {
 		headers := make(http.Header, len(req.Headers)+1)
-		for name, value := range req.Headers {
-			headers.Set(name, value)
+		for _, name := range req.Headers.names() {
+			for _, value := range req.Headers[name] {
+				headers.Add(name, value)
+			}
 		}
 		if req.ContentType != "" {
 			headers.Set("Content-Type", req.ContentType)

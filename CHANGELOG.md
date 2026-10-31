@@ -124,7 +124,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   metric lint's advice on the rows of the metric it is about. The text view
   is the whole answer, as before, and `/debug/run` answers the series one
   sample at a time as `samples`. The response radio that probes a target is
-  now called *Probe a target*.
+  now called *Probe a target*. A pasted response's headers and the probe
+  parameters are rows of a name and a value, added with *+ Add header* or
+  *+ Add parameter* and removed with *×*, in place of a text box of lines:
+  a row is checked as the server would check it and marked with why, the
+  collector's own `{{param_<name>}}` parameters are rows to start with,
+  their defaults shown, and the others it takes are suggested as names. A
+  run's `headers` and `params` take a list of values for a repeated name.
 
 ### Fixed
 

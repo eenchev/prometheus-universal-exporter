@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -45,9 +46,9 @@ func TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows(t *testing.T) {
 	page, form := debugFormPage(t, server, "pg_values")
 	want := debugForm{
 		RequestType: "sql", Answer: "Paste the rows as JSON, a list of objects of each row's columns by name, as the Response of a run shows them",
-		TargetLabel: "Database server", TargetHint: "host or host:5432", Params: "param_min=0",
+		TargetLabel: "Database server", TargetHint: "host or host:5432", Params: []debugParam{{Name: "param_min", Default: "0"}},
 	}
-	if form != want {
+	if !reflect.DeepEqual(form, want) {
 		t.Errorf("the form is %+v, want %+v", form, want)
 	}
 	requireDebugForm(t, page, form)

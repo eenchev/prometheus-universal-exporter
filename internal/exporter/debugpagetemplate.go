@@ -136,6 +136,16 @@ table.series details { margin: 0; }
 table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600; color: var(--accent); }
 .lint-advice { margin: 4px 0 0; font-size: 12px; white-space: normal; }
 .lint-unplaced { margin: 0 0 8px; padding-left: 18px; font-size: 13px; }
+.kv-title { font-size: 13px; margin: 8px 0 2px; }
+.kv-item + .kv-item { margin-top: 6px; }
+.kv-row { display: flex; align-items: flex-start; gap: 6px; }
+.kv-fields { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.kv-fields input { flex: 1 1 8em; width: auto; min-width: 0; height: 34px; }
+.kv-fields input.kv-value { flex-grow: 2; }
+.kv-row button.kv-remove { flex: 0 0 34px; width: 34px; height: 34px; padding: 0; margin: 0; border-color: var(--line); background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+.kv-row button.kv-remove:hover { color: var(--bad); border-color: var(--bad); }
+.kv-fields input[aria-invalid="true"] { border-color: var(--bad); }
+.kv-error { margin: 2px 0 0; color: var(--bad); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -184,9 +194,10 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 <div class="narrow" id="status-part"{{if not .Form.HTTPAnswer}} hidden{{end}}><label for="status">Status</label>
 <input id="status" type="number" min="100" max="599" value="200"></div>
 </div>
-<div id="headers-part"{{if not .Form.HTTPAnswer}} hidden{{end}}>
-<label for="headers">Other headers, one <code>Name: value</code> a line</label>
-<textarea id="headers" rows="2" spellcheck="false" autocomplete="off"></textarea>
+<div id="headers-part" role="group" aria-labelledby="headers-title"{{if not .Form.HTTPAnswer}} hidden{{end}}>
+<div class="kv-title" id="headers-title">Other headers</div>
+<div class="kv" id="headers-rows"></div>
+<button type="button" class="secondary" id="headers-add">+ Add header</button>
 </div>
 <label for="body">Body</label>
 <textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="{{.Form.Answer}}" data-example="{{.ExampleBody}}">{{if not .Chosen}}{{.ExampleBody}}{{end}}</textarea>
@@ -200,11 +211,14 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 <input id="target" type="text" placeholder="{{.Form.TargetHint}}" autocomplete="off">
 </div>
 <p class="note" id="no-target"{{if not .Form.NoTarget}} hidden{{end}}>This collector names its own target.</p>
-<div id="params-part"{{if not .Form.Params}} hidden{{end}}>
-<label for="params">Probe parameters, one <code>name=value</code> a line</label>
-<textarea id="params" rows="3" spellcheck="false" autocomplete="off" placeholder="{{.Form.Params}}"></textarea>
+<div id="params-part" role="group" aria-labelledby="params-title"{{if not (or .Form.Params .Form.OtherParams)}} hidden{{end}}>
+<div class="kv-title" id="params-title">Probe parameters</div>
+<p class="note">A parameter left empty takes its default, shown greyed in its box; a name box suggests the parameters the collector takes.</p>
+<datalist id="params-names"></datalist>
+<div class="kv" id="params-rows"></div>
+<button type="button" class="secondary" id="params-add">+ Add parameter</button>
 </div>
-<p class="note" id="no-params"{{if .Form.Params}} hidden{{end}}>This collector takes no probe parameters.</p>
+<p class="note" id="no-params"{{if or .Form.Params .Form.OtherParams}} hidden{{end}}>This collector takes no probe parameters.</p>
 </div>
 <div data-mode="static" hidden>
 <p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, through the collector chosen, or the one the playground was copied from, and read by the collector chosen. Nothing is published.</p>
@@ -328,6 +342,166 @@ const fetcher = () => $("configured").value || copiedFrom;
 const forms = JSON.parse($("forms").textContent);
 const formOf = (name) => (name !== "" && forms.collectors[name]) || forms.playground;
 const readerForm = () => formOf($("configured").value);
+// The headers of a pasted response and the probe parameters are each a list
+// of rows, a name and a value with × to remove the row, and a button to add
+// one. A row left blank is not sent, and one with a value and no name, or a
+// name the server would refuse, is marked on the row, with why, and the run
+// not sent; the server checks again whatever it is sent. What is typed is
+// put in with value and textContent alone, never as HTML.
+let rowIds = 0;
+function editor(rowsBox, addButton, noun, check, hint, names) {
+  const rows = [];
+  const title = noun[0].toUpperCase() + noun.slice(1);
+  const relabel = () => rows.forEach((row, i) => {
+    row.name.setAttribute("aria-label", title + " name " + (i + 1));
+    row.value.setAttribute("aria-label", title + " value " + (i + 1));
+    row.remove.setAttribute("aria-label", "Remove " + noun + " " + (i + 1));
+  });
+  let marked = false;
+  // validate marks every row that is wrong and returns the first input to
+  // put right, or null.
+  const validate = () => {
+    let first = null;
+    marked = false;
+    rows.forEach((row, i) => {
+      const name = row.name.value.trim(), value = row.value.value;
+      let message = "";
+      if (name === "" && value !== "") message = "A " + noun + " needs a name: give one, or clear the value.";
+      else if (name !== "") message = check(name, rows.slice(0, i).map((before) => before.name.value.trim()), rows.map((each) => each.name.value.trim()));
+      row.error.textContent = message;
+      row.error.hidden = message === "";
+      if (message === "") {
+        row.name.removeAttribute("aria-invalid");
+        row.name.removeAttribute("aria-describedby");
+      } else {
+        row.name.setAttribute("aria-invalid", "true");
+        row.name.setAttribute("aria-describedby", row.error.id);
+        marked = true;
+        if (first === null) first = row.name;
+      }
+    });
+    return first;
+  };
+  const add = (name = "", value = "", focus = false) => {
+    const item = document.createElement("div"), line = document.createElement("div"), fields = document.createElement("div");
+    item.className = "kv-item";
+    line.className = "kv-row";
+    fields.className = "kv-fields";
+    const row = { item, name: document.createElement("input"), value: document.createElement("input"), remove: document.createElement("button"), error: document.createElement("p") };
+    for (const input of [row.name, row.value]) {
+      input.type = "text";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.addEventListener("input", () => { if (marked) validate(); });
+      input.addEventListener("change", validate);
+    }
+    row.name.className = "kv-name";
+    row.name.placeholder = "Name";
+    if (names) row.name.setAttribute("list", names);
+    row.name.value = name;
+    row.value.className = "kv-value";
+    row.value.value = value;
+    row.value.placeholder = hint(name.trim());
+    row.name.addEventListener("input", () => { row.value.placeholder = hint(row.name.value.trim()); });
+    // Enter in the last row's value adds a row.
+    row.value.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || rows[rows.length - 1] !== row) return;
+      event.preventDefault();
+      add("", "", true);
+    });
+    row.remove.type = "button";
+    row.remove.className = "secondary kv-remove";
+    row.remove.textContent = "\u00d7";
+    row.remove.addEventListener("click", () => {
+      const at = rows.indexOf(row);
+      rows.splice(at, 1);
+      item.remove();
+      relabel();
+      validate();
+      // Focus stays in the list: on the row that took this one's place,
+      // the one before it, or the button that adds one.
+      const next = rows[at] || rows[at - 1];
+      (next ? next.name : addButton).focus();
+    });
+    row.error.className = "kv-error";
+    row.error.id = "kv-error-" + ++rowIds;
+    row.error.hidden = true;
+    fields.append(row.name, row.value);
+    line.append(fields, row.remove);
+    item.append(line, row.error);
+    rowsBox.append(item);
+    rows.push(row);
+    relabel();
+    if (focus) row.name.focus();
+    return row;
+  };
+  addButton.addEventListener("click", () => add("", "", true));
+  return {
+    rows, add, validate,
+    clear: () => { rows.length = 0; rowsBox.replaceChildren(); },
+    // values are the rows filled in, name to its values in the order of the
+    // rows; same (a name) is the name a later row's is given as, so that two
+    // that differ only as same says are one name repeated.
+    values: (same) => {
+      const out = {}, spelt = new Map();
+      for (const row of rows) {
+        const name = row.name.value.trim();
+        if (name === "") continue;
+        const key = spelt.get(same(name)) ?? name;
+        spelt.set(same(name), key);
+        (out[key] ||= []).push(row.value.value);
+      }
+      // One value is sent as a string, more as a list.
+      for (const name of Object.keys(out)) if (out[name].length === 1) out[name] = out[name][0];
+      return out;
+    },
+  };
+}
+// A header's name is an HTTP token, as the server reads it; a name may be
+// given again, as HTTP lets a response repeat a header, and the names of a
+// header are the same in any case.
+const headerName = /^[!#$%&'*+.^_\x60|~0-9A-Za-z-]+$/;
+const headers = editor($("headers-rows"), $("headers-add"), "header",
+  (name) => headerName.test(name) ? "" : "Header name " + JSON.stringify(name) + " is not one HTTP allows.",
+  () => "Value");
+headers.add();
+// A probe parameter is given once, as /probe takes it, but header_<name>,
+// every value of which is forwarded; target, collector and debug are the
+// page's own.
+const headerParam = (name) => name.length > 7 && name.slice(0, 7).toLowerCase() === "header_";
+let paramDefaults = new Map();
+const params = $("params-rows") && editor($("params-rows"), $("params-add"), "parameter",
+  (name, before, all) => {
+    if (name === "target" || name === "collector" || name === "debug") return name + " is one the debug page sets itself.";
+    if (headerParam(name) || !before.includes(name)) return "";
+    return "Probe parameter " + name + " is given " + all.filter((other) => other === name).length + " times; give it once.";
+  },
+  (name) => paramDefaults.get(name) || "Value", "params-names");
+// The rows of the probe parameters are those of the collector a target is
+// probed through: a row of each of its own, with its default shown, and the
+// others it takes offered as names. A change of collector makes them again,
+// keeping what was typed for a name the new one takes too.
+let paramsOf = null;
+function showParams(through) {
+  const own = through.params || [], others = through.other_params || [];
+  $("params-part").hidden = own.length + others.length === 0;
+  $("no-params").hidden = own.length + others.length > 0;
+  const of = JSON.stringify([own, others]);
+  if (of === paramsOf) return;
+  paramsOf = of;
+  paramDefaults = new Map(own.map((param) => [param.name, param.default]));
+  const takes = new Set([...own.map((param) => param.name), ...others]);
+  $("params-names").replaceChildren(...[...takes].map((name) => { const option = document.createElement("option"); option.value = name; return option; }));
+  const typed = params.rows.map((row) => ({ name: row.name.value.trim(), value: row.value.value })).filter((row) => takes.has(row.name));
+  params.clear();
+  for (const param of own) {
+    const at = typed.findIndex((row) => row.name === param.name);
+    params.add(param.name, at < 0 ? "" : typed.splice(at, 1)[0].value);
+  }
+  for (const row of typed) params.add(row.name, row.value);
+  if (params.rows.length === 0 && takes.size > 0) params.add();
+  params.validate();
+}
 function showForm() {
   const reads = readerForm();
   $("content-type-part").hidden = !reads.content_type;
@@ -340,9 +514,7 @@ function showForm() {
   $("no-target").hidden = !through.no_target;
   $("target-label").textContent = through.target_label || "Target";
   $("target").placeholder = through.target_hint || "";
-  $("params-part").hidden = !through.params;
-  $("no-params").hidden = !!through.params;
-  $("params").placeholder = through.params || "";
+  showParams(through);
 }
 // A collector read again from /debug/collector brings its form with it,
 // which a reload may have changed.
@@ -460,16 +632,12 @@ for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEv
 $("configured").addEventListener("change", showCollector);
 showMode();
 showCollector();
-// "Name: value" and "name=value" lines, a blank one skipped.
-const lines = (text, separator) => {
-  const out = {};
-  for (const line of text.split("\n")) {
-    if (line.trim() === "") continue;
-    const at = line.indexOf(separator);
-    if (at < 0) throw new Error("the line " + JSON.stringify(line) + " has no " + separator);
-    out[line.slice(0, at).trim()] = line.slice(at + 1).trim();
-  }
-  return out;
+// A list whose rows are wrong is not sent: the first wrong row is focused,
+// and the status says where to look.
+const filled = (list, what, same) => {
+  const wrong = list.validate();
+  if (wrong) { wrong.focus(); throw new Error("A " + what + " row is wrong; it says why below it."); }
+  return list.values(same);
 };
 let running = null;
 async function run() {
@@ -487,7 +655,9 @@ async function run() {
       const through = formOf(fetcher());
       if (request.collector !== undefined) request.request_from = copiedFrom;
       request.target = through.no_target ? "" : $("target").value;
-      request.params = through.params ? lines($("params").value, "=") : {};
+      // A parameter's name is the same in one case only, as /probe reads
+      // it.
+      request.params = $("params-part").hidden ? {} : filled(params, "probe parameter", (name) => name);
     } else if (mode() === "static") {
       request.static_target = $("static-target").value;
     } else {
@@ -495,7 +665,7 @@ async function run() {
       request.body = $("body").value;
       request.content_type = reads.content_type ? $("content-type").value : "";
       request.status = reads.http_answer ? Number($("status").value) || 0 : 0;
-      request.headers = reads.http_answer ? lines($("headers").value, ":") : {};
+      request.headers = reads.http_answer ? filled(headers, "header", (name) => name.toLowerCase()) : {};
     }
   } catch (error) {
     statusLine.className = "status failed";

@@ -3,6 +3,7 @@
 package exporter
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -25,14 +26,15 @@ func TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters(t *testing.T) {
 	want := debugForm{
 		RequestType: "http", Answer: "Paste what the target answers: the body, with its Content-Type, status and headers",
 		ContentType: true, HTTPAnswer: true, TargetLabel: "URL", TargetHint: "https://host:port",
-		Params: "param_city=sofia\nparam_days=\nalso: method, path, body, insecure_skip_verify, follow_redirects, enable_http2, retry_attempts, retry_backoff, header_X-Tenant",
+		Params:      []debugParam{{Name: "param_city", Default: "sofia"}, {Name: "param_days"}},
+		OtherParams: []string{"method", "path", "body", "insecure_skip_verify", "follow_redirects", "enable_http2", "retry_attempts", "retry_backoff", "header_X-Tenant"},
 	}
-	if form != want {
+	if !reflect.DeepEqual(form, want) {
 		t.Errorf("the form is %+v, want %+v", form, want)
 	}
 	requireDebugForm(t, page, form)
 	requireInPage(t, page, `<p class="note" id="fetched-through">Probed through weather, the collector chosen.</p>`,
 		`The target is probed as <code>/probe?debug=true</code> probes it`)
 	playground, _ := debugFormPage(t, server, "")
-	requireInPage(t, playground, `<div id="content-type-part">`, `<div class="narrow" id="status-part">`, `<div id="headers-part">`)
+	requireInPage(t, playground, `<div id="content-type-part">`, `<div class="narrow" id="status-part">`, `<div id="headers-part" role="group" aria-labelledby="headers-title">`)
 }

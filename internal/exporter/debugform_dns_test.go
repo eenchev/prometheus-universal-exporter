@@ -2,7 +2,10 @@
 
 package exporter
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // The debug page asks a run of a dns collector for the name to resolve, or
 // the address of a PTR lookup, the server being the collector's own; one
@@ -29,7 +32,7 @@ func TestTheDebugPageAsksADNSCollectorForTheNameToResolve(t *testing.T) {
 		"addresses": {RequestType: "dns", Answer: answer, TargetLabel: "Address to resolve", TargetHint: "192.0.2.1 or 2001:db8::1"},
 	} {
 		page, form := debugFormPage(t, server, name)
-		if form != want {
+		if !reflect.DeepEqual(form, want) {
 			t.Errorf("%s: the form is %+v, want %+v", name, form, want)
 		}
 		requireDebugForm(t, page, form)

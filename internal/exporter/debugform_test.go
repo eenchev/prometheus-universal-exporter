@@ -11,6 +11,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -66,7 +67,7 @@ func debugFormPage(t *testing.T, server *Server, name string) (string, debugForm
 	if err := json.Unmarshal([]byte(page[start+len(`<script type="application/json" id="forms">`):start+end]), &held); err != nil {
 		t.Fatal(err)
 	}
-	if held.Collectors[name] != *answer.Form {
+	if !reflect.DeepEqual(held.Collectors[name], *answer.Form) {
 		t.Errorf("the page holds the form %+v of %s, /debug/collector answers %+v", held.Collectors[name], name, *answer.Form)
 	}
 	return page, *answer.Form
@@ -75,7 +76,7 @@ func debugFormPage(t *testing.T, server *Server, name string) (string, debugForm
 // requireDebugForm checks that page, opened on a collector, asks for what
 // form says, as the page's fields first show it: the target's label and
 // placeholder, or the note that the collector names its own; the probe
-// parameters' placeholder, or the note that it takes none; the body's
+// parameters' rows, or the note that it takes none; the body's
 // placeholder; and the Content-Type, status and headers shown or hidden.
 func requireDebugForm(t *testing.T, page string, form debugForm) {
 	t.Helper()
@@ -91,13 +92,12 @@ func requireDebugForm(t *testing.T, page string, form debugForm) {
 		requireInPage(t, page, `<div id="target-part">`, `<label for="target" id="target-label">`+html.EscapeString(form.TargetLabel)+`</label>`,
 			`<input id="target" type="text" placeholder="`+html.EscapeString(form.TargetHint)+`" autocomplete="off">`, `<p class="note" id="no-target" hidden>`)
 	}
-	if form.Params == "" {
-		requireInPage(t, page, `<div id="params-part" hidden>`, `<p class="note" id="no-params">This collector takes no probe parameters.</p>`)
-	} else {
-		requireInPage(t, page, `<div id="params-part">`, `placeholder="`+html.EscapeString(form.Params)+`"></textarea>`, `<p class="note" id="no-params" hidden>`)
-	}
+	// The rows of the parameters are the script's to make, from the form.
+	takes := len(form.Params)+len(form.OtherParams) > 0
+	requireInPage(t, page, `<div id="params-part" role="group" aria-labelledby="params-title"`+hidden(!takes)+`>`,
+		`<p class="note" id="no-params"`+hidden(takes)+`>This collector takes no probe parameters.</p>`)
 	requireInPage(t, page, `<div id="content-type-part"`+hidden(!form.ContentType)+`>`, `<div class="narrow" id="status-part"`+hidden(!form.HTTPAnswer)+`>`,
-		`<div id="headers-part"`+hidden(!form.HTTPAnswer)+`>`, `placeholder="`+html.EscapeString(form.Answer)+`" data-example=`)
+		`<div id="headers-part" role="group" aria-labelledby="headers-title"`+hidden(!form.HTTPAnswer)+`>`, `placeholder="`+html.EscapeString(form.Answer)+`" data-example=`)
 }
 
 // requireInPage is requireContains, which builds without http and localfile.

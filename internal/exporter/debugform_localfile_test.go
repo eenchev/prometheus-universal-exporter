@@ -2,7 +2,10 @@
 
 package exporter
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // The debug page asks a run of a localfile collector for what its target is
 // under its root, and says it may be left out: the directory that holds the
@@ -22,13 +25,13 @@ func TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot(t *testing.T) {
     transform: {type: prometheus}
 `)
 	for name, want := range map[string]debugForm{
-		"named":     {TargetLabel: "Directory", TargetHint: "a directory under its root that holds app.prom (optional)", Params: "also: path"},
+		"named":     {TargetLabel: "Directory", TargetHint: "a directory under its root that holds app.prom (optional)", OtherParams: []string{"path"}},
 		"textfiles": {TargetLabel: "Directory", TargetHint: "a directory under its root (optional)"},
-		"any":       {TargetLabel: "File", TargetHint: "a file under its root, such as app.prom (optional)", Params: "also: path"},
+		"any":       {TargetLabel: "File", TargetHint: "a file under its root, such as app.prom (optional)", OtherParams: []string{"path"}},
 	} {
 		want.RequestType, want.Answer, want.ContentType = "localfile", "Paste the file's content", true
 		page, form := debugFormPage(t, server, name)
-		if form != want {
+		if !reflect.DeepEqual(form, want) {
 			t.Errorf("%s: the form is %+v, want %+v", name, form, want)
 		}
 		requireDebugForm(t, page, form)

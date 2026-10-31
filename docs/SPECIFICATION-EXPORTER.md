@@ -29519,13 +29519,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent` (changed): so with nothing in progress as with a probe.
 - `TestShutdownTimeoutBoundsTheWait`, `TestTheExporterForwardsItsOwnLogOverOTLP`, `TestOTLPExportsThroughTheShutdownDelay` and the other shutdown tests (changed): they look for the new wording of the shutdown's first line and of its giving up.
 
-## 34.242 The debug page's series as a table, and Probe a target
+## 34.242 The debug page's series as a table, Probe a target, and headers and parameters as rows
 
 - `TestTheDebugPageAnswersEachSampleOfARun`: a pasted Prometheus text with a gauge, `NaN`, a counter, a histogram, a summary with its quantiles out of order and an untyped `+Inf` is answered with `samples` whose `name`, `labels` and `value`, written as sample lines, are the lines of `series` in its order, each with its metric's `metric` and `type`: the histogram's `le="0.5"` and `le="+Inf"` buckets, `_sum` and `_count`, the summary's `quantile="0.5"` before `0.9`, `_sum` and `_count`; a refused run has none.
 - `TestTheDebugPagesLintFindingsNameTheMetricOfTheirSamples`: a written collector's `jobs` counter and a counter `idle` whose items select nothing give `counter-total` findings on `jobs`, which samples are of, and on `idle`, which none is, and none on `queue_length`; the page's script puts a finding on the rows of the metric it names, lists one of no row's metric above the table, `which no series is of`, and writes the advice as a summary's title and as the text it opens to.
 - `TestTheDebugPageShowsTheSeriesAsATable`: `/debug` has the *Table* tab selected and the *Text* tab, the text's `<pre id="series"></pre>` unchanged in its own panel, a filter box, a metric list and the table in a box that scrolls; the script sorts by a clicked header, again reversed, `value`, `le` and `quantile` as numbers with `+Inf` read, a missing label last, filters case-insensitively and by metric, says `<n> of <m> series`, draws at most 2000 rows with `Showing the first 2000 of <n>; filter to narrow.`, fills cells by `textContent`, keeps the view in the browser and shows a refused run as text; it writes no HTML (`innerHTML`, `outerHTML`, `insertAdjacentHTML`).
 - `TestTheDebugPageSaysProbeATarget`: at `full`, with and without a collector chosen and a `target` in the address, the radio says *Probe a target* and the note `to probe a target or scrape a static target.`, its value `fetch` and id `mode-fetch` and the `target` the address names read as before, and the page says *Fetch a target* nowhere; at `edit` it says `Probing a target needs --web.debug=full`.
 - `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector` (changed): they look for *Probe a target* and `to probe a target or scrape a static target.`.
+- `TestTheDebugRunTakesRepeatedHeadersAndParameters`: a pasted run with `"X-Trace": ["one", "two"]` and `"X-Single": "three"` shows `X-Trace: one` then `X-Trace: two` and `X-Single: three` among the response's headers; `param_room` given twice is refused `probe parameter param_room is given 2 times; give it once`; a header's value as a number, a list of numbers or an object is refused `"X-Trace" has neither a string nor a list of strings`, and 101 values of one header as `101 headers`; at `full` `header_X-Tenant` given as `a` and `b` sends the target both.
+- `TestTheDebugPageEditsHeadersAndParametersAsRows`: `/debug` has no `headers` or `params` textarea and no `also: ` hint, but the headers' and the parameters' groups with their titles, row boxes, *+ Add header* and *+ Add parameter*, the `params-names` datalist and the note on defaults; the script labels each input and *×* with its row's number, fills by `value` and `textContent`, moves focus on add and remove, adds a row on Enter in the last value, words the checks as the server (`A header needs a name`, `Header name "…" is not one HTTP allows.`, `Probe parameter … is given … times; give it once.`, the page's own `target`, `collector` and `debug`, `header_<name>` free to repeat), marks the row `aria-invalid` and stops the run, sends one value as a string and more as a list, a header's name in any case and a parameter's as written, and keeps typed values for the names the next collector takes; the CSS keeps name, value and *×* `34px` high on one wrapping line; its header-name pattern is the server's `debugHeaderName`.
+- `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`, `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`, `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`, `TestTheDebugPageAsksAnSSHFileCollectorForTheHost` and the other per-type form tests (changed): the form gives `params` as names with defaults (`param_city` `sofia`, `param_days`; `param_min` `0`) and `other_params` as names (`method`, …, `header_X-Tenant`; `path`), and the page shows the parameters' group or the note that the collector takes none.
 
 # 35. Documentation requirements
 
@@ -33267,7 +33270,12 @@ response — `body`, with `content_type`, `status` (200 when left out, else
 100 to 599) and `headers` — or `target`, with `request_from`, a collector of
 the configuration in force, and `params`, probe parameters, as `/probe` takes
 them, without `target`, `collector` or `debug`; or `static_target`, the name
-of a static target, without `params`. A run that is not that object, names
+of a static target, without `params`. `headers` and `params` MUST be objects
+of names, each with a string or a list of strings, a name given more than
+once: a pasted response MUST have a header once for each of its values, in
+their order, at most 100 values in all, a `header_<name>` parameter MUST
+forward each, and any other parameter given more than once MUST be refused
+as `/probe` refuses it; a value of another kind MUST be answered `400`. A run that is not that object, names
 two collectors or none, or sends two sources or none, MUST be answered
 `400`, and so MUST a configured collector or a `request_from` the
 configuration does not have; a request over 2 MiB, a collector over 256 KiB
@@ -33357,12 +33365,15 @@ the playground and of each configured collector, and MUST take the one
   target (`kubernetes`) MUST be offered no target field, the page saying
   `This collector names its own target.`, and its run MUST send an empty
   target, which is not refused for want of one;
-- the probe parameters MUST be hinted as the collector's own `{{param_<name>}}`
-  placeholders, one `param_<name>=<default>` a line, nothing after `=` for
-  one without a default, followed by the other parameters its type takes
-  from a probe, `header_<name>` for each header it forwards, `timeout` left
-  out; a collector that takes none MUST be offered no field, the page saying
-  `This collector takes no probe parameters.`;
+- the probe parameters MUST be asked for as rows of a name and a value (below):
+  a row for each of the collector's own `{{param_<name>}}` placeholders, its
+  name filled in, its value empty with its default, if it has one, as the
+  value's placeholder, and the other parameters its type takes from a probe,
+  `header_<name>` for each header it forwards, `timeout` left out, offered as
+  names to choose; `/debug/collector`'s `form` MUST give them as `params`,
+  each a `name` and its `default`, and `other_params`. A collector that takes
+  none MUST be offered no rows, the page saying `This collector takes no
+  probe parameters.`;
 - a pasted response's body MUST be asked for as what an answer of the type
   is — what the target answers for `http`, the rows as JSON for `sql`, the
   JSON document the exporter makes for the types that make one, the file's
@@ -33374,6 +33385,27 @@ the playground and of each configured collector, and MUST take the one
 - the page MUST NOT say that a target of another type than `http` is
   fetched: it is probed as `/probe?debug=true` probes it, through the
   collector named (`Probed through <name>, …`).
+
+A pasted response's other headers and the probe parameters MUST be asked for
+as rows, each a name and a value input with a button removing the row, and a
+button adding a row (*+ Add header*, *+ Add parameter*), every input and
+button labelled for assistive technology with its row's number (`Header name
+1`, `Remove parameter 2`). The headers MUST start with one empty row. A row
+whose name and value are both blank MUST NOT be sent; one with a value and no
+name, a header name that is not an HTTP token, worded as the server words
+it, and a probe parameter `/probe` would refuse — `target`, `collector` or
+`debug`, or a name given again but a `header_<name>` — MUST be marked on its
+row with why and focused, and the run MUST NOT be sent; the server MUST
+still check all it is sent. A header name given again, in any case, MUST be
+sent as one name with each value in the order of the rows. Adding a row
+MUST focus its name, and removing one the row that takes its place, the one
+before, or the adding button. A change of collector MUST keep the header
+rows, and make the parameter rows again for the collector a target is
+probed through, keeping the values typed for names it takes too. The rows
+MUST be made with `value` and `textContent` alone, never as HTML, and MUST
+keep a row's inputs and its button one height, on one line while the name
+and value fit side by side, and the page without sideways scrolling at a
+phone's width.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a

@@ -5518,6 +5518,40 @@ its YAML from `/debug/collector`, so it follows a reload. The target is
 probed as `/probe?debug=true` probes it, and the page says through which
 collector: *Probed through status_json, the collector chosen.*
 
+*Copy as*, below the parameters, gives the probe as it is asked of the
+exporter outside the page, made from the form as it stands and made again
+as the target and the rows change:
+
+- **URL**: the `/probe` URL, absolute and resolved against the page's own
+  address, so a path prefix in front of the exporter is kept, with
+  `collector`, `target` and each filled parameter row, a repeated
+  `header_<name>` once for each row, URL-encoded:
+  `http://exporter:8080/probe?collector=status_json&target=http%3A%2F%2Fapi%3A8080&param_city=sofia`.
+- **curl**: `curl -s` and the URL in single quotes.
+- **scrape_config**: a Prometheus job of the collector and the target, the
+  multi-target job of [the `localfile` page](LOCALFILE.md#scraping-with-prometheus): the
+  parameters under `params`, the target moved into the `target` parameter
+  and `instance`, and the exporter scraped at the host and port the page was
+  opened at — inside a cluster, use its service's address instead. A
+  collector that names its own target, such as a `kubernetes` collector, is
+  given the exporter as the job's target and no `target` parameter. Every
+  value is a single-quoted YAML scalar.
+- **Debug report URL**: the URL with `debug=true`, the
+  [debug probe](#debug-probes).
+
+The buttons are disabled, with a note saying why, while the target is
+empty or a parameter row is wrong. With the playground, a copy of a
+collector, they probe through the collector it was copied from, as
+configured: `/probe` runs only the configured collectors, so the
+playground's edits are not in what is copied, and the page says so. A
+button shows what it copies in a box, so it can be selected where the
+browser does not let the page use the clipboard, and says *Copied the
+curl command.* when it did. With `web.basic_auth` on, curl is given
+`-u USER`, which asks for the password, and the job a commented
+`basic_auth` to fill in; the credential is never on the page.
+*Scrape a static target* offers *Copy as* too: its
+`/static-targets?targets=<name>` URL and the curl command for it.
+
 The series a run gave are shown as a table, or as the Prometheus text a probe
 would answer; *Table* and *Text* switch between them, and the browser keeps
 the choice. The text is the whole answer, to the byte. The table has a row

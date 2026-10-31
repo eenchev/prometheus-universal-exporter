@@ -131,6 +131,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   collector's own `{{param_<name>}}` parameters are rows to start with,
   their defaults shown, and the others it takes are suggested as names. A
   run's `headers` and `params` take a list of values for a repeated name.
+  *Copy as* gives a probe of the form as its `/probe` URL, a `curl` command,
+  a Prometheus `scrape_config` for the collector and the target, and the
+  debug probe's URL, and a static target as its `/static-targets` URL and
+  `curl` command; no credential is put in them.
 
 ### Fixed
 

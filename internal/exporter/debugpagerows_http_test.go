@@ -100,7 +100,7 @@ func TestTheDebugPageEditsHeadersAndParametersAsRows(t *testing.T) {
 		`const next = rows[at] || rows[at - 1];`, `(next ? next.name : addButton).focus();`, `if (event.key !== "Enter" || rows[rows.length - 1] !== row) return;`,
 		`addButton.addEventListener("click", () => add("", "", true));`, `headers.add();`,
 		// The checks, worded as the server's.
-		`message = "A " + noun + " needs a name: give one, or clear the value.";`,
+		`return "A " + noun + " needs a name: give one, or clear the value.";`,
 		`"Header name " + JSON.stringify(name) + " is not one HTTP allows."`,
 		`"Probe parameter " + name + " is given " + all.filter((other) => other === name).length + " times; give it once."`,
 		`if (name === "target" || name === "collector" || name === "debug") return name + " is one the debug page sets itself.";`,

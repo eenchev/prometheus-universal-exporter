@@ -38,6 +38,9 @@ type debugPage struct {
 	// Form that of the collector it opens with: Chosen, or the playground.
 	Forms debugForms
 	Form  debugForm
+	// BasicAuth is whether the exporter asks for web.basic_auth, which the
+	// probe's Copy as says to give.
+	BasicAuth bool
 }
 
 // debugForms are the forms of the playground and of each configured
@@ -146,10 +149,20 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 .kv-row button.kv-remove:hover { color: var(--bad); border-color: var(--bad); }
 .kv-fields input[aria-invalid="true"] { border-color: var(--bad); }
 .kv-error { margin: 2px 0 0; color: var(--bad); font-size: 12px; }
+.copy-as { margin-top: 14px; }
+.copy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.copy-row .kv-title { margin: 0; }
+.copy-row button { margin: 0; }
+.copy-row button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.copy-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+.copy-as .note { margin: 6px 0 0; }
+pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-wrap: normal; }
+.copy-done { color: var(--muted); font-size: 13px; }
+.copy-done.copied { color: var(--good); }
 </style>
 </head>
 <body>
-<main>
+<main{{if .BasicAuth}} data-basic-auth{{end}}>
 {{template "chrome" .Chrome}}
 <h1>Debug</h1>
 <p class="meta">Run one collector — one of the configuration, or the playground, a collector written on the page as it is written under <code>collectors:</code> — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
@@ -219,6 +232,17 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 <button type="button" class="secondary" id="params-add">+ Add parameter</button>
 </div>
 <p class="note" id="no-params"{{if or .Form.Params .Form.OtherParams}} hidden{{end}}>This collector takes no probe parameters.</p>
+<div class="copy-as" id="probe-copy" role="group" aria-labelledby="probe-copy-title">
+<div class="copy-row"><span class="kv-title" id="probe-copy-title">Copy as</span>
+<button type="button" class="secondary" data-copy="url" data-what="probe URL" aria-controls="probe-copy-text" aria-pressed="false">URL</button>
+<button type="button" class="secondary" data-copy="curl" data-what="curl command" aria-controls="probe-copy-text" aria-pressed="false">curl</button>
+<button type="button" class="secondary" data-copy="scrape" data-what="scrape_config" aria-controls="probe-copy-text" aria-pressed="false">scrape_config</button>
+<button type="button" class="secondary" data-copy="debug" data-what="debug report URL" aria-controls="probe-copy-text" aria-pressed="false">Debug report URL</button>
+<span class="copy-done" data-copy-done role="status"></span>
+</div>
+<p class="note" data-copy-note hidden></p>
+<pre class="copy-text" id="probe-copy-text" tabindex="0" aria-label="The text copied" hidden></pre>
+</div>
 </div>
 <div data-mode="static" hidden>
 <p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, through the collector chosen, or the one the playground was copied from, and read by the collector chosen. Nothing is published.</p>
@@ -228,6 +252,15 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 <option value="{{.Name}}"{{if eq .Name $.StaticTarget}} selected{{end}}>{{.Name}}{{if .Target}} — {{.Target}}{{end}}</option>
 {{- end}}
 </select>
+<div class="copy-as" id="static-copy" role="group" aria-labelledby="static-copy-title">
+<div class="copy-row"><span class="kv-title" id="static-copy-title">Copy as</span>
+<button type="button" class="secondary" data-copy="url" data-what="static targets URL" aria-controls="static-copy-text" aria-pressed="false">URL</button>
+<button type="button" class="secondary" data-copy="curl" data-what="curl command" aria-controls="static-copy-text" aria-pressed="false">curl</button>
+<span class="copy-done" data-copy-done role="status"></span>
+</div>
+<p class="note" data-copy-note hidden></p>
+<pre class="copy-text" id="static-copy-text" tabindex="0" aria-label="The text copied" hidden></pre>
+</div>
 </div>
 {{- end}}
 <div class="actions">
@@ -358,16 +391,20 @@ function editor(rowsBox, addButton, noun, check, hint, names) {
     row.remove.setAttribute("aria-label", "Remove " + noun + " " + (i + 1));
   });
   let marked = false;
+  // messageOf is why the row at i is wrong, or "".
+  const messageOf = (i) => {
+    const name = rows[i].name.value.trim(), value = rows[i].value.value;
+    if (name === "" && value !== "") return "A " + noun + " needs a name: give one, or clear the value.";
+    if (name === "") return "";
+    return check(name, rows.slice(0, i).map((before) => before.name.value.trim()), rows.map((each) => each.name.value.trim()));
+  };
   // validate marks every row that is wrong and returns the first input to
   // put right, or null.
   const validate = () => {
     let first = null;
     marked = false;
     rows.forEach((row, i) => {
-      const name = row.name.value.trim(), value = row.value.value;
-      let message = "";
-      if (name === "" && value !== "") message = "A " + noun + " needs a name: give one, or clear the value.";
-      else if (name !== "") message = check(name, rows.slice(0, i).map((before) => before.name.value.trim()), rows.map((each) => each.name.value.trim()));
+      const message = messageOf(i);
       row.error.textContent = message;
       row.error.hidden = message === "";
       if (message === "") {
@@ -438,6 +475,9 @@ function editor(rowsBox, addButton, noun, check, hint, names) {
   addButton.addEventListener("click", () => add("", "", true));
   return {
     rows, add, validate,
+    // wrong is whether a row is wrong, marking none: what is copied is made
+    // as the visitor types, and a row is marked as the run marks it.
+    wrong: () => rows.some((row, i) => messageOf(i) !== ""),
     clear: () => { rows.length = 0; rowsBox.replaceChildren(); },
     // values are the rows filled in, name to its values in the order of the
     // rows; same (a name) is the name a later row's is given as, so that two
@@ -515,6 +555,7 @@ function showForm() {
   $("target-label").textContent = through.target_label || "Target";
   $("target").placeholder = through.target_hint || "";
   showParams(through);
+  refreshCopies();
 }
 // A collector read again from /debug/collector brings its form with it,
 // which a reload may have changed.
@@ -532,6 +573,7 @@ function showFetch() {
     ? "Probed through " + through + ", the collector chosen."
     : "Probed through " + through + ", the collector this playground was copied from.";
   showMode();
+  refreshCopies();
 }
 // The static targets offered are those scraped through fetcher(), read from
 // /debug/collector whenever it changes, so they follow a reload of the
@@ -567,6 +609,7 @@ async function showStaticTargets() {
   $("static-unavailable").hidden = note === "";
   if ($("mode-static").disabled && $("mode-static").checked) choose("paste");
   showMode();
+  refreshCopies();
 }
 // The example body fits the example collector alone: with a configured
 // collector, or a copy of one, the body starts empty, waiting for what its
@@ -609,6 +652,120 @@ async function showCollector() {
   }
   if ($("configured").value === name) area.value = text;
 }
+// Copy as gives what the page's form asks for as it is asked of the exporter
+// outside the page: the /probe URL, a curl command for it, a Prometheus job
+// that scrapes it, and the debug probe's URL; for a static target, the
+// /static-targets URL and its curl. Each is made from the form as it now
+// stands and shown in a box, so it can be selected where the browser does
+// not let the page copy. The URLs are absolute, resolved as the page's own
+// requests are, so a proxy's path prefix is kept. A credential is never put
+// in: with web.basic_auth on, curl is given -u USER, which asks for the
+// password, and the job a basic_auth to fill in.
+const basicAuth = document.querySelector("main").hasAttribute("data-basic-auth");
+const shellQuoted = (text) => "'" + text.replaceAll("'", "'\\''") + "'";
+const yamlQuoted = (text) => "'" + text.replaceAll("'", "''") + "'";
+// A mapping key is written plain only where YAML reads it as that string.
+const yamlKey = (text) => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(text) && !/^(true|false|yes|no|on|off|y|n|null)$/i.test(text) ? text : yamlQuoted(text);
+const curlOf = (url) => "curl -s " + (basicAuth ? "-u USER " : "") + shellQuoted(url);
+const authNote = basicAuth ? " The exporter asks for web.basic_auth: curl -u USER asks for USER's password, and the job's basic_auth is left for you to fill in; no credential is put in these." : "";
+function copier(box, texts) {
+  const pre = box.querySelector(".copy-text"), note = box.querySelector("[data-copy-note]"), done = box.querySelector("[data-copy-done]");
+  const buttons = [...box.querySelectorAll("button[data-copy]")];
+  let shown = "";
+  const say = (message, copied = false) => {
+    done.textContent = message;
+    done.classList.toggle("copied", copied);
+  };
+  const refresh = () => {
+    const made = texts();
+    note.textContent = made.note;
+    note.hidden = made.note === "";
+    for (const button of buttons) button.disabled = !!made.blocked;
+    if (made.blocked) shown = "";
+    for (const button of buttons) button.setAttribute("aria-pressed", String(button.dataset.copy === shown));
+    pre.hidden = shown === "";
+    const text = shown === "" ? "" : made[shown];
+    if (pre.textContent !== text) { pre.textContent = text; say(""); }
+    return made;
+  };
+  for (const button of buttons) {
+    button.addEventListener("click", async () => {
+      shown = button.dataset.copy;
+      const text = refresh()[shown];
+      if (!navigator.clipboard || !navigator.clipboard.writeText) { say("Select the text below to copy it."); return; }
+      try {
+        await navigator.clipboard.writeText(text);
+        say("Copied the " + button.dataset.what + ".", true);
+      } catch (error) {
+        say("The browser did not let the page copy it; select the text below.");
+      }
+    });
+  }
+  return refresh;
+}
+// The Prometheus job is the multi-target pattern of docs/LOCALFILE.md: the
+// target is the job's, moved into the target parameter and instance, and
+// the exporter, as this page reached it, is what is scraped.
+function scrapeConfigOf(collector, target, given, url) {
+  const lines = ["scrape_configs:", "  - job_name: " + yamlQuoted(collector)];
+  if (url.protocol === "https:") lines.push("    scheme: https");
+  lines.push("    metrics_path: " + yamlQuoted(url.pathname), "    params:");
+  const listed = new Map([["collector", [collector]]]);
+  for (const [name, value] of given) {
+    if (listed.has(name)) listed.get(name).push(value);
+    else listed.set(name, [value]);
+  }
+  for (const [name, values] of listed) lines.push("      " + yamlKey(name) + ": [" + values.map(yamlQuoted).join(", ") + "]");
+  if (basicAuth) lines.push("    # The exporter asks for web.basic_auth:", "    # basic_auth:", "    #   username: USER", "    #   password_file: /path/to/the/password");
+  const exporter = "# The exporter as this page reached it; inside a cluster, its service's address.";
+  if (target === null) {
+    lines.push("    " + exporter, "    static_configs:", "      - targets: [" + yamlQuoted(url.host) + "]");
+  } else {
+    lines.push("    static_configs:", "      - targets: [" + yamlQuoted(target) + "]",
+      "    relabel_configs:",
+      "      - source_labels: [__address__]", "        target_label: __param_target",
+      "      - source_labels: [__param_target]", "        target_label: instance",
+      "      " + exporter, "      - target_label: __address__", "        replacement: " + yamlQuoted(url.host));
+  }
+  return lines.join("\n") + "\n";
+}
+// /probe runs only the configured collectors, so a playground copied from
+// one is copied as a probe through that one, as configured.
+const probeCopy = $("probe-copy") ? copier($("probe-copy"), () => {
+  const through = fetcher();
+  if (through === "") return { blocked: true, note: "Choose a configured collector, or Edit a copy of one, to copy a probe." };
+  const form = formOf(through);
+  const target = form.no_target ? null : $("target").value;
+  if (target !== null && target.trim() === "") return { blocked: true, note: "Give the target to copy the probe." };
+  const own = $("params-part").hidden ? null : params;
+  if (own && own.wrong()) return { blocked: true, note: "A probe parameter row is wrong; put it right to copy the probe." };
+  const given = own ? Object.entries(own.values((name) => name)).flatMap(([name, values]) => [values].flat().map((value) => [name, value])) : [];
+  const url = new URL("probe", document.baseURI);
+  url.searchParams.append("collector", through);
+  if (target !== null) url.searchParams.append("target", target);
+  for (const [name, value] of given) url.searchParams.append(name, value);
+  const debug = new URL(url);
+  debug.searchParams.append("debug", "true");
+  const copied = $("configured").value === "" ? "These probe through " + through + ", the collector this playground was copied from, as configured: /probe runs only the configured collectors, so the playground's edits are not in them." : "";
+  return { note: (copied + authNote).trim(), url: url.href, curl: curlOf(url.href), scrape: scrapeConfigOf(through, target, given, url), debug: debug.href };
+}) : null;
+const staticCopy = $("static-copy") ? copier($("static-copy"), () => {
+  const name = $("static-target").disabled ? "" : $("static-target").value;
+  if (name === "") return { blocked: true, note: "Choose a static target to copy its scrape." };
+  const url = new URL("static-targets", document.baseURI);
+  url.searchParams.set("targets", name);
+  return { note: authNote.trim(), url: url.href, curl: curlOf(url.href) };
+}) : null;
+function refreshCopies() {
+  if (probeCopy) probeCopy();
+  if (staticCopy) staticCopy();
+}
+if (probeCopy) {
+  $("target").addEventListener("input", probeCopy);
+  // A row's input, its × and + Add parameter.
+  for (const event of ["input", "click"]) $("params-part").addEventListener(event, probeCopy);
+}
+if (staticCopy) $("static-target").addEventListener("change", staticCopy);
 function keep() {
   try {
     if (store) {

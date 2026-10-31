@@ -625,6 +625,11 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 			page.StaticNote = "No static target uses " + page.Chosen + "."
 		}
 	}
+	// The page's Copy as says to give curl and Prometheus a credential when
+	// the exporter asks for one; it is never given the credential itself.
+	if auth := s.manager.Get().Web.BasicAuth; auth != nil && auth.Enabled {
+		page.BasicAuth = true
+	}
 	s.renderPage(w, debugPageTemplate, page)
 }
 

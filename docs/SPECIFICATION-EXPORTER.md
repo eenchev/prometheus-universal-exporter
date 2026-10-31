@@ -29530,6 +29530,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageEditsHeadersAndParametersAsRows`: `/debug` has no `headers` or `params` textarea and no `also: ` hint, but the headers' and the parameters' groups with their titles, row boxes, *+ Add header* and *+ Add parameter*, the `params-names` datalist and the note on defaults; the script labels each input and *×* with its row's number, fills by `value` and `textContent`, moves focus on add and remove, adds a row on Enter in the last value, words the checks as the server (`A header needs a name`, `Header name "…" is not one HTTP allows.`, `Probe parameter … is given … times; give it once.`, the page's own `target`, `collector` and `debug`, `header_<name>` free to repeat), marks the row `aria-invalid` and stops the run, sends one value as a string and more as a list, a header's name in any case and a parameter's as written, and keeps typed values for the names the next collector takes; the CSS keeps name, value and *×* `34px` high on one wrapping line; its header-name pattern is the server's `debugHeaderName`.
 - `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`, `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`, `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`, `TestTheDebugPageAsksAnSSHFileCollectorForTheHost` and the other per-type form tests (changed): the form gives `params` as names with defaults (`param_city` `sofia`, `param_days`; `param_min` `0`) and `other_params` as names (`method`, …, `header_X-Tenant`; `path`), and the page shows the parameters' group or the note that the collector takes none.
 
+## 34.243 The debug page copies a probe as a URL, a curl command and a scrape_config
+
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig`: at `edit` the page has no *Copy as*; at `full` *Probe a target* has the *Copy as* row with *URL*, *curl*, *scrape_config* and *Debug report URL*, the box of what is copied and the status, and *Scrape a static target* its own with *URL* and *curl*; the script quotes for the shell (`'\''`) and for YAML (`''`), makes the URL with `new URL("probe", document.baseURI)`, `collector`, `target` but for a collector that names its own and each parameter row, a repeated name repeated, `debug=true` in the debug report's URL alone, is blocked with a note while there is no collector to probe through, the target is empty or a row is wrong (`wrong()`, which marks none), says that a copied playground's edits are not in it, writes the job of `docs/LOCALFILE.md` (`metrics_path` the URL's path, `scheme: https` over HTTPS, `params` with `collector` first, the target moved into `__param_target` and `instance` and `__address__` the page's host) or, without a target, the page's host as the target, makes `/static-targets?targets=<name>`, copies with `navigator.clipboard.writeText` saying `Copied the …` or to select the text, follows the target and the parameter rows, and writes no HTML (`innerHTML`, `outerHTML`, `insertAdjacentHTML`); without `web.basic_auth` the page is not marked as asking for it.
+- `TestTheDebugPageCopiesNoCredential`: with `web.basic_auth` on, the page, fetched with the credential, is marked `data-basic-auth`, says that curl gets `-u USER` and the job a `basic_auth` to fill in, writes that `basic_auth` commented, and has neither the user nor the password anywhere.
+- `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the check that a row with a value needs a name is now `messageOf`'s `return`, which `wrong()` shares.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33452,6 +33458,38 @@ scrape would have published, its series with the target's labels and
 another collector fetched — a written one, or one other than the static
 target's — MUST be given what an `http` collector fetched only (`400`
 otherwise), and decodes, transforms and validates it.
+
+*Probe a target* MUST offer *Copy as*, made from the form as it stands and
+made again as the target and the parameter rows change: the `/probe` URL,
+a `curl` command for it, a Prometheus `scrape_config` and the debug probe's
+URL. The URL MUST be absolute, resolved against the page's own address as
+the page's requests are, so that a path prefix in front of the exporter is
+kept, and MUST carry `collector`, the collector a target is probed through
+— the configured one chosen, or the one the playground was copied from, the
+page then saying that `/probe` runs the configured collectors only and so
+the playground's edits are not in it — `target`, left out for a collector
+that names its own, and each filled parameter row, a repeated
+`header_<name>` once for each row, URL-encoded; only the debug probe's URL
+MUST carry `debug=true`. The command MUST be `curl -s` and the URL in single
+quotes, a single quote in it written `'\''`. The `scrape_config` MUST be the
+multi-target job of `docs/LOCALFILE.md`: `job_name` the collector's name,
+`metrics_path` the URL's path, `scheme: https` when the page is served over
+HTTPS, `params` of `collector` and each parameter with its values in the
+order of the rows, and, for a collector that takes a target, the target in
+`static_configs`, moved by `relabel_configs` into `__param_target` and
+`instance`, `__address__` set to the host and port the page was reached at;
+for one that names its own, that host and port as the target. Every value
+MUST be a single-quoted YAML scalar, a single quote in it written `''`, and
+a key that YAML would read as other than its text quoted as well. With
+`web.basic_auth` on, the command MUST add `-u USER`, the job MUST carry a
+commented `basic_auth` to fill in, and the page MUST say so; the page MUST
+NOT be given or copy the credential. The buttons MUST be disabled, saying
+why, while the target is empty for a collector that takes one or a
+parameter row is wrong. *Scrape a static target* MUST offer *Copy as* the
+`/static-targets?targets=<name>` URL of the target chosen and its `curl`
+command. A button MUST show what it copies in a box that can be selected,
+copy it with the browser's clipboard where the browser allows it, and say
+whether it did; the text MUST be put in with `textContent` alone.
 
 A run MUST be bounded by the probe's deadline (§ 3.2a), and by
 `--probe.default-timeout`'s default when that is `0`, or a static target's

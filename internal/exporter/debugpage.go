@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -63,13 +64,21 @@ import (
 // collector written on the page is refused what would reach further than
 // the response:
 //
+//   - its request block is inert: no path of a run makes a request with it,
+//     a pasted response being decoded as it is and a target fetched through
+//     a configured collector alone. So it may be of any request type the
+//     build has, a sql or a tlscert collector as an http one, its type
+//     saying only how the answer is read: its decoder, a sql collector's
+//     rows, the JSON document a tlscert collector's handshake is made into;
 //   - Python, a python transform or a pre_script, is never run: a script is
 //     a program run on the server, with the server's files and network;
-//   - a collector of another request type than http, whose type reads files,
-//     hosts or databases with the server's own keys and passwords, and an
-//     http collector that names a file — basic_auth_file, bearer_token_file,
-//     a tls file or a login's — are refused before they are checked, so nothing the
-//     run answers can carry what such a file holds;
+//   - a collector that names a file — any key of its request ending in _file
+//     or _files, such as bearer_token_file, a tls file or an sshfile
+//     collector's known_hosts_file, and a login, which reads its secrets
+//     from files — is refused before it is checked, so nothing the run
+//     answers can carry what such a file holds; the request is never made,
+//     so those a request needs are not required of it
+//     (model.Collector.RequestNotMade);
 //   - ${NAME} references are left as written: the answer would show the
 //     server's environment.
 //
@@ -431,50 +440,49 @@ func debugSameOrigin(r *http.Request) error {
 }
 
 // refusedOnDebugPage refuses, before it is checked, a collector written on
-// the debug page that the page does not run: Python, a request type other
-// than http, the one the page writes (fetch.RequestType.DebugPage), and an
-// http collector that names a file of the server's.
+// the debug page that the page does not run: Python, and one that names a
+// file of the server's. Its request may be of any type the build has, since
+// its request block is never made: it says only how the answer is read
+// (fetch.RequestType's decoder, rows or JSON document).
 func refusedOnDebugPage(x *model.Collector) error {
-	if kind := x.Request.Type; kind != "" && !onDebugPage(kind) {
-		return fmt.Errorf("collector %q uses request.type %s; a collector written on the debug page is an http collector, since the other types read files, hosts and databases with the server's own credentials. Write it with request.type http to try its decoder and rules on a pasted response, or run a configured collector by name", x.Name, kind)
-	}
 	if runsPython(x) {
 		return fmt.Errorf("collector %q runs Python (transform.type python or transform.pre_script); a collector written on the debug page never runs Python, since a script is a program run on the server. Put it in the configuration and run it here by name instead", x.Name)
 	}
-	var files []string
-	r := x.Request
-	if r.BasicAuthFile != nil {
-		files = append(files, "basic_auth_file")
-	}
-	if r.BearerTokenFile != "" {
-		files = append(files, "bearer_token_file")
-	}
-	if r.Login != nil {
-		// A login reads its secrets from files, and sends them.
-		files = append(files, "login")
-	}
-	for key, path := range map[string]string{"tls.ca_file": r.TLS.CAFile, "tls.cert_file": r.TLS.CertFile, "tls.key_file": r.TLS.KeyFile} {
-		if path != "" {
-			files = append(files, key)
-		}
-	}
-	if len(files) > 0 {
-		// In the order the file has them; tls's keys, which the map above
-		// gives in no order, in theirs where it says none.
-		sort.Strings(files)
-		files = model.InFileOrder(files, x.Request.Order)
+	if files := serverFileKeys(x.Request); len(files) > 0 {
 		return fmt.Errorf("collector %q sets request.%s, which names a file on the server; a collector written on the debug page reads no file of the server's. Leave it out: a pasted response needs no credential, and a target is fetched through a configured collector (request_from), with its credentials", x.Name, strings.Join(files, ", request."))
 	}
 	return nil
 }
 
-// onDebugPage reports whether a collector written on the debug page may be
-// of the request type, and another collector read what one of it fetches:
-// http's, which reads nothing of the server's but what its configuration
-// names (fetch.RequestType.DebugPage).
-func onDebugPage(requestType string) bool {
-	rt := fetch.RequestTypes[requestType]
-	return rt != nil && rt.DebugPage
+// serverFileKeys are the keys of a request block that name a file of the
+// server's, in the order the block has them: every key ending in _file or
+// _files, of any type, at the top of the block or in a mapping it holds,
+// as tls.ca_file, but max_files, a count, and login, which reads its
+// secrets from files and sends them. A key inside one already named is not
+// named again.
+func serverFileKeys(r model.RequestConfig) []string {
+	var files []string
+	for _, key := range r.Order {
+		if slices.ContainsFunc(files, func(named string) bool { return strings.HasPrefix(key, named+".") }) {
+			continue
+		}
+		last := key[strings.LastIndex(key, ".")+1:]
+		if key == "login" || strings.HasSuffix(last, "_file") || strings.HasSuffix(last, "_files") && last != "max_files" {
+			files = append(files, key)
+		}
+	}
+	return files
+}
+
+// readsWhatFetches reports whether reader, a collector run, may read what
+// fetcher, another collector, fetches: when both are of one request type,
+// whose answer the reader reads as its type reads one, its rows a sql
+// collector's and the JSON document a tlscert collector's.
+func readsWhatFetches(reader, fetcher *model.Collector) error {
+	if reader.Request.Type == fetcher.Request.Type {
+		return nil
+	}
+	return fmt.Errorf("collector %q reads what a collector of its request type, %s, fetches only, and collector %q is of request type %s", reader.Name, reader.Request.Type, fetcher.Name, fetcher.Request.Type)
 }
 
 // debugPageCollector is a configured collector as the page offers it.
@@ -536,16 +544,26 @@ func debugFormOf(c *model.Collector) debugForm {
 	return f
 }
 
-// playgroundForm is the form of the playground, a collector of the type the
-// debug page writes (onDebugPage), http's; a build without one has a
-// playground that runs nothing, whose form asks for a response as http's.
-func playgroundForm() debugForm {
-	for _, name := range fetch.BuiltRequestTypes() {
-		if onDebugPage(name) {
-			return debugFormOf(&model.Collector{Request: model.RequestConfig{Type: name}})
-		}
+// playgroundForm is the form of the playground the page opens with, the
+// example, as its request type says it; a build without that type has an
+// example that runs nothing, whose form asks for a response as an HTTP
+// response is asked for. The example is read once.
+var playgroundForm = sync.OnceValue(func() debugForm {
+	if cfg, err := config.ParseCollector([]byte(debugExample), nil); err == nil {
+		return debugFormOf(&cfg.Collectors[0])
 	}
 	return debugForm{Answer: "Paste what the target answers", ContentType: true, HTTPAnswer: true}
+})
+
+// typeForms are the forms of a playground of each request type the build
+// has, by its name, as the type says them of a collector that sets nothing
+// else: the page follows the request.type written in the editor with them.
+func typeForms() map[string]debugForm {
+	forms := map[string]debugForm{}
+	for _, name := range fetch.BuiltRequestTypes() {
+		forms[name] = debugFormOf(&model.Collector{Request: model.RequestConfig{Type: name}})
+	}
+	return forms
 }
 
 // debugParamsOf is what the page offers of the probe parameters of c: a
@@ -581,7 +599,7 @@ func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
 
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
-	page.Forms = debugForms{Playground: playgroundForm(), Collectors: map[string]debugForm{}}
+	page.Forms = debugForms{Playground: playgroundForm(), Types: typeForms(), Collectors: map[string]debugForm{}}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).
 	followed := s.reconcile()
@@ -774,8 +792,8 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		if p.edited || through.Name != c.Name {
 			// Another collector reads what the target's fetches: the
 			// target's request, read by the collector run.
-			if !onDebugPage(through.Request.Type) {
-				return p, nil, http.StatusBadRequest, fmt.Errorf("static target %q is scraped through collector %q, a %s collector; another collector reads what an http collector fetches only. Run collector %q itself on it", static.static.Name, through.Name, through.Request.Type, through.Name)
+			if err := readsWhatFetches(c, through); err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("static target %q is scraped through collector %q: %w. Run collector %q itself on it, or a copy of it", static.static.Name, through.Name, err, through.Name)
 			}
 			static.collector, static.requester, static.generation = c, through, p.generation
 			// The stale result would be the target's collector's, not this
@@ -804,8 +822,10 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		case p.edited:
 			return p, nil, http.StatusBadRequest, errors.New("a collector written on the debug page makes no request of its own: name in request_from the configured collector to fetch the target through")
 		}
-		if (p.edited || requester.Name != c.Name) && !onDebugPage(requester.Request.Type) {
-			return p, nil, http.StatusBadRequest, fmt.Errorf("collector %q in request_from is a %s collector; another collector reads what an http collector fetches only", requester.Name, requester.Request.Type)
+		if p.edited || requester.Name != c.Name {
+			if err := readsWhatFetches(c, requester); err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("request_from: %w", err)
+			}
 		}
 		target := ""
 		if req.Target != nil {

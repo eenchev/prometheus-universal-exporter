@@ -268,10 +268,6 @@ type RequestType struct {
 	// is, as the body's field there asks for it: what the target answers,
 	// for http; the rows as JSON, for sql. Required.
 	AnswerHint string
-	// DebugPage says a collector written on the debug page may be of this
-	// type, and that another collector may read what one of this type
-	// fetches (request_from).
-	DebugPage bool
 	// JSONAnswer says the exporter makes the type's answer, a JSON document,
 	// so its decoder is json and its transform one that reads JSON.
 	JSONAnswer bool

@@ -5378,7 +5378,12 @@ The collector run is one of two:
   and a mistake is reported in the words a load would use, with line numbers
   counted from the collector's first line. `${NAME}` references are left as
   they are written, whatever `--config.expand-env` says. It is never put in
-  force, and its own request block never makes a request. It takes no
+  force, and its own request block never makes a request: it may be of any
+  request type the build has, its `request.type` saying only how its answer
+  is read — its decoder, a `sql` collector's rows, the JSON document a
+  `tlscert` handshake is made into — and the keys a request needs to be
+  made, such as an `sshfile` collector's `known_hosts_file`, are not
+  required of it. It takes no
   [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
   a file, and refused here as `collectors` is, while a configured collector
   runs with the keys it took from its file's.
@@ -5388,8 +5393,9 @@ The collector run is one of two:
   stands for.
 
 The editor shows the collector that runs. While none of the configuration
-is chosen, *Playground* in the list, it holds the playground — the example to
-start with, then what was written, kept in the browser between visits. A configured
+is chosen, *Playground* in the list, it holds the playground — the example,
+an `http` collector, every time the page opens, then what was written, for
+as long as the page is open; nothing of it is kept in the browser. A configured
 collector chosen, in the list or by the link from `/collectors`, is shown
 in its place, read-only, since it runs as configured:
 
@@ -5411,10 +5417,14 @@ in its place, read-only, since it runs as configured:
 
 *Edit a copy* makes the playground a copy of that YAML, which then runs in
 its place, under the rules for the playground: what was withheld has to be
-left out or written again, and a collector of another request type than
-`http`, with Python or with a file, is refused as any playground is. The
-page remembers the collector the playground was copied from, through edits
-and between visits, and fetches a target through it.
+left out or written again, and a collector with Python or with a file is
+refused as any playground is. A copy of a collector of any request type
+runs: a `tlscert` collector's copy reads a pasted handshake, or what
+`tls_cert` answers when a target is probed or a static target scraped
+through it. The page remembers the collector the playground was copied
+from, through edits, while it is open, and fetches a target through it;
+*Back to the example*, shown while the playground is a copy, puts the
+example back.
 
 It reads one of three responses:
 
@@ -5429,7 +5439,14 @@ It reads one of three responses:
   answers are HTTP responses, and for a `Content-Type` only where it can
   choose the decoder; the body's placeholder says what to paste: what the
   target answers, a file's content, or, for the types that make their
-  answer, the JSON document a run's *Response* shows. A `sql` collector's
+  answer, the JSON document a run's *Response* shows. For the playground
+  these follow the `request.type` written in the editor as it is typed,
+  in block style (`request:` with `type: sql` under it) or in flow style
+  (`request: {type: sql}`); with none written, or a type the build does not
+  have, the page asks as for `http`, and the run says what is wrong. What
+  was typed in a field the type hides is kept for when it is shown again,
+  and is not sent. A response pasted for a `localfile` collector that reads
+  a directory is read as one file. A `sql` collector's
   response is its rows, pasted as JSON as a run's *Response* shows them, a
   list of objects of each row's columns by name,
   `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
@@ -5456,7 +5473,9 @@ It reads one of three responses:
   for; one not copied from a configured
   collector, as the example, has nothing to fetch through, so *Probe a
   target* is not offered with it. A collector run on what another fetched
-  reads what an `http` collector fetches only.
+  reads what a collector of its own request type fetches only, as it
+  reads that type's answer: a copy whose type was changed is refused
+  (`400`).
 - **A static target's scrape**, at `full` only: made once as its schedule
   makes it, with the target's own settings and credentials, its interval as
   the budget and its labels on the series, as
@@ -5472,14 +5491,16 @@ It reads one of three responses:
   static target file. With no static target of that collector, or none at
   all, *Scrape a static target* is offered disabled with a note saying so;
   the example playground, copied from no collector, scrapes none, as it
-  fetches none. The scrape is read by the collector chosen, the target's
+  fetches none. The panel says whose static targets it lists: *Static
+  targets of tls_cert, the collector chosen.*, or *…, the collector this
+  playground was copied from.* The scrape is read by the collector chosen, the target's
   own, or by the playground, a copy of it that may have been edited.
   `/debug?static_target=<name>` opens the page with that target chosen and
   its collector chosen on the left.
 
 What the page asks for follows the request type of the collector it is
-for — the collector run, for a pasted response, the playground being an
-`http` collector, and the one a target is probed through, for a target —
+for — the collector run, for a pasted response, the playground's being the
+one its editor writes, and the one a target is probed through, for a target —
 as each type says it, so a build without a type has nothing of it:
 
 | Request type | Target, as the page labels and hints it |
@@ -5586,12 +5607,18 @@ runs on the server:
 - **Python is never run.** A collector with `transform.type: python` or a
   `pre_script` is refused, at `full` as at `edit`; put it in the
   configuration and run it by name.
-- **Only `http` collectors**, since the other request types read files,
-  hosts and databases with the server's own credentials, and **no file of
-  the server's**: `request.basic_auth_file`, `request.bearer_token_file`,
-  the `request.tls` files and a `request.login`, which reads its secrets
-  from files, are refused, named in the order the collector has them. A pasted response needs no
-  credential, and a fetched target gets the configured collector's.
+- **Its request block is inert**, whatever its type: no run makes a
+  request with it, so a `sql`, `tlscert` or `localfile` playground reaches
+  no database, host or file. A pasted response is decoded as it is, and a
+  target is fetched, or a static target scraped, through a configured
+  collector alone.
+- **No file of the server's**: every request key ending in `_file` or
+  `_files`, of any type — `request.bearer_token_file`, the `request.tls`
+  files, an `sshfile` collector's `known_hosts_file`, a `grpc` collector's
+  `protoset_file` — and a `request.login`, which reads its secrets from
+  files, are refused, named in the order the collector has them. A pasted
+  response needs no credential, and a fetched target gets the configured
+  collector's.
 
 A run takes as long as a probe may — the timeout on the page, sent as
 Prometheus's scrape timeout, within `--probe.default-timeout`, or a static

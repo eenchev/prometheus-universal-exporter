@@ -29476,7 +29476,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
 - `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
 - `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
-- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records while the page is open, and says `the collector this playground was copied from`.
 - `TestTheDebugPagesBodyFitsTheCollectorChosen`: the body has the placeholder `Paste what the target answers` and the example in `data-example`; `/debug` starts it as the example, `/debug?collector=rooms` empty, and the script changes it on a change of collector only while it is empty or the example.
 - `TestTheDebugPageNeverRunsOnOpening` (changed): `run` is named only where it is defined and by *Run*'s click handler, with no timer.
 - `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note; its script chooses the collector the server chose (`data-chosen`).
@@ -29537,6 +29537,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the check that a row with a value needs a name is now `messageOf`'s `return`, which `wrong()` shares.
 
 - `TestEveryPagesDropdownsHaveTheirArrowInFromTheEdge`: the pages' shared style draws a dropdown's arrow itself, 14px and 19px in from the field's right edge with 34px of padding before it, under a selector that outweighs each page's own rule for its fields.
+
+## 34.244 The debug page's playground of any request type, opened as the example
+
+- `TestAnHTTPPlaygroundMakesNoRequest`, `TestATLSCertPlaygroundMakesNoRequest`, `TestADNSPlaygroundMakesNoRequest`, `TestAnNTPPlaygroundMakesNoRequest`, `TestASQLPlaygroundMakesNoRequest`, `TestAGRPCPlaygroundMakesNoRequest`, `TestAGraphitePlaygroundMakesNoRequest`, `TestAKubernetesPlaygroundMakesNoRequest`, `TestAnSSHFilePlaygroundMakesNoRequest`, and in the builds that have them `TestAnSSHExecPlaygroundMakesNoRequest`, `TestATCPPlaygroundMakesNoRequest`, `TestARedisPlaygroundMakesNoRequest`, `TestAnLDAPPlaygroundMakesNoRequest` and `TestAnS3FilePlaygroundMakesNoRequest`: at `full`, a playground of the type, whose request reaches a listener that records TCP connections and UDP packets wherever the type names a host in its request block (an http or graphite `proxy_url`, a dns `server`, a kubernetes `api_server`, an s3file `endpoint`), and written without the files a request of its type needs (`known_hosts_file` and a key, a `bearer_token_file`, a password file), reads a pasted response of the type into its series (a JSON document, sql rows, a file's content, a command's output) with no request made; run on a target with `request_from` and on a static target, both of a configured collector of the type, every request is that collector's; and nothing ever connects to the listener. Each then sets every request key of its type ending in `_file` or `_files`, those of the common part it takes, of its own and of the mappings among them, one at a time, and is refused `422` naming it (`request.login` for a login's).
+- `TestALocalfilePlaygroundReadsNoFile`: a localfile playground whose `root` and `path` name a file holding other series gives the pasted content's series; through a configured localfile collector, its requests alone are made.
+- `TestTheDebugPageReadsWhatACollectorOfItsOwnTypeFetches`: a copy of a tlscert collector is run on that collector's static target and on a target fetched through it, the report saying so; an http playground on a tlscert collector's static target or through it, and a tlscert playground through an http collector or on its static target, are refused `400` saying that a collector reads what a collector of its request type fetches only.
+- `TestTheDebugPageHoldsTheFormOfAPlaygroundOfEachType`: the page holds, under `types`, the form of a playground of each request type the build has, as the type gives it, a tlscert one asking for the handshake's JSON document without `Content-Type`, status or headers, an http one with them, which is the example's; the script takes the playground's form from the `request.type` the editor holds, once a frame as it is typed, and sends no status, headers or `Content-Type` its form hides.
+- `TestTheDebugPageOpensWithTheExamplePlayground`: `/debug` opens with the example in the editor and *Back to the example* hidden; the script keeps nothing of the playground, the body or the collector copied from in the browser (no `debug.collector`, `debug.body`, `debug.copied` or `sessionStorage`), shows *Back to the example* while the playground is a copy, which puts the example back, and still keeps the choice of table or text.
+- `TestTheDebugPageSaysWhoseStaticTargetsItOffers`: `/debug?collector=rooms` says `Static targets of rooms, the collector chosen.`; `/debug`, with *Scrape a static target* disabled, says nothing, and the script says `…, the collector this playground was copied from.` of a copy.
+- `TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector`, `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageIsSelfContained` (changed): a localfile playground is no longer refused; the collector copied from is no longer kept in the browser; the targets' placeholders the forms hold are not URLs the page loads.
 
 # 35. Documentation requirements
 
@@ -33306,12 +33316,22 @@ expanded, whatever `--config.expand-env` says, and reading it MUST NOT size
 the expression caches, which are the configuration in force's. Before it is
 checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
 why: a collector that runs Python (`transform.type: python` or
-`transform.pre_script`), which MUST NOT be run; one whose `request.type` is
-not `http`; and one that sets `request.basic_auth_file`,
-`request.bearer_token_file`, a `request.tls` file or `request.login`
+`transform.pre_script`), which MUST NOT be run; and one whose request block
+sets a key ending in `_file` or `_files` (but `max_files`, a count), at its
+top or in a mapping it holds, of any request type — `request.bearer_token_file`,
+a `request.tls` file, `request.known_hosts_file` — or `request.login`
 (§ 42.6a), naming every such key in the order the collector has them.
 Nothing a file holds
-MUST reach the answer. Its own request block MUST NOT make a request.
+MUST reach the answer. Its own request block MUST NOT make a request on any
+path of a run — a pasted response, a target fetched through `request_from`
+or a static target's scrape — whatever its type: it MUST be accepted of
+every request type the build has, its type saying only how its answer is
+read (its default decoder, a `sql` collector's rows, the JSON document of
+the types that make one), and the keys naming files that a request of its
+type needs (an `sshfile` or `sshexec` collector's `known_hosts_file` and key
+or password, a `kubernetes` collector's credential beside `api_server`, the
+password files of an `ldap` `bind_dn` and a `redis` `username`) MUST NOT be
+required of it.
 
 A configured collector MUST be run as it is configured, its Python
 included, at `edit` as at `full`: its scripts are the operator's, and read
@@ -33340,8 +33360,12 @@ value in which text reads as a credential; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
 copy of the YAML shown, which then runs, and MUST remember, through edits
-and between visits, the configured collector the playground was copied
-from. The YAML
+while it is open, the configured collector the playground was copied from.
+The page MUST open with the example playground, an `http` collector,
+whatever was written or copied on it before: it MUST NOT keep the
+playground, the body or the collector copied from in the browser. While
+the playground is a copy, the page MUST offer *Back to the example*, which
+puts the example back. The YAML
 shown, with the lines that hold what was withheld left out and written on
 the page, MUST be read as a collector and give the series the configured
 collector gives. `GET /debug/collector?name=<name>`, served and
@@ -33357,11 +33381,16 @@ there is none; and `form`, what the page asks a run of the collector for
 What the page asks for MUST follow the request type of the collector it is
 for, as the type says it in its own registration, so a type a build leaves
 out takes its words with it and every type MUST say them (a type that does
-not MUST fail to build): the collector run reads what is pasted, the
-playground being an `http` collector, and a target is probed through the
-collector a target would be fetched through. The page MUST hold the form of
-the playground and of each configured collector, and MUST take the one
-`/debug/collector` answers with a collector when it reads it again:
+not MUST fail to build): the collector run reads what is pasted, and a
+target is probed through the collector a target would be fetched through.
+The page MUST hold the form of the playground, of a playground of each
+request type the build has and of each configured collector, and MUST take
+the one `/debug/collector` answers with a collector when it reads it again.
+The playground's MUST follow the `request.type` its editor holds, read as
+it is typed from the top mapping's `request`, in block or flow style,
+quoted or not, comments left out; with none, or a type the page holds no
+form of, the page MUST ask as for `http`. A field the type hides MUST keep
+what was typed in it, and MUST NOT be sent:
 
 - the target MUST be asked for by its type's name for it and an example of
   its forms — `URL` and `https://host:port` for `http`, `Name to resolve` and
@@ -33458,8 +33487,11 @@ answered as what the
 scrape would have published, its series with the target's labels and
 `static_target`; nothing MUST be published. A collector run on what
 another collector fetched — a written one, or one other than the static
-target's — MUST be given what an `http` collector fetched only (`400`
-otherwise), and decodes, transforms and validates it.
+target's — MUST be given what a collector of its own request type fetched
+only (`400` otherwise, before anything is fetched), and decodes, transforms
+and validates it as its type reads an answer. The page MUST say whose
+static targets it lists: `Static targets of <name>, the collector chosen.`
+or `…, the collector this playground was copied from.`
 
 *Probe a target* MUST offer *Copy as*, made from the form as it stands and
 made again as the target and the parameter rows change: the `/probe` URL,

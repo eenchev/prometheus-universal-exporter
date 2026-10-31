@@ -171,6 +171,13 @@ type Collector struct {
 	// static targets that use it, are not checked against them. It is no
 	// key of the configuration.
 	DescriptorFilesUnread bool `yaml:"-"`
+	// RequestNotMade says the collector's request block is never made: the
+	// debug page's playground (config.ParseCollector), which reads only a
+	// pasted response or what a configured collector fetched. The keys
+	// naming the files a request would read, which the playground may not
+	// set, are then not required of it, as a key a request needs is
+	// required of every other collector. It is no key of the configuration.
+	RequestNotMade bool `yaml:"-"`
 	// FromDefaults are the keys the collector took from the defaults block
 	// of its file (CollectorDefaults.ApplyTo), by their paths, for the
 	// errors about them and the dry run to say so. It is no key of the

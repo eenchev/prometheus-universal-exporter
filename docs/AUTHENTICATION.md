@@ -477,9 +477,16 @@ is kept from reaching further than that:
   be framed. The debug URLs only read, with `GET`, and answer `text/plain`
   with `nosniff`, which a browser never runs as a page.
 - **The server's files and credentials.** The playground, a collector
-  written on the page, that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file, a
-  `login` — is refused, and so is any request type but `http`, since the others read
-  files, hosts and databases with the server's keys. `${NAME}` references in
+  written on the page, may be of any request type, since its request block
+  is inert: no run makes a request with it, whatever its type — a pasted
+  response is decoded as it is, and a target is reached only through a
+  configured collector — so a `sql` or `sshfile` playground reaches no
+  database or host, and a `localfile` one reads no file; its type says only
+  how the answer is read. One that names a file — any request key ending
+  in `_file` or `_files`, such as `bearer_token_file`, a TLS file or
+  `known_hosts_file`, and a `login` — is still refused, so that nothing a
+  file holds can reach an answer even through a mistake in that rule, and
+  so is Python (below). `${NAME}` references in
   it are not expanded, so the environment stays unseen. A pasted response
   makes no request at all. A configured collector run by name is the
   operator's own: on a pasted response it makes no request either. The page

@@ -72,7 +72,6 @@ func init() {
 		Requester:   httpRequester{},
 		URLPath:     true,
 		Revalidates: true,
-		DebugPage:   true,
 		CheckTargetRequest: func(c *model.Collector, t *model.StaticTarget) error {
 			if err := checkTargetLogin(c, t); err != nil {
 				return err

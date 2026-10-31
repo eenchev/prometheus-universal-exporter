@@ -43,10 +43,12 @@ type debugPage struct {
 	BasicAuth bool
 }
 
-// debugForms are the forms of the playground and of each configured
+// debugForms are the forms of the playground, of a playground of each
+// request type the build has, by its name, and of each configured
 // collector by name (debugForm), which the page's script reads.
 type debugForms struct {
 	Playground debugForm            `json:"playground"`
+	Types      map[string]debugForm `json:"types"`
 	Collectors map[string]debugForm `json:"collectors"`
 }
 
@@ -185,6 +187,7 @@ pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-w
 <div class="collector-head">
 <label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}Playground: the YAML of a collector, which runs{{end}}</label>
 <button type="button" class="secondary" id="edit-copy"{{if not .Chosen}} hidden{{end}}>Edit a copy</button>
+<button type="button" class="secondary" id="back-to-example" hidden>Back to the example</button>
 </div>
 <p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> makes the playground a copy of it, which runs in its place and fetches a target through it.</p>
 <textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
@@ -246,6 +249,7 @@ pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-w
 </div>
 <div data-mode="static" hidden>
 <p class="note">The static target is scraped once as its schedule scrapes it, with its own settings and credentials, through the collector chosen, or the one the playground was copied from, and read by the collector chosen. Nothing is published.</p>
+<p class="note" id="static-through">{{if .Chosen}}Static targets of {{.Chosen}}, the collector chosen.{{end}}</p>
 <label for="static-target">Static target</label>
 <select id="static-target" data-for="{{.Chosen}}"{{if not .StaticTargets}} disabled{{end}}>
 {{- range .StaticTargets}}
@@ -324,21 +328,13 @@ pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-w
 "use strict";
 const $ = (id) => document.getElementById(id);
 const store = (() => { try { return window.localStorage; } catch (error) { return null; } })();
-// The playground and the body are kept in this browser between visits, and
-// so is the configured collector the playground is a copy of, if it is one:
-// written is the playground, which the editor shows while no configured
-// collector is chosen, and copiedFrom the collector Edit a copy copied it
-// from, which a target is fetched through while the playground runs.
+// The page opens with the example playground, whatever was written on it
+// before: written is the playground, which the editor shows while no
+// configured collector is chosen, and copiedFrom the collector Edit a copy
+// copied it from, which a target is fetched through while the playground
+// runs. Both last only while the page is open; Back to the example puts
+// the example back.
 let written = $("collector").dataset.example, copiedFrom = "";
-for (const id of ["collector", "body", "copied"]) {
-  try {
-    const kept = store && store.getItem("debug." + id);
-    if (kept === null || kept === undefined) continue;
-    if (id === "collector") written = kept;
-    else if (id === "copied") copiedFrom = kept;
-    else $(id).value = kept;
-  } catch (error) { /* storage refused: start from the example */ }
-}
 // A link from the collectors page names the collector, and at full the
 // target or the static target. The server has chosen the collector the
 // link names, or the one of the static target it names, and the browser's
@@ -348,9 +344,6 @@ const pick = (select, value) => {
   for (const option of select.options) if (option.value === value) { select.value = value; return true; }
   return false;
 };
-// A copy of a collector a reload has since taken away fetches through
-// nothing.
-if (copiedFrom !== "" && ![...$("configured").options].some((option) => option.value !== "" && option.value === copiedFrom)) copiedFrom = "";
 pick($("configured"), $("configured").dataset.chosen);
 const choose = (value) => {
   const radio = document.querySelector('input[name="mode"][value="' + value + '"]');
@@ -370,11 +363,82 @@ const showMode = () => {
 // no request of its own, so without either nothing can be fetched.
 const fetcher = () => $("configured").value || copiedFrom;
 // What a run asks for follows the request type of the collector it is for
-// (debugForm): the one run reads what is pasted, the playground being an
-// http collector, and a target is probed through fetcher().
+// (debugForm): the one run reads what is pasted, and a target is probed
+// through fetcher(). The playground's is the request.type written in the
+// editor, as it is written, with the form the page holds of each type the
+// build has; one the page does not know, or none, is asked for as an http
+// collector's answer, and the server says what is wrong with it.
 const forms = JSON.parse($("forms").textContent);
 const formOf = (name) => (name !== "" && forms.collectors[name]) || forms.playground;
-const readerForm = () => formOf($("configured").value);
+// requestTypeOf is the request.type a collector's YAML writes, or "": the
+// request key of its top mapping, written as a block (request: then type:
+// indented under it) or in flow style (request: {type: sql}), its value
+// quoted or not; comments are left out. It reads what the editor holds as
+// it is typed, so it is tolerant, and the server reads the YAML itself.
+function requestTypeOf(text) {
+  const uncommented = (line) => {
+    let quote = "";
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote !== "") { if (ch === quote) quote = ""; continue; }
+      if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+    }
+    return line;
+  };
+  const lines = text.split(/\r?\n/).map(uncommented);
+  const indentOf = (line) => line.length - line.trimStart().length;
+  const scalar = (value) => {
+    value = value.trim();
+    const quoted = /^(["'])(.*)\1$/.exec(value);
+    return quoted ? quoted[2] : value;
+  };
+  const key = /^\s*(?:-\s+)?(["']?)([A-Za-z_][\w-]*)\1\s*:(?:\s+(.*)|$)/;
+  let top = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === "" || lines[i].trim() === "---") continue;
+    const at = key.exec(lines[i]);
+    if (!at) continue;
+    // The top mapping's keys are at the indentation of its first; a list's
+    // dash, as a collector is written under collectors:, is passed over.
+    const indent = indentOf(lines[i]) + (/^\s*-\s/.test(lines[i]) ? lines[i].trimStart().indexOf(at[1] + at[2]) : 0);
+    if (top < 0) top = indent;
+    if (indent !== top || at[2] !== "request") continue;
+    const rest = (at[3] || "").trim();
+    if (rest.startsWith("{")) {
+      // Flow style, which may go on over the lines after it.
+      let flow = rest, depth = 0;
+      for (let j = i + 1; j < lines.length && (flow.match(/{/g) || []).length > (flow.match(/}/g) || []).length; j++) flow += " " + lines[j];
+      for (let k = 0, start = 1; k < flow.length; k++) {
+        const ch = flow[k];
+        if (ch === "{" || ch === "[") depth++;
+        else if (ch === "}" || ch === "]") depth--;
+        if ((ch === "," && depth === 1) || depth === 0) {
+          const pair = /^\s*(["']?)type\1\s*:\s*(.*)$/.exec(flow.slice(start, k));
+          if (pair) return scalar(pair[2]);
+          start = k + 1;
+          if (depth === 0) break;
+        }
+      }
+      return "";
+    }
+    if (rest !== "") return "";
+    let inner = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === "") continue;
+      const indent = indentOf(lines[j]);
+      if (indent <= top) break;
+      if (inner < 0) inner = indent;
+      const pair = key.exec(lines[j]);
+      if (indent === inner && pair && pair[2] === "type") return scalar(pair[3] || "");
+    }
+    return "";
+  }
+  return "";
+}
+let writtenType = requestTypeOf(written);
+const playgroundForm = () => forms.types[writtenType] || forms.playground;
+const readerForm = () => $("configured").value !== "" ? formOf($("configured").value) : playgroundForm();
 // The headers of a pasted response and the probe parameters are each a list
 // of rows, a name and a value with × to remove the row, and a button to add
 // one. A row left blank is not sent, and one with a value and no name, or a
@@ -583,7 +647,13 @@ function showFetch() {
 let listedFor = $("static-target") ? $("static-target").dataset.for : "";
 async function showStaticTargets() {
   const select = $("static-target"), through = fetcher();
-  if (!select || through === listedFor) return;
+  if (!select) return;
+  // Whose they are is said whenever the collector chosen changes, the list
+  // being the same when a copy is made of it.
+  $("static-through").textContent = through === "" ? "" : $("configured").value !== ""
+    ? "Static targets of " + through + ", the collector chosen."
+    : "Static targets of " + through + ", the collector this playground was copied from.";
+  if (through === listedFor) return;
   listedFor = through;
   let targets = [], note = "";
   if (through !== "") {
@@ -628,6 +698,7 @@ async function showCollector() {
   const area = $("collector"), name = $("configured").value;
   area.readOnly = name !== "";
   $("edit-copy").hidden = name === "";
+  $("back-to-example").hidden = name !== "" || copiedFrom === "";
   $("collector-note").hidden = name === "";
   $("collector-label").textContent = name !== "" ? "The configuration of " + name + ", which runs as configured (read-only)"
     : copiedFrom !== "" ? "Playground, a copy of " + copiedFrom + ": the YAML of a collector, which runs"
@@ -766,23 +837,35 @@ if (probeCopy) {
   for (const event of ["input", "click"]) $("params-part").addEventListener(event, probeCopy);
 }
 if (staticCopy) $("static-target").addEventListener("change", staticCopy);
-function keep() {
-  try {
-    if (store) {
-      store.setItem("debug.collector", written);
-      store.setItem("debug.copied", copiedFrom);
-      store.setItem("debug.body", $("body").value);
-    }
-  } catch (error) { /* not kept */ }
-}
-$("collector").addEventListener("input", () => { if (!$("collector").readOnly) { written = $("collector").value; keep(); } });
-$("body").addEventListener("input", keep);
+// The panel follows the request type written in the playground as it is
+// typed, once a frame however fast the keys come: the fields it hides keep
+// what was typed in them, for when the type comes back, and are not sent.
+let typeFrame = 0;
+$("collector").addEventListener("input", () => {
+  if ($("collector").readOnly) return;
+  written = $("collector").value;
+  if (typeFrame) return;
+  typeFrame = requestAnimationFrame(() => {
+    typeFrame = 0;
+    const now = requestTypeOf(written);
+    if (now !== writtenType) { writtenType = now; showForm(); }
+  });
+});
 $("edit-copy").addEventListener("click", () => {
   written = $("collector").value;
+  writtenType = requestTypeOf(written);
   copiedFrom = $("configured").value;
   $("configured").value = "";
   showCollector();
-  keep();
+  $("collector").focus();
+});
+// Back to the example puts the example playground back in place of the
+// copy, with the example's body unless one was written in.
+$("back-to-example").addEventListener("click", () => {
+  written = $("collector").dataset.example;
+  writtenType = requestTypeOf(written);
+  copiedFrom = "";
+  showCollector();
   $("collector").focus();
 });
 for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", showMode);

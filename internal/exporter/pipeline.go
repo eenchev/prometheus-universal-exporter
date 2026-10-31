@@ -274,7 +274,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if revalidates {
 			fetchCtx = fetch.WithRevalidation(ctx, s.cache.Revalidation(j.revalidateKey, time.Now()))
 		}
-		response, err = fetch.FetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
+		response, err = s.fetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.

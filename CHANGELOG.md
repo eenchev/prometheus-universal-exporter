@@ -76,6 +76,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   before. The line the shutdown begins with now reads
   `shutting down: waiting for 1 probe in progress, at most 15s; …`, or
   `shutting down: no probes in progress; exiting`.
+- The debug page no longer keeps the playground, its body or the collector
+  it was copied from in the browser between visits. A collector run on what
+  another collector fetches, through `request_from` or a static target,
+  must now be of that collector's request type (`400` otherwise), where it
+  had to be an `http` collector before.
 
 ### New
 
@@ -171,6 +176,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   keys it takes from its file's defaults marked, instead of the example,
   which it does not run; *Edit a copy* writes it on the page. A link from
   `/collectors` opens the page with it shown.
+- The debug page's playground may be of any request type the build has, so
+  *Edit a copy* of a `tlscert`, `sql`, `dns` or other collector now runs: on
+  a pasted answer of that type, or on what the collector it was copied from
+  answers for a target or a static target. Before, every run of such a copy
+  was refused with `422: ... a collector written on the debug page is an
+  http collector`. The playground's request block still makes no request,
+  and a playground with a `*_file` key, a `login` or Python is still
+  refused.
+- The debug page opens with the example playground every time, not with
+  what was written or copied on it at an earlier visit; *Back to the
+  example* puts it back in place of a copy.
+- A pasted response asks for a `Content-Type`, a status and headers only
+  when the playground's `request.type`, as the editor writes it, is `http`
+  or `graphite`, and its placeholder says what that type's answer is; the
+  fields follow the type as it is typed.
+- *Scrape a static target* says whose static targets it lists: the
+  collector chosen, or the one the playground was copied from.
 
 ## exporter 1.8.0
 

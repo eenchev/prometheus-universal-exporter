@@ -178,3 +178,17 @@ func TestTheDebugPagesStaticTargetsFollowAReload(t *testing.T) {
 		t.Errorf("/debug/collector?name=second after the reload: %+v", got)
 	}
 }
+
+// The static targets offered say whose they are: those of the collector
+// chosen, or of the one the playground was copied from, which a copy scrapes
+// them through; the example playground, copied from none, names none.
+func TestTheDebugPageSaysWhoseStaticTargetsItOffers(t *testing.T) {
+	server := staticTargetsPageServer(t)
+	requireContains(t, getPage(t, server, "/debug?collector=rooms"), `<p class="note" id="static-through">Static targets of rooms, the collector chosen.</p>`)
+	page := getPage(t, server, "/debug")
+	requireContains(t, page, `<p class="note" id="static-through"></p>`,
+		`<input type="radio" name="mode" value="static" id="mode-static" disabled> Scrape a static target`)
+	requireContains(t, debugPageScript(page),
+		`"Static targets of " + through + ", the collector chosen."`,
+		`"Static targets of " + through + ", the collector this playground was copied from."`)
+}

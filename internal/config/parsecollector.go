@@ -15,11 +15,15 @@ import (
 // read here, as the loader reads one of the collectors list, so that what the
 // debug page accepts the configuration accepts and the other way round, and
 // a mistake is reported in the words, and at the line, a load would report it.
-// Three things a load does are not done:
+// Four things a load does are not done:
 //
 //   - ${NAME} references are never expanded, whatever --config.expand-env
 //     says: the debug page's answer would show the exporter's environment;
 //   - no file the collector names is opened, as WithoutNamedFiles loads;
+//   - the files of the request's credentials are not required, such as an
+//     sshfile collector's known_hosts_file: the collector's request block is
+//     never made (model.Collector.RequestNotMade), and the debug page
+//     refuses a key that names a file;
 //   - the expression caches are not sized for it (expr.ReserveExpressions),
 //     which is the configuration in force's to do: a debug page's collector
 //     sizing them to its own few expressions would have the configuration's
@@ -74,6 +78,9 @@ func ParseCollector(document []byte, refuse func(*model.Collector) error) (*mode
 		return nil, err
 	}
 	collector.DescriptorFilesUnread = true
+	// Its request block is never made, so what only a request needs, the
+	// files of its credentials, is not asked of it.
+	collector.RequestNotMade = true
 	if err := validateCollector(c, collector); err != nil {
 		return nil, err
 	}

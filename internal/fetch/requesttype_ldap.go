@@ -243,7 +243,9 @@ func validateLDAPRequest(x *model.Collector) error {
 		if err := checkLDAPDN(own.BindDN); err != nil {
 			return fmt.Errorf("collector %q request.bind_dn %q is not a DN: %w", x.Name, own.BindDN, err)
 		}
-		if r.PasswordFile == "" {
+		// The debug page's playground makes no request, and may name no
+		// file.
+		if r.PasswordFile == "" && !x.RequestNotMade {
 			return fmt.Errorf("collector %q sets request.bind_dn without request.password_file; a simple bind with a DN and no password is an unauthenticated bind, which a server takes without checking anything, so name the file of the account's password", x.Name)
 		}
 	}

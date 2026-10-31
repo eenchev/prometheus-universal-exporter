@@ -73,13 +73,11 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 		`<p class="note" id="fetch-unavailable" hidden>`, `<p class="note" id="fetched-through">Probed through rooms, the collector chosen.</p>`)
 	script := debugPageScript(chosen)
 	// The playground's fetch names the collector it was copied from, which
-	// Edit a copy remembers, kept with the playground between visits; the
-	// fetch radio is disabled while there is neither it nor a configured
-	// collector chosen.
+	// Edit a copy remembers while the page is open; the fetch radio is
+	// disabled while there is neither it nor a configured collector chosen.
 	requireContains(t, script,
 		`if (request.collector !== undefined) request.request_from = copiedFrom;`,
 		`copiedFrom = $("configured").value;`,
-		`store.setItem("debug.copied", copiedFrom);`,
 		`const fetcher = () => $("configured").value || copiedFrom;`,
 		`radio.disabled = through === "";`,
 		`"Probed through " + through + ", the collector this playground was copied from."`)
@@ -109,4 +107,33 @@ func TestTheDebugPagesBodyFitsTheCollectorChosen(t *testing.T) {
 	requireContains(t, debugPageScript(chosen),
 		`if (body.value !== example && body.value !== "") return;`,
 		`body.value = $("configured").value === "" && copiedFrom === "" ? example : "";`)
+}
+
+// The page opens with the example playground, an http collector, whatever
+// was written or copied on it before: nothing of the playground, the body
+// or the collector it was copied from is kept in the browser, and a copy
+// lasts while the page is open. Back to the example, offered while the
+// playground is a copy, puts the example back.
+func TestTheDebugPageOpensWithTheExamplePlayground(t *testing.T) {
+	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
+	server.SetDebug(DebugFull)
+	page := getPage(t, server, "/debug")
+	requireContains(t, page, `<textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="`+html.EscapeString(debugExample)+`">`+html.EscapeString(debugExample)+`</textarea>`,
+		`<button type="button" class="secondary" id="back-to-example" hidden>Back to the example</button>`)
+	script := debugPageScript(page)
+	for _, gone := range []string{`"debug.collector"`, `"debug.body"`, `"debug.copied"`, `"debug." + id`, "sessionStorage", "function keep()"} {
+		if strings.Contains(script, gone) {
+			t.Errorf("the script still keeps the playground: %q", gone)
+		}
+	}
+	requireContains(t, script,
+		`let written = $("collector").dataset.example, copiedFrom = "";`,
+		`$("back-to-example").hidden = name !== "" || copiedFrom === "";`,
+		`$("back-to-example").addEventListener("click", () => {
+  written = $("collector").dataset.example;
+  writtenType = requestTypeOf(written);
+  copiedFrom = "";
+  showCollector();`)
+	// The choice of table or text is the visitor's own, and still kept.
+	requireContains(t, script, `store.setItem("debug.view", view);`)
 }

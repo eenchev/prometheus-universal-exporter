@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -218,14 +219,14 @@ func requirePlaygroundRefusesFiles(t *testing.T, requestType string) {
 		name, value, _ := strings.Cut(key, "=")
 		path := strings.Split(name, ".")
 		var yaml strings.Builder
-		yaml.WriteString("name: x\nrequest:\n  type: " + requestType + "\n")
+		fmt.Fprintf(&yaml, "name: x\nrequest:\n  type: %s\n", requestType)
 		for i, part := range path {
-			yaml.WriteString(strings.Repeat("  ", i+1) + part + ":")
+			fmt.Fprintf(&yaml, "%s%s:", strings.Repeat("  ", i+1), part)
 			if i < len(path)-1 {
 				yaml.WriteString("\n")
 			}
 		}
-		yaml.WriteString(" " + value + "\ntransform: {type: jq}\nmetrics: [{name: up, expression: '1'}]\n")
+		fmt.Fprintf(&yaml, " %s\ntransform: {type: jq}\nmetrics: [{name: up, expression: '1'}]\n", value)
 		// A login reads its secrets from files, and is named as a whole.
 		named := name
 		if path[0] == "login" {

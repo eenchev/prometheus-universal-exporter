@@ -168,3 +168,33 @@ func ValidateShutdownDelay(delay time.Duration) error {
 // Kubernetes and load balancers stop sending probes while the exporter still
 // answers the ones already on their way (--web.shutdown-delay).
 func (s *Server) BeginShutdown() { s.stopping.Store(true) }
+
+// countInProgress counts the requests next is answering, and the probes
+// among them, from the moment the request is routed until its answer is
+// written: what the HTTP server's graceful shutdown waits for, so the
+// shutdown can say what it is waiting for (InProgress).
+func (s *Server) countInProgress(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probe := r.URL.Path == "/probe"
+		s.answering.Add(1)
+		if probe {
+			s.probing.Add(1)
+		}
+		defer func() {
+			if probe {
+				s.probing.Add(-1)
+			}
+			s.answering.Add(-1)
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// InProgress is how many probes, and how many other requests, the exporter
+// is answering: a shutdown waits for both, within --web.shutdown-timeout.
+func (s *Server) InProgress() (probes, others int) {
+	// The two are read apart, so a probe ending between the reads can
+	// leave one more probe than requests: none is then another request.
+	p, r := s.probing.Load(), s.answering.Load()
+	return int(p), int(max(r-p, 0))
+}

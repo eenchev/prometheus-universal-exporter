@@ -118,6 +118,9 @@ type Server struct {
 	fingerprints *fingerprintMemo
 	// stopping is set when a shutdown begins; /ready answers 503 from then.
 	stopping atomic.Bool
+	// answering and probing count the requests being answered, and the
+	// probes among them: what a shutdown waits for (InProgress).
+	answering, probing atomic.Int64
 	// followed is the configuration the per-collector state was last
 	// reconciled with, with the static target file in force with it, and its
 	// generation (reconcile.go). It is replaced under statsMu, together with
@@ -310,7 +313,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
 		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
 	}
-	return s.writeBounded(mux)
+	return s.countInProgress(s.writeBounded(mux))
 }
 
 // readOnly reports whether r is a GET or a HEAD, which an endpoint that

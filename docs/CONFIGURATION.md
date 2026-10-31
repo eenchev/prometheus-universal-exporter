@@ -5848,16 +5848,39 @@ scrapes on every rollout. The Helm chart sets it to 5 seconds. Static targets
 keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
 through the delay.
 
-Then it stops accepting connections, lets the
+Then it stops accepting connections, cuts short the
+[static target](STATIC-TARGETS.md) scrapes in flight, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
 followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
 export of its own log within the same `otlp.timeout`,
-and exits `0`. It logs that it is shutting down, and, when the timeout runs
-out with probes still in progress, that it closed them — Prometheus records
-those as failed scrapes. Keep the timeout at least as long as the longest
-scrape timeout of the monitors that probe the exporter, so a rollout does not
-cut probes off:
+and exits `0`. The static target scrapes are not waited for: their results are
+served by this exporter alone, which is stopping, so a target that does not
+answer would only hold the shutdown up. A scrape cut short publishes nothing
+and logs nothing above `debug`; the target's last result stands, and the last
+OTLP export goes without what that scrape would have queued. Nothing else the
+exporter runs on its own holds the shutdown up: the configuration watch stops
+as the shutdown begins, and the [allocator](ALLOCATOR.md) client, which keeps
+saying the replica is shutting down, once the probes are done.
+
+The log says what the shutdown waits for, and for how long at most:
+
+```json
+{"level":"INFO","msg":"shutting down: waiting for 2 probes in progress, at most 15s; a second signal exits at once","probes":2,"other_requests":0,"shutdown_timeout":"15s"}
+{"level":"INFO","msg":"shutting down: still waiting for 1 probe in progress, 10s left","probes":1,"other_requests":0,"time_left":"10s"}
+```
+
+`other_requests` counts the requests in progress that are not probes, such as
+a scrape of the self-metrics, which the shutdown waits for as well. While it
+waits it says every 5 seconds what it still waits for; with nothing in
+progress it says `shutting down: no probes in progress; exiting`, or that it
+sends the last OTLP export, and does not wait. When the timeout runs out with
+probes still in progress it logs an error saying it gave up on them and closed
+their connections — Prometheus records those as failed scrapes — and still
+exits `0`: the exporter stopped as asked, and a probe cut off is Prometheus's
+failed scrape, not the exporter's. Keep the timeout at least as long as the
+longest scrape timeout of the monitors that probe the exporter, so a rollout
+does not cut probes off:
 
 ```sh
 prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
@@ -5866,9 +5889,16 @@ prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 In Kubernetes the pod must also be allowed to run that long: its
 `terminationGracePeriodSeconds`, 30 by default, has to cover the delay, the
 timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
-`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time
-ends the process at once — the second Ctrl-C of an impatient operator, or a
-supervisor that signals twice — without waiting for the probes or the export.
+`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
+included, ends the process at once — the second Ctrl-C of an impatient
+operator, or a supervisor that signals twice — without waiting for the probes
+or the export. It logs one line first,
+`second signal: exiting now, 1 probe in progress left unfinished`, and the
+process is then ended by that signal, as an exporter that did not catch it
+would be: a shell reports `130` for `SIGINT` and `143` for `SIGTERM`, and
+Kubernetes the same exit codes. An exporter started with the signal ignored,
+as a script's background job is with `SIGINT`, exits with that same status
+instead, a second later. `SIGTERM` and `SIGINT` do the same throughout.
 A `SIGHUP` in that time [reloads](#reloading-on-demand) as at any other, and
 does not end the process.
 

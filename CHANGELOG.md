@@ -65,6 +65,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   refresh while the box is open. On the debug page *Run* stands level with
   the timeout box beside it, and the status page's Refresh button and
   auto-refresh selector are one height, centred on one line.
+- A `SIGTERM` or `SIGINT` no longer waits for the static target scrapes in
+  flight: they are cut short at once, logging nothing above `debug`, so a
+  target that does not answer no longer holds Ctrl-C up for all of
+  `--web.shutdown-timeout`. The last OTLP export goes without what those
+  scrapes would have queued. Probes in progress are still waited for, and the
+  log now says how many, for how long at most, what is still awaited every 5
+  seconds, and what it gave up on when the timeout runs out. A second signal
+  logs `second signal: exiting now, …` before the process ends by it, as
+  before. The line the shutdown begins with now reads
+  `shutting down: waiting for 1 probe in progress, at most 15s; …`, or
+  `shutting down: no probes in progress; exiting`.
 
 ### New
 

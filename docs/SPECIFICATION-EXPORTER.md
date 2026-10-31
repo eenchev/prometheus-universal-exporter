@@ -10049,12 +10049,34 @@ garbage: such a limit leaves the Go heap almost nothing.
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
 probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
-refused as a malformed command line. When it runs out, the connections still
-open MUST be closed, which MUST be logged with the timeout, before the last
-OTLP export (§ 42.1a) and a clean exit.
-The line logged as the graceful shutdown begins MUST name the last OTLP
+refused as a malformed command line. The wait MUST be for the requests to the
+exporter in progress alone — the probes, and any other request being
+answered — and not for work the exporter started on its own: the static
+target scrapes in flight are cut short as it begins (below), and the
+configuration watch, the reload loop and the Python worker reaping stop then
+and are not waited for. When it runs out, the connections still
+open MUST be closed, which MUST be logged at `error` with the timeout and the
+number of probes and of other requests given up on, before the last
+OTLP export (§ 42.1a) and a clean exit, `0`.
+The line logged as the graceful shutdown begins MUST say what it waits for —
+the number of probes in progress, and of other requests when there are any,
+in words and as the attributes `probes` and `other_requests` — and the
+timeout, or, with nothing in progress, that there is nothing to wait for, in
+which case the exporter MUST NOT wait. It MUST name the last OTLP
 export only when OTLP export is enabled with an endpoint, the only case in
-which one is sent.
+which one is sent. While the wait goes on, the exporter MUST log, every 5
+seconds and no more often, what it still waits for and the time left, so a
+shutdown run from a terminal never looks hung.
+
+A second `SIGTERM` or `SIGINT`, from the first signal on, the delay below
+included, MUST end the process at once, without waiting for the probes or
+the last OTLP export, after logging one line that says so and how many probes
+and other requests it leaves unfinished. The process MUST then end by that
+signal's default action, so it reports itself killed by the signal (a shell's
+`130` for `SIGINT`, `143` for `SIGTERM`) rather than exiting `0`; a process
+started with that signal ignored, which the default action does not end, MUST
+exit with that status, 128 and the signal's number, within a second. `SIGTERM` and
+`SIGINT` MUST behave the same throughout.
 
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
@@ -10065,17 +10087,20 @@ sending probes before the listener closes rather than having them refused.
 Connections MUST NOT be kept alive past their current request during the
 delay, so clients reconnect to another instance. The exporter MUST log the
 delay when it starts one. A second signal during the delay MUST end the process
-at once, as during the shutdown timeout. A negative value MUST be refused as a
+at once, as during the shutdown timeout, with the same line. A negative value MUST be refused as a
 malformed command line.
 
 Static targets (§ 42.14) MUST keep being scraped during the delay, while their
 endpoint is still served. When the delay ends no static target scrape MUST
 start, and one waiting for a slot MUST give up without logging advice about
 `concurrency`; one that comes by a slot as the delay ends, or after, MUST NOT
-begin either. Those in flight MUST be allowed to finish within
-`--web.shutdown-timeout`, and publish as usual. One the timeout cuts short
-MUST publish nothing — on the endpoint or over OTLP — and MUST NOT be logged as
-a failure: the target did not fail, so it MUST NOT be reported down, and its
+begin either. Those in flight MUST be cut short as the delay ends, and MUST NOT
+be waited for: what they would publish is served by this process alone, which
+is stopping, and a target that does not answer would hold the shutdown for
+all of `--web.shutdown-timeout`. One cut short
+MUST publish nothing — on the endpoint or over OTLP, so the last OTLP export
+goes without it — and MUST NOT be logged as
+a failure, or at any level above `debug`: the target did not fail, so it MUST NOT be reported down, and its
 last result stands.
 
 `--version` prints the build information of § 22.0d and exits 0.
@@ -29482,6 +29507,17 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageAsksAnSSHFileCollectorForTheHost`: an sshfile collector is asked for `SSH host`, `host or host:22`, its parameters `also: path`, and of a pasted response for the file's content.
 - `TestTheCollectorsPageHasAProbeFormPerCollector`, `TestTheCollectorsPageNamesADNSTarget`, `TestTheCollectorsPageShowsAGraphiteTarget` and `TestTheCollectorsPageHintsALocalfileTarget` (changed): the collectors page labels the target `URL` with `https://host:port`, `Name to resolve` with `example.com`, `Graphite URL` with `https://graphite:8080`, and `Directory` with `a directory under its root that holds batch.prom (optional)`; the kubernetes test's form offers the target disabled.
 - `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`, `TestTheDebugPagesBodyFitsTheCollectorChosen`, `TestTheDebugPageIsSelfContained` and `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen` (changed): the note reads `Probed through …`, the body's placeholder is the http type's answer hint, the page names no URL but `https://host:port`, and the script takes the form `/debug/collector` answers.
+
+## 34.241 The shutdown cuts static target scrapes short and says what it waits for
+
+- `TestAShutdownDoesNotWaitForStaticTargetScrapes`: with a static target on a listener that accepts the connection and never answers, its scrape in flight, an interval of a minute and `--web.shutdown-timeout=15s`, a `SIGINT` ends the exporter with exit status `0` within 5 seconds, where waiting for the scrape took the whole 15; the log says `shutting down: no probes in progress; exiting` with `probes` `0`, and has no `ERROR` or `WARN` line.
+- `TestAShutdownSaysWhatItWaitsFor`: with a probe of a target that never answers in progress, a static target scrape on a silent listener in flight and `--web.shutdown-timeout=7s`, a `SIGINT` exits `0` no sooner than 7 seconds, having logged `shutting down: waiting for 1 probe in progress, at most 7s; a second signal exits at once` with `probes` `1`, `other_requests` `0` and the timeout, exactly one `shutting down: still waiting for 1 probe in progress, <n>s left` line with `time_left`, and the `ERROR` line `shutting down: gave up waiting for 1 probe in progress; --web.shutdown-timeout ran out and their connections are closed` with `probes` `1`; no `static target scrape failed`.
+- `TestASecondSignalInTheShutdownDelayExitsAtOnce`: a second `SIGTERM` in a `--web.shutdown-delay` held open ends the process killed by `SIGTERM`, having logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `terminated`.
+- `TestASecondSignalEndsAnExporterStartedWithItIgnored`: an exporter started with `SIGINT` ignored, through a shell's `trap "" INT`, with a probe in progress and `--web.shutdown-timeout=10m`, exits with status `130` on a second `SIGINT`, having logged the second signal, where it used to ignore it and wait out the probe.
+- `TestSecondSignalExitsAtOnce` (changed): the process the second `SIGINT` ends is killed by `SIGINT`, and logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `interrupt` and `probes` `1` first.
+- `TestTheShutdownSaysWhatItWaitsFor`: the line the shutdown begins with is `shutting down: waiting for 1 probe in progress, at most 15s; a second signal exits at once` for one probe, `2 probes`, `2 probes and 1 other request` and `3 requests` for those counts, and `shutting down: no probes in progress; exiting` for none.
+- `TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent` (changed): so with nothing in progress as with a probe.
+- `TestShutdownTimeoutBoundsTheWait`, `TestTheExporterForwardsItsOwnLogOverOTLP`, `TestOTLPExportsThroughTheShutdownDelay` and the other shutdown tests (changed): they look for the new wording of the shutdown's first line and of its giving up.
 
 # 35. Documentation requirements
 

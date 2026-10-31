@@ -1,3 +1,9 @@
+//go:build !select_request_types || request_type_dns || request_type_http || request_type_kubernetes || request_type_localfile || request_type_sql || request_type_sshfile
+
+// The helpers of the debug page's per-type form tests, built with any of
+// the types those tests are for: a build with none of them, graphite's
+// alone say, has none of the tests and would find these unused.
+
 package exporter
 
 import (

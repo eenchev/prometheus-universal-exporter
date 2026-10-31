@@ -25,7 +25,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Static targets the exporter scrapes itself and delivers over OTLP
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
-* Self-metrics, optionally including per-request series and the standard `go_` and `process_` series
+* Self-metrics, including the standard `go_` and `process_` series and optionally per-request series
 * A target allocator that splits static targets over the exporter's pods
 * A HorizontalPodAutoscaler that can scale on how busy the pods are, or on static targets per pod
 * A debug page, `/debug`, that runs a collector on a pasted or fetched answer and shows every stage (`server.debug`)
@@ -1202,7 +1202,7 @@ A failing log export never makes the pod unready; the exporter's [status page](.
 
 ### Exporter resource metrics
 
-Set `web.self_metrics.resource_metrics_enabled: true` inside `config.data.config.yaml` to publish the standard `go_` and `process_` series describing the exporter's own CPU and memory, under the names an existing Go dashboard already uses:
+The exporter publishes the standard `go_` and `process_` series describing its own CPU and memory, under the names an existing Go dashboard already uses. They are on by default; set `web.self_metrics.resource_metrics_enabled: false` inside `config.data.config.yaml` to leave them out:
 
 ```yaml
 config:
@@ -1210,7 +1210,7 @@ config:
     config.yaml: |
       web:
         self_metrics:
-          resource_metrics_enabled: true
+          resource_metrics_enabled: false
       collectors:
         - name: example
           request:
@@ -1218,7 +1218,7 @@ config:
           ...
 ```
 
-They are scraped by the self-metrics monitor along with everything else on that endpoint. They carry no per-collector or per-target labels, so they add a fixed number of series rather than one per target. Off by default: reading them briefly stops the world on every scrape, which an exporter scraped frequently by several Prometheus servers should not pay for unless the numbers are wanted.
+They are scraped by the self-metrics monitor along with everything else on that endpoint. They carry no per-collector or per-target labels, so they add a fixed number of series rather than one per target. Reading them does not stop the world: the memory statistics come from `runtime/metrics` and the garbage collection pauses from `runtime/debug.ReadGCStats`, so a scrape of them is cheap. See [Resource metrics](../../docs/SELF-METRICS.md#resource-metrics) for every series and its source.
 
 ## Extra volumes and arguments
 

@@ -224,7 +224,7 @@ func TestAnExportOfTheExportersOwnMetricsAndProbesIsMadeOnce(t *testing.T) {
 	cfg := &model.Config{
 		Collectors: []model.Collector{testutil.Collector("text", "text"), passedOn()},
 		OTLP:       otlpConfig("http://collector.invalid/v1/metrics"),
-		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: true}},
+		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: new(true)}},
 	}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "scheduled", Collector: "text", Target: one.URL}}}
 	server := newStaticServer(t, cfg, file)

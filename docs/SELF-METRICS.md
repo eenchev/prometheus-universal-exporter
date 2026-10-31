@@ -483,13 +483,14 @@ compressed at is published too.
 
 ## Resource metrics
 
-The exporter can publish the familiar `go_` and `process_` series describing its
-own CPU and memory, under the names every Go dashboard already uses:
+The exporter publishes the familiar `go_` and `process_` series describing its
+own CPU and memory, under the names every Go dashboard already uses. They are
+on by default; this switches them off:
 
 ```yaml
 web:
   self_metrics:
-    resource_metrics_enabled: true
+    resource_metrics_enabled: false
 ```
 
 ```text
@@ -498,6 +499,7 @@ go_threads 8
 go_info{version="go1.27.0"} 1
 go_memstats_heap_inuse_bytes 1.589248e+06
 go_memstats_alloc_bytes_total 767904
+go_gc_duration_seconds{quantile="0.5"} 0.000412
 go_gc_duration_seconds_sum 0.0021
 go_gc_duration_seconds_count 3
 go_cpu_classes_user_cpu_seconds_total 0.27687507
@@ -506,41 +508,80 @@ process_resident_memory_bytes 1.3389824e+07
 process_open_fds 8
 ```
 
-The names and meanings match what `prometheus/client_golang` publishes, so an
-existing dashboard or alert works unchanged — that is the entire point of the
-prefix. The numbers come from the standard library rather than from a client
-library: this exporter renders its own exposition and keeps no registry, so
-pulling one in to gather these would add a dependency and an adapter for
-nothing.
+The names, types and help texts match what `prometheus/client_golang`
+publishes, so an existing dashboard or alert works unchanged — that is the
+entire point of the prefix. The numbers come from the standard library rather
+than from a client library: this exporter renders its own exposition and keeps
+no registry, so pulling one in to gather these would add a dependency and an
+adapter for nothing.
 
-It is off by default because reading them is not free. `runtime.ReadMemStats`
-briefly stops the world, and an exporter scraped every few seconds by several
-Prometheus servers should not pay that unless somebody wants the numbers.
+Reading them never stops the world. The memory statistics come from
+`runtime/metrics`, all in one read per scrape, and the collection pauses from
+`runtime/debug.ReadGCStats`; neither pauses the program the way
+`runtime.ReadMemStats` does, which is what kept these off by default while the
+exporter used it.
 
 ### What you get
 
-The `go_memstats_*`, `go_goroutines`, `go_threads`, `go_info`,
-`go_sched_gomaxprocs_threads` and `go_gc_duration_seconds` series
-come from the runtime and are published on every platform the exporter builds
-for.
+| Series | Type | Source |
+| --- | --- | --- |
+| `go_info` | gauge | `runtime.Version()`, as the `version` label |
+| `go_goroutines` | gauge | `runtime.NumGoroutine()` |
+| `go_threads` | gauge | the `threadcreate` profile |
+| `go_sched_gomaxprocs_threads` | gauge | `runtime.GOMAXPROCS(0)` |
+| `go_memstats_alloc_bytes` | gauge | `/memory/classes/heap/objects:bytes` |
+| `go_memstats_alloc_bytes_total` | counter | `/gc/heap/allocs:bytes` |
+| `go_memstats_sys_bytes` | gauge | `/memory/classes/total:bytes` |
+| `go_memstats_mallocs_total` | counter | `/gc/heap/allocs:objects` + `/gc/heap/tiny/allocs:objects` |
+| `go_memstats_frees_total` | counter | `/gc/heap/frees:objects` + `/gc/heap/tiny/allocs:objects` |
+| `go_memstats_heap_alloc_bytes` | gauge | `/memory/classes/heap/objects:bytes` |
+| `go_memstats_heap_sys_bytes` | gauge | heap `objects` + `unused` + `free` + `released` |
+| `go_memstats_heap_idle_bytes` | gauge | heap `free` + `released` |
+| `go_memstats_heap_inuse_bytes` | gauge | heap `objects` + `unused` |
+| `go_memstats_heap_released_bytes` | gauge | `/memory/classes/heap/released:bytes` |
+| `go_memstats_heap_objects` | gauge | `/gc/heap/objects:objects` |
+| `go_memstats_stack_inuse_bytes` | gauge | `/memory/classes/heap/stacks:bytes` |
+| `go_memstats_stack_sys_bytes` | gauge | `/memory/classes/heap/stacks:bytes` + `/memory/classes/os-stacks:bytes` |
+| `go_memstats_gc_sys_bytes` | gauge | `/memory/classes/metadata/other:bytes` |
+| `go_memstats_other_sys_bytes` | gauge | `/memory/classes/other:bytes` |
+| `go_memstats_next_gc_bytes` | gauge | `/gc/heap/goal:bytes` |
+| `go_memstats_last_gc_time_seconds` | gauge | `ReadGCStats`, 0 before the first collection |
+| `go_gc_duration_seconds` | summary | `ReadGCStats`: the quantiles 0, 0.25, 0.5, 0.75 and 1 of the last 256 pauses, the total pause as `_sum` and the number of collections as `_count` |
+| `go_cpu_classes_total_cpu_seconds_total` | counter | `/cpu/classes/total:cpu-seconds` |
+| `go_cpu_classes_user_cpu_seconds_total` | counter | `/cpu/classes/user:cpu-seconds` |
+| `go_cpu_classes_idle_cpu_seconds_total` | counter | `/cpu/classes/idle:cpu-seconds` |
+| `go_cpu_classes_gc_total_cpu_seconds_total` | counter | `/cpu/classes/gc/total:cpu-seconds` |
+| `go_cpu_classes_scavenge_total_cpu_seconds_total` | counter | `/cpu/classes/scavenge/total:cpu-seconds` |
+| `process_cpu_seconds_total` | counter | `/proc/self/stat`, user and system time |
+| `process_virtual_memory_bytes` | gauge | `/proc/self/stat` |
+| `process_resident_memory_bytes` | gauge | `/proc/self/stat` |
+| `process_open_fds` | gauge | the entries of `/proc/self/fd` |
+| `process_start_time_seconds` | gauge | `/proc/self/stat` and the boot time in `/proc/stat` |
 
-The `go_cpu_classes_*` counters come from `runtime/metrics`, asked for by name.
-A Go release that renames or drops one makes that series disappear rather than
-publish a zero, so what you see is what the runtime the binary was built with
-actually offers.
+The `go_memstats_*` values are worked out from the `runtime/metrics` memory
+classes the way client_golang's Go collector does for Go 1.17 and later, so
+they agree with what a client_golang program would publish. Mallocs and frees
+both count the tiny allocations, as `runtime.MemStats` does, so that their
+difference stays the number of live objects. `go_memstats_gc_sys_bytes` is the
+garbage collector's metadata other than the span and cache structures, and
+`go_memstats_other_sys_bytes` the runtime's other allocations without the
+profiling buckets: client_golang counts those separately, as
+`go_memstats_mspan_*`, `go_memstats_mcache_*` and
+`go_memstats_buck_hash_sys_bytes`, which this exporter does not publish.
 
-The `process_*` series are the operating system's view, read from `/proc`. They
+The `runtime/metrics` sources are asked for by name. A Go release that renames
+or drops one makes every series built from it disappear rather than publish a
+zero or a sum with a part missing, so what you see is what the runtime the
+binary was built with actually offers.
+
+The `go_` series are published on every platform the exporter builds for. The
+`process_*` series are the operating system's view, read from `/proc`. They
 appear on Linux — where the container runs — and are simply absent elsewhere.
 They are deliberately not synthesised from runtime numbers on other platforms:
 `process_cpu_seconds_total` is real CPU time the process consumed, while
 `go_cpu_classes_total_cpu_seconds_total` is GOMAXPROCS multiplied by wall time
 and includes idle. Publishing one under the other's name would be wrong in a way
 that only shows up when somebody trusts the graph.
-
-`go_gc_duration_seconds` is a summary, as in client_golang, published with its
-`_count` and `_sum` only. The quantiles a summary would carry are not available
-from `runtime.MemStats`, and inventing them would be worse than leaving them
-out.
 
 Like verbosity, this is configuration rather than a flag, so a reload turns it
 on and off.

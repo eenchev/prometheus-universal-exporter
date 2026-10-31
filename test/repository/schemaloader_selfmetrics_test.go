@@ -23,13 +23,14 @@ func TestSchemaAndExporterAgreeOnSelfMetrics(t *testing.T) {
 	keys := map[string]bool{}
 	for i := 0; i < block.NumField(); i++ {
 		key, _, _ := strings.Cut(block.Field(i).Tag.Get("yaml"), ",")
-		if block.Field(i).Type.Kind() != reflect.Bool {
+		// A *bool is a switch whose default is true.
+		if kind := block.Field(i).Type; kind.Kind() != reflect.Bool && (kind.Kind() != reflect.Pointer || kind.Elem().Kind() != reflect.Bool) {
 			t.Fatalf("web.self_metrics.%s is no switch; say here what it takes", key)
 		}
 		keys[key] = true
 		for written, accepted := range map[string]bool{
 			"true": true, "false": true,
-			"1": false, "0": false, "sometimes": false, `"true"`: false, "[true]": false, "{}": false,
+			"1": false, "0": false, "sometimes": false, `"true"`: false, "[true]": false, "{}": false, "~": false,
 		} {
 			agree(t, schema, "web.self_metrics."+key+": "+written, "web: {self_metrics: {"+key+": "+written+"}}\n"+testutil.MinimalConfig, accepted)
 		}

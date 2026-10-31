@@ -7697,22 +7697,31 @@ checked first.
 
 The exporter MUST support publishing the standard `go_` and `process_` series
 describing its own CPU and memory, configured under
-`web.self_metrics.resource_metrics_enabled` and defaulting to false.
+`web.self_metrics.resource_metrics_enabled` and defaulting to true; false
+MUST leave every one of them out.
 
-The names and semantics MUST match what `prometheus/client_golang` publishes, so
-an existing Go dashboard or alert works against this exporter unchanged. That is
-the only reason to use the prefix at all; a series named `go_goroutines` that
-means something else is worse than no series.
+The names, types, help texts and semantics MUST match what
+`prometheus/client_golang` publishes, so an existing Go dashboard or alert works
+against this exporter unchanged. That is the only reason to use the prefix at
+all; a series named `go_goroutines` that means something else is worse than no
+series.
 
-They MUST default to off. Collecting them is not free — reading the memory
-statistics briefly stops the world — and an exporter scraped frequently by
-several Prometheus servers should not pay that cost unless it is asked for.
+Collecting them MUST NOT stop the world: the exporter MUST NOT call
+`runtime.ReadMemStats` outside its tests. The memory series MUST be read from
+`runtime/metrics`, every source in one `metrics.Read` per scrape, and computed
+from the memory classes as client_golang's Go collector computes the
+`runtime.MemStats` fields for Go 1.17 and later; `go_memstats_last_gc_time_seconds`
+and `go_gc_duration_seconds` MUST come from `runtime/debug.ReadGCStats`. Because
+nothing pauses the program they are on by default. The samples and the pause
+history MUST be reused from one scrape to the next, so that overlapping scrapes
+neither race on them nor allocate them again.
 
 The runtime series MUST be available on every platform the exporter builds for.
-The CPU class series MUST be requested from the runtime by name and omitted when
-the Go release in use does not provide them, so the exporter publishes what its
-runtime actually offers rather than a fixed list a toolchain upgrade could
-invalidate.
+Every `runtime/metrics` source MUST be requested by name and checked against the
+descriptions the runtime gives (`metrics.All`); a series MUST be omitted when the
+Go release in use does not describe one of its sources, so the exporter
+publishes what its runtime actually offers rather than a fixed list a toolchain
+upgrade could invalidate, and never a sum with a part missing.
 
 The `process_` series MUST reflect the operating system's view of the process
 and MUST be omitted where that view is unavailable. They MUST NOT be synthesised
@@ -7722,10 +7731,11 @@ time and includes idle. Publishing one under the other's name is wrong in a way
 that only appears when somebody trusts the graph.
 
 Where a standard series cannot be produced faithfully it MUST be omitted rather
-than approximated. `go_gc_duration_seconds` MUST therefore be published as a
-summary with its count and sum only, because the quantiles are not available
-from the runtime statistics the exporter reads; it MUST NOT be published as two
-counters, which would give the family a type client_golang does not give it.
+than approximated. `go_gc_duration_seconds` MUST be published as the summary
+client_golang publishes: the quantiles 0, 0.25, 0.5, 0.75 and 1 of the recent
+pauses, the total pause as its sum and the number of collections as its count.
+It MUST NOT be published as two counters, which would give the family a type
+client_golang does not give it.
 
 `process_start_time_seconds` MUST be the same at every scrape of one process:
 it MUST be worked out from the boot time the system reports and the process's
@@ -10888,10 +10898,11 @@ HTML/XML output.
 
 Test resource metrics:
 
-- None of the `go_` or `process_` series appear unless configured.
+- The `go_` and `process_` series appear without being configured, and none of
+  them appear with the setting false.
 - With the setting on, every runtime series is published, `go_info` carries this
   binary's Go version, and the values are the live ones rather than zeros.
-- The CPU class series are requested from the runtime by name and are counters.
+- The series read from `runtime/metrics` keep client_golang's types.
 - The `process_` series appear where the operating system's view is available
   and are absent where it is not, rather than being synthesised.
 - The process statistics are parsed correctly when the executable name contains
@@ -29576,6 +29587,51 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageSaysWhatThePlaygroundMayDoInEachMode`: without the flag the page says the playground never runs Python and makes no request of its own, *Probe a target* disabled, and no page has the badge; with it the page has the red warning, `<main data-dangerous>`, *Probe a target* offered for the playground probed through its own request, the note for static targets alone, and the script's own-request form, without the usual note, and `/`, `/collectors`, `/debug` and the status page each carry the *Dangerous debug mode* badge; at `edit` the page warns of nothing.
 - `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig` and `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` (changed): the script's lines that block *Copy as* and disable *Probe a target* for a playground copied from none now also say what dangerous mode does.
 - `TestParseCollectorAsksForTheRequestsFilesWhenItIsMade` (config, sshfile): a collector read for the debug page is marked as never making its request and is not asked for `known_hosts_file`; read `WithRequestMade`, it is.
+
+## 34.247 Resource metrics without stopping the world, on by default
+
+- `TestResourceMetricsAreOnUnlessSwitchedOff` (internal/config): a
+  configuration that leaves `web.self_metrics.resource_metrics_enabled` out, or
+  writes an empty `self_metrics` block, loads with the resource metrics on;
+  `true` keeps them on and `false` turns them off (§ 22.0a).
+- `TestResourceMetricsArePublishedByDefault`: a configuration that does not
+  mention them publishes `go_goroutines` on the self-metrics endpoint, and one
+  that sets the key to false publishes no `go_` or `process_` line.
+- `TestRuntimeMetricsHangTogether`: every runtime series is published and
+  none is negative; heap in use and idle are each at most the heap obtained
+  from the system and add up to it, the released heap is at most the idle, the
+  allocated heap at most the heap in use, the stack in use at most the stack
+  from the system, the heap from the system at most `go_memstats_sys_bytes`,
+  frees at most mallocs, `go_memstats_alloc_bytes` equals
+  `go_memstats_heap_alloc_bytes`, and the next collection's goal, the heap
+  objects and the allocated bytes are positive; after 64 allocations of
+  64 KiB `go_memstats_alloc_bytes_total` has grown by at least 4 MiB and
+  `go_memstats_mallocs_total` by at least 64.
+- `TestGCDurationIsASummaryWithQuantiles`: across a `runtime.GC()`
+  `go_gc_duration_seconds` stays a summary whose count grows and whose sum
+  does not shrink, with exactly the quantiles 0, 0.25, 0.5, 0.75 and 1 in that
+  order, their values ascending and the maximum positive; the exposition
+  writes the five `quantile` lines.
+- `TestRuntimeSeriesNeedEverySource`: a runtime that does not describe
+  `/memory/classes/heap/unused:bytes` leaves out `go_memstats_heap_sys_bytes`
+  and `go_memstats_heap_inuse_bytes`, which sum it, and keeps the series that
+  do not; with the descriptions of the Go release in use every source of
+  every runtime series is described.
+- `TestRuntimeMetricsReadConcurrently`: eight goroutines reading the runtime
+  series twenty times each at once all get every series (run under the race
+  detector in CI).
+- `TestRuntimeMetricsAllocateLittle`: a read of the runtime series allocates
+  at most 6 times and 4096 bytes, so neither the samples nor the pause history
+  ReadGCStats copies are allocated per scrape.
+- `TestRuntimeSeriesKeepTheirTypes`: each series read from `runtime/metrics`
+  is a counter when its name ends in `_total` and a gauge otherwise.
+- `TestResourceMetricsDocumentationListsWhatIsPublished` (test/repository):
+  the families of the table in docs/SELF-METRICS.md, "Resource metrics", are
+  exactly the `go_` and `process_` families /self-metrics publishes with the
+  default configuration (the `process_` rows only where `/proc` exists).
+- `TestNothingButTestsReadsMemStats` (test/repository): no Go file outside
+  `_test.go` files, `internal/testutil`, `vendor` and `testdata` calls
+  `ReadMemStats`.
 
 # 35. Documentation requirements
 

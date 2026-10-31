@@ -211,9 +211,11 @@ func TestAStaticTargetIsToldInForceThroughReloadsAsItWas(t *testing.T) {
 // request of a target says which collector of a name it was found with.
 // The targets name the collectors, one never configured and none, at an
 // address of their own, one two targets share, or one no request can be
-// named for, some with a method of their own.
+// named for, some with a method of their own. The resource metrics are off:
+// their values differ between two reads, and so then would the size of the
+// answer the next read reports.
 func staticRequestsCase(random *rand.Rand, unique bool) (*model.Config, *model.StaticTargetFile) {
-	cfg := &model.Config{Web: model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}}}
+	cfg := &model.Config{Web: model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: new(false)}}}
 	names := []string{"a", "b", "c", "d", "e", "f"}
 	order := random.Perm(len(names))
 	for i := range 1 + random.IntN(len(names)) {

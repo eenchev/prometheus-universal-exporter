@@ -16,6 +16,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- The `go_` and `process_` resource metrics are published on the
+  self-metrics endpoint by default: reading them no longer stops the world,
+  because the memory statistics now come from `runtime/metrics` and the
+  garbage collection pauses from `runtime/debug.ReadGCStats` instead of
+  `runtime.ReadMemStats`. Set `web.self_metrics.resource_metrics_enabled:
+  false` to leave them out. `go_gc_duration_seconds` now carries the
+  quantiles 0, 0.25, 0.5, 0.75 and 1 beside its `_sum` and `_count`, as in
+  client_golang. The series names, types and help texts are as before.
 - The JSON schemas refuse more of what the exporter refuses, so an editor now
   marks it: durations and sizes under the exporter's least (`script_timeout`
   under 1ms, `max_script_memory` under 32MiB, intervals under 1s, a zero

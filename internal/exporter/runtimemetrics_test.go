@@ -1,31 +1,22 @@
 package exporter
 
 import (
-	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The CPU classes come from runtime/metrics by name. A Go release that drops or
-// renames one must make the series disappear rather than publish a zero.
-func TestCPUClassMetricsComeFromTheRuntime(t *testing.T) {
-	published := map[string]bool{}
-	for _, metric := range cpuClassMetrics() {
-		published[metric.Name] = true
-	}
-	if len(published) == 0 {
-		t.Skip("this Go release publishes none of the CPU classes")
-	}
-	for _, want := range cpuClassSamples {
-		if !published[want.metricName] {
-			t.Logf("%s is not published by %s", want.metricName, runtime.Version())
+// The series read from runtime/metrics keep the types client_golang gives
+// them: a _total is a counter, everything else a gauge.
+func TestRuntimeSeriesKeepTheirTypes(t *testing.T) {
+	for _, series := range runtimeSeries {
+		want := model.GaugeMetricType
+		if strings.HasSuffix(series.name, "_total") {
+			want = model.CounterMetricType
 		}
-	}
-	// Whatever is published must be a counter: these only ever grow.
-	for _, metric := range cpuClassMetrics() {
-		if metric.Type != model.CounterMetricType {
-			t.Errorf("%s has type %v, want a counter", metric.Name, metric.Type)
+		if series.typ != want {
+			t.Errorf("%s has type %v, want %v", series.name, series.typ, want)
 		}
 	}
 }

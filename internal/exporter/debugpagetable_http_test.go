@@ -31,7 +31,10 @@ func sampleLine(s debugSample) string {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			b.WriteString(name + `="` + s.Labels[name] + `"`)
+			b.WriteString(name)
+			b.WriteString(`="`)
+			b.WriteString(s.Labels[name])
+			b.WriteByte('"')
 		}
 		b.WriteByte('}')
 	}

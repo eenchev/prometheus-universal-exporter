@@ -85,6 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable /-/reload, which on POST or PUT reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	debugLevel := flags.String("web.debug", "off", "Debugging collectors: off; edit, the /debug page, where a collector written there or a configured one is run on a pasted response and each stage of its trip shown, nothing fetched; or full, which adds fetching a target or a static target's scrape on that page, /probe?...&debug=true and /static-targets?debug=<name>, all of which show what the target answered")
+	debugDangerous := flags.Bool("web.debug.dangerous", false, "With --web.debug=full only: let the debug page's playground, a collector written on the page, run Python, name the server's files (any *_file or *_files key, and login) and probe a target with its own request. Whoever can open the page can then run code and read files as the exporter's user; for a debugging session on one's own machine, never a shared deployment")
 	statusRefresh := flags.String("web.status-refresh", "off", "The status page's auto-refresh when its URL gives none with ?refresh=: off, or a duration in whole seconds from 5s to 24h, such as 30s or 1m. The page offers off and 5s to 1h, and keeps the interval chosen in its URL")
 	gzipLevel := flags.Int("web.gzip-level", exporter.DefaultGzipLevel, "The gzip level of the answers of /probe, the self-metrics and the static targets to a client that accepts gzip, as Prometheus does: 1, the fastest, to 9, the smallest; or 0 to answer uncompressed whatever the client accepts")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
@@ -185,6 +186,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	debug, err := exporter.ParseDebugLevel(*debugLevel)
 	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateDebugDangerous(debug, *debugDangerous); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -334,6 +339,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetDebug(debug)
+	server.SetDebugDangerous(*debugDangerous)
+	if *debugDangerous {
+		logger.Warn(exporter.DebugDangerousWarning)
+	}
 	server.SetStatusRefresh(refresh)
 	server.SetGzipLevel(*gzipLevel)
 	if alloc != nil {

@@ -82,6 +82,11 @@ import (
 //   - ${NAME} references are left as written: the answer would show the
 //     server's environment.
 //
+// --web.debug.dangerous lifts the first three (debuglevel.go): the
+// playground then runs Python, may name the server's files, and fetching a
+// target with no request_from makes its own request block's request, as a
+// configured collector's probe does. ${NAME} references stay as written.
+//
 // A configured collector is the operator's own, put in force by the
 // configuration, and is run as it is, its Python included: a pasted body is
 // input chosen by whoever uses the page, as a target's answer is chosen by
@@ -241,6 +246,10 @@ type debugAnswer struct {
 	Lint     []transform.LintFinding `json:"lint,omitempty"`
 	Report   string                  `json:"report,omitempty"`
 	Error    string                  `json:"error,omitempty"`
+	// Dangerous says the run was made with --web.debug.dangerous, whose
+	// playground runs Python, names the server's files and makes its own
+	// request.
+	Dangerous bool `json:"dangerous,omitempty"`
 }
 
 type debugStage struct {
@@ -598,7 +607,7 @@ func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
 }
 
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
-	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
+	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, Dangerous: s.playgroundUnbound(), ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
 	page.Forms = debugForms{Playground: playgroundForm(), Types: typeForms(), Collectors: map[string]debugForm{}}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).
@@ -697,6 +706,7 @@ func (s *Server) debugRunHandler(w http.ResponseWriter, r *http.Request) {
 	report := s.runDebug(r.Context(), p)
 	answer := debugAnswerOf(report)
 	answer.Notes = append(notes, answer.Notes...)
+	answer.Dangerous = s.playgroundUnbound()
 	s.countDebugRun(debugKindPage, report.result())
 	s.logger.Info("debug run served", "collector", p.collector.Name, "edited", p.edited, "on", p.source)
 	writeDebugAnswer(w, http.StatusOK, answer)
@@ -774,7 +784,17 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			return p, nil, http.StatusBadRequest, fmt.Errorf("unknown collector %q in configured; name a collector of the configuration in force", req.Configured)
 		}
 	} else {
-		cfg, err := config.ParseCollector([]byte(*req.Collector), refusedOnDebugPage)
+		refuse, opts := refusedOnDebugPage, []config.ParseOption(nil)
+		if s.playgroundUnbound() {
+			// --web.debug.dangerous: nothing is refused, and a playground
+			// that fetches a target with no request_from makes its own
+			// request, which is checked as a load checks a request.
+			refuse = nil
+			if source, _ := req.sources(); source == debugSourceTarget && req.RequestFrom == "" {
+				opts = append(opts, config.WithRequestMade())
+			}
+		}
+		cfg, err := config.ParseCollector([]byte(*req.Collector), refuse, opts...)
 		if err != nil {
 			return p, nil, http.StatusUnprocessableEntity, err
 		}
@@ -819,7 +839,7 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			if requester == nil {
 				return p, nil, http.StatusBadRequest, fmt.Errorf("unknown collector %q in request_from; name a collector of the configuration in force", req.RequestFrom)
 			}
-		case p.edited:
+		case p.edited && !s.playgroundUnbound():
 			return p, nil, http.StatusBadRequest, errors.New("a collector written on the debug page makes no request of its own: name in request_from the configured collector to fetch the target through")
 		}
 		if p.edited || requester.Name != c.Name {
@@ -902,7 +922,7 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 	}
 	if requester != c {
 		p.requester = requester
-	} else if model.UsesCache(c) || c.FailureBackoff != nil {
+	} else if !p.edited && (model.UsesCache(c) || c.FailureBackoff != nil) {
 		// A configured collector fetching for itself is a debug probe of it,
 		// whose stale answer and backoff are the same probe's
 		// (probeHandler).

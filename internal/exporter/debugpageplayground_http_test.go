@@ -79,7 +79,7 @@ func TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied(t *testing.T) {
 		`if (request.collector !== undefined) request.request_from = copiedFrom;`,
 		`copiedFrom = $("configured").value;`,
 		`const fetcher = () => $("configured").value || copiedFrom;`,
-		`radio.disabled = through === "";`,
+		`radio.disabled = through === "" && !dangerous;`,
 		`"Probed through " + through + ", the collector this playground was copied from."`)
 	if n := strings.Count(script, "request_from"); n != 1 {
 		t.Errorf("the script sets request_from %d times, want once, from copiedFrom", n)

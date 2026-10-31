@@ -84,6 +84,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `--web.debug.dangerous` (the chart's `server.debugDangerous`), with
+  `--web.debug=full` only, lets the debug page's playground run Python, name
+  the server's files and probe a target with its own request, for writing a
+  collector on a machine of one's own; never on a shared deployment.
 - The pages' bar has a *Theme* picker: *Auto*, the default, follows the
   browser's light or dark preference, and *Light* or *Dark* holds whatever it
   prefers, kept in the browser for every page.

@@ -56,6 +56,47 @@ func (s *Server) SetDebug(level DebugLevel) {
 	}
 }
 
+// --web.debug.dangerous lifts, at full, what the playground — a collector
+// written on the debug page — is refused for the server's sake: it may run
+// Python, a python transform or a pre_script, in the workers a configured
+// collector's scripts run in and bounded by the same limits; it may name the
+// server's files, any request key ending in _file or _files and a login;
+// and it may make its own request, through its own request block, as a
+// configured collector's probe makes one, with the target policy and the
+// credentials it writes itself. That last is what makes its files of any
+// use: a localfile playground reads a file under the root it names, and a
+// credential or TLS file is read for the request it is sent with; a pasted
+// response still makes no request. Whoever can open the page can then run
+// code on the server, in the workers' sandbox, which is no wall against a
+// script written to get out, read any file the exporter's user can through
+// a request, and reach any host the exporter can, so it is for a debugging
+// session on a machine of one's own, never a shared deployment. ${NAME} references stay unexpanded
+// even so: the environment is where a deployment keeps its secrets, and
+// nothing written on the page needs them, since it can name a file instead.
+
+// ValidateDebugDangerous refuses --web.debug.dangerous below
+// --web.debug=full: the playground's own request shows what a target
+// answered, which full alone allows, and the flag is meant for a session
+// that is debugging in earnest, not one left on at edit by mistake.
+func ValidateDebugDangerous(level DebugLevel, dangerous bool) error {
+	if dangerous && level != DebugFull {
+		return fmt.Errorf("--web.debug.dangerous needs --web.debug=full, not %s: it lets the debug page's playground run Python, read the server's files and make its own requests", level)
+	}
+	return nil
+}
+
+// DebugDangerousWarning is what the exporter logs at warn when it starts
+// with --web.debug.dangerous.
+const DebugDangerousWarning = "--web.debug.dangerous is on: the debug page's playground runs Python and reads the server's files with the exporter's permissions, and makes its own requests to any target it names; never use it on a shared deployment"
+
+// SetDebugDangerous sets --web.debug.dangerous, which the caller has checked
+// with ValidateDebugDangerous.
+func (s *Server) SetDebugDangerous(dangerous bool) { s.debugDangerous = dangerous }
+
+// playgroundUnbound reports whether the playground runs with
+// --web.debug.dangerous's freedoms.
+func (s *Server) playgroundUnbound() bool { return s.debugDangerous && s.debug == DebugFull }
+
 // debugKind is what asked for a run: a debug probe, a debug scrape of a
 // static target, or the debug page.
 type debugKind uint8

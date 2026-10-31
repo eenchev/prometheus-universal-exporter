@@ -155,6 +155,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.debug" .) }}
             - {{ printf "--web.debug=%s" . | quote }}
             {{- end }}
+            {{- if include "prometheus-universal-exporter.debugDangerous" . }}
+            - --web.debug.dangerous
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.gzipLevel" .) }}
             - {{ printf "--web.gzip-level=%s" . | quote }}
             {{- end }}

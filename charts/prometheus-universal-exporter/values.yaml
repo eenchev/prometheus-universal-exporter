@@ -158,6 +158,14 @@ server:
   # collector written on the page never runs Python or reads a file of the
   # pod. Off by default; behind web.basic_auth when that is configured.
   debug: ""
+  # Dangerous debug mode (--web.debug.dangerous), with debug: full only:
+  # the debug page's playground may run Python, read the pod's files (any
+  # *_file key, login, a localfile root) and probe a target with its own
+  # request. Whoever can open the page can then run code in the pod and read
+  # its files and mounted secrets. For a debugging session no one else can
+  # reach, never a shared deployment. Off by default; true without
+  # debug: full fails rendering.
+  debugDangerous: false
   # The gzip level of the answers of /probe, the self-metrics and the static
   # targets to a scrape that accepts gzip, as Prometheus's do
   # (--web.gzip-level): 1, the fastest, to 9, the smallest; 0 answers them

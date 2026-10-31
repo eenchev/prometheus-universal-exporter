@@ -29565,6 +29565,18 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestThePagesStyleHasBothThemesChosen`: the pages' style has the light colours with `color-scheme: light dark`, `color-scheme: light` for `data-theme="light"`, the dark colours under `prefers-color-scheme: dark` only where Light is not chosen and again for `data-theme="dark"`, each with its `color-scheme`, and no other rule following the browser's preference; a hidden picker is not shown.
 - `TestTheStatusPageHasRefreshControls` and the other status page refresh tests (changed): the auto-refresh selector's options are read up to its own `</select>`, the bar now holding one before it.
 
+## 34.246 The debug page's dangerous mode, --web.debug.dangerous
+
+- `TestTheDangerousDebugModeNeedsFull`: `ValidateDebugDangerous` refuses the flag at `off` and `edit`, naming `--web.debug=full` and the level, and takes it at `full` or left off at any level.
+- `TestTheDangerousDebugModeNeedsFullAndIsWarnedOf` (root package): `--web.debug.dangerous` alone, at `edit`, and at `edit` with `--dry-run`, exits `2` saying it needs `--web.debug=full`; at `full` the exporter starts, serves `/debug` and logs the warning at `WARN`.
+- `TestTheDangerousDebugModeRunsThePlaygroundsPython`: without the flag a playground with a python transform or a `pre_script` is refused `422`; with it both run on a pasted body (`length 4`; the `pre_script` keeping one room), the answer says `dangerous`, a configured collector of the playground's name counts no run, and the pool counts both with no worker left idle.
+- `TestTheDangerousDebugModeMakesThePlaygroundsOwnRequestWithItsFiles`: without the flag a playground with `bearer_token_file` is refused and one probing a target without `request_from` is told it makes no request of its own, the target reached by neither; with it the playground's own request is made with the file's token (`Bearer file-token`), the report naming it and not the token, a pasted run still makes no request, its own `allowed_targets` refuses the target (`403`), a missing token file fails the run without a request, and `request_from` still fetches through the configured collector.
+- `TestTheDangerousDebugModeLetsALocalfilePlaygroundReadAFile` (localfile): a localfile playground probed for `app.prom` under its own root is refused `400` without the flag and reads the file's series with it.
+- `TestTheDangerousDebugModeLeavesEnvironmentReferencesAsWritten`: with the flag a `${NAME}` in the playground is still left as written.
+- `TestTheDebugPageSaysWhatThePlaygroundMayDoInEachMode`: without the flag the page says the playground never runs Python and makes no request of its own, *Probe a target* disabled, and no page has the badge; with it the page has the red warning, `<main data-dangerous>`, *Probe a target* offered for the playground probed through its own request, the note for static targets alone, and the script's own-request form, without the usual note, and `/`, `/collectors`, `/debug` and the status page each carry the *Dangerous debug mode* badge; at `edit` the page warns of nothing.
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig` and `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` (changed): the script's lines that block *Copy as* and disable *Probe a target* for a playground copied from none now also say what dangerous mode does.
+- `TestParseCollectorAsksForTheRequestsFilesWhenItIsMade` (config, sshfile): a collector read for the debug page is marked as never making its request and is not asked for `known_hosts_file`; read `WithRequestMade`, it is.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33078,7 +33090,8 @@ Sofia in both halves of the year.
 One flag, `--web.debug`, MUST set how far collectors can be debugged: `off`,
 the default; `edit`; or `full`, in any case. Any other value MUST be a
 command-line error (exit 2, before `--dry-run` or startup). There MUST be no
-other flag for any part of it.
+other flag for any part of it but `--web.debug.dangerous` (below), which
+lifts what the playground is refused.
 
 - At `off`, `/debug` and `/debug/run` MUST answer `404`, and a debug probe
   and a debug scrape `403`.
@@ -33331,16 +33344,16 @@ refuse MUST be answered `422` with the loader's message, its line numbers
 counted from the collector's first line. `${NAME}` references MUST NOT be
 expanded, whatever `--config.expand-env` says, and reading it MUST NOT size
 the expression caches, which are the configuration in force's. Before it is
-checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
-why: a collector that runs Python (`transform.type: python` or
+checked, at `full` as at `edit`, unless `--web.debug.dangerous` is on, the
+page MUST refuse with `422`, saying why: a collector that runs Python (`transform.type: python` or
 `transform.pre_script`), which MUST NOT be run; and one whose request block
 sets a key ending in `_file` or `_files` (but `max_files`, a count), at its
 top or in a mapping it holds, of any request type — `request.bearer_token_file`,
 a `request.tls` file, `request.known_hosts_file` — or `request.login`
 (§ 42.6a), naming every such key in the order the collector has them.
 Nothing a file holds
-MUST reach the answer. Its own request block MUST NOT make a request on any
-path of a run — a pasted response, a target fetched through `request_from`
+MUST reach the answer. Without `--web.debug.dangerous`, its own request
+block MUST NOT make a request on any path of a run — a pasted response, a target fetched through `request_from`
 or a static target's scrape — whatever its type: it MUST be accepted of
 every request type the build has, its type saying only how its answer is
 read (its default decoder, a `sql` collector's rows, the JSON document of
@@ -33349,6 +33362,30 @@ type needs (an `sshfile` or `sshexec` collector's `known_hosts_file` and key
 or password, a `kubernetes` collector's credential beside `api_server`, the
 password files of an `ldap` `bind_dn` and a `redis` `username`) MUST NOT be
 required of it.
+
+`--web.debug.dangerous`, a boolean flag off by default, MUST be a
+command-line error (exit 2, before `--dry-run` or startup) unless
+`--web.debug` is `full`, and the exporter MUST log a line at `warn` when it
+starts with it, saying that the playground runs Python and reads the
+server's files with the exporter's permissions. With it, a collector
+written on the page MUST NOT be refused for Python, for a key naming a file
+or for `request.login`. Its Python MUST run as a configured collector's
+runs, in the same worker pool and held to the same limits, and MUST count
+in the pool's worker series alone, under no collector's name, a configured
+collector of the same name included, leaving no worker of it idle. A run
+of it on a target without `request_from` MUST make its own request block's
+request, as a probe of a configured collector makes one, through the
+target policy and with the credentials it writes, and it MUST then be
+checked as a load checks a request, the files a request needs required;
+with `request_from`, the target MUST still be fetched through that
+collector, and a pasted response MUST still make no request. `${NAME}`
+references MUST still NOT be expanded. The debug page MUST then say, in a
+warning set apart from its notes, that the playground runs Python and reads
+the server's files with the exporter's permissions and makes its own
+request, in place of the note that it runs no Python; every page's bar
+MUST carry a *Dangerous debug mode* badge, and every answer of a run of
+`/debug/run` MUST carry `dangerous: true`. Without the flag, or below
+`full`, none of these MUST show.
 
 A configured collector MUST be run as it is configured, its Python
 included, at `edit` as at `full`: its scripts are the operator's, and read

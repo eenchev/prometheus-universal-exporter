@@ -25,6 +25,7 @@
   "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.debug" "set server.debug instead"
+  "--web.debug.dangerous" "set server.debugDangerous instead"
   "--web.gzip-level" "set server.gzipLevel instead"
   "--web.status-refresh" "set server.statusRefresh instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
@@ -493,6 +494,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- if has $level (list "edit" "full") -}}
 {{- $level -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.debugDangerous" -}}
+{{- /* The exporter refuses --web.debug.dangerous below --web.debug=full and
+       would exit at once, restarting for ever; refused here instead, where
+       the values are. */ -}}
+{{- if .Values.server.debugDangerous -}}
+{{- if ne (include "prometheus-universal-exporter.debug" .) "full" -}}
+{{- fail (printf "server.debugDangerous needs server.debug: full, not %q: it lets the debug page's playground run Python, read the pod's files and make its own requests" (.Values.server.debug | default "" | toString)) -}}
+{{- end -}}
+true
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.gzipLevel" -}}

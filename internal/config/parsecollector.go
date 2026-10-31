@@ -23,11 +23,26 @@ import (
 //   - the files of the request's credentials are not required, such as an
 //     sshfile collector's known_hosts_file: the collector's request block is
 //     never made (model.Collector.RequestNotMade), and the debug page
-//     refuses a key that names a file;
+//     refuses a key that names a file. With WithRequestMade, for a request
+//     that is made, both are as a load has them;
 //   - the expression caches are not sized for it (expr.ReserveExpressions),
 //     which is the configuration in force's to do: a debug page's collector
 //     sizing them to its own few expressions would have the configuration's
 //     compiled again and again.
+
+// ParseOption changes how ParseCollector reads a collector.
+type ParseOption func(*parseOptions)
+
+type parseOptions struct{ requestMade bool }
+
+// WithRequestMade reads a collector whose request block is made, as the
+// debug page's playground's is with --web.debug.dangerous when it fetches a
+// target itself: the files its request needs are required, and a grpc
+// collector's descriptor files are read, as a load requires and reads them.
+// ${NAME} references are still left as written.
+func WithRequestMade() ParseOption {
+	return func(o *parseOptions) { o.requestMade = true }
+}
 
 // ParseCollector reads document, one collector as it is written under
 // collectors: — a mapping that starts with its name — and checks it as Load
@@ -36,7 +51,11 @@ import (
 // debug page refuses what it does not run. The configuration returned holds
 // the collector alone, its defaults filled in, with the warnings a load would
 // give for it.
-func ParseCollector(document []byte, refuse func(*model.Collector) error) (*model.Config, error) {
+func ParseCollector(document []byte, refuse func(*model.Collector) error, opts ...ParseOption) (*model.Config, error) {
+	var options parseOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	if err := refuseNotScalarKeys(document); err != nil {
 		return nil, err
 	}
@@ -77,10 +96,11 @@ func ParseCollector(document []byte, refuse func(*model.Collector) error) (*mode
 	if err := checkCollectorName(collector); err != nil {
 		return nil, err
 	}
-	collector.DescriptorFilesUnread = true
-	// Its request block is never made, so what only a request needs, the
-	// files of its credentials, is not asked of it.
-	collector.RequestNotMade = true
+	// Its request block is never made, unless it is said to be, so what
+	// only a request needs, the files of its credentials, is not asked of
+	// it.
+	collector.DescriptorFilesUnread = !options.requestMade
+	collector.RequestNotMade = !options.requestMade
 	if err := validateCollector(c, collector); err != nil {
 		return nil, err
 	}

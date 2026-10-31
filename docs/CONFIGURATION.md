@@ -5358,6 +5358,10 @@ is shown as the target sent it.
 [Debugging](AUTHENTICATION.md#debugging-collectors) says what each level lets
 a visitor of the exporter's pages do.
 
+`--web.debug.dangerous` (the chart's `server.debugDangerous`), with `full`
+only, lifts what the playground is refused for the server's sake: see
+[Dangerous debug mode](#dangerous-debug-mode).
+
 ### The debug page
 
 `/debug` runs one collector and shows the series a probe would answer, the
@@ -5602,7 +5606,8 @@ What a target sent is put in the table as text, never as HTML. On a narrow
 screen the table scrolls sideways in its own box.
 
 The playground may do nothing past the response, since what it is given
-runs on the server:
+runs on the server, unless [`--web.debug.dangerous`](#dangerous-debug-mode)
+lifts these:
 
 - **Python is never run.** A collector with `transform.type: python` or a
   `pre_script` is refused, at `full` as at `edit`; put it in the
@@ -5675,7 +5680,53 @@ strings), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
 `metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
-`403`.
+`403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
+
+### Dangerous debug mode
+
+`--web.debug.dangerous`, off by default, lets the playground do what a
+configured collector does, for writing a collector whose script or files
+cannot be tried otherwise without putting it in the configuration. It
+needs `--web.debug=full`, and is refused at startup without it (exit status
+2); the exporter logs at `warn` when it starts with it on. The playground
+then:
+
+- **Runs Python**, a `python` transform and a `pre_script`, as a
+  configured collector's script runs: in the same worker pool and
+  [sandbox](PYTHON.md), which blocks opening files and sockets but is no
+  wall against a script written to get out, held to the same limits (`limits.script_timeout`, `max_script_memory`,
+  `max_output_bytes`, `--python.max-workers`) and to the run's deadline.
+  Its runs count in the pool-wide [Python worker
+  series](SELF-METRICS.md#python-workers) alone, under no collector's name,
+  and its worker is stopped once it has run, which those series count as a
+  stop for a reload.
+- **Names the server's files**: any request key ending in `_file` or
+  `_files`, and `request.login`, are taken.
+- **Makes its own request**: *Probe a target* with the playground, when it
+  is not a copy of a configured collector, fetches the target through the
+  playground's own request block, as a probe of a configured collector
+  would, with the `allowed_targets`, `denied_targets` and credentials it
+  writes; it is then checked as a load checks a request, the files a
+  request needs required of it. This is what makes its files of use: a
+  `localfile` playground reads a file under the `root` it names, a
+  `bearer_token_file` or a TLS file is read for the request it is sent
+  with, and a `sql` playground connects to the database it names. A copy
+  of a configured collector still fetches through that collector, whose
+  credentials the copy does not have, and a pasted response still makes no
+  request. *Copy as* copies no probe of the playground's own request:
+  `/probe` runs only the configured collectors.
+
+`${NAME}` references are still left as written: the environment is where a
+deployment keeps its secrets, and a collector written on the page can name
+a file instead.
+
+The page then says so in a red banner in place of its usual note, every
+page's bar carries a *Dangerous debug mode* badge, and `/debug/run` answers
+`dangerous: true`. Whoever can open the page can run code on the server,
+read any file the exporter's user can through a playground's request, and
+reach any host the exporter can: use it
+on a machine of your own, or in a debugging session no one else can reach,
+and never on a shared deployment ([Debugging](AUTHENTICATION.md#debugging-collectors)).
 
 ### Debug probes
 

@@ -41,6 +41,9 @@ type debugPage struct {
 	// BasicAuth is whether the exporter asks for web.basic_auth, which the
 	// probe's Copy as says to give.
 	BasicAuth bool
+	// Dangerous is --web.debug.dangerous: the playground runs Python, names
+	// the server's files and probes a target with its own request.
+	Dangerous bool
 }
 
 // debugForms are the forms of the playground, of a playground of each
@@ -161,14 +164,20 @@ table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600
 pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-wrap: normal; }
 .copy-done { color: var(--muted); font-size: 13px; }
 .copy-done.copied { color: var(--good); }
+p.danger { margin: 12px 0 4px; padding: 10px 14px; border: 1px solid var(--bad); border-left-width: 6px; border-radius: 6px; background: var(--danger-bg); color: var(--fg); font-size: 14px; }
+p.danger strong { color: var(--bad); }
 </style>
 </head>
 <body>
-<main{{if .BasicAuth}} data-basic-auth{{end}}>
+<main{{if .BasicAuth}} data-basic-auth{{end}}{{if .Dangerous}} data-dangerous{{end}}>
 {{template "chrome" .Chrome}}
 <h1>Debug</h1>
 <p class="meta">Run one collector — one of the configuration, or the playground, a collector written on the page as it is written under <code>collectors:</code> — and see the series a probe would answer. Nothing is put in force, cached or counted against a collector.</p>
+{{- if .Dangerous}}
+<p class="danger" id="danger" role="alert"><strong>Dangerous debug mode</strong> (<code>--web.debug.dangerous</code>): the playground runs Python and reads the server's files with the exporter's permissions, and probing a target with it makes its own request, to any target it names. Anyone who can open this page can do the same. Turn the flag off once the collector is fixed.</p>
+{{- else}}
 <p class="note">The playground never runs Python, and one that names a file of the server's is refused; a configured collector runs as it is configured.{{if not .Full}} Debugging is at <code>edit</code>: collectors run on a pasted response only, and nothing is fetched. Probing a target needs <code>--web.debug=full</code>.{{end}}</p>
+{{- end}}
 <noscript><p class="note">The debug page needs JavaScript.</p></noscript>
 <div class="grid">
 <section class="panel">
@@ -197,10 +206,10 @@ pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-w
 {{- if .Full}}
 <div class="modes" role="radiogroup" aria-label="Response">
 <label><input type="radio" name="mode" value="paste" checked> Paste a response</label>
-<label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not .Chosen}} disabled{{end}}> Probe a target</label>
+<label><input type="radio" name="mode" value="fetch" id="mode-fetch"{{if not (or .Chosen .Dangerous)}} disabled{{end}}> Probe a target</label>
 <label><input type="radio" name="mode" value="static" id="mode-static"{{if not .StaticTargets}} disabled{{end}}> Scrape a static target</label>
 </div>
-<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to probe a target or scrape a static target.</p>
+<p class="note" id="fetch-unavailable"{{if .Chosen}} hidden{{end}}>Choose a configured collector, or <em>Edit a copy</em> of one, to {{if not .Dangerous}}probe a target or {{end}}scrape a static target.</p>
 <p class="note" id="static-unavailable"{{if not .StaticNote}} hidden{{end}}>{{.StaticNote}}</p>
 {{- end}}
 <div data-mode="paste">
@@ -220,8 +229,12 @@ pre.copy-text { margin-top: 8px; max-height: 260px; white-space: pre; overflow-w
 </div>
 {{- if .Full}}
 <div data-mode="fetch" hidden>
+{{- if .Dangerous}}
+<p class="note">The target is probed as <code>/probe?debug=true</code> probes it: through a configured collector's request, target policy and credentials, or, for a playground copied from none, through the playground's own request, with the target policy and credentials it writes.</p>
+{{- else}}
 <p class="note">The target is probed as <code>/probe?debug=true</code> probes it: through a configured collector's request, target policy and credentials. The playground makes no request of its own; it reads what the collector it was copied from answered.</p>
-<p class="note" id="fetched-through">{{if .Chosen}}Probed through {{.Chosen}}, the collector chosen.{{end}}</p>
+{{- end}}
+<p class="note" id="fetched-through">{{if .Chosen}}Probed through {{.Chosen}}, the collector chosen.{{else if .Dangerous}}Probed through the playground's own request.{{end}}</p>
 <div id="target-part"{{if .Form.NoTarget}} hidden{{end}}>
 <label for="target" id="target-label">{{or .Form.TargetLabel "Target"}}</label>
 <input id="target" type="text" placeholder="{{.Form.TargetHint}}" autocomplete="off">
@@ -362,6 +375,10 @@ const showMode = () => {
 // chosen, or the one the playground was copied from; the playground makes
 // no request of its own, so without either nothing can be fetched.
 const fetcher = () => $("configured").value || copiedFrom;
+// With --web.debug.dangerous a playground copied from none makes its own
+// request, and is asked for a target as its request type asks for one.
+const dangerous = document.querySelector("main").hasAttribute("data-dangerous");
+const throughForm = () => fetcher() === "" ? playgroundForm() : formOf(fetcher());
 // What a run asks for follows the request type of the collector it is for
 // (debugForm): the one run reads what is pasted, and a target is probed
 // through fetcher(). The playground's is the request.type written in the
@@ -613,7 +630,7 @@ function showForm() {
   $("headers-part").hidden = !reads.http_answer;
   $("body").placeholder = reads.answer;
   if (!$("target")) return;
-  const through = formOf(fetcher());
+  const through = throughForm();
   $("target-part").hidden = !!through.no_target;
   $("no-target").hidden = !through.no_target;
   $("target-label").textContent = through.target_label || "Target";
@@ -630,10 +647,10 @@ function showFetch() {
   const radio = $("mode-fetch");
   if (!radio) return;
   const through = fetcher();
-  radio.disabled = through === "";
+  radio.disabled = through === "" && !dangerous;
   $("fetch-unavailable").hidden = through !== "";
   if (radio.disabled && radio.checked) choose("paste");
-  $("fetched-through").textContent = through === "" ? "" : $("configured").value !== ""
+  $("fetched-through").textContent = through === "" ? (dangerous ? "Probed through the playground's own request." : "") : $("configured").value !== ""
     ? "Probed through " + through + ", the collector chosen."
     : "Probed through " + through + ", the collector this playground was copied from.";
   showMode();
@@ -804,7 +821,7 @@ function scrapeConfigOf(collector, target, given, url) {
 // one is copied as a probe through that one, as configured.
 const probeCopy = $("probe-copy") ? copier($("probe-copy"), () => {
   const through = fetcher();
-  if (through === "") return { blocked: true, note: "Choose a configured collector, or Edit a copy of one, to copy a probe." };
+  if (through === "") return { blocked: true, note: dangerous ? "/probe runs only the configured collectors, so the playground's own request is run on this page alone; choose a configured collector, or Edit a copy of one, to copy a probe." : "Choose a configured collector, or Edit a copy of one, to copy a probe." };
   const form = formOf(through);
   const target = form.no_target ? null : $("target").value;
   if (target !== null && target.trim() === "") return { blocked: true, note: "Give the target to copy the probe." };
@@ -892,7 +909,9 @@ async function run() {
     if (mode() === "fetch") {
       // A field the collector's form leaves out is sent empty: a collector
       // that names its own target is probed with none.
-      const through = formOf(fetcher());
+      const through = throughForm();
+      // An empty request_from, with --web.debug.dangerous, is the
+      // playground's own request.
       if (request.collector !== undefined) request.request_from = copiedFrom;
       request.target = through.no_target ? "" : $("target").value;
       // A parameter's name is the same in one case only, as /probe reads

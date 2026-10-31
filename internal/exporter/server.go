@@ -35,6 +35,10 @@ type Server struct {
 	// counts every run of the debug engine.
 	debug      DebugLevel
 	debugSlots chan struct{}
+	// debugDangerous is --web.debug.dangerous: the playground may run
+	// Python, name the server's files and make its own request
+	// (debuglevel.go).
+	debugDangerous bool
 	// fetchCollector makes a trip's request: fetch.FetchCollector, which the
 	// debug page's tests wrap to see whose request block every run makes,
 	// since the playground's must make none (debugpage.go).

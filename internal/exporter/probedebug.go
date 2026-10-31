@@ -541,10 +541,14 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		// and shows the conditional request; it keeps nothing.
 		revalidateKey: p.staleKey,
 	}
-	// An edited collector runs no Python, and is no collector of the
-	// configuration whose workers would count it.
+	// An edited collector is no collector of the configuration whose
+	// workers would count it: the Python it runs with --web.debug.dangerous
+	// counts for the pool as a whole alone, under no collector, and its
+	// worker is stopped once it has run, leaving none idle.
 	if !p.edited {
 		job.python = s.pythonStatsSince(p.generation, p.collector)
+	} else if runsPython(p.collector) {
+		job.python = transform.PythonWorkers().Departed()
 	}
 	result := s.collect(ctx, job)
 	verdict, answer = s.debugVerdict(result, p)

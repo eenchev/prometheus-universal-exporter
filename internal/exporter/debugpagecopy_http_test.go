@@ -55,7 +55,7 @@ func TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig(t *testing.T) {
 		`for (const [name, value] of given) url.searchParams.append(name, value);`,
 		`debug.searchParams.append("debug", "true");`,
 		// What stops it, and the playground copied from a collector.
-		`if (through === "") return { blocked: true, note: "Choose a configured collector, or Edit a copy of one, to copy a probe." };`,
+		`if (through === "") return { blocked: true, note: dangerous ? "/probe runs only the configured collectors, so the playground's own request is run on this page alone; choose a configured collector, or Edit a copy of one, to copy a probe." : "Choose a configured collector, or Edit a copy of one, to copy a probe." };`,
 		`const target = form.no_target ? null : $("target").value;`,
 		`if (target !== null && target.trim() === "") return { blocked: true, note: "Give the target to copy the probe." };`,
 		`if (own && own.wrong()) return { blocked: true, note: "A probe parameter row is wrong; put it right to copy the probe." };`,

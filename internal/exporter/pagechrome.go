@@ -16,11 +16,14 @@ import (
 
 // pageChrome is the bar at the top of a page: Home, the landing page as a
 // link relative to the page, empty on the landing page itself; Links, the
-// other pages, the one shown marked; and Docs, the documentation.
+// other pages, the one shown marked; Docs, the documentation; and
+// Dangerous, --web.debug.dangerous, which every page's bar warns of, as the
+// debug page's playground then runs Python and reads the server's files.
 type pageChrome struct {
-	Home  string
-	Links []chromeLink
-	Docs  string
+	Home      string
+	Links     []chromeLink
+	Docs      string
+	Dangerous bool
 }
 
 // chromeLink is a page the bar links, Current on the page itself.
@@ -57,7 +60,7 @@ func (s *Server) chromeFor(path string) pageChrome {
 	link := func(label, endpoint string) chromeLink {
 		return chromeLink{Label: label, Href: prefix + relativeLink(endpoint), Current: endpoint == path}
 	}
-	chrome := pageChrome{Docs: landingDocs}
+	chrome := pageChrome{Docs: landingDocs, Dangerous: s.playgroundUnbound()}
 	if path != pageHome {
 		chrome.Home = up
 	}
@@ -74,6 +77,7 @@ func (s *Server) chromeFor(path string) pageChrome {
 const chromeTemplate = `{{define "chrome"}}<header class="site"><nav aria-label="The exporter's pages">
 {{- if .Home}}<a class="home" href="{{.Home}}">← Prometheus Universal Exporter</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter</span>{{end}}
 <span class="pages">
+{{- if .Dangerous}}<span class="danger-badge" title="--web.debug.dangerous: the debug page's playground runs Python and reads the server's files">Dangerous debug mode</span>{{end}}
 {{- range .Links}}{{if .Current}}<span aria-current="page">{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}<a href="{{.Docs}}">Documentation</a>` + themePicker + `</span>
 </nav></header>{{end}}`
 
@@ -125,6 +129,7 @@ header.site a { text-decoration: none; }
 header.site a:hover { text-decoration: underline; }
 header.site [aria-current="page"] { color: var(--fg); font-weight: 600; }
 header.site label.theme { color: var(--muted); }
+header.site .danger-badge { padding: 1px 8px; border: 1px solid var(--bad); border-radius: 999px; background: var(--danger-bg); color: var(--bad); font-size: 12px; font-weight: 600; }
 header.site label.theme[hidden] { display: none; }
 header.site label.theme select { width: auto; height: 26px; margin: 0 0 0 4px; padding: 0 30px 0 8px; border: 1px solid var(--line); border-radius: 6px; background-color: var(--bg); color: var(--fg); font: inherit; font-size: 13px; background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; }
 `

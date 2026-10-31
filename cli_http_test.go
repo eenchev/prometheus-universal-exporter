@@ -807,3 +807,35 @@ func TestTheDebugLevelReachesTheServer(t *testing.T) {
 		_ = p.cmd.Process.Kill()
 	}
 }
+
+// --web.debug.dangerous is a command-line error below --web.debug=full, at
+// a start and with --dry-run alike; at full the exporter starts and warns,
+// at warn, of what it lets the debug page's playground do.
+func TestTheDangerousDebugModeNeedsFullAndIsWarnedOf(t *testing.T) {
+	for _, args := range [][]string{
+		{"--web.debug.dangerous"},
+		{"--web.debug=edit", "--web.debug.dangerous"},
+		{"--dry-run", "--config.file=configs/config.example.yaml", "--web.debug=edit", "--web.debug.dangerous=true"},
+	} {
+		out := runCLI(t, args...)
+		if out.code != 2 || !strings.Contains(out.stderr, "--web.debug.dangerous needs --web.debug=full") || out.stdout != "" {
+			t.Errorf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+	p := startHeldExporter(t, "--web.debug=full", "--web.debug.dangerous")
+	defer func() { _ = p.cmd.Process.Kill() }()
+	resp, err := http.Get("http://" + p.address + "/debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	warned := false
+	for _, line := range strings.Split(p.logs.String(), "\n") {
+		if strings.Contains(line, `"level":"WARN"`) && strings.Contains(line, `"msg":"--web.debug.dangerous is on: the debug page's playground runs Python and reads the server's files with the exporter's permissions`) {
+			warned = true
+		}
+	}
+	if !warned || resp.StatusCode != http.StatusOK {
+		t.Errorf("/debug %d; the exporter did not warn of dangerous mode:\n%s", resp.StatusCode, p.logs.String())
+	}
+}

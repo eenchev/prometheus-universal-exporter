@@ -507,6 +507,21 @@ is kept from reaching further than that:
   runs on the server against the response, bounded by the probe's deadline,
   the collector's limits and 4 runs of the page at a time.
 
+`--web.debug.dangerous` lifts the two rules above that hold the playground
+to the response — no file of the server's, and no Python — and lets it
+make its own request ([Dangerous debug mode](CONFIGURATION.md#dangerous-debug-mode)).
+With it, whoever can open the page runs code on the server: a script runs
+in the workers' [sandbox](PYTHON.md), which keeps a script from opening
+files or sockets by mistake but is no wall against one written to get out;
+a `localfile` playground reads any file under a root it chooses, and its
+own request reaches any host the exporter can, with whatever credential
+file it names. Basic Auth and the checks against other sites' pages still hold,
+but the page is then as powerful as a shell in the exporter's container.
+Use it on a machine of your own or in a locked-down debugging session, and
+never on a shared deployment; the exporter warns at startup, and every
+page's bar says the mode is on. `${NAME}` references stay unexpanded even
+so, since the environment is where a deployment keeps its secrets.
+
 ## Requests from other sites
 
 Once the exporter's Basic Auth credential has been typed into a browser, the

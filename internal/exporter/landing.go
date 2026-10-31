@@ -42,8 +42,8 @@ ul.links { padding-left: 20px; }
 // when Dark is; color-scheme follows, so the browser's own parts of the page,
 // its scrollbars and form controls, match.
 const (
-	lightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d;"
-	darkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80;"
+	lightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; --danger-bg: #fef2f2;"
+	darkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; --danger-bg: #2c1517;"
 )
 
 // selectStyle draws the pages' dropdowns' arrow itself: the browser's own

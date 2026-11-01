@@ -104,6 +104,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The debug page has an *OTLP* tab beside *Table* and *Text*, with
+  `otlp.enabled`: what the next export would send of a run's series, made by
+  the export's own code — the resource, the scope, each data point with its
+  OTLP name, kind, unit, attributes, value and what was changed of it, the
+  points left out and why, and the request's JSON — and with `otlp.logs` the
+  run's log lines as log records. Nothing of a run is exported. At
+  `--web.debug=full` it tests the endpoint with one empty export, sent once
+  with the export's headers, TLS, compression and timeout
+  (`POST /debug/otlp-test`).
 - `--python.max-idle-workers` (the chart's `server.pythonMaxIdleWorkers`),
   `1` by default, says how many workers of each collector's script stay idle
   after a burst of concurrent scrapes; `0` keeps none, each worker stopping

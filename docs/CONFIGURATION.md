@@ -5648,6 +5648,62 @@ metric's `# TYPE`:
 What a target sent is put in the table as text, never as HTML. On a narrow
 screen the table scrolls sideways in its own box.
 
+With [OTLP](OTLP.md) enabled, a third tab, *OTLP*, shows what the next
+export would send of the run's series, for every kind of run: a pasted
+response, a fetched target or a static target's scrape, of a configured
+collector or of the playground. It is made by the export's own code, so it
+is what the export does, not a description of it:
+
+- **Resource and scope**: a probe's points are under the exporter-wide
+  resource, `otlp.service_name` and `otlp.resource_attributes`, with the
+  `collector` and `target` attributes of `otlp.probe_attributes`; the
+  playground's as a probe of it would be. A static target's scrape is under
+  the target's own resource, its `otlp.labels_as_resource` moved to it and
+  its name its `service.instance.id` with `otlp.instance_id`, also when it
+  does not set `export_via_otlp`, which the tab then says. The scope is
+  `otlp.scope`'s name and version.
+- **Data points**: a row for each, with its Prometheus name and its OTLP
+  name, which differ under `otlp.metric_names: otel`, its kind — `gauge`,
+  `sum (cumulative, monotonic)`, `histogram (cumulative)` or `summary` — its
+  unit, its attributes and its value: a histogram's count, sum and each
+  bucket's own count, a summary's count, sum and quantiles. A row the
+  export changed has a badge that opens to why: a family exported as
+  gauges because its bucket counts fall or a counter is NaN, `_total` taken
+  off, the unit `s` from `_seconds`, a label moved to the resource, an
+  attribute added. The table sorts by a column's header and keeps the rows
+  that hold the filter's text.
+- **Left out**: points the export would leave out, a name exported as two
+  kinds or, under `otel` naming, for two Prometheus names, with the warning
+  the export logs of them. Only the run's own points are checked against
+  one another: those of other probes and static targets in the same export,
+  and the exporter's own series, are not the run's.
+- **Request body**: the `ExportMetricsServiceRequest`, folded away, with
+  *Copy*, indented to be read; it is sent on one line, gzipped unless
+  `otlp.compression: none`. A cumulative point starts at its own time, as
+  at a series' first export: the export remembers when each series
+  started, which a run neither reads nor changes.
+- **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on:
+  each line the run logged as the record the log export makes of it — its
+  time, severity, body and attributes — those below `otlp.logs.level`
+  marked as not exported, and the `ExportLogsServiceRequest` of the rest. A
+  probe logs a failure as `probe failed`, where a run says `debug run
+  failed`, and a repeated one once and then every five minutes.
+
+Nothing of a run reaches the export: nothing is queued, no start time is
+remembered, the export's self-metrics and status are unchanged, and
+nothing is sent. At `full` the tab also offers *Test the metrics
+endpoint*, and with `otlp.logs` *Test the logs endpoint*: one empty
+export, `{"resourceMetrics":[]}` or `{"resourceLogs":[]}`, sent to the
+endpoint the configuration names, with `otlp.headers`, `otlp.tls`,
+`otlp.compression` and `otlp.timeout`, once, never retried. The page shows
+the status, how long it took, the error of the connection, of TLS or of a
+timeout in full, the headers sent with credentials withheld, the answer's
+headers and body, its `partialSuccess`, and what an export would make of
+the answer — a success, a retry or a refusal. It counts in none of the
+export's self-metrics and changes nothing the status page shows. One test
+runs at a time; another asked meanwhile is answered `429`. At `edit` the
+buttons are disabled.
+
 The playground may do nothing past the response, since what it is given
 runs on the server, unless [`--web.debug.dangerous`](#dangerous-debug-mode)
 lifts these:
@@ -5677,7 +5733,8 @@ result and the response it would
 [revalidate](#revalidating-expired-responses)), counts in no
 collector's self-metrics but the [Python worker
 series](SELF-METRICS.md#python-workers) of a configured collector's script,
-and logs one `debug run served` line at `info`. The page is behind
+and logs one `debug run served` line at `info`, which the OTLP log export
+does not take. The page is behind
 `web.basic_auth` when that is configured;
 [Debugging](AUTHENTICATION.md#debugging-collectors) says how a run is kept
 from being sent by another site.
@@ -5721,9 +5778,21 @@ suffix), `metric` (the metric's name, as a lint finding names it), `type`,
 `labels` and `value` (as the text writes it, so `NaN` and `+Inf` are
 strings), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
-`metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
+`metric` and `message`, `report`, the text report, and, with OTLP enabled
+alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
+(each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
+`prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
+`left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
+`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`). A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
+
+The endpoint test is `POST /debug/otlp-test` with `X-Debug-Run` and a
+JSON body `{"signal": "metrics"}` or `{"signal": "logs"}`, answered with
+`ok`, `signal`, `endpoint`, `sent`, `body`, `status`, `took`, `failure`,
+`outcome`, `partial_success`, `headers`, `response` and `notes`; below
+`full` it is answered `403`, with the export (or the log export) off `409`,
+and while another test runs `429`, each with `error`.
 
 ### Dangerous debug mode
 

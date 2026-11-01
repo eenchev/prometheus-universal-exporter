@@ -8127,8 +8127,9 @@ Recommended behavior:
   followed: a target cleared since the link was last followed MUST NOT be
   carried; no form MUST ask `/probe` for a debug report.
 - `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
-  which its runs post to, and `/debug/collector`, which shows it a
-  configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
+  which its runs post to, `/debug/collector`, which shows it a
+  configured collector, and `/debug/otlp-test`, its OTLP endpoint test:
+  § 42.17. With the flag, `/` and `/collectors` MUST
   link the page; without it, neither path is served (`404`) and neither page
   links it.
 - Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
@@ -29737,6 +29738,18 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   as on stderr, a `String` that panics is `!PANIC: no text`, a non-nil error
   its text, and logging the line neither panics nor loses the record.
 
+## 34.251 OTLP on the debug page
+
+- `TestTheOTLPTabShowsEachKindUnderEitherNaming`: a pasted gauge, counter, histogram, summary and a histogram whose bucket counts fall are, under `prometheus`, `job_duration_seconds` gauge `1.5`, `requests_total` sum (cumulative, monotonic) `7`, `latency_seconds` histogram `count 3, sum 1.25; buckets ≤0.1: 1, ≤1: 2, >1: 0`, `rpc_seconds` summary `count 40, sum 7; quantiles 0.5: 0.1, 0.9: 0.3`, without notes, and `broken_bucket`/`broken_count` gauges noted `its bucket counts fall`; under `otel`, `job_duration` of unit `s`, `requests` noted `_total taken off`, `latency` and `rpc` of unit `s` noted with the suffix; the notes say how start times are made and the body is the indented request.
+- `TestTheOTLPTabIsThereWithOTLPAlone`: without OTLP a run has no `otlp` and the page no tab or test button; with it the tab is there, the test button disabled at `edit` with its note, no log records without `otlp.logs`, and with them the logs part and both buttons at `full`.
+- `TestTheOTLPTabShowsTheResourceOfTheRun`: with `probe_attributes` and a scope `acme.pue` `1.2`, a fetched probe is under the exporter-wide resource, its points with `collector` and `target` noted as added; the playground's is the same resource, noted as a probe of it and without a target; a static target's is `service.name, city=berlin, deployment.environment, service.instance.id=berlin`, its points without `city`, noted moved; nothing is queued and no start time remembered.
+- `TestTheOTLPTabListsWhatTheExportLeavesOut`: under `otel` the counters `x_seconds` and `x_seconds_total`, and the gauge `jobs` and counter `jobs_total`, leave out `x_seconds` and `jobs` with the export's messages, the clash lines as the export logs them, and the body without their points.
+- `TestTheOTLPTabsBodyIsWhatTheExportSends`: a probe of a target and a static target's scrape, exported to a receiver, are the run's body to the byte but for the points' times and the exporter's own and the Go runtime's series; the test fails when the run's series are not in the drained queue's order.
+- `TestTheOTLPTabShowsTheRunsLogRecords`: a failing run's `debug run failed` is a record of severity 17 `ERROR` with its time, `collector` and `error` attributes, exported at `info` and in the logs body; the log export then gets no line of the run nor `debug run served` (the test fails when that line is logged through the tee); at `error` a `log` rule's warning is shown not exported, `not exported: below otlp.logs.level error`.
+- `TestTheOTLPEndpointTest`: an endpoint answering `200` with a `partialSuccess` message is `ok` with it, its `Authorization` sent and shown withheld and the empty body sent; a `429` is one request and an outcome that would retry; a `401` refused; a slow endpoint past `otlp.timeout` a client timeout; an HTTPS endpoint with an unknown CA a certificate error; none of them changes the export's counts or history.
+- `TestTheOTLPEndpointTestOfTheLogsEndpoint`: `signal: logs` sends `{"resourceLogs":[]}` to `/v1/logs` alone.
+- `TestTheOTLPEndpointTestIsGuarded`: `403` at `edit`, without `X-Debug-Run` and from another site, `409` for logs with the log export off and with OTLP off, `400` for another signal, `405` for `GET`, `429` while a test is in progress, and no request sent by any of them.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30047,7 +30060,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`, `/debug/otlp-test`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -33865,9 +33878,78 @@ click or keyboard, not by hover alone; one about a metric no row is of MUST
 be listed above the table. On a narrow screen the table MUST scroll in its
 own box and the page not.
 
+With `otlp.enabled` and an endpoint, and only then, every answer of a run
+that ran MUST carry `otlp`, what the next OTLP export would send of the
+run's series, and the page MUST offer an *OTLP* tab beside *Table* and
+*Text*, at `edit` as at `full`, for every kind of run — a pasted response,
+a target fetched, a static target's scrape, of a configured collector or
+of the playground. It MUST be made by the export's own code, not by a copy
+of it: the series a probe would answer, with `otlp.probe_attributes`'
+attributes, under the exporter-wide resource, the playground's as a probe
+of it would be; a static target's scrape's under the target's resource,
+its `otlp.labels_as_resource` moved to it and `otlp.instance_id` set,
+whether or not it sets `export_via_otlp`, which the tab MUST then say;
+each series once and in the order a drained queue has them, the later of
+two alike kept; named under `otlp.metric_names`; and checked against one
+another as an export checks a resource's points, and against no other
+point: not the other probes' or static targets', and not the exporter's
+own series. A cumulative point's start time MUST be its own time, as at a
+series' first export, which the tab MUST say. Making it MUST NOT queue
+anything, ask for or remember a series' start time, count in the
+export's self-metrics or status, or send anything. `otlp` MUST be an object
+of `metric_names`; `resource`, the resource's attributes, each a `key` and
+a `value`, `service.name` first, and `resource_notes`, where they come
+from; `scope`, its `name` and `version`; `points`, each with `prometheus`,
+the name the exposition writes it under, `name`, `kind` (`gauge`, `sum
+(cumulative, monotonic)`, `histogram (cumulative)` or `summary`), `unit`,
+`attributes`, `value` (a histogram's count, sum and each bucket's own
+count, a summary's count, sum and quantiles) and `notes`, one for each
+change the export made of its series — a family exported as gauges and
+why, `_total` taken off, a unit from a suffix, an attribute added by
+`otlp.probe_attributes`, a label moved to the resource, a series' own
+timestamp, a sum or count OTLP cannot leave out; `left_out`, each point
+the export would leave out, with its `reason` in the words the export
+logs it; `clashes`, the lines the export would log of them; `notes`; and
+`body`, the `ExportMetricsServiceRequest` the export would send of them,
+indented, `{"resourceMetrics": []}` for none. The tab MUST show the
+resource, the scope, the points as a table that sorts by a column's
+header and keeps the rows that hold a filter's text, a badge on a row with
+notes that opens to them by click or keyboard, the points left out, and
+the body folded away with a *Copy* button, every text put in as text,
+never as HTML. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
+log lines as the records the log export makes of them, by the log
+export's own conversion — `time`, `severity_number`, `severity_text`,
+`body`, `attributes`, flattened and each key once, and `exported`, false
+with a `note` for a line below `otlp.logs.level` — with its `level`,
+`notes` and `body`, the `ExportLogsServiceRequest` of those exported, and
+the tab MUST show them as *Log records*. None of them MUST be queued for
+the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
+MUST NOT offer the tab.
+
+With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, and
+with `otlp.logs` on *Test the logs endpoint*, which `POST` to
+`/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left
+out) or `logs`, with the `X-Debug-Run` header, refused as a run is
+without it, from another site, with another content type or method, and
+behind Basic Auth. Below `full` the buttons MUST be disabled with a note,
+and the test MUST be answered `403`; with the export off, or `logs` with
+the log export off, `409`; another `signal` `400`; and while a test is in
+progress, the server's whole, `429`, sending nothing. A test MUST send
+one request, an empty `{"resourceMetrics":[]}` or `{"resourceLogs":[]}`,
+to the endpoint the configuration in force names and no other, with the
+export's headers, TLS, compression and timeout, and MUST NOT retry it,
+whatever it answers. It MUST answer `200` with `ok`, `signal`,
+`endpoint`, its credentials withheld, `sent`, the headers sent, a
+credential's value withheld, `body`, `status`, `took`, `failure`, the
+connection's, TLS's or the timeout's error or the refusal in full,
+`outcome`, what an export would make of the answer, `partial_success`,
+`headers` and `response`, the start of the answer's body, and `notes`. It
+MUST NOT count in the export's self-metrics, change what the status page
+shows of the exports or readiness, or be taken by the log export.
+
 The collector MUST NOT be put in force. A run MUST NOT be answered from or
 fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log
-but for one `info` line per run, be queued for OTLP, or be counted in any
+but for one `info` line per run, which the log export MUST NOT take, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be
 reported as a debug probe that panics is, and logged with its stack, and a fetch MUST give back its trip slot however it ends.

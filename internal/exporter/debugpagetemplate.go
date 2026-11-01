@@ -4,7 +4,8 @@ package exporter
 // an editor, or one chosen from the configuration in force, the response it
 // is run on — pasted, or at --web.debug=full a target fetched through a
 // configured collector or a static target's scrape — and what the run gave:
-// the series a probe would answer, as a table and as text, the requests, the response, the stages,
+// the series a probe would answer, as a table and as text, and with OTLP on
+// what the next export would send of them, the requests, the response, the stages,
 // the metric lint's advice, what was logged and the whole debug report. It
 // runs when Run is pressed, and only then; a run cancels the one before it.
 // The collectors page links each collector here as ?collector=<name>, with
@@ -47,6 +48,9 @@ type debugPage struct {
 	// Dangerous is --web.debug.dangerous: the playground runs Python, names
 	// the server's files and probes a target with its own request.
 	Dangerous bool
+	// OTLP offers the OTLP tab, with otlp.enabled, and OTLPLogs its log
+	// records, with otlp.logs on too (debugotlp.go).
+	OTLP, OTLPLogs bool
 }
 
 // debugForms are the forms of the playground, of a playground of each
@@ -166,6 +170,13 @@ table.series td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 table.series td.value { text-align: right; white-space: nowrap; }
 table.series td.type { color: var(--muted); font-family: inherit; }
 table.series td.lint { font-family: inherit; min-width: 9em; }
+table.series td.otlp-notes { font-family: inherit; min-width: 12em; }
+ul.otlp-notes { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; color: var(--muted); }
+#otlp-resource th { position: static; width: 1%; }
+.otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.otlp-test button { margin: 0; }
+.otlp-test button:disabled { opacity: 0.5; cursor: not-allowed; }
+pre.otlp-body { max-height: 520px; white-space: pre; overflow-wrap: normal; }
 table.series details { margin: 0; }
 table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600; color: var(--accent); }
 .lint-advice { margin: 4px 0 0; font-size: 12px; white-space: normal; }
@@ -329,6 +340,9 @@ p.danger strong { color: var(--bad); }
 <div class="views" id="views" role="tablist" aria-labelledby="series-heading">
 <button type="button" role="tab" id="view-table" data-view="table" aria-controls="series-table-part" aria-selected="true">Table</button>
 <button type="button" role="tab" id="view-text" data-view="text" aria-controls="series-text-part" aria-selected="false">Text</button>
+{{- if .OTLP}}
+<button type="button" role="tab" id="view-otlp" data-view="otlp" aria-controls="series-otlp-part" aria-selected="false">OTLP</button>
+{{- end}}
 </div>
 </div>
 <div id="series-table-part" role="tabpanel" aria-labelledby="view-table">
@@ -346,6 +360,61 @@ p.danger strong { color: var(--bad); }
 <div id="series-text-part" role="tabpanel" aria-labelledby="view-text" hidden>
 <pre id="series"></pre>
 </div>
+{{- if .OTLP}}
+<div id="series-otlp-part" role="tabpanel" aria-labelledby="view-otlp" hidden>
+<p class="note" id="otlp-none">Not run yet. Once a collector has run, this shows what the next OTLP export would send of its series, made by the export's own code; nothing of a run is queued or sent.</p>
+<div id="otlp-shown" hidden>
+<ul class="otlp-notes" id="otlp-notes"></ul>
+<h3>Resource</h3>
+<div class="table-box"><table class="series" id="otlp-resource"><tbody id="otlp-resource-rows"></tbody></table></div>
+<ul class="otlp-notes" id="otlp-resource-notes"></ul>
+<p class="note" id="otlp-scope"></p>
+<h3>Data points</h3>
+<div class="row series-filters">
+<div><label for="otlp-filter">Filter: name, attribute, value or note</label>
+<input id="otlp-filter" type="search" autocomplete="off" spellcheck="false"></div>
+</div>
+<p class="note" id="otlp-count"></p>
+<div class="table-box" id="otlp-box" hidden><table class="series" id="otlp-table"><thead><tr id="otlp-columns"></tr></thead><tbody id="otlp-rows"></tbody></table></div>
+<div id="otlp-left-part" hidden>
+<h3>Left out</h3>
+<ul class="lint-unplaced" id="otlp-left"></ul>
+<pre id="otlp-clashes" hidden></pre>
+</div>
+<details id="otlp-body-part">
+<summary>Request body (ExportMetricsServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-body-copy">Copy</button><span class="copy-done" id="otlp-body-copied"></span></div>
+<pre class="otlp-body" id="otlp-body"></pre>
+</details>
+{{- if .OTLPLogs}}
+<div id="otlp-logs-part" hidden>
+<h3>Log records</h3>
+<ul class="otlp-notes" id="otlp-logs-notes"></ul>
+<p class="note" id="otlp-logs-count"></p>
+<div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
+<details id="otlp-logs-body-part">
+<summary>Request body (ExportLogsServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><span class="copy-done" id="otlp-logs-copied"></span></div>
+<pre class="otlp-body" id="otlp-logs-body"></pre>
+</details>
+</div>
+{{- end}}
+</div>
+<h3>Test the endpoint</h3>
+<div class="otlp-test">
+<button type="button" class="secondary" id="otlp-test-metrics" data-signal="metrics"{{if not .Full}} disabled{{end}}>Test the metrics endpoint</button>
+{{- if .OTLPLogs}}
+<button type="button" class="secondary" id="otlp-test-logs" data-signal="logs"{{if not .Full}} disabled{{end}}>Test the logs endpoint</button>
+{{- end}}
+</div>
+{{- if .Full}}
+<p class="note">Sends one empty export to the endpoint otlp configures, with its headers, TLS, compression and timeout, once, without retrying. It counts in none of the export's self-metrics and changes nothing the status page shows.</p>
+{{- else}}
+<p class="note" id="otlp-test-unavailable">Testing the endpoint sends it a request and shows what it answers, so it needs <code>--web.debug=full</code>.</p>
+{{- end}}
+<pre id="otlp-test-result" hidden></pre>
+</div>
+{{- end}}
 <h3>Stages</h3>
 <ul class="stages" id="stages"></ul>
 <div id="lint-part" hidden>
@@ -1169,13 +1238,18 @@ async function run() {
 // answers, which stays whole whatever the table shows; the choice is kept
 // in this browser. A refused run's error is text, and shown as text.
 let view = "table", refused = false;
-try { if (store && store.getItem("debug.view") === "text") view = "text"; } catch (error) { /* the table, then */ }
+// The OTLP tab is there with otlp.enabled alone.
+try {
+  const kept = store && store.getItem("debug.view");
+  if (kept === "text" || (kept === "otlp" && $("view-otlp"))) view = kept;
+} catch (error) { /* the table, then */ }
 function showView() {
   const shown = refused ? "text" : view;
   $("views").hidden = refused;
   for (const tab of document.querySelectorAll("#views [data-view]")) tab.setAttribute("aria-selected", String(tab.dataset.view === shown));
   $("series-table-part").hidden = shown !== "table";
   $("series-text-part").hidden = shown !== "text";
+  if ($("series-otlp-part")) $("series-otlp-part").hidden = shown !== "otlp";
 }
 for (const tab of document.querySelectorAll("#views [data-view]")) {
   tab.addEventListener("click", () => {
@@ -1320,6 +1394,192 @@ function drawRows() {
 }
 $("series-filter").addEventListener("input", drawRows);
 $("series-metric").addEventListener("change", drawRows);
+// The OTLP tab (debugotlp.go): what the next export would send of the
+// run's series, as the server made it with the export's own code. Every
+// value is put in with textContent alone. The table of data points sorts by
+// a column's header, a value as a number where both are one, and keeps the
+// rows whose cells hold the filter's text; a row with notes has a badge,
+// which opens to them, as a lint finding's does.
+const otlpColumns = ["prometheus", "name", "kind", "unit", "attributes", "value", "notes"];
+let otlpPoints = [], otlpSort = null, otlpDown = false;
+const attributeText = (attributes) => (attributes || []).map((a) => a.key + "=" + a.value).join(", ");
+function otlpCell(point, column) {
+  if (column === "attributes") return attributeText(point.attributes);
+  if (column === "notes") return (point.notes || []).join("\n");
+  return point[column] || "";
+}
+function otlpNotesOf(notes) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "\u24d8 " + notes.length + (notes.length === 1 ? " note" : " notes");
+  summary.title = notes.join("\n");
+  details.append(summary);
+  for (const note of notes) {
+    const p = document.createElement("p");
+    p.className = "lint-advice";
+    p.textContent = note;
+    details.append(p);
+  }
+  return details;
+}
+const listOf = (list, items) => {
+  list.replaceChildren(...items.map((text) => { const li = document.createElement("li"); li.textContent = text; return li; }));
+  list.hidden = items.length === 0;
+};
+function drawOTLPRows() {
+  const needle = $("otlp-filter").value.trim().toLowerCase();
+  let rows = otlpPoints.filter((point) => needle === "" || point.haystack.includes(needle));
+  if (otlpSort !== null) {
+    rows = rows.slice().sort((a, b) => {
+      const x = otlpCell(a, otlpSort), y = otlpCell(b, otlpSort);
+      const p = numberOf(x), q = numberOf(y);
+      const order = x !== "" && y !== "" && !Number.isNaN(p) && !Number.isNaN(q) ? (p < q ? -1 : p > q ? 1 : 0) : (x < y ? -1 : x > y ? 1 : 0);
+      return otlpDown ? -order : order;
+    });
+  }
+  for (const th of $("otlp-columns").children) th.setAttribute("aria-sort", th.dataset.column === otlpSort ? (otlpDown ? "descending" : "ascending") : "none");
+  $("otlp-rows").replaceChildren(...rows.slice(0, tableRows).map((point) => {
+    const tr = document.createElement("tr");
+    for (const column of otlpColumns) {
+      const td = document.createElement("td");
+      if (column === "value") td.className = "value";
+      if (column === "kind") td.className = "type";
+      if (column === "notes") {
+        td.className = "otlp-notes";
+        if ((point.notes || []).length > 0) td.append(otlpNotesOf(point.notes));
+      } else {
+        td.textContent = otlpCell(point, column);
+      }
+      tr.append(td);
+    }
+    return tr;
+  }));
+  $("otlp-box").hidden = otlpPoints.length === 0;
+  $("otlp-count").textContent = otlpPoints.length === 0 ? "(no data points)" : rows.length + " of " + otlpPoints.length + " data points" + (rows.length > tableRows ? "; showing the first " + tableRows + ", filter to narrow" : "");
+}
+if ($("series-otlp-part")) {
+  $("otlp-columns").replaceChildren(...otlpColumns.map((column) => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.dataset.column = column;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = column === "prometheus" ? "Prometheus name" : column === "name" ? "OTLP name" : column;
+    button.addEventListener("click", () => {
+      otlpDown = otlpSort === column ? !otlpDown : false;
+      otlpSort = column;
+      drawOTLPRows();
+    });
+    th.append(button);
+    return th;
+  }));
+  $("otlp-filter").addEventListener("input", drawOTLPRows);
+  const copyButton = (button, source, done) => button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($(source).textContent);
+      $(done).textContent = "Copied.";
+    } catch (error) {
+      $(done).textContent = "The browser did not let the page copy it; select the text below.";
+    }
+  });
+  copyButton($("otlp-body-copy"), "otlp-body", "otlp-body-copied");
+  if ($("otlp-logs-copy")) copyButton($("otlp-logs-copy"), "otlp-logs-body", "otlp-logs-copied");
+}
+function showOTLP(otlp, ran) {
+  if (!$("series-otlp-part")) return;
+  $("otlp-shown").hidden = !otlp;
+  $("otlp-none").hidden = !!otlp;
+  if (!otlp) {
+    $("otlp-none").textContent = ran ? "The OTLP export is off (otlp.enabled), so a run shows nothing here." : "The run was refused: nothing would be exported.";
+    otlpPoints = [];
+    return;
+  }
+  listOf($("otlp-notes"), otlp.notes || []);
+  $("otlp-resource-rows").replaceChildren(...(otlp.resource || []).map((a) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = a.key;
+    const td = document.createElement("td");
+    td.textContent = a.value;
+    tr.append(th, td);
+    return tr;
+  }));
+  listOf($("otlp-resource-notes"), otlp.resource_notes || []);
+  $("otlp-scope").textContent = "Scope: " + otlp.scope.name + (otlp.scope.version ? " " + otlp.scope.version : " (no version)") + ". Metric names: " + otlp.metric_names + ".";
+  otlpPoints = (otlp.points || []).map((point) => ({ ...point, haystack: otlpColumns.map((column) => otlpCell(point, column)).join("\n").toLowerCase() }));
+  drawOTLPRows();
+  const left = otlp.left_out || [], clashes = otlp.clashes || [];
+  $("otlp-left-part").hidden = left.length === 0 && clashes.length === 0;
+  listOf($("otlp-left"), left.map((p) => "\u26a0 " + p.prometheus + " as " + p.name + " (" + p.kind + ")" + (p.attributes ? " {" + attributeText(p.attributes) + "}" : "") + ": " + p.reason));
+  $("otlp-clashes").hidden = clashes.length === 0;
+  $("otlp-clashes").textContent = clashes.join("\n");
+  $("otlp-body").textContent = otlp.body;
+  if ($("otlp-logs-part")) {
+    const logs = otlp.logs;
+    $("otlp-logs-part").hidden = !logs;
+    if (logs) {
+      listOf($("otlp-logs-notes"), logs.notes || []);
+      const records = logs.records || [];
+      const exported = records.filter((r) => r.exported).length;
+      $("otlp-logs-count").textContent = records.length === 0 ? "The run logged nothing." : records.length + (records.length === 1 ? " line, " : " lines, ") + exported + " exported at otlp.logs.level " + logs.level;
+      $("otlp-logs-box").hidden = records.length === 0;
+      $("otlp-logs-rows").replaceChildren(...records.map((r) => {
+        const tr = document.createElement("tr");
+        for (const text of [r.time || "", r.severity_text + " (" + r.severity_number + ")", r.body, attributeText(r.attributes), r.exported ? "yes" : "no: " + (r.note || "")]) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.append(td);
+        }
+        return tr;
+      }));
+      $("otlp-logs-body").textContent = logs.body;
+    }
+  }
+}
+// The endpoint test: one empty export to the endpoint otlp configures, at
+// --web.debug=full. One test at a time: the buttons are disabled while one
+// is in progress, and the server refuses a second.
+for (const button of document.querySelectorAll(".otlp-test button")) {
+  button.addEventListener("click", async () => {
+    const buttons = [...document.querySelectorAll(".otlp-test button")];
+    const result = $("otlp-test-result");
+    for (const b of buttons) b.disabled = true;
+    result.hidden = false;
+    result.className = "";
+    result.textContent = "Testing the " + button.dataset.signal + " endpoint…";
+    try {
+      const response = await fetch(new URL("debug/otlp-test", document.baseURI), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Run": "otlp-test" },
+        body: JSON.stringify({ signal: button.dataset.signal }),
+        cache: "no-store", credentials: "same-origin",
+      });
+      const t = await response.json();
+      const lines = [];
+      if (t.error) {
+        lines.push(response.status + ": " + t.error);
+      } else {
+        lines.push((t.ok ? "OK" : "Failed") + ": " + t.signal + " endpoint " + t.endpoint + (t.took ? " in " + t.took : ""));
+        if (t.status) lines.push("Status: " + t.status);
+        if (t.failure) lines.push("Error: " + t.failure);
+        if (t.outcome) lines.push("An export: " + t.outcome);
+        if (t.partial_success) lines.push("partialSuccess: " + t.partial_success.rejected + " rejected" + (t.partial_success.message ? ": " + t.partial_success.message : ""));
+        lines.push("", "Sent: " + t.body, ...(t.sent || []).map((h) => "  " + h));
+        if (t.headers) lines.push("", "Answered:", ...t.headers.map((h) => "  " + h));
+        if (t.response) lines.push("", t.response);
+        for (const note of t.notes || []) lines.push("", note);
+      }
+      result.className = t.ok ? "" : "error";
+      result.textContent = lines.join("\n");
+    } catch (error) {
+      result.className = "error";
+      result.textContent = "The test could not be sent: " + error.message;
+    } finally {
+      for (const b of buttons) b.disabled = false;
+    }
+  });
+}
 // sent is the playground's YAML the run sent, undefined for a configured
 // collector's run: the lines a refusal of it names are marked in the editor,
 // and link to it, while the editor still holds what was sent.
@@ -1338,6 +1598,7 @@ function show(answer, response, took, sent) {
     showError(series, answer.error, ours);
     markLines(ours ? linesNamed(answer.error) : []);
     fillTable({});
+    showOTLP(null, false);
     for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
@@ -1348,6 +1609,7 @@ function show(answer, response, took, sent) {
   series.className = "";
   series.textContent = answer.series === "" ? "(no series)" : answer.series;
   fillTable(answer);
+  showOTLP(answer.otlp, true);
   for (const stage of answer.stages || []) {
     const item = document.createElement("li");
     item.className = stage.outcome === "ok" ? "" : "failed";

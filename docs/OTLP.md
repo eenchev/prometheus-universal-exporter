@@ -393,6 +393,15 @@ is such a series, so that a name is one kind of metric in an export, and its
 points carry no start time, as no gauge does. A family whose values its type
 allows always keeps the type.
 
+## Seeing what is exported
+
+With `--web.debug`, the debug page's *OTLP* tab shows what the next export
+would send of a run's series — the resource, the scope, each data point
+with what was made of it, the points left out and why, and the request's
+JSON — and, with `otlp.logs`, the run's log lines as log records; at
+`full` it tests the endpoint with one empty export. Nothing of a run is
+exported. See [The debug page](CONFIGURATION.md#the-debug-page).
+
 ## Metric names
 
 `otlp.metric_names` is how the export names metrics. `prometheus`, the

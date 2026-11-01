@@ -35,6 +35,9 @@ type Server struct {
 	// counts every run of the debug engine.
 	debug      DebugLevel
 	debugSlots chan struct{}
+	// debugOTLPTesting is set while the debug page's OTLP endpoint test is
+	// in progress, which one at a time may be (debugotlptest.go).
+	debugOTLPTesting atomic.Bool
 	// debugDangerous is --web.debug.dangerous: the playground may run
 	// Python, name the server's files and make its own request
 	// (debuglevel.go).
@@ -217,7 +220,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath:
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath, debugOTLPTestPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -320,6 +323,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+debugPagePath, protected(s.debugPageHandler))
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
 		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
+		mux.HandleFunc(debugOTLPTestPath, protected(s.debugOTLPTestHandler))
 	}
 	return s.countInProgress(s.writeBounded(mux))
 }

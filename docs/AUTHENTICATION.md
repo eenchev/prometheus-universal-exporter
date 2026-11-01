@@ -500,6 +500,17 @@ is kept from reaching further than that:
   playground was copied from — with its target policy and its credentials, as a debug probe of it would be — nothing a probe could not
   already reach. Nothing of the browser's request, its `Authorization` or
   cookies, is forwarded.
+- **The OTLP endpoint.** The debug page's endpoint test, at `full` only,
+  sends one empty export to the endpoint `otlp` configures, with its
+  headers and TLS, and to no other: the visitor cannot name a destination,
+  so the test reaches nothing the export does not reach every interval. It
+  shows, at `full`, what the endpoint answered — its status, headers and
+  the start of its body — and the error of a failed connection or TLS
+  handshake in full, which can name the endpoint's host, address and
+  certificate; the headers it sent are shown with a credential's value
+  withheld, as the endpoint's URL is with its userinfo. One test runs at a
+  time. The *OTLP* tab shows what a run would export, at `edit` too, made
+  of what the run already shows.
 - **Code.** The playground never runs Python, at either
   level. A configured collector runs its own script, as it does on every
   probe, on whatever the visitor pasted: input chosen by someone else, as a

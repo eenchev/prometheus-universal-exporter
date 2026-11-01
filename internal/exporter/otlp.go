@@ -369,18 +369,30 @@ func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
 	s.otlpStarts.bound(cfg.MaxPendingPoints)
-	scope := otlpScopeOf(cfg)
 	for _, resource := range resources {
 		if len(resource.Set.Metrics) == 0 {
 			continue
 		}
-		resource.otelNames = cfg.MetricNames == model.OTLPMetricNamesOTel
 		key := resource.Identity.key()
-		metrics, clashes := otlpMetricsOf(resource, now, s.otlpStarts.forResource(key))
+		made, clashes := otlpResourceMetricsOf(cfg, resource, now, s.otlpStarts.forResource(key), nil)
 		s.logOTLPNameClashes(resource.Identity, key, clashes)
-		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: scope, Metrics: metrics}}})
+		payload.ResourceMetrics = append(payload.ResourceMetrics, made)
 	}
 	return payload, now
+}
+
+// otlpResourceMetricsOf is what an export sends of one resource: its
+// attributes, the scope, and its metrics made under cfg's
+// otlp.metric_names (otlpMetricsWith), with the clashes found among them.
+// The export makes each resource of its payload with it, and the debug
+// page the resource of one run (debugotlp.go), which is how the page shows
+// what the export would send without anything queued or remembered: start
+// gives each cumulative point its start time, and sources, when given, are
+// told which series each point is of and which points are left out.
+func otlpResourceMetricsOf(cfg model.OTLPConfig, resource otlpResourceSet, now string, start func(m model.Metric, at string) string, sources *otlpPointSources) (otlpResourceMetrics, []otlpNameClash) {
+	resource.otelNames = cfg.MetricNames == model.OTLPMetricNamesOTel
+	metrics, clashes := otlpMetricsWith(resource, now, start, sources)
+	return otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScopeOf(cfg), Metrics: metrics}}}, clashes
 }
 
 // deliverOTLP sends one request's body, and retries a network error, 429,
@@ -518,13 +530,43 @@ func (s *Server) sendOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OT
 	// the endpoint's API keys and tenant, and the body to wherever the
 	// endpoint points, another host and plain http:// included. A redirect
 	// is a misconfigured endpoint, refused below for the operator to fix.
+	resp, err := postOTLP(ctx, cfg, tlsSettings, body, timeout)
+	if err != nil {
+		var unusable *otlpTLSError
+		// A TLS configuration that cannot be used is no attempt, and gives
+		// none to retry.
+		return otlpAnswer{retryable: !errors.As(err, &unusable)}, err
+	}
+	return otlpAnswerOf(resp, signal.logs)
+}
+
+// otlpResponse is what the endpoint answered one request: its status, its
+// headers and the start of its body.
+type otlpResponse struct {
+	status   int
+	header   http.Header
+	body     []byte
+	location string
+}
+
+// otlpTLSError is otlp.tls that cannot be made a client of.
+type otlpTLSError struct{ err error }
+
+func (e *otlpTLSError) Error() string { return "OTLP TLS configuration: " + e.err.Error() }
+func (e *otlpTLSError) Unwrap() error { return e.err }
+
+// postOTLP sends body to cfg.Endpoint once, with the export's headers, TLS,
+// compression and timeout, and reads the answer. It is an attempt of an
+// export (sendOTLPOf) and the debug page's endpoint test
+// (debugotlptest.go), which are sent alike.
+func postOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpResponse, error) {
 	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: tlsSettings}, false, timeout)
 	if err != nil {
-		return otlpAnswer{}, fmt.Errorf("OTLP TLS configuration: %w", err)
+		return otlpResponse{}, &otlpTLSError{err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return otlpAnswer{}, fetch.RedactURLErrors(err)
+		return otlpResponse{}, fetch.RedactURLErrors(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.Compression != model.OTLPCompressionNone {
@@ -539,23 +581,34 @@ func (s *Server) sendOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OT
 		// Go's client quotes the endpoint in its error with its query as
 		// written, which may carry a token: the error is logged and shown
 		// on the status page with the URL's credentials withheld.
-		return otlpAnswer{retryable: true}, fetch.RedactURLErrors(err)
+		return otlpResponse{}, fetch.RedactURLErrors(err)
 	}
 	// The body is read to the end, however little of it matters, so the
 	// connection goes back to the pool for the next export.
 	answer, _ := io.ReadAll(io.LimitReader(resp.Body, otlpResponseLimit))
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, otlpResponseLimit))
 	_ = resp.Body.Close()
+	out := otlpResponse{status: resp.StatusCode, header: resp.Header, body: answer}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		out.location = redirectHost(resp)
+	}
+	return out, nil
+}
+
+// otlpAnswerOf is what an export makes of the endpoint's answer: a success,
+// with what its partialSuccess says the endpoint rejected; a 429, 502, 503
+// or 504 to retry; or a refusal, a redirect among them, not retried.
+func otlpAnswerOf(resp otlpResponse, logs bool) (otlpAnswer, error) {
 	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return otlpAnswer{partial: partialSuccessOf(answer, resp.Header.Get("Content-Type"), signal.logs)}, nil
-	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
-		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
-		return otlpAnswer{retryable: true, wait: retryAfter(resp.Header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
-	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		return otlpAnswer{}, &otlpRefusedError{status: resp.StatusCode, body: bodyExcerpt(answer), redirect: true, location: redirectHost(resp)}
+	case resp.status >= 200 && resp.status < 300:
+		return otlpAnswer{partial: partialSuccessOf(resp.body, resp.header.Get("Content-Type"), logs)}, nil
+	case resp.status == http.StatusTooManyRequests, resp.status == http.StatusBadGateway,
+		resp.status == http.StatusServiceUnavailable, resp.status == http.StatusGatewayTimeout:
+		return otlpAnswer{retryable: true, wait: retryAfter(resp.header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.status)
+	case resp.status >= 300 && resp.status < 400:
+		return otlpAnswer{}, &otlpRefusedError{status: resp.status, body: bodyExcerpt(resp.body), redirect: true, location: resp.location}
 	default:
-		return otlpAnswer{}, &otlpRefusedError{status: resp.StatusCode, body: bodyExcerpt(answer)}
+		return otlpAnswer{}, &otlpRefusedError{status: resp.status, body: bodyExcerpt(resp.body)}
 	}
 }
 
@@ -1040,7 +1093,38 @@ type otlpPointSources struct {
 	index  map[string]int
 	shapes []otlpShape
 	of     [][]int
+	// leftOut are the points the export leaves out for another written
+	// later, in the order they would have been made, which the debug page
+	// lists (debugotlp.go).
+	leftOut []otlpLeftOutPoint
 }
+
+// otlpLeftOutPoint is a point an export leaves out (otlpMetricsOf): of the
+// series'th series of the resource's set, which the exposition writes under
+// source, exported as name, of shape, with attributes; why says which rule
+// left it out.
+type otlpLeftOutPoint struct {
+	series       int
+	source, name string
+	shape        otlpShape
+	attributes   []otlpAttribute
+	why          otlpLeftOutReason
+}
+
+// otlpLeftOutReason is which of otlpMetricsOf's rules left a point out.
+type otlpLeftOutReason int
+
+const (
+	// otlpLeftOutKind: its name is exported as another kind or unit, that
+	// of the point of the name written last.
+	otlpLeftOutKind otlpLeftOutReason = iota
+	// otlpLeftOutName: its name is exported for another Prometheus name,
+	// under otlp.metric_names: otel.
+	otlpLeftOutName
+	// otlpLeftOutReplaced: a point of the same metric with the same
+	// attributes was written later.
+	otlpLeftOutReplaced
+)
 
 // add says that the next point made is of the series'th series, for the
 // metric of name and shape, found as otlpPoints finds it.
@@ -1076,6 +1160,8 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		name, source, identity string
 		shape                  otlpShape
 		written                int64
+		series                 int
+		attributes             []otlpAttribute
 	}
 	var points []point
 	otlpPoints(set, own, otel, now, nil, func(series int, source, name string, shape otlpShape, attributes []otlpAttribute) bool {
@@ -1083,7 +1169,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		if series < own {
 			written = resource.seqs[series]
 		}
-		points = append(points, point{name: name, source: source, identity: otlpPointIdentity(name, attributes), shape: shape, written: written})
+		points = append(points, point{name: name, source: source, identity: otlpPointIdentity(name, attributes), shape: shape, written: written, series: series, attributes: attributes})
 		return false
 	})
 	later := func(a, b int) bool {
@@ -1098,6 +1184,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		}
 	}
 	leftOut, some := make([]bool, len(points)), false
+	why := make([]otlpLeftOutReason, len(points))
 	latest := map[string]int{}
 	var clashes map[string]*otlpNameClash
 	clashOf := func(p *point) *otlpNameClash {
@@ -1116,7 +1203,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		p := &points[n]
 		kept := &points[last[p.name]]
 		if p.shape != kept.shape {
-			leftOut[n], some = true, true
+			leftOut[n], some, why[n] = true, true, otlpLeftOutKind
 			clash := clashOf(p)
 			if !slices.Contains(clash.leftOut, p.shape) {
 				clash.leftOut = append(clash.leftOut, p.shape)
@@ -1125,7 +1212,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 			continue
 		}
 		if p.source != kept.source {
-			leftOut[n], some = true, true
+			leftOut[n], some, why[n] = true, true, otlpLeftOutName
 			clash := clashOf(p)
 			if !slices.Contains(clash.leftOutSources, p.source) {
 				clash.leftOutSources = append(clash.leftOutSources, p.source)
@@ -1138,10 +1225,10 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		case !seen:
 			latest[p.identity] = n
 		case later(n, earlier):
-			leftOut[earlier], some = true, true
+			leftOut[earlier], some, why[earlier] = true, true, otlpLeftOutReplaced
 			latest[p.identity] = n
 		default:
-			leftOut[n], some = true, true
+			leftOut[n], some, why[n] = true, true, otlpLeftOutReplaced
 		}
 	}
 	if !some {
@@ -1150,6 +1237,12 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	n := 0
 	if sources != nil {
 		*sources = otlpPointSources{index: map[string]int{}}
+		for k := range points {
+			if leftOut[k] {
+				p := &points[k]
+				sources.leftOut = append(sources.leftOut, otlpLeftOutPoint{series: p.series, source: p.source, name: p.name, shape: p.shape, attributes: p.attributes, why: why[k]})
+			}
+		}
 	}
 	out, _ = otlpPoints(set, own, otel, now, start, func(series int, _, name string, shape otlpShape, _ []otlpAttribute) bool {
 		n++
@@ -1191,6 +1284,13 @@ var errOTLPNameClash = errors.New("two writers of one OTLP resource - probes, st
 // Prometheus names.
 var errOTLPNamesMerged = errors.New("otlp.metric_names: otel exports these Prometheus metric names of one OTLP resource under one name, and a name is one metric there, whose points of the two would be one stream where their labels are the same; rename one of the metrics, or export with otlp.metric_names: prometheus")
 
+// What is logged of a name exported as two kinds, and of one exported for
+// two Prometheus names, which the debug page says of the points left out.
+const (
+	otlpNameClashMessage   = "OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export"
+	otlpNamesMergedMessage = "OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export"
+)
+
 // logOTLPNameClashes logs each name of a resource that an export had as
 // two kinds, or for two Prometheus names, once and then as a repeat
 // (failureLog), whichever was written last at each export. The line shows
@@ -1199,25 +1299,56 @@ var errOTLPNamesMerged = errors.New("otlp.metric_names: otel exports these Prome
 func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
 	for _, clash := range clashes {
 		if len(clash.leftOutSources) > 0 {
-			names := make([]string, 0, len(clash.leftOutSources))
-			for _, source := range clash.leftOutSources {
-				names = append(names, model.ShownName(source))
-			}
 			s.failures.failed(s.logger, slog.LevelWarn, otlpNameMergeKey(resource, clash.name),
-				"OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export", "otlp", errOTLPNamesMerged,
-				"metric", model.ShownName(clash.name), "prometheus_name", model.ShownName(clash.source), "left_out_prometheus_name", strings.Join(names, ", "), "left_out_points", clash.sourcePoints, "service_name", identity.ServiceName)
+				otlpNamesMergedMessage, "otlp", errOTLPNamesMerged, append(otlpNamesMergedAttrs(clash), "service_name", identity.ServiceName)...)
 		}
 		if len(clash.leftOut) == 0 {
 			continue
 		}
-		kinds := make([]string, 0, len(clash.leftOut))
-		for _, shape := range clash.leftOut {
-			kinds = append(kinds, shape.String())
-		}
 		s.failures.failed(s.logger, slog.LevelWarn, otlpNameClashKey(resource, clash.name),
-			"OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export", "otlp", errOTLPNameClash,
-			"metric", model.ShownName(clash.name), "kind", clash.kept.String(), "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
+			otlpNameClashMessage, "otlp", errOTLPNameClash, append(otlpKindsClashAttrs(clash), "service_name", identity.ServiceName)...)
 	}
+}
+
+// otlpNamesMergedAttrs are the attributes the line of a name exported for
+// two Prometheus names has, but its resource's service name.
+func otlpNamesMergedAttrs(clash otlpNameClash) []any {
+	names := make([]string, 0, len(clash.leftOutSources))
+	for _, source := range clash.leftOutSources {
+		names = append(names, model.ShownName(source))
+	}
+	return []any{"metric", model.ShownName(clash.name), "prometheus_name", model.ShownName(clash.source), "left_out_prometheus_name", strings.Join(names, ", "), "left_out_points", clash.sourcePoints}
+}
+
+// otlpKindsClashAttrs are the attributes the line of a name exported as
+// two kinds has, but its resource's service name.
+func otlpKindsClashAttrs(clash otlpNameClash) []any {
+	kinds := make([]string, 0, len(clash.leftOut))
+	for _, shape := range clash.leftOut {
+		kinds = append(kinds, shape.String())
+	}
+	return []any{"metric", model.ShownName(clash.name), "kind", clash.kept.String(), "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points}
+}
+
+// otlpNameClashLines are the lines an export logs of a clash, as the debug
+// page shows them: the message, the attributes as key=value and the error.
+func otlpNameClashLines(clash otlpNameClash) []string {
+	line := func(message string, attrs []any, err error) string {
+		var b strings.Builder
+		b.WriteString(message)
+		for k := 0; k+1 < len(attrs); k += 2 {
+			fmt.Fprintf(&b, " %v=%v", attrs[k], attrs[k+1])
+		}
+		return b.String() + ": " + err.Error()
+	}
+	var lines []string
+	if len(clash.leftOutSources) > 0 {
+		lines = append(lines, line(otlpNamesMergedMessage, otlpNamesMergedAttrs(clash), errOTLPNamesMerged))
+	}
+	if len(clash.leftOut) > 0 {
+		lines = append(lines, line(otlpNameClashMessage, otlpKindsClashAttrs(clash), errOTLPNameClash))
+	}
+	return lines
 }
 
 // untypedFamilies are the names of the families of a set that have a series
@@ -1634,17 +1765,25 @@ func (s *Server) queueProbeOTLP(set model.MetricSet, c *model.Collector, target 
 		return
 	}
 	at := scraped(set, c, fetched)
-	if cfg.ProbeAttributes {
-		attributes := map[string]string{probeCollectorAttribute: c.Name}
-		if target != "" {
-			// The target is the probe's query's, and may be a part of the
-			// request's line, which a point waiting would keep whole: the
-			// probe's points share a copy of the target alone.
-			attributes[probeTargetAttribute] = strings.Clone(target)
-		}
-		set = withTargetLabels(set, attributes)
+	s.queueOTLPResource(otlpProbeSet(cfg, set, c, target), defaultResourceIdentity(cfg), at)
+}
+
+// otlpProbeSet is a probe's answer as it is exported: with collector and
+// target attributes on its series when otlp.probe_attributes says so, a
+// label of the series' own by either name kept. The debug page shows a
+// run's points made of it (debugotlp.go).
+func otlpProbeSet(cfg model.OTLPConfig, set model.MetricSet, c *model.Collector, target string) model.MetricSet {
+	if !cfg.ProbeAttributes {
+		return set
 	}
-	s.queueOTLPResource(set, defaultResourceIdentity(cfg), at)
+	attributes := map[string]string{probeCollectorAttribute: c.Name}
+	if target != "" {
+		// The target is the probe's query's, and may be a part of the
+		// request's line, which a point waiting would keep whole: the
+		// probe's points share a copy of the target alone.
+		attributes[probeTargetAttribute] = strings.Clone(target)
+	}
+	return withTargetLabels(set, attributes)
 }
 
 // queueOTLPResource stages metrics under a specific resource, so a static
@@ -1751,6 +1890,27 @@ func (s *Server) drainOTLP() []otlpResourceSet {
 	}
 	s.otlpPending = make(map[string]*otlpBatch)
 	s.otlpPoints = 0
+	return out
+}
+
+// otlpQueueOrder is the series of set as the queue would hold them, queued
+// one after another under one resource and drained: by their places in set,
+// each series once, its last point in set, in the order drainOTLP gives
+// them. The debug page shows a run's points in it (debugotlp.go), which the
+// export's checks of a resource's points depend on.
+func otlpQueueOrder(set model.MetricSet) []int {
+	pending := make(map[string]pendingMetric, len(set.Metrics))
+	place := make(map[string]int, len(set.Metrics))
+	for i := range set.Metrics {
+		key := otlpPendingKey(&set.Metrics[i])
+		pending[key] = pendingMetric{metric: set.Metrics[i], seq: int64(i)}
+		place[key] = i
+	}
+	keys := otlpPendingOrder(pending)
+	out := make([]int, len(keys))
+	for k, key := range keys {
+		out[k] = place[key]
+	}
 	return out
 }
 

@@ -155,6 +155,9 @@ type probeTrace struct {
 	// derivedAbsent are the operands of each derived entry that had no
 	// series (transform.RuleReport.DerivedAbsent).
 	derivedAbsent map[string][]string
+	// otlpRecords are the run's log lines as OTLP log records, for a run
+	// of the debug page while the log export is on; nil otherwise.
+	otlpRecords *debugLogRecords
 }
 
 // sentResponse is a copy of a response as it was fetched, for a report to
@@ -192,8 +195,15 @@ type probeTraceKey struct{}
 // newProbeTrace returns a trace, and a context carrying it and the request
 // trace it reads the requests from.
 func newProbeTrace(ctx context.Context) (context.Context, *probeTrace) {
-	t := &probeTrace{}
-	t.logger = slog.New(slog.NewTextHandler(lockedWriter{t}, &slog.HandlerOptions{
+	return newProbeTraceOf(ctx, nil)
+}
+
+// newProbeTraceOf is newProbeTrace whose log, when records is given, also
+// makes each line the OTLP log record the log export would make of it, for
+// the debug page's OTLP tab (debugotlp.go).
+func newProbeTraceOf(ctx context.Context, records *debugLogRecords) (context.Context, *probeTrace) {
+	t := &probeTrace{otlpRecords: records}
+	var handler slog.Handler = slog.NewTextHandler(lockedWriter{t}, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) == 0 && a.Key == slog.TimeKey {
@@ -201,7 +211,11 @@ func newProbeTrace(ctx context.Context) (context.Context, *probeTrace) {
 			}
 			return a
 		},
-	}))
+	})
+	if records != nil {
+		handler = &otlpLogHandler{run: records, base: handler}
+	}
+	t.logger = slog.New(handler)
 	ctx, t.requests = fetch.WithRequestTrace(ctx)
 	ctx = transform.WithRuleLogger(ctx, t.logger)
 	return context.WithValue(ctx, probeTraceKey{}, t), t
@@ -421,7 +435,11 @@ func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	// of failure_backoff's; its report only says whether the probes and
 	// scrapes it stands for would have.
 	p.backingOff = s.backoffs.describe(p.collector.Name, p.backoffKey)
-	ctx, trace := newProbeTrace(ctx)
+	var records *debugLogRecords
+	if p.kind == debugKindPage && otlpLogsOn(s.manager.Get().OTLP) {
+		records = &debugLogRecords{}
+	}
+	ctx, trace := newProbeTraceOf(ctx, records)
 	if p.budget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.budget)

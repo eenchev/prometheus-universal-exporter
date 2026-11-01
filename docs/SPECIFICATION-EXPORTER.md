@@ -8121,8 +8121,9 @@ Recommended behavior:
   and its value MUST NOT appear on the page. With `--web.debug` at `edit` or
   `full`, and only then, each collector MUST link the debug page (§ 42.17)
   as `debug?collector=<name>`, and at `full` the link MUST carry the target
-  entered in the form as `target`; no form MUST ask `/probe` for a debug
-  report.
+  entered in the form as `target`, as the form holds it when the link is
+  followed: a target cleared since the link was last followed MUST NOT be
+  carried; no form MUST ask `/probe` for a debug report.
 - `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
   which its runs post to, and `/debug/collector`, which shows it a
   configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
@@ -32056,8 +32057,10 @@ then one of the OTLP export. Of the static targets:
   backdrop, MUST give focus back to the control that opened it, and MUST say
   the time its text is of. It MUST have no heading, its label naming the
   kind of text it holds (`The whole error`) for a screen reader. No refresh MUST swap the content while the
-  dialog is open; closing it MUST resume the refresh, at once if one fell
-  due. `?format=fragment` MUST have the `<details>` and no dialog, and the
+  dialog is open, one whose answer comes while it is open included: that
+  answer MUST be held and swapped in when the dialog closes, after focus is
+  given back, the control in its opener's place then taking focus; closing
+  it MUST resume the refresh, at once if one fell due. `?format=fragment` MUST have the `<details>` and no dialog, and the
   JSON MUST be as it is, every value whole.
 - Controls on one line MUST line up: the Refresh button, the auto-refresh
   selector and its label MUST be centred on one line at one height; on the
@@ -33478,8 +33481,8 @@ read (its default decoder, a `sql` collector's rows, the JSON document of
 the types that make one), and the keys naming files that a request of its
 type needs (an `sshfile` or `sshexec` collector's `known_hosts_file` and key
 or password, a `kubernetes` collector's credential beside `api_server`, the
-password files of an `ldap` `bind_dn` and a `redis` `username`) MUST NOT be
-required of it.
+password files of an `ldap` `bind_dn` and a `redis` `username`, a `grpc`
+collector's `protoset_file` or `proto_files`) MUST NOT be required of it.
 
 `--web.debug.dangerous`, a boolean flag off by default, MUST be a
 command-line error (exit 2, before `--dry-run` or startup) unless
@@ -33530,8 +33533,14 @@ credential: a scalar value whose key reads as a credential's, by the rule above 
 but where a login's answer holds its token and how it authenticates, and a
 redis key — MUST be shown as `<redacted>`, and so MUST every value of a key
 ending in `_file` or `_files`; a URL's userinfo and the values of its query
-parameters whose names read as credentials MUST be withheld, and a header's
-value in which text reads as a credential; a Python script MUST be shown
+parameters whose names read as credentials MUST be withheld; every other
+string of the request block — a header's or a query parameter's value, an
+`http` body, a `grpc` message, a `tcp` send, a `redis` command's argument,
+a `sql` statement or argument — in which text reads as a credential, by the
+rule that masks text the exporter did not write, or that writes a text
+protocol's login command (`AUTH`, `PASS` or `APOP` at the start of a line,
+in any case), MUST be shown as `<redacted>` whole, in the copy too, a folded
+block scalar among them then on one line; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
 copy of the YAML shown, which then runs, and MUST remember, through edits
@@ -33541,7 +33550,10 @@ key ending in `_file` or `_files` but `max_files`, at any depth of the
 request's mappings, and `login` — each replaced by a YAML comment, where its
 line was, that names it and says why it was dropped, and a mapping left
 with nothing MUST be left out with it, its comment naming each of its keys,
-so that a copy of a collector without Python loads as a playground; the
+so that a copy of a collector without Python loads as a playground; a
+mapping written in flow style (`tls: {ca_file: …, server_name: …}`) that
+loses a key, and each mapping that holds it, MUST be written in block
+style, so that every comment has a line of its own; the
 page MUST say above the editor which keys the copy left out, and, for a
 collector that runs Python, that a run of the copy is refused until the
 script is taken out. With `--web.debug.dangerous` the copy MUST keep a
@@ -33549,7 +33561,10 @@ script is taken out. With `--web.debug.dangerous` the copy MUST keep a
 whose paths the page withholds, each comment saying to write the path in its
 place. `/debug/collector` MUST answer the copy as `copy` and the note as
 `copy_note`, and the page opened on a configured collector MUST hold them
-for *Edit a copy*.
+for *Edit a copy*. *Edit a copy* MUST be disabled while the collector's YAML
+is being read and after a read of it failed, when the editor holds what the
+page says of it, and MUST copy nothing but the copy `/debug/collector`
+answered.
 
 The editor MUST number its lines in a gutter beside it, for a configured
 collector's YAML and for the playground alike, each number level with its
@@ -33566,7 +33581,7 @@ selection is on; Esc, then Tab, MUST leave the editor, and a read-only
 editor MUST take Tab as any field does. Ctrl+Enter and Cmd+Enter MUST run
 from anywhere on the page, the editors and fields included, as *Run* does,
 which MUST say so in its title, its `aria-keyshortcuts` and a hint beside
-it; Enter with either in a parameter's value MUST NOT add a row.
+it, centred level with *Run* and the timeout's box; Enter with either in a parameter's value MUST NOT add a row.
 The page MUST open with the example playground, an `http` collector,
 whatever was written or copied on it before: it MUST NOT keep the
 playground, the body or the collector copied from in the browser. While
@@ -33713,7 +33728,10 @@ that names its own, and each filled parameter row, a repeated
 MUST carry `debug=true`. The command MUST be `curl -s` and the URL in single
 quotes, a single quote in it written `'\''`. The `scrape_config` MUST be the
 multi-target job of `docs/LOCALFILE.md`: `job_name` the collector's name,
-`metrics_path` the URL's path, `scheme: https` when the page is served over
+`metrics_path` the URL's path as it reads, its percent-escapes decoded,
+since Prometheus escapes the path itself (a prefix `/my%20pfx` MUST be
+written `/my pfx`; a path whose escapes decode to no text MUST be written as
+it stands), `scheme: https` when the page is served over
 HTTPS, `params` of `collector` and each parameter with its values in the
 order of the rows, and, for a collector that takes a target, the target in
 `static_configs`, moved by `relabel_configs` into `__param_target` and

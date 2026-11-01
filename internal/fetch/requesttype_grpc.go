@@ -313,10 +313,13 @@ func validateDescriptorKeys(x *model.Collector) error {
 	if (len(r.ProtoFiles) > 0 || len(r.ProtoImportPaths) > 0) && r.Descriptors != descriptorsProto {
 		return fmt.Errorf("collector %q sets request.proto_files or proto_import_paths, which apply only with descriptors: proto", x.Name)
 	}
-	if r.Descriptors == descriptorsProtoset && strings.TrimSpace(r.ProtosetFile) == "" {
+	// The files are required of a request that is made; the debug page's
+	// playground never makes one, and its Edit a copy leaves out the paths
+	// the page does not show (model.Collector.RequestNotMade).
+	if r.Descriptors == descriptorsProtoset && strings.TrimSpace(r.ProtosetFile) == "" && !x.RequestNotMade {
 		return fmt.Errorf("collector %q has descriptors: protoset but no request.protoset_file; name the FileDescriptorSet that protoc --descriptor_set_out --include_imports or buf build -o writes", x.Name)
 	}
-	if r.Descriptors == descriptorsProto && len(r.ProtoFiles) == 0 {
+	if r.Descriptors == descriptorsProto && len(r.ProtoFiles) == 0 && !x.RequestNotMade {
 		return fmt.Errorf("collector %q has descriptors: proto but no request.proto_files; list the .proto files that define %s", x.Name, service)
 	}
 	for i, file := range r.ProtoFiles {

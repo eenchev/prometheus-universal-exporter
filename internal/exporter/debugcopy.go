@@ -72,6 +72,9 @@ func (d *copyDrops) dropFrom(n *yaml.Node) {
 			d.dropped, _ = d.dropIn(n.Content[i+1], "")
 		}
 	}
+	if len(d.dropped) > 0 {
+		n.Style &^= yaml.FlowStyle
+	}
 }
 
 // refused says whether the playground refuses the key at path under
@@ -132,6 +135,13 @@ func (d *copyDrops) dropIn(n *yaml.Node, path string) ([]string, bool) {
 		}
 	}
 	n.Content = kept
+	if len(dropped) > 0 {
+		// A droppedKey's comments go on lines of their own, which a mapping
+		// written in flow style, {ca_file: …, server_name: …}, has none of:
+		// the stand-in would be left in it. The mappings it stands in, n and
+		// those that hold n, are written in block style.
+		n.Style &^= yaml.FlowStyle
+	}
 	return dropped, left == 0 && len(dropped) > 0
 }
 

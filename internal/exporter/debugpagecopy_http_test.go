@@ -64,7 +64,9 @@ func TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig(t *testing.T) {
 		// The job: docs/LOCALFILE.md's multi-target pattern.
 		`const lines = ["scrape_configs:", "  - job_name: " + yamlQuoted(collector)];`,
 		`if (url.protocol === "https:") lines.push("    scheme: https");`,
-		`lines.push("    metrics_path: " + yamlQuoted(url.pathname), "    params:");`,
+		// metrics_path as the path reads, which Prometheus escapes itself.
+		`lines.push("    metrics_path: " + yamlQuoted(decodedPath(url.pathname)), "    params:");`,
+		`try { return decodeURIComponent(path); } catch (error) { return path; }`,
 		`const listed = new Map([["collector", [collector]]]);`,
 		`lines.push("      " + yamlKey(name) + ": [" + values.map(yamlQuoted).join(", ") + "]");`,
 		`"      - source_labels: [__address__]", "        target_label: __param_target",`,

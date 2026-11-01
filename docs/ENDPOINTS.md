@@ -69,8 +69,9 @@ with *Show all* under it, so one long error does not make its table as tall
 as the text. *Show all* opens the whole text in a box over the page, with
 the time it is of, *Copy* where the browser allows it, and *Close*; Esc or a
 click beside the box closes it too. The page is not refreshed while the box
-is open, so the text does not change under you; it refreshes when the box
-closes, at once if a refresh fell due meanwhile. Without JavaScript *Show
+is open, so the text does not change under you: a refresh already on its
+way when the box opened is shown only when it closes. It refreshes when the
+box closes, at once if a refresh fell due meanwhile. Without JavaScript *Show
 all* opens the whole text in place. The JSON has every value whole.
 
 ### Refreshing

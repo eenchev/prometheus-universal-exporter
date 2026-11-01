@@ -88,3 +88,29 @@ func TestTheDebugPageShowsFoldedBlocksAsWritten(t *testing.T) {
 		t.Errorf("read again, the statement is %q, want %q", a, b)
 	}
 }
+
+// A statement, written as a folded block, and an argument that hold a
+// credential are withheld whole, the statement no longer shown over its
+// lines.
+func TestTheDebugPageWithholdsAStatementHoldingACredential(t *testing.T) {
+	requireFreeTextWithheld(t, `  - name: statement
+    request:
+      type: sql
+      driver: postgres
+      username: monitor
+      statement: >-
+        SELECT count(*) FROM sessions
+        WHERE token = 'Bearer s3cret-statement'
+    transform: {type: csv}
+    metrics: [{name: sessions, expression: count}]
+  - name: args
+    request:
+      type: sql
+      driver: postgres
+      username: monitor
+      statement: SELECT count(*) FROM sessions WHERE note = $1
+      args: ['password=s3cret-arg']
+    transform: {type: csv}
+    metrics: [{name: sessions, expression: count}]
+`)
+}

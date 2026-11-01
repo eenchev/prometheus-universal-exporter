@@ -494,10 +494,27 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
   const dataClock = () => clock(Date.parse(dataAt) || refreshedAt);
   asOf();
   state.textContent = "As of " + dataClock();
+  // A swap takes away what had focus in the content, such as a long text's
+  // control the dialog gave focus back to; the control at the same place in
+  // the new content takes it.
+  function swap(fragment) {
+    const summaries = () => [...content.querySelectorAll("details.long > summary")];
+    const focused = summaries().indexOf(document.activeElement);
+    content.innerHTML = fragment;
+    if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
+    refreshedAt = Date.now();
+    state.className = "muted";
+    asOf();
+    state.textContent = "As of " + dataClock();
+  }
+  // held is a fragment fetched while the dialog was open, swapped in when
+  // it closes: the content does not change under the dialog, nor is the
+  // control that opened it taken away while it is open.
+  let held = null;
   async function refresh() {
     // A refresh still waiting for its answer is not overlapped: a tick
-    // that finds one is skipped. Nor is the content swapped while the
-    // dialog shows a text of it: its close refreshes, if a tick fell due.
+    // that finds one is skipped. Nor is one started while the dialog shows
+    // a text of the content: its close refreshes, if a tick fell due.
     if (inFlight || whole.open) return;
     inFlight = true;
     const url = new URL(location.href);
@@ -506,17 +523,10 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
     try {
       const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
       if (!response.ok) throw new Error("HTTP " + response.status);
-      // A swap takes away what had focus in the content, such as a long
-      // text's control the dialog gave focus back to; the control at the
-      // same place in the new content takes it.
-      const summaries = () => [...content.querySelectorAll("details.long > summary")];
-      const focused = summaries().indexOf(document.activeElement);
-      content.innerHTML = await response.text();
-      if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
-      refreshedAt = Date.now();
-      state.className = "muted";
-      asOf();
-      state.textContent = "As of " + dataClock();
+      const fragment = await response.text();
+      // The dialog may have opened while the answer was on its way.
+      if (whole.open) held = fragment;
+      else swap(fragment);
     } catch (error) {
       // The last data stays, and the state says how old it is.
       state.className = "bad";
@@ -583,11 +593,17 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
       copy.textContent = "Copy failed";
     }
   });
-  // Esc closes the dialog too. Focus goes back to what opened it, and the
-  // refresh held while it was open resumes.
+  // Esc closes the dialog too. Focus goes back to what opened it, a
+  // fragment fetched while it was open is swapped in, focus going to the
+  // control in the opener's place, and the refresh held resumes.
   whole.addEventListener("close", () => {
     if (opener && opener.isConnected) opener.focus();
     opener = null;
+    if (held !== null) {
+      const fragment = held;
+      held = null;
+      swap(fragment);
+    }
     schedule();
   });
 })();

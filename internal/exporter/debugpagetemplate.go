@@ -118,7 +118,9 @@ textarea[readonly] { background: var(--code); }
 .editor textarea { position: relative; display: block; min-height: 360px; padding: var(--editor-pad) 8px; border: 0; border-radius: 0; background: transparent; line-height: var(--editor-line); white-space: pre; overflow-wrap: normal; overflow: auto; }
 .editor textarea:focus { outline: none; }
 .editor-hint { margin: 4px 0 0; }
-.actions .run-hint { flex: 0 1 auto; align-self: center; margin: 0; }
+/* Level with Run and the timeout's box, at the foot of the row, and not
+   with the row's middle, which the timeout's label above its box lowers. */
+.actions .run-hint { flex: 0 1 auto; align-self: flex-end; display: flex; align-items: center; min-height: 36px; margin: 0; }
 pre button.line-link { padding: 0; margin: 0; border: 0; background: transparent; color: var(--bad); font: inherit; text-decoration: underline; cursor: pointer; }
 .collector-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
 .collector-head label { flex: 1 1 200px; }
@@ -893,6 +895,10 @@ async function showCollector() {
   $("copy-note").textContent = copyNote;
   $("copy-note").hidden = name !== "" || copiedFrom === "" || copyNote === "";
   $("edit-copy").hidden = name === "";
+  // Edit a copy copies the collector's YAML, which a collector still being
+  // read, or one that could not be, has none of: the editor's text is then
+  // what the page says of it, no collector to copy.
+  $("edit-copy").disabled = name !== "" && !configuredYAML.has(name);
   $("back-to-example").hidden = name !== "" || copiedFrom === "";
   $("collector-note").hidden = name === "";
   $("collector-label").textContent = name !== "" ? "The configuration of " + name + ", which runs as configured (read-only)"
@@ -920,7 +926,9 @@ async function showCollector() {
   } catch (error) {
     text = "# The configuration could not be read: " + error.message;
   }
-  if ($("configured").value === name) setEditor(text);
+  if ($("configured").value !== name) return;
+  setEditor(text);
+  $("edit-copy").disabled = !configuredYAML.has(name);
 }
 // Copy as gives what the page's form asks for as it is asked of the exporter
 // outside the page: the /probe URL, a curl command for it, a Prometheus job
@@ -973,13 +981,20 @@ function copier(box, texts) {
   }
   return refresh;
 }
+// metrics_path is written as the path reads, not as the page's URL escapes
+// it: Prometheus escapes the path itself, so a proxy's prefix /my%20pfx
+// would be scraped as /my%2520pfx. A path the browser left with an escape
+// that decodes to no text is written as it stands.
+const decodedPath = (path) => {
+  try { return decodeURIComponent(path); } catch (error) { return path; }
+};
 // The Prometheus job is the multi-target pattern of docs/LOCALFILE.md: the
 // target is the job's, moved into the target parameter and instance, and
 // the exporter, as this page reached it, is what is scraped.
 function scrapeConfigOf(collector, target, given, url) {
   const lines = ["scrape_configs:", "  - job_name: " + yamlQuoted(collector)];
   if (url.protocol === "https:") lines.push("    scheme: https");
-  lines.push("    metrics_path: " + yamlQuoted(url.pathname), "    params:");
+  lines.push("    metrics_path: " + yamlQuoted(decodedPath(url.pathname)), "    params:");
   const listed = new Map([["collector", [collector]]]);
   for (const [name, value] of given) {
     if (listed.has(name)) listed.get(name).push(value);
@@ -1058,8 +1073,9 @@ $("collector").addEventListener("input", () => {
 // above the editor says what it left out (debugcopy.go).
 $("edit-copy").addEventListener("click", () => {
   const shown = configuredYAML.get($("configured").value);
-  written = shown && shown.copy ? shown.copy : $("collector").value;
-  copyNote = shown ? shown.note : "";
+  if (!shown) return;
+  written = shown.copy || shown.yaml;
+  copyNote = shown.note;
   writtenType = requestTypeOf(written);
   copiedFrom = $("configured").value;
   $("configured").value = "";

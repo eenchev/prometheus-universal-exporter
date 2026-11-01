@@ -180,6 +180,30 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- The debug page no longer shows a credential written in free text of a
+  configured collector's request, in its view or in *Edit a copy*: an `http`
+  body, a `grpc` message, a `tcp` send (`AUTH …`, `PASS …`), a `redis`
+  command's argument, a `sql` statement or argument, a query parameter's
+  value, a folded block among them, is shown `<redacted>` whole when
+  something in it reads as a credential.
+- *Edit a copy* of a collector whose `tls` or other block is written on one
+  line (`tls: {ca_file: /etc/ca.pem, server_name: api}`) loads: the comment
+  for the dropped file stands on a line of its own, where a stand-in key was
+  left that the playground refused.
+- *Edit a copy* of a `grpc` collector with `descriptors: proto` or
+  `protoset` loads: the playground, which makes no request, no longer asks
+  for the `proto_files` or `protoset_file` the copy leaves out.
+- *Edit a copy* is disabled until the collector's YAML is read, so it no
+  longer copies the page's `Reading the configuration…` line or an error.
+- *Copy as* *scrape_config* writes `metrics_path` as the path reads
+  (`/my pfx/probe`), which Prometheus escapes once, not escaped twice.
+- The status page no longer swaps its content under the long-text box when
+  a refresh already on its way answers while the box is open; the answer is
+  shown when it closes, and focus goes back to *Show all*.
+- The collectors page's *Debug* link no longer keeps a target cleared from
+  the form since it was last followed.
+- The debug page's `Ctrl+Enter runs` hint is level with *Run* and the
+  timeout's box.
 - The debug page asks for what the chosen collector's request type takes,
   not for an HTTP target: the target as the type names it, with an example
   of its forms (`SSH host`, `host or host:22`; `Name to resolve`,

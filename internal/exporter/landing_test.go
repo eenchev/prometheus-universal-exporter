@@ -241,7 +241,8 @@ func TestThePagesWorkUnderAPathPrefix(t *testing.T) {
 }
 
 // With --web.debug on each collector links the debug page with its name,
-// and at full the link carries the form's target; with debugging off there
+// and at full the link carries the form's target as it stands when the link
+// is followed; with debugging off there
 // is no link. No form asks /probe for a debug report: the debug page shows
 // the trip.
 func TestTheCollectorsPageLinksEachCollectorIntoTheDebugPage(t *testing.T) {
@@ -254,7 +255,10 @@ func TestTheCollectorsPageLinksEachCollectorIntoTheDebugPage(t *testing.T) {
 	requireContains(t, page, `<a class="debug" href="debug?collector=weather">Debug</a>`, "Debugging is on at <code>edit</code>")
 	server.SetDebug(DebugFull)
 	page = getPage(t, server, "/collectors")
-	requireContains(t, page, `<a class="debug" href="debug?collector=weather" data-with-target>Debug</a>`, `link.searchParams.set("target", target)`)
+	requireContains(t, page, `<a class="debug" href="debug?collector=weather" data-with-target>Debug</a>`, `link.searchParams.set("target", target)`,
+		// Built from the link served each time, so a target cleared is not
+		// carried from the last time it was followed.
+		`debug.dataset.href = debug.getAttribute("href");`, `const link = new URL(debug.dataset.href, document.baseURI);`)
 	if strings.Contains(page, `name="debug"`) {
 		t.Error("a form asks /probe for a debug report")
 	}

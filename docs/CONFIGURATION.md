@@ -5374,7 +5374,8 @@ pressed, and at no other time: not after an edit, and never when it opens,
 where the collector and the target its address names are filled in and wait
 for *Run*, since a link on any page can name them. The landing page
 links it, and `/collectors` links each collector into it, the collector
-chosen and, at `full`, with the target entered in the collector's form.
+chosen and, at `full`, with the target the collector's form holds when the
+link is followed.
 
 The collector run is one of two:
 
@@ -5388,8 +5389,8 @@ The collector run is one of two:
   request type the build has, its `request.type` saying only how its answer
   is read — its decoder, a `sql` collector's rows, the JSON document a
   `tlscert` handshake is made into — and the keys a request needs to be
-  made, such as an `sshfile` collector's `known_hosts_file`, are not
-  required of it. It takes no
+  made, such as an `sshfile` collector's `known_hosts_file` or a `grpc`
+  collector's `proto_files`, are not required of it. It takes no
   [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
   a file, and refused here as `collectors` is, while a configured collector
   runs with the keys it took from its file's.
@@ -5419,7 +5420,14 @@ in its place, read-only, since it runs as configured:
   a debug report withholds a header by — is shown as `<redacted>`, and so
   is every path a `*_file` key names, which no page shows; a URL's userinfo
   and the values of its query parameters named like credentials are
-  withheld. A Python script is shown as written, but for what reads as a
+  withheld. Any other text of the request — a header's or a query
+  parameter's value, an `http` body, a `grpc` message, a `tcp` send, a
+  `redis` command's argument, a `sql` statement — is shown `<redacted>`
+  whole when something in it reads as a credential, by the rule an error's
+  text is masked by (`"password": "…"`, `token=…`, `Bearer …`, a URL's
+  userinfo), or when one of its lines logs in to a text protocol (`AUTH …`,
+  `PASS …`, `APOP …`); a folded block among them is then shown on one line.
+  A Python script is shown as written, but for what reads as a
   credential in it, which is masked as an error's text is; keep a script's
   credentials in a file it reads.
 
@@ -5431,8 +5439,10 @@ playground would refuse: every key of the request ending in `_file` or
 says what was dropped and why,
 `# tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)`,
 and a block left with nothing, such as a `tls:` that held only `ca_file`,
-with it, so that the copy loads; a note above the editor lists what was left
-out. A target probed, or a static target scraped, through the collector it
+with it, so that the copy loads; a block written in flow style,
+`tls: {ca_file: /etc/ca.pem, server_name: api.example}`, is written out one
+key to a line for its comment to have a line of its own. A note above the
+editor lists what was left out. A target probed, or a static target scraped, through the collector it
 was copied from is still fetched with them. In [dangerous debug
 mode](#dangerous-debug-mode) a `login` is kept, but the paths, which the
 page withholds, are dropped all the same, each comment saying to write the
@@ -5443,7 +5453,9 @@ or written again. A copy of a collector of any request type
 runs: a `tlscert` collector's copy reads a pasted handshake, or what
 `tls_cert` answers when a target is probed or a static target scraped
 through it. The page remembers the collector the playground was copied
-from, through edits, while it is open, and fetches a target through it;
+from, through edits, while it is open, and fetches a target through it.
+*Edit a copy* waits for the collector's YAML: it is disabled while the page
+reads it, and stays so when it could not be read;
 *Back to the example*, shown while the playground is a copy, puts the
 example back.
 
@@ -5586,7 +5598,9 @@ as the target and the rows change:
   multi-target job of [the `localfile` page](LOCALFILE.md#scraping-with-prometheus): the
   parameters under `params`, the target moved into the `target` parameter
   and `instance`, and the exporter scraped at the host and port the page was
-  opened at — inside a cluster, use its service's address instead. A
+  opened at — inside a cluster, use its service's address instead. Its
+  `metrics_path` is the path as it reads, `/my pfx/probe` behind a prefix
+  with a space, not `/my%20pfx/probe`: Prometheus escapes the path itself. A
   collector that names its own target, such as a `kubernetes` collector, is
   given the exporter as the job's target and no `target` parameter. Every
   value is a single-quoted YAML scalar.

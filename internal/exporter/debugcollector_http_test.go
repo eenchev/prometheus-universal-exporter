@@ -270,3 +270,52 @@ func TestTheDebugCollectorPathIsReserved(t *testing.T) {
 		t.Errorf("--web.self-metrics-path %s was accepted", debugCollectorPath)
 	}
 }
+
+// A credential in a request value that is free text, whatever its key is
+// named, withholds the value whole, in the configured view and in Edit a
+// copy: a body, one written as a folded block over several lines, which is
+// then no longer shown over them, and a query parameter's value; a body
+// that holds none is shown as written.
+func TestTheDebugPageWithholdsFreeTextHoldingACredential(t *testing.T) {
+	requireFreeTextWithheld(t, `  - name: body
+    request:
+      type: http
+      method: POST
+      body: '{"user": "u", "password": "s3cret-body"}'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: folded
+    request:
+      type: http
+      method: POST
+      body: >-
+        {"user": "u",
+        "password": "s3cret-folded"}
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: query
+    request:
+      type: http
+      query:
+        q: 'Bearer s3cret-query'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+`)
+	cfg, err := config.Load(testutil.WriteFile(t, "plain.yaml", `collectors:
+  - name: plain
+    request:
+      type: http
+      method: POST
+      body: '{"user": "u", "room": "kitchen"}'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, err := shownCollectorYAML(&cfg.Collectors[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, shown, `body: '{"user": "u", "room": "kitchen"}'`)
+}

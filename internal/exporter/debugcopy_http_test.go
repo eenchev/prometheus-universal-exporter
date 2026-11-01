@@ -89,8 +89,13 @@ transform: {type: jq}
 	requireContains(t, script,
 		`copy: $("collector").dataset.copy, note: $("collector").dataset.copyNote || ""`,
 		`copy: answer.copy || answer.yaml, note: answer.copy_note || ""`,
-		`written = shown && shown.copy ? shown.copy : $("collector").value;`,
-		`copyNote = shown ? shown.note : "";`,
+		`if (!shown) return;`,
+		`written = shown.copy || shown.yaml;`,
+		// Edit a copy waits for the collector's YAML: the editor holds what
+		// the page says of it while it is read, or when it could not be.
+		`$("edit-copy").disabled = name !== "" && !configuredYAML.has(name);`,
+		"if ($(\"configured\").value !== name) return;\n  setEditor(text);\n  $(\"edit-copy\").disabled = !configuredYAML.has(name);",
+		`copyNote = shown.note;`,
 		`$("copy-note").hidden = name !== "" || copiedFrom === "" || copyNote === "";`)
 	requireContains(t, page, `<p class="note" id="copy-note" role="status" hidden></p>`)
 
@@ -116,5 +121,43 @@ transform: {type: jq}
 	}
 	if answer := getCollectorYAML(t, server, "scripted", 200); answer.CopyNote != "" {
 		t.Errorf("dangerous: a copy with Python is noted %q", answer.CopyNote)
+	}
+}
+
+// A key dropped from a mapping written in flow style, in a request written
+// in flow style too, leaves its comment on a line of its own, the mappings
+// that held it then written in block style, and the copy loads as a
+// playground.
+func TestEditACopyOfAFlowMappingWritesItsComments(t *testing.T) {
+	ca := testutil.WriteFile(t, "ca.pem", "x\n")
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: kept
+    request:
+      type: http
+      tls: {ca_file: `+ca+`, server_name: api.example}
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: emptied
+    request: {type: http, tls: {ca_file: `+ca+`}}
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{
+		"request:\n  type: http\n  tls:\n    # ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)\n    server_name: api.example\ntransform: {type: jq}\n",
+		"request:\n  type: http\n  # tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)\ntransform: {type: jq}\n",
+	} {
+		copied, _, err := copiedCollectorYAML(&cfg.Collectors[i], false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(copied, want) || strings.Contains(copied, droppedKey) {
+			t.Errorf("the copy is\n%s\nwant it to hold\n%s", copied, want)
+		}
+		if _, err := config.ParseCollector([]byte(copied), refusedOnDebugPage); err != nil {
+			t.Errorf("the copy does not load as a playground: %v\n%s", err, copied)
+		}
 	}
 }

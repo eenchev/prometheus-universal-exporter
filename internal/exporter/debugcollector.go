@@ -49,6 +49,13 @@ var notCredentials = map[string]bool{
 // urlValue is a value written as an absolute URL.
 var urlValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 
+// commandCredential is a line of a text protocol that logs in, which a tcp
+// collector's send may write: AUTH of Redis, Memcached's SASL and SMTP,
+// PASS and APOP of POP3 and FTP. What follows the command is a credential
+// whatever it looks like, which fetch.RedactText, reading names and values,
+// cannot tell.
+var commandCredential = regexp.MustCompile(`(?im)^[ \t]*(?:auth|pass|apop)[ \t]+\S`)
+
 // debugCollectorAnswer is what debugCollectorPath answers: the collector's
 // name and YAML, and the keys it took from its file's defaults; or Error.
 type debugCollectorAnswer struct {
@@ -301,6 +308,10 @@ func copyNode(n *yaml.Node) *yaml.Node {
 func withhold(n *yaml.Node, path string) {
 	if n.Kind == yaml.SequenceNode {
 		for _, item := range n.Content {
+			if inRequest(path) && freeTextCredential(item) {
+				withheldValue(item)
+				continue
+			}
 			withhold(item, path)
 		}
 		return
@@ -331,10 +342,33 @@ func withhold(n *yaml.Node, path string) {
 			}
 		case value.Kind == yaml.ScalarNode && value.ShortTag() == "!!str" && urlValue.MatchString(value.Value):
 			value.Value = shownURL(value.Value)
+		case inRequest(at) && freeTextCredential(value):
+			withheldValue(value)
 		default:
 			withhold(value, at)
 		}
 	}
+}
+
+// inRequest says whether the key at path is one of the collector's request
+// block.
+func inRequest(path string) bool {
+	return path == "request" || strings.HasPrefix(path, "request.")
+}
+
+// freeTextCredential says whether n, a string of the request block whose
+// key does not read as a credential's, such as an http body, a grpc
+// message, a tcp send, a redis command's argument or a SQL statement, holds
+// what reads as one: what fetch.RedactText masks, as it masks a Python
+// script's, or a protocol's login command (commandCredential). Such a value
+// is withheld whole, not masked where it reads as one, since a credential
+// in free text may not look like one to the rule: a body that writes
+// password=hunter2 may write the same password elsewhere in it.
+func freeTextCredential(n *yaml.Node) bool {
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
+		return false
+	}
+	return fetch.RedactText(n.Value) != n.Value || commandCredential.MatchString(n.Value)
 }
 
 // withholdAll withholds every value n holds.

@@ -96,8 +96,9 @@ func TestTheStatusPagesDialogIsOutsideTheSwappedContent(t *testing.T) {
 
 // The page's script opens a long text by a listener on the content element,
 // which a refresh keeps, copies the text with textContent, never parsing it,
-// skips a refresh while the dialog is open, resumes when it closes, and
-// gives focus back to the control that opened it.
+// skips a refresh while the dialog is open, holds the answer of one that
+// was on its way when it opened, swapping it in only when it closes, resumes
+// when it closes, and gives focus back to the control that opened it.
 func TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh(t *testing.T) {
 	server, _ := longErrorServer(t)
 	page := getPage(t, server, "/static-targets/status")
@@ -112,20 +113,25 @@ func TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh(t *testing.T) {
 		`whole.showModal();`,
 		`if (inFlight || whole.open) return;`,
 		`whole.addEventListener("click", (event) => { if (event.target === whole) whole.close(); });`,
-		`if (opener && opener.isConnected) opener.focus();`)
+		`if (opener && opener.isConnected) opener.focus();`,
+		"if (whole.open) held = fragment;\n      else swap(fragment);")
 	_, closing, _ := strings.Cut(script, `whole.addEventListener("close"`)
-	closing, _, _ = strings.Cut(closing, "});")
+	closing, _, _ = strings.Cut(closing, "\n  });")
 	if !strings.Contains(closing, "schedule();") {
 		t.Errorf("closing the dialog does not resume the refresh:\n%s", closing)
 	}
+	if focus, swapped := strings.Index(closing, "opener.focus();"), strings.Index(closing, "swap(fragment);"); swapped < 0 || focus > swapped || !strings.Contains(closing, "held = null;") {
+		t.Errorf("closing the dialog does not swap in the fragment held, after focus is back on its opener:\n%s", closing)
+	}
 	// The one innerHTML is the swap of the fragment the exporter rendered.
-	if n := regexp.MustCompile(`innerHTML`).FindAllStringIndex(script, -1); len(n) != 1 || !strings.Contains(script, "content.innerHTML = await response.text();") {
+	if n := regexp.MustCompile(`innerHTML`).FindAllStringIndex(script, -1); len(n) != 1 || !strings.Contains(script, "content.innerHTML = fragment;") {
 		t.Errorf("the script sets innerHTML other than to swap the fragment:\n%s", script)
 	}
 }
 
 // Controls on one line line up: the debug page's Run button and its timeout
 // box have one height and their bottoms aligned under the box's label, the
+// hint beside Run centred on them, the
 // fields of a row on the debug and collectors pages align at their bottoms
 // when a label wraps, and the status page's Refresh button, auto-refresh
 // choice and its label are centred on one line at one height.
@@ -136,6 +142,9 @@ func TestThePagesControlsOnOneLineLineUp(t *testing.T) {
 	requireContains(t, debug,
 		".actions { display: flex; align-items: flex-end;",
 		".actions button, .actions input { height: 36px; }",
+		// The hint beside Run, level with Run and the box, not with the
+		// middle of the row the box's label makes taller.
+		".actions .run-hint { flex: 0 1 auto; align-self: flex-end; display: flex; align-items: center; min-height: 36px; margin: 0; }",
 		".row { display: flex; align-items: flex-end;")
 	requireContains(t, getPage(t, server, "/collectors"), ".row { display: flex; align-items: flex-end;")
 	requireContains(t, getPage(t, server, "/static-targets/status"),

@@ -56,7 +56,7 @@ func TestHistogramsAreExportedAsOTLPHistograms(t *testing.T) {
 				t.Fatalf("not a histogram: %+v", out)
 			}
 			h := out[0].Histogram
-			if h.AggregationTemporality != "AGGREGATION_TEMPORALITY_CUMULATIVE" || len(h.DataPoints) != 1 {
+			if h.AggregationTemporality != 2 || len(h.DataPoints) != 1 {
 				t.Fatalf("histogram %+v", h)
 			}
 			point := h.DataPoints[0]

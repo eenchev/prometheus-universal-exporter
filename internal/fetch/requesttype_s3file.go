@@ -266,9 +266,10 @@ func s3Display(target string) string {
 	return strings.TrimSpace(target)
 }
 
-// s3URL is the s3:// URL of a key in a bucket.
+// s3URL is the s3:// URL of a key in a bucket, the key escaped as a URL's
+// path is (pathURL).
 func s3URL(bucket, key string) string {
-	return "s3://" + bucket + "/" + key
+	return pathURL("s3", bucket, "/"+key)
 }
 
 // s3NoFile is the error of a read that names no file.

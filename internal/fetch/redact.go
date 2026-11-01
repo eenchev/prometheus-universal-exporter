@@ -19,7 +19,9 @@ import (
 //     with the rest where the URL is cut down (RedactURL).
 //   - What happens to a URL's query depends on where it is shown: dropped
 //     from a metric label's URL, which Prometheus keeps; every value masked
-//     in a debug report and an error; and, where a target is shown — in a
+//     in an error, and in a debug report's request lines every value but
+//     those the collector's configuration set (RedactRequestURL); and,
+//     where a target is shown — in a
 //     log line, the static targets endpoint's target label, an OTLP target
 //     attribute — the values of parameters whose names read as credentials
 //     masked, so that targets that differ in anything else stay apart
@@ -126,6 +128,15 @@ func RedactURLString(raw string, how URLRedaction) string {
 // was written too (credentialQueryName), so %74oken=SECRET is masked as
 // token=SECRET is; it is shown as written.
 func maskQuery(raw string, all bool) string {
+	return maskQueryShowing(raw, all, nil)
+}
+
+// maskQueryShowing is maskQuery, but that with all set the value of a pair
+// that shown says the request's configuration set (RedactRequestURL) is
+// shown, when the pair stands between two & alone, with no ; that a server
+// could split it at, its name reads as no credential's and its escapes
+// decode: shown is asked of the name and the value as a server reads them.
+func maskQueryShowing(raw string, all bool, shown func(name, value string) bool) string {
 	if raw == "" {
 		return ""
 	}
@@ -133,8 +144,9 @@ func maskQuery(raw string, all bool) string {
 	b.Grow(len(raw))
 	// masked says a value has been masked since the last &, and wholeName
 	// that the name a server splitting at & alone reads there, which ends at
-	// the first = after that &, is a credential's.
-	masked, wholeName := false, credentialUpToEquals(raw)
+	// the first = after that &, is a credential's; alone, that no ; is
+	// between that & and the next.
+	masked, wholeName, alone := false, credentialUpToEquals(raw), aloneUpToAmpersand(raw)
 	for len(raw) > 0 {
 		piece, separator := raw, ""
 		if end := strings.IndexAny(raw, "&;"); end >= 0 {
@@ -142,10 +154,12 @@ func maskQuery(raw string, all bool) string {
 		}
 		raw = raw[len(piece)+len(separator):]
 		name, _, hasValue := strings.Cut(piece, "=")
+		// With all, a value is masked unless the configuration set it.
+		allMasked := all && (!alone || !configuredPair(name, strings.TrimPrefix(piece, name+"="), shown))
 		switch {
 		// The first piece with a = after an & holds the = that ends the
 		// whole name, so wholeName is asked of that piece's value.
-		case hasValue && (all || masked || wholeName || credentialQueryName(name)):
+		case hasValue && (allMasked || masked || wholeName || credentialQueryName(name)):
 			b.WriteString(name)
 			b.WriteString("=" + Redacted)
 			masked = true
@@ -156,10 +170,56 @@ func maskQuery(raw string, all bool) string {
 		}
 		b.WriteString(separator)
 		if separator == "&" {
-			masked, wholeName = false, credentialUpToEquals(raw)
+			masked, wholeName, alone = false, credentialUpToEquals(raw), aloneUpToAmpersand(raw)
 		}
 	}
 	return b.String()
+}
+
+// aloneUpToAmpersand says whether what a query holds up to its first & has
+// no ;, which a server could split a pair at.
+func aloneUpToAmpersand(raw string) bool {
+	if end := strings.IndexByte(raw, '&'); end >= 0 {
+		raw = raw[:end]
+	}
+	return !strings.Contains(raw, ";")
+}
+
+// configuredPair says whether shown says a pair, as it was written in the
+// query, is one the request's configuration set: its name and its value
+// decoded as a server reads them. A pair whose escapes do not decode is
+// not.
+func configuredPair(name, value string, shown func(name, value string) bool) bool {
+	if shown == nil {
+		return false
+	}
+	n, err := url.QueryUnescape(name)
+	if err != nil {
+		return false
+	}
+	v, err := url.QueryUnescape(value)
+	return err == nil && shown(n, v)
+}
+
+// RedactRequestURL is a request's URL as a debug report's request line shows
+// it: as RedactURLString with MaskQueryValues shows it, but for the values
+// of the query pairs configured says the request's configuration set
+// (ConfiguredQuery), which are shown as they were sent. A pair a probe
+// parameter, a placeholder or the target gave keeps its value masked, and
+// so does one whose name reads as a credential's; the userinfo is withheld
+// and the fragment dropped as ever.
+func RedactRequestURL(raw string, configured func(name, value string) bool) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return Redacted
+	}
+	shown := *u
+	shown.RawQuery = maskQueryShowing(u.RawQuery, true, configured)
+	shown.Fragment, shown.RawFragment = "", ""
+	if shown.User != nil {
+		shown.User = redactedUser
+	}
+	return shown.String()
 }
 
 // credentialUpToEquals says whether what a query holds before its first =,

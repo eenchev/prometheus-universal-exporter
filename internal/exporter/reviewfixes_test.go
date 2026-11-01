@@ -116,7 +116,7 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				continue
 			}
 			if key == "-" {
-				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" && name != "RequestNotMade" && name != "FromDefaults" && name != "Written" {
+				if name := prefix + field.Name; name != "LabelParams" && name != "DescriptorFilesUnread" && name != "RequestNotMade" && name != "FromDefaults" && name != "Written" && name != "WrittenBlocks" {
 					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
 				}
 				continue

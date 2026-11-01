@@ -122,7 +122,10 @@ func newFailureLog() *failureLog {
 //   - a static target's metric left out of the static targets endpoint
 //     (staticClashKey): the target's name and the metric's;
 //   - a metric name the OTLP export had as two kinds under one resource
-//     (otlpNameClashKey): the resource's key and the name.
+//     (otlpNameClashKey): the resource's key and the name;
+//   - a metric name the OTLP export had for two Prometheus names under one
+//     resource (otlpNameMergeKey): the resource's key, the name and a third
+//     part, which tells it from the name's clash of kinds.
 //   - the exporter's own Basic Auth credential that cannot be read
 //     (webAuthKey), which has no parts: there is one.
 //
@@ -247,6 +250,14 @@ func staticClashKey(target, metric string) subjectKey {
 // forgets it.
 func otlpNameClashKey(resource, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric)}
+}
+
+// otlpNameMergeKey is the key of the metric name that an OTLP export had
+// for two Prometheus names under the resource whose key is resource
+// (otlpMetricsOf), as otlpNameClashKey is, with a third part: the name's
+// clash of kinds is another subject, which may be logged beside it.
+func otlpNameMergeKey(resource, metric string) subjectKey {
+	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric, "names")}
 }
 
 // webAuthKey is the key of the exporter's own web.basic_auth credential that

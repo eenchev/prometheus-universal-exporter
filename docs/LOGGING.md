@@ -170,10 +170,12 @@ a name is as long as the target or a script made it; and the `metric` and
 `clashes_with` of `static target metric left out of the static targets
 endpoint`, the `metric` of `static target metric back on the static targets
 endpoint` and the `metric` of `OTLP metric name written as two kinds under
-one resource`, whose names are as long as a raised
+one resource`, and the `metric`, `prometheus_name` and
+`left_out_prometheus_name` of `OTLP metric name written for two Prometheus
+metric names under one resource`, whose names are as long as a raised
 `limits.max_metric_name_length` lets them be. The cut changes nothing of what
 is one failure: the warning of repaired UTF-8 is one failing thing per
-collector, target and file whatever its first metric, and the other two are
+collector, target and file whatever its first metric, and the others are
 remembered under the whole name, so two long names that start alike are
 logged apart. The other attributes that come from outside the exporter are
 bounded where they come in: a probe's `target` by the 8 KiB a probe
@@ -287,7 +289,13 @@ written as two kinds under one resource; the data points of the kind written
 earlier are left out of the export`, with the `metric`, the `kind` exported,
 the `left_out_kind` and its `left_out_points`, and the resource's
 `service_name`; it is one failing thing per resource and name whichever kind
-is written last, and has no line for its end: see
+is written last, and has no line for its end), and to a name that
+`otlp.metric_names: otel` exports for two Prometheus names (`OTLP metric name
+written for two Prometheus metric names under one resource; the data points
+of the name written earlier are left out of the export`, with the `metric`,
+the `prometheus_name` exported, the `left_out_prometheus_name` and its
+`left_out_points`, and the `service_name`; one failing thing per resource and
+name apart from that of kinds: see
 [Two writers of one series or one name](OTLP.md#two-writers-of-one-series-or-one-name)). Up to 10,000
 failing things are remembered at a time, and one not reported for an hour is
 forgotten: the same failure later is logged as new, and its recovery after

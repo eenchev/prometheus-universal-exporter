@@ -5374,7 +5374,8 @@ pressed, and at no other time: not after an edit, and never when it opens,
 where the collector and the target its address names are filled in and wait
 for *Run*, since a link on any page can name them. The landing page
 links it, and `/collectors` links each collector into it, the collector
-chosen and, at `full`, with the target entered in the collector's form.
+chosen and, at `full`, with the target the collector's form holds when the
+link is followed.
 
 The collector run is one of two:
 
@@ -5388,8 +5389,8 @@ The collector run is one of two:
   request type the build has, its `request.type` saying only how its answer
   is read — its decoder, a `sql` collector's rows, the JSON document a
   `tlscert` handshake is made into — and the keys a request needs to be
-  made, such as an `sshfile` collector's `known_hosts_file`, are not
-  required of it. It takes no
+  made, such as an `sshfile` collector's `known_hosts_file` or a `grpc`
+  collector's `proto_files`, are not required of it. It takes no
   [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
   a file, and refused here as `collectors` is, while a configured collector
   runs with the keys it took from its file's.
@@ -5408,29 +5409,67 @@ in its place, read-only, since it runs as configured:
 - **As its file writes it**: its keys in the order the file has them, its
   `${NAME}` references as written, not what they expand to, the keys an
   anchor or a merge key (`<<`) gives it written out, as the loader reads
-  them, and the file's comments left out. The keys it takes from its file's
-  [defaults](#defaults-for-the-collectors-of-a-file) are added where it
-  would write them, each marked `# from the file's defaults`.
+  them, and the file's comments left out. A folded block scalar, such as a
+  `statement: >-` of several lines, is shown with the lines the file writes
+  it over, not folded into one, as a literal one (`|`) is. The keys it takes
+  from its file's [defaults](#defaults-for-the-collectors-of-a-file) are
+  added where it would write them, each marked `# from the file's defaults`.
 - **Without its credentials**, at `edit` as at `full`: a value whose key
   reads as a credential's — `bearer_token`, `basic_auth`'s `password`, a
   header, a query parameter or a login field named like one, by the rule
   a debug report withholds a header by — is shown as `<redacted>`, and so
   is every path a `*_file` key names, which no page shows; a URL's userinfo
   and the values of its query parameters named like credentials are
-  withheld. A Python script is shown as written, but for what reads as a
+  withheld. Any other text of the request — a header's or a query
+  parameter's value, an `http` body, a `grpc` message, a `tcp` send, a
+  `redis` command's argument, a `sql` statement — is shown `<redacted>`
+  whole when something in it reads as a credential, by the rule an error's
+  text is masked by (`"password": "…"`, `token=…`, `Bearer …`, a URL's
+  userinfo), or when one of its lines logs in to a text protocol (`AUTH …`,
+  `PASS …`, `APOP …`); a folded block among them is then shown on one line.
+  A Python script is shown as written, but for what reads as a
   credential in it, which is masked as an error's text is; keep a script's
   credentials in a file it reads.
 
 *Edit a copy* makes the playground a copy of that YAML, which then runs in
-its place, under the rules for the playground: what was withheld has to be
-left out or written again, and a collector with Python or with a file is
-refused as any playground is. A copy of a collector of any request type
+its place, under the rules for the playground. The copy leaves out what the
+playground would refuse: every key of the request ending in `_file` or
+`_files` (`tls.ca_file`, `password_file`, `bearer_token_file`,
+`known_hosts_file`, …) and a `login`, each line replaced by a comment that
+says what was dropped and why,
+`# tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)`,
+and a block left with nothing, such as a `tls:` that held only `ca_file`,
+with it, so that the copy loads; a block written in flow style,
+`tls: {ca_file: /etc/ca.pem, server_name: api.example}`, is written out one
+key to a line for its comment to have a line of its own. A note above the
+editor lists what was left out. A target probed, or a static target scraped, through the collector it
+was copied from is still fetched with them. In [dangerous debug
+mode](#dangerous-debug-mode) a `login` is kept, but the paths, which the
+page withholds, are dropped all the same, each comment saying to write the
+path in its place. Python is left in: the note says that a run of the copy
+is refused until the script is taken out, as for any playground, but in
+dangerous debug mode. Any other value shown `<redacted>` has to be left out
+or written again. A copy of a collector of any request type
 runs: a `tlscert` collector's copy reads a pasted handshake, or what
 `tls_cert` answers when a target is probed or a static target scraped
 through it. The page remembers the collector the playground was copied
-from, through edits, while it is open, and fetches a target through it;
+from, through edits, while it is open, and fetches a target through it.
+*Edit a copy* waits for the collector's YAML: it is disabled while the page
+reads it, and stays so when it could not be read;
 *Back to the example*, shown while the playground is a copy, puts the
 example back.
+
+The editor numbers its lines in a gutter beside the text, for the YAML of a
+configured collector as for the playground. It does not wrap: a long line,
+such as a statement, scrolls sideways, and the numbers stay beside their
+lines however the text is scrolled. When a run of the playground is refused
+with a mistake on a line — `line 7: unknown key "bogus" in a metric rule` —
+each line the error names is marked, in the gutter and by a band behind it,
+and `line 7` in the error is a link that selects that line in the editor;
+the marks go with the next edit. In the playground Tab indents by two
+spaces, or indents the lines selected, and Shift+Tab outdents them; to leave
+the editor with the keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on
+a Mac, runs from anywhere on the page, as *Run* does.
 
 It reads one of three responses:
 
@@ -5559,7 +5598,9 @@ as the target and the rows change:
   multi-target job of [the `localfile` page](LOCALFILE.md#scraping-with-prometheus): the
   parameters under `params`, the target moved into the `target` parameter
   and `instance`, and the exporter scraped at the host and port the page was
-  opened at — inside a cluster, use its service's address instead. A
+  opened at — inside a cluster, use its service's address instead. Its
+  `metrics_path` is the path as it reads, `/my pfx/probe` behind a prefix
+  with a space, not `/my%20pfx/probe`: Prometheus escapes the path itself. A
   collector that names its own target, such as a `kubernetes` collector, is
   given the exporter as the job's target and no `target` parameter. Every
   value is a single-quoted YAML scalar.
@@ -5745,7 +5786,7 @@ Took 184ms. A probe would have answered 502: metric queue_len failed: ...
 A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.
 
 Requests
-  1. GET https://api.example.com/v1/status?tenant=<redacted> -> 200 OK in 162ms
+  1. GET https://api.example.com/v1/status?tenant=<redacted>&view=full -> 200 OK in 162ms
      Accept: application/json
      Authorization: <redacted>
 
@@ -5918,10 +5959,20 @@ Below `--web.debug=full`, `debug=true` is answered `403`, before the target
 is contacted. When `web.basic_auth` is configured, a debug probe needs the
 same credentials as a probe. The report, and the page's JSON alike, redacts:
 
-- every query value, in the requests listed and in the errors that quote a
-  URL alike. The query is otherwise shown as it was sent: each pair where it
-  stood and as it was written, a pair with a `;` or a malformed escape
-  included ([how a query is masked](LOGGING.md#repeated-failures));
+- every query value in the errors that quote a URL, and in the requests
+  listed every one but those the collector's configuration sets as its file
+  writes them: a value of `request.query` without a placeholder, as `view=full`
+  above, a `graphite` collector's expressions without placeholders, `from`,
+  `until` and `format=json`, and a `kubernetes` listing's `limit` and
+  selectors. A value a probe parameter or a placeholder gives, as
+  `tenant={{param_tenant}}` above, one a `${NAME}` reference expanded to,
+  which is the environment's, the target's own query, a static target's
+  own keys, the API server's `continue` token and the value of any parameter
+  whose name reads as a credential's (below) stay masked, and so does a
+  pair next to a `;`, which a server may split. The query is otherwise
+  shown as it was sent: each pair where it stood and as it was written, a
+  pair with a `;` or a malformed escape included
+  ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
   credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): any
@@ -5987,8 +6038,12 @@ prometheus-universal-exporter --healthcheck --web.listen-address=:8080
 prometheus-universal-exporter --healthcheck=health --web.listen-address=:8080
 ```
 
-A listen address with no host, or with `0.0.0.0`, is asked on `127.0.0.1`,
-and `[::]` on `[::1]`; a name or a particular address is asked as it is.
+A listen address with no host, or with a wildcard (`0.0.0.0`, `[::]` or
+`[::ffff:0.0.0.0]`), is asked on `127.0.0.1`: the exporter's `[::]` listener
+answers IPv4 too, and listens on IPv4 alone on a host without IPv6, where
+`[::1]` could not be reached. A name or a particular address is asked as it
+is, an IPv6 zone included (`[fe80::1%eth0]:8080`), and a named port such as
+`:http` by its number.
 The check gives up after 5 seconds. It starts no server, reads no file and
 loads no configuration, so it takes a few milliseconds. The other flags are
 checked as at a start, so the container's own arguments can be given with

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -48,11 +49,23 @@ var notCredentials = map[string]bool{
 // urlValue is a value written as an absolute URL.
 var urlValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 
+// commandCredential is a line of a text protocol that logs in, which a tcp
+// collector's send may write: AUTH of Redis, Memcached's SASL and SMTP,
+// PASS and APOP of POP3 and FTP. What follows the command is a credential
+// whatever it looks like, which fetch.RedactText, reading names and values,
+// cannot tell.
+var commandCredential = regexp.MustCompile(`(?im)^[ \t]*(?:auth|pass|apop)[ \t]+\S`)
+
 // debugCollectorAnswer is what debugCollectorPath answers: the collector's
 // name and YAML, and the keys it took from its file's defaults; or Error.
 type debugCollectorAnswer struct {
-	Name         string   `json:"name,omitempty"`
-	YAML         string   `json:"yaml,omitempty"`
+	Name string `json:"name,omitempty"`
+	YAML string `json:"yaml,omitempty"`
+	// Copy is the YAML Edit a copy puts in the playground, and CopyNote
+	// what the page says above it of what the copy left out
+	// (copiedCollectorYAML).
+	Copy         string   `json:"copy,omitempty"`
+	CopyNote     string   `json:"copy_note,omitempty"`
 	FromDefaults []string `json:"from_defaults,omitempty"`
 	// StaticTargets are the static targets scraped through the collector,
 	// at full alone, where the page scrapes them: empty, not left out, when
@@ -96,6 +109,12 @@ func debugStaticTargets(followed *followedConfig, name string) []debugStaticTarg
 
 // shownCollectorYAML is the configured collector x as the page shows it.
 func shownCollectorYAML(x *model.Collector) (string, error) {
+	return collectorYAML(x, nil)
+}
+
+// collectorYAML is x as the page shows it, and, with drops set, as Edit a
+// copy copies it, the keys the playground refuses dropped (copyDrops).
+func collectorYAML(x *model.Collector, drops *copyDrops) (string, error) {
 	var n *yaml.Node
 	if x.Written != nil {
 		n = copyNode(x.Written)
@@ -105,7 +124,13 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 			return "", err
 		}
 	}
+	// Told before withhold, which may change a scalar's style.
+	folded := foldedScalars(n, nil)
 	withhold(n, "")
+	blocks := writtenBlocks(x, folded)
+	if drops != nil {
+		drops.dropFrom(n)
+	}
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
@@ -115,7 +140,107 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 	if err := enc.Close(); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	text := blocks.Replace(b.String())
+	if drops != nil {
+		text = drops.Replace(text)
+	}
+	return text, nil
+}
+
+// shownBlock stands in, as a plain scalar, for a folded block scalar of the
+// collector's while it is encoded, and is then replaced with the block as
+// its file writes it.
+const shownBlock = "pue-written-block-"
+
+// foldedScalars appends to out the folded block scalars of n, depth first,
+// the order model.Collector.WrittenBlocks has them in.
+func foldedScalars(n *yaml.Node, out []*yaml.Node) []*yaml.Node {
+	if n.Kind == yaml.ScalarNode && n.Style&yaml.FoldedStyle != 0 {
+		return append(out, n)
+	}
+	for _, child := range n.Content {
+		out = foldedScalars(child, out)
+	}
+	return out
+}
+
+// writtenBlocks puts shownBlock<i> in place of each folded block scalar of
+// the collector, folded, that its file writes over several lines
+// (model.Collector.WrittenBlocks), and gives what writes the blocks in
+// their place once the YAML is encoded. The encoder writes a folded scalar
+// on one line, however long, as its value has it; a SQL statement of four
+// lines would run off the editor. Only a block whose lines still read as
+// the value shown, which the withholding has not changed, is written as
+// its file writes it.
+func writtenBlocks(x *model.Collector, folded []*yaml.Node) blockLines {
+	var out blockLines
+	if x.Written == nil || len(folded) != len(x.WrittenBlocks) {
+		return nil
+	}
+	for i, block := range x.WrittenBlocks {
+		n := folded[i]
+		if n.Style&yaml.FoldedStyle == 0 || len(block.Lines) == 0 || !blockReads(block, n.Value) {
+			continue
+		}
+		n.Value, n.Style, n.Tag = shownBlock+strconv.Itoa(len(out)), 0, "!!str"
+		out = append(out, block)
+	}
+	return out
+}
+
+// blockReads says whether block, written under a key, reads as value.
+func blockReads(block model.WrittenBlock, value string) bool {
+	var b strings.Builder
+	fmt.Fprintf(&b, "v: %s\n", block.Header)
+	for _, line := range block.Lines {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	var read struct{ V *string }
+	return yaml.Unmarshal([]byte(b.String()), &read) == nil && read.V != nil && *read.V == value
+}
+
+// blockLines are the folded block scalars writtenBlocks stood shownBlock<i>
+// in for, by i.
+type blockLines []model.WrittenBlock
+
+// Replace writes each block in place of its shownBlock<i> in text, the YAML
+// encoded, its lines indented two spaces beyond its key's, or beyond its
+// dash's for an entry of a list.
+func (blocks blockLines) Replace(text string) string {
+	if len(blocks) == 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// The value of a key, or an entry of a list, then perhaps a comment.
+		at := strings.Index(line, shownBlock)
+		if at < 0 || !strings.HasSuffix(line[:at], ": ") && !strings.HasSuffix(line[:at], "- ") {
+			out = append(out, line)
+			continue
+		}
+		rest := line[at+len(shownBlock):]
+		digits := len(rest) - len(strings.TrimLeft(rest, "0123456789"))
+		i, err := strconv.Atoi(rest[:digits])
+		if err != nil || i >= len(blocks) || rest[digits:] != "" && !strings.HasPrefix(rest[digits:], " #") {
+			out = append(out, line)
+			continue
+		}
+		// Where the key starts, past the indentation and any dashes.
+		start := len(line) - len(strings.TrimLeft(line, " "))
+		for strings.HasPrefix(line[start:], "- ") {
+			start = len(line) - len(strings.TrimLeft(line[start+1:], " "))
+		}
+		out = append(out, line[:at]+blocks[i].Header+rest[digits:])
+		for _, written := range blocks[i].Lines {
+			if written == "" {
+				out = append(out, "")
+				continue
+			}
+			out = append(out, strings.Repeat(" ", start+2)+written)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // heldCollector is x as the exporter holds it, with the keys that hold
@@ -183,6 +308,10 @@ func copyNode(n *yaml.Node) *yaml.Node {
 func withhold(n *yaml.Node, path string) {
 	if n.Kind == yaml.SequenceNode {
 		for _, item := range n.Content {
+			if inRequest(path) && freeTextCredential(item) {
+				withheldValue(item)
+				continue
+			}
 			withhold(item, path)
 		}
 		return
@@ -213,10 +342,33 @@ func withhold(n *yaml.Node, path string) {
 			}
 		case value.Kind == yaml.ScalarNode && value.ShortTag() == "!!str" && urlValue.MatchString(value.Value):
 			value.Value = shownURL(value.Value)
+		case inRequest(at) && freeTextCredential(value):
+			withheldValue(value)
 		default:
 			withhold(value, at)
 		}
 	}
+}
+
+// inRequest says whether the key at path is one of the collector's request
+// block.
+func inRequest(path string) bool {
+	return path == "request" || strings.HasPrefix(path, "request.")
+}
+
+// freeTextCredential says whether n, a string of the request block whose
+// key does not read as a credential's, such as an http body, a grpc
+// message, a tcp send, a redis command's argument or a SQL statement, holds
+// what reads as one: what fetch.RedactText masks, as it masks a Python
+// script's, or a protocol's login command (commandCredential). Such a value
+// is withheld whole, not masked where it reads as one, since a credential
+// in free text may not look like one to the rule: a body that writes
+// password=hunter2 may write the same password elsewhere in it.
+func freeTextCredential(n *yaml.Node) bool {
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
+		return false
+	}
+	return fetch.RedactText(n.Value) != n.Value || commandCredential.MatchString(n.Value)
 }
 
 // withholdAll withholds every value n holds.
@@ -288,8 +440,14 @@ func (s *Server) debugCollectorHandler(w http.ResponseWriter, r *http.Request) {
 		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
 		return
 	}
+	copied, note, err := copiedCollectorYAML(x, s.playgroundUnbound())
+	if err != nil {
+		s.logger.Error("copying a collector on the debug page failed", "collector", name, "error", err)
+		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
+		return
+	}
 	form := debugFormOf(x)
-	a := debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults, Form: &form}
+	a := debugCollectorAnswer{Name: x.Name, YAML: shown, Copy: copied, CopyNote: note, FromDefaults: x.FromDefaults, Form: &form}
 	if s.debug == DebugFull {
 		// The page offers them when this collector is chosen or the
 		// playground is a copy of it, read at each change of collector, so

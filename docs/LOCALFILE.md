@@ -417,7 +417,8 @@ file over the size limit counts in `http_exporter_series_limit_exceeded_total`.
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics),
 a file read is labelled with its `file://` URL, path parameters kept as their
 placeholders, and `http_method="READ"`; a directory read with the directory's
-URL, ending in `/`:
+URL, ending in `/`. The path is escaped as a URL's is, a space as `%20`, and
+so is the `READ` line of a debug report:
 
 ```text
 http_exporter_scrapes_total{collector="textfile",http_method="READ",url="file:///var/lib/node_exporter/textfile_collector/batch.prom"} 12

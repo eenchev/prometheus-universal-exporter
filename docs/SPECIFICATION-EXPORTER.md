@@ -1297,7 +1297,9 @@ such.
 It MUST accept these `/probe` parameters: `path`, `timeout` and
 `param_<name>`. A static target using a `localfile` collector MAY set
 `path` and `timeout`. Its verbose self-metrics MUST carry the file's `file://`
-URL, with path parameters as their placeholders, as `url`, and `READ` as
+URL, its path escaped as a URL's path is (a space as `%20`, a `?` as `%3F`, a
+`#` as `%23`), with path parameters as their placeholders, as `url`, and a
+debug report's request line MUST show that URL; `READ` MUST be
 `http_method`, so they are never mistaken for the per-collector series, which
 carry no method.
 
@@ -1842,7 +1844,8 @@ the same response. Its keys:
   replaces the collector's. These MUST enter its cache key in a section a
   probe's key never has.
 - A debug probe's request section MUST show each read: `READ`, the host and
-  the file or directory as `sftp://host:port/path`, the user, and whether the
+  the file or directory as `sftp://host:port/path`, the path escaped as a
+  URL's path is, as `localfile`'s is, the user, and whether the
   connection was made for the probe or kept from an earlier scrape, and no
   credential. The verbose `url` label MUST be that URL, with path parameters
   as their placeholders, ending in `/` for a directory, and `http_method`
@@ -2210,7 +2213,8 @@ of objects, one a row, of its columns by name. Its keys:
   named after the failure unless the caller's text names it.
 - A failed statement MUST be reported in the `sql` stage, naming the server.
   A debug probe's request section MUST show `QUERY`,
-  `driver://host:port/database` (the service for `oracle`), the account,
+  `driver://host:port/database` (the service for `oracle`), the database
+  escaped as a URL's path is, as `localfile`'s file is, the account,
   whether the connection was new or kept, and the number of bound values,
   and never a credential, a bound value or the statement's text; the
   outcome MUST name the rows and the columns. The verbose `url` label MUST
@@ -2506,7 +2510,8 @@ carries it. Its keys:
   follow MUST fail the read saying so.
 - An object's response MUST be `localfile`'s, with `ETag`, the object's
   entity tag, among its headers. A debug probe's request section MUST show
-  `READ` and the object's `s3://bucket/key` URL, or the prefix's ending in
+  `READ` and the object's `s3://bucket/key` URL, the key escaped as a URL's
+  path is, as `localfile`'s file is, or the prefix's ending in
   `/`, and never a credential; the verbose `url` label MUST be that URL,
   path parameters as their placeholders, and `http_method` MUST be `READ`.
 - A static target MAY set `path` and `timeout`, the path held to the rules
@@ -3594,7 +3599,9 @@ a metric in an attribute whose name the target or a script chose — the
 set is validated, when the name is as long as the response; the `metric` and
 the `clashes_with` of a static target's metric left out of the static targets
 endpoint and the `metric` of its return (§ 42.14a); the `metric` of a name an
-OTLP export had as two kinds (§ 42.1), whose names are as long as a raised
+OTLP export had as two kinds, and the `metric`, `prometheus_name` and
+`left_out_prometheus_name` of one it had for two Prometheus names (§ 42.1),
+whose names are as long as a raised
 `limits.max_metric_name_length` lets them be — MUST show a name longer than
 200 bytes by its first 200 bytes, the cut between two characters, followed by
 `... (N bytes)` with the length of the whole name, as the error shows it
@@ -8116,8 +8123,9 @@ Recommended behavior:
   and its value MUST NOT appear on the page. With `--web.debug` at `edit` or
   `full`, and only then, each collector MUST link the debug page (§ 42.17)
   as `debug?collector=<name>`, and at `full` the link MUST carry the target
-  entered in the form as `target`; no form MUST ask `/probe` for a debug
-  report.
+  entered in the form as `target`, as the form holds it when the link is
+  followed: a target cleared since the link was last followed MUST NOT be
+  carried; no form MUST ask `/probe` for a debug report.
 - `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
   which its runs post to, and `/debug/collector`, which shows it a
   configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
@@ -10147,8 +10155,10 @@ answers `200` and 1 otherwise: another status, a redirect, which it MUST NOT
 follow, a refused connection, or no answer within 5 seconds. On failure it
 MUST write one JSON line to stderr naming the URL and the status with the
 answer's body on one line, or the error. A listen address with an empty host
-or an IPv4 wildcard MUST be asked on `127.0.0.1`, the IPv6 wildcard on `::1`,
-and any other host as written. It MUST NOT bind the listen address, read the
+or a wildcard, IPv4, IPv6 or IPv4-mapped, MUST be asked on `127.0.0.1`, which
+a `[::]` listener answers too and which works on a host without IPv6, and any
+other host as written, with an IPv6 zone escaped in the URL as `%25`; a named
+port MUST be asked by its number. It MUST NOT bind the listen address, read the
 configuration or static target files, start any loop, or send credentials,
 since § 23's endpoints are never authenticated, and MUST NOT use a proxy from
 the environment. A value other than `ready` or `health` MUST be a
@@ -29657,6 +29667,76 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestOutOfRangeLimitsAreCommandLineErrors` (root package, changed): `--python.max-idle-workers=-1` and `--python.idle-timeout` of `999ms`, `0s` and `-1m` exit 2 with their messages, with and without `--dry-run`.
 - `TestPythonWorkersThatDiedIdleAreReplaced`, `TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt`, `TestPythonWorkersAreCappedProcessWide` and `TestARunCountsInTheStatisticsItsTripCarries` (changed): each sets the idle workers it needs kept, which the default of 1 no longer keeps.
 
+## 34.249 The debug page's editor, the configured values a debug report shows, block scalars as written, escaped file URLs, and a copy without the server's files
+
+- `TestALocalfileLabelIsAnEscapedFileURL`: a localfile collector whose root is `…/Claude outputs` reading `a b#1?.prom` is labelled `file://…/Claude%20outputs/a%20b%231%3F.prom`, and one reading `{{param_job}} now.prom` keeps the placeholder and escapes the space.
+- `TestAnSSHFileLabelIsAnEscapedURL`: an sshfile collector reading `my app.prom` is labelled, and its read traced, as `sftp://host:port/…/my%20app.prom`.
+- `TestAnS3FileLabelIsAnEscapedURL`: an s3file collector reading `my app.prom` under `exports/app` is labelled `s3://metrics/exports/app/my%20app.prom`.
+- `TestASQLLabelEscapesTheDatabase`: a sql collector of the database `my app_{{param_tenant}}` is labelled `sqlserver://db.example:1433/my%20app_{{param_tenant}}`.
+- `TestALocalfileRequestLineIsAnEscapedFileURL`: a configured localfile collector under `…/Claude outputs` run on `my app.prom` from the debug page lists its request as `READ file://…/Claude%20outputs/my%20app.prom`, and its report and a debug probe's report have that line.
+- `TestTheDebugPageShowsFoldedBlocksAsWritten`: `/debug/collector?name=pg_databases` and `/debug?collector=pg_databases` show a `statement: >-` written over two lines as `>-` over those two lines, a metric's `description: >` with a blank and a more indented line keeps both, and a `description: |` its lines; no stand-in is left in it, and the YAML read again as a collector, the withheld line left out, has the file's statement and descriptions.
+- `TestARequestLineShowsTheConfiguredQueryValuesAlone`: with `tenant=a b`, `api_key`, `x`, `y` and `z=%ZZ` configured, `https://user:pw@h/p?tenant=a+b&api_key=1&own=2&x=1;y=2&z=%ZZ&tenant=c#frag` is shown `https://redacted:redacted@h/p?tenant=a+b&api_key=<redacted>&own=<redacted>&x=<redacted>;y=<redacted>&z=<redacted>&tenant=<redacted>`, and with nothing configured as `MaskQueryValues` shows it.
+- `TestADebugReportShowsAGraphiteCollectorsOwnQuery`: a graphite request line shows `format=json`, `from=-15min`, `until=now` and the expression without a placeholder, and masks the target's own `own=1`, the expression a probe parameter filled in, a `from` the probe gives and one written `${GRAPHITE_FROM}`.
+- `TestADebugReportShowsAKubernetesListingsOwnQuery`: a listing's request line shows `limit=50` and the selectors the collector writes and masks `continue`, and a selector the collector does not write.
+- `TestADebugReportShowsTheQueryValuesTheConfigurationSets`: a configured http collector with `request.query` `tenant: acme`, `api_key: s3cret`, `t: "{{param_t}}"` and `region: ${PUE_TEST_REGION}` loaded with `--config.expand-env`, run from the debug page on a target with `?own=1`, lists its request with `tenant=acme` and `own`, `api_key`, `t` and `region` `<redacted>`, as its report and a debug probe's report do; a failed probe's caller is still told `tenant=<redacted>`.
+- `TestADebugProbeReportsTheTrip`, `TestACutShowsNothingTheReportWithholds` and `TestTheReportsOfTheExamplesAreWrittenAsTheyWere` (changed): the collector's own `view=full` is shown, the token still masked, and the oracle masks as `fetch.RedactRequestURL` does with the collector's `fetch.ConfiguredQuery`.
+- `TestTheDebugPageEditorNumbersItsLines`: `/debug` and `/debug?collector=rooms` have the editor's gutter and its bands beside the textarea, which does not wrap, laid out by one line height (`--editor-line`), the gutter's numbers out of the flow, the read-only editor marked `readonly`, and the script draws a number a line and follows the textarea's `scroll` with `translateY` of the gutter and the bands.
+- `TestTheDebugPageMarksTheLinesAnErrorNames`: the loader's refusal of a playground with two unknown keys names `line 7` and `line 9`, as the page's `/\bline (\d+)\b/g` reads them; the script marks them, in the gutter and with a band, for a refused run of the playground the editor still holds alone, makes each `line N` a button that selects the line, clears the marks on an edit, and writes no HTML.
+- `TestTheDebugPageRunsOnCtrlEnter`: *Run*'s title and `aria-keyshortcuts="Control+Enter Meta+Enter"`, the hint beside it, the page's keydown handler that runs on Ctrl+Enter or Cmd+Enter, and a parameter's value that adds no row on either.
+- `TestTheDebugPageEditorIndentsOnTab`: the hint below the editor, Tab putting in two spaces or indenting the lines selected, Shift+Tab taking up to two, Esc then Tab and a read-only editor leaving Tab alone, through `execCommand("insertText")`.
+- `TestEditACopyLeavesOutWhatThePlaygroundRefuses`: the copy of a collector with `bearer_token_file`, `tls.ca_file` alone under `tls` and a json `login` has a comment in place of each, `tls` and `login` dropped whole, loads as a playground and is noted above the editor; the page holds it and its note in `data-copy` and `data-copy-note`, which *Edit a copy* puts in the playground; a copy of a collector with a `pre_script` keeps it and is noted as refused; with `--web.debug.dangerous` the login is kept, its `field_files` and the other paths dropped with a comment saying to write each, and nothing `<redacted>` is left.
+- `TestTheDebugPageNeverRunsOnOpening`, `TestTheDebugPageHasNoRunAsYouType` and `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the script calls `run` from its definition, *Run*'s click and the Ctrl+Enter handler alone; *Run* has its title and `aria-keyshortcuts`; Enter with Ctrl or Cmd in a parameter's value adds no row.
+
+## 34.250 Fixes from the review of the debug page, the OTLP export and the health check
+
+- `TestTheDebugPageWithholdsFreeTextHoldingACredential`: an `http` collector's body with `"password": "…"`, one written as a folded block over two lines, and a query value `Bearer …` are each shown `<redacted>` whole, in the configured view and in *Edit a copy* with and without `--web.debug.dangerous`, the folded block no longer over its lines; a body with no credential is shown as written.
+- `TestTheDebugPageWithholdsAStatementHoldingACredential` (sql): a statement, written as a folded block, with `Bearer …` in it, and an argument `password=…` are shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsAGRPCMessageHoldingACredential` (grpc): a message `{"api_key": "…"}` is shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsATCPSendHoldingACredential` (tcp): a send `AUTH …`, one `USER …` then `pass …` on its second line, and a folded block with `token=…` are shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsARedisArgumentHoldingACredential` (redis): a command argument `session:token=…` is shown `<redacted>`, in the view and in both copies.
+- `TestEditACopyOfAFlowMappingWritesItsComments`: *Edit a copy* of `tls: {ca_file: …, server_name: …}` writes `tls:` in block style with the comment for `ca_file` on its own line and `server_name` kept, and of `request: {type: http, tls: {ca_file: …}}` writes `request:` in block style with the comment for `tls.ca_file`; neither holds a `pue-dropped-` stand-in, and each loads as a playground.
+- `TestEditACopyOfAGRPCCollectorWithDescriptorFilesLoads` (grpc): *Edit a copy* of a collector with `descriptors: protoset` and of one with `descriptors: proto`, with and without `--web.debug.dangerous`, names neither file and loads as a playground.
+- `TestParseCollectorAsksForTheDescriptorFilesWhenTheRequestIsMade` (config, grpc): a collector with `descriptors: protoset` without `protoset_file`, and one with `descriptors: proto` without `proto_files`, read for the debug page load; read `WithRequestMade`, each is refused naming the key.
+- `TestEditACopyLeavesOutWhatThePlaygroundRefuses` (changed): *Edit a copy* is disabled while the collector chosen has no YAML read (`$("edit-copy").disabled = name !== "" && !configuredYAML.has(name);`), enabled when the read answers it and left disabled when it fails, and copies nothing but the copy read (`if (!shown) return;`).
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig` (changed): `metrics_path` is the URL's path decoded with `decodeURIComponent`, the path as it stands when that throws.
+- `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh` (changed): a fragment answered while the dialog is open is held (`if (whole.open) held = fragment;`) and swapped in on its close, after focus is given back to the opener; the one `innerHTML` is the swap of the fragment.
+- `TestTheStatusPageHasRefreshControls` (changed): the swap is `content.innerHTML = fragment;`.
+- `TestTheCollectorsPageLinksEachCollectorIntoTheDebugPage` (changed): the debug link keeps the href it was served with in `data-href` and is built from it each time it is followed.
+- `TestThePagesControlsOnOneLineLineUp` (changed): the hint beside *Run* is at the row's foot, `min-height: 36px`, its text centred, level with *Run* and the timeout's box.
+- `--healthcheck` asks `127.0.0.1` for a listen address with an empty host,
+  `0.0.0.0`, `[::]` or `[::ffff:0.0.0.0]`, the host as written for an
+  address or a name, an IPv6 zone escaped as `%25` (`[fe80::1%25eth0]`,
+  `[::1%25lo]`), and a named port by its number (`localhost:http` and
+  `:http` on port 80); every URL is one a request can be made of, and the
+  test fails on `[::1]` for `[::]`, on `:http` left in the URL and on a bare
+  `%` before a zone.
+- An exporter on a `[::]` listener passes `--healthcheck` at
+  `[::]:<port>`, also on a host without IPv6, where `[::1]` cannot be
+  dialed: the test fails there when the check asks `[::1]`.
+- Under `metric_names: otel` the counters `x_seconds` (`a=1` and `a=2`) and
+  `x_seconds_total` (`a=1`), and `requests_total` and `requests`, are the
+  sum `x` of unit `s` with `x_seconds_total`'s one point and `requests` with
+  the point of `requests`; the clashes report `x` kept as `x_seconds_total`
+  with `x_seconds` left out, two points, and `requests` with
+  `requests_total` left out, one; the warning names `metric`,
+  `prometheus_name`, `left_out_prometheus_name`, `left_out_points` and
+  `service_name`, and a name of two kinds and of two Prometheus names is
+  logged for each, under keys of its own. Under `prometheus` they are four
+  metrics and no clash. The test fails when the two are merged without a
+  report. A clash of kinds names the Prometheus name kept too.
+- Every enum of the export's JSON is its number: the golden export writes
+  each `aggregationTemporality` as `2` and no `AGGREGATION_TEMPORALITY_`
+  name, the golden JSON of the defaults pins it, and a warning's log record
+  has `"severityNumber":13`.
+- A log record has each attribute key once: `With("a", 1, "b", "with")`
+  and a line's `c=3`, `a=2`, `trip.x=flat`, a group `trip` with `x=group`
+  and `c=4` is the record's `a=2`, `b=with`, `c=4`, `trip.x=group`, in that
+  order; the logger's next line has `a=1` alone, and stderr still writes
+  both `a`s.
+- A nil `*T` error whose `Error` dereferences it is the attribute `<nil>`,
+  as on stderr, a `String` that panics is `!PANIC: no text`, a non-nil error
+  its text, and logging the line neither panics nor loses the record.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30046,6 +30126,9 @@ resource attributes MUST be preserved:
 
 - A gauge MUST be an OTLP gauge, and a counter a monotonic sum with cumulative
   temporality.
+- In the JSON representation every enum MUST be written as its number, as
+  the OTLP/JSON encoding requires, never as its name: `aggregationTemporality`
+  MUST be `2`, cumulative, and a log record's `severityNumber` a number.
 - A histogram MUST be an OTLP histogram with cumulative temporality, its count
   and sum — without the sum, which OTLP allows, when it was read from a target
   without a `_sum` (§ 14.1) — and its buckets converted from Prometheus's
@@ -30149,7 +30232,18 @@ resource attributes MUST be preserved:
     left out and the resource's service name, and says to rename a metric or
     to give a static target a resource of its own; as one repeated failure
     (§ 25.1) for the resource and the name, whichever kind is written last at
-    each export, with no line when it ends.
+    each export, with no line when it ends;
+  - of the Prometheus names, the names the exposition writes the points
+    under, that a name of a resource would be exported for in the kind
+    exported, which under `otlp.metric_names: otel` may be more than one —
+    the counters `x_seconds` and `x_seconds_total` — the name of the point
+    written last MUST be exported, with every point of it, and no point of
+    another, whatever their attributes. It MUST be logged as a warning that
+    names the metric, the Prometheus name exported, the Prometheus names and
+    the number of points left out and the resource's service name, and says
+    to rename a metric or to export with `metric_names: prometheus`; as one
+    repeated failure for the resource and the name, apart from the name's
+    clash of kinds, with no line when it ends.
 
   Written last is queued last, a point that waits again after a failed
   export keeping the place it was first queued with (§ 42.1a), and the
@@ -30189,7 +30283,8 @@ or `/d`. It MUST hold for the exporter's own metrics, the probes' and the
 static targets' alike. A family exported as gauges under its samples' names
 MUST keep those names and have no unit. Two names the translation makes one
 MUST be one name to the rule of one writer below, a different unit making a
-different kind of it, logged with the unit. Any other value MUST be refused
+different kind of it, logged with the unit, and two Prometheus names of one
+kind and unit two writers of the name, never merged into one metric. Any other value MUST be refused
 when the configuration loads, in a block that is switched on.
 
 `otlp.scope` MAY name the instrumentation scope of the export, its `name`
@@ -30323,7 +30418,12 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   each a string, an int, a double or a bool as its value is, and an
   attribute of a group named after the group and a dot. A value JSON has no
   number for, a whole number past an int, a duration, a time and an error
-  MUST be strings.
+  MUST be strings. A record MUST have each attribute key once, as OTLP
+  requires: of a key given twice — by `With` and by the line, or by a group
+  and a name its dot makes alike — the value given last, where the key was
+  first given. A value whose `Error` or `String` panics MUST be the string
+  `<nil>` when it is a nil pointer and `!PANIC: ` and the panic otherwise, as
+  slog's handlers write it, and the line MUST be logged and exported.
 - Only the lines at or above `otlp.logs.level` — `debug`, `info`, `warn` or
   `error`, in any case, `info` by default, any other value refused — MUST be
   exported, whatever `--log.level` writes to stderr.
@@ -32031,8 +32131,10 @@ then one of the OTLP export. Of the static targets:
   backdrop, MUST give focus back to the control that opened it, and MUST say
   the time its text is of. It MUST have no heading, its label naming the
   kind of text it holds (`The whole error`) for a screen reader. No refresh MUST swap the content while the
-  dialog is open; closing it MUST resume the refresh, at once if one fell
-  due. `?format=fragment` MUST have the `<details>` and no dialog, and the
+  dialog is open, one whose answer comes while it is open included: that
+  answer MUST be held and swapped in when the dialog closes, after focus is
+  given back, the control in its opener's place then taking focus; closing
+  it MUST resume the refresh, at once if one fell due. `?format=fragment` MUST have the `<details>` and no dialog, and the
   JSON MUST be as it is, every value whole.
 - Controls on one line MUST line up: the Refresh button, the auto-refresh
   selector and its label MUST be centred on one line at one height; on the
@@ -33323,7 +33425,19 @@ the values of request or response headers whose names read as a credential's
 by the rule below: they contain, in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
 `session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
-`pass` as a whole word.
+`pass` as a whole word. One exception: a request line MUST show the value
+of a query pair that the configuration of the collector that made the
+request sets as its file writes it — a `request.query` value without a
+placeholder, a `graphite` collector's expressions without placeholders, its
+`from` and `until` (their defaults when it writes none) and `format=json`, a
+`kubernetes` listing's `limit` and the selectors it writes — when the
+pair's name does not read as a credential's and no `;` is between the `&`
+before it and the one after it, its name and value compared with their
+escapes decoded. A value a probe parameter or a placeholder gave, one a
+`${NAME}` reference expanded to, the target's own query, a static target's
+own request keys and the API server's `continue` token MUST stay masked,
+and so MUST every query value of an error, which a probe's caller is told
+as well.
 
 With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request
@@ -33341,7 +33455,8 @@ together with `targets`, `400`.
 Every place a URL, a header or text from a target is shown — a displayed
 target, a metric label, a debug report, a logged body excerpt — MUST withhold
 credentials by the same rules, kept in one place: userinfo is never shown; a
-metric label drops the query, a debug report masks its values, and a
+metric label drops the query, a debug report masks its values (but those
+of the collector's configuration, above), and a
 displayed target — in a log line, the static targets endpoint's `target`
 label and the OTLP `target` attribute — masks the values of the parameters
 whose names read as credentials, and keeps the rest, in order, so targets
@@ -33440,8 +33555,8 @@ read (its default decoder, a `sql` collector's rows, the JSON document of
 the types that make one), and the keys naming files that a request of its
 type needs (an `sshfile` or `sshexec` collector's `known_hosts_file` and key
 or password, a `kubernetes` collector's credential beside `api_server`, the
-password files of an `ldap` `bind_dn` and a `redis` `username`) MUST NOT be
-required of it.
+password files of an `ldap` `bind_dn` and a `redis` `username`, a `grpc`
+collector's `protoset_file` or `proto_files`) MUST NOT be required of it.
 
 `--web.debug.dangerous`, a boolean flag off by default, MUST be a
 command-line error (exit 2, before `--dry-run` or startup) unless
@@ -33481,7 +33596,10 @@ configured collector MUST be shown as YAML that its file writes: the
 collector's mapping as written, its keys in the file's order, its `${NAME}`
 references unexpanded whatever `--config.expand-env` says, the keys aliases
 and merge keys give it written out as the decoder reads them, without the
-file's comments, and with each key it takes from its file's `defaults`
+file's comments, a folded block scalar (`>`, `>-`, `>+`) with its header
+and over the lines the file writes it on, which MUST read as the value
+shown — one that would not, or whose header gives an indentation, MAY be
+written on one line — and with each key it takes from its file's `defaults`
 added where it would write it, marked `# from the file's defaults`. A
 collector the exporter holds without a file MUST be shown as it holds it,
 its empty keys left out. At `edit` as at `full` the YAML MUST NOT show a
@@ -33489,12 +33607,55 @@ credential: a scalar value whose key reads as a credential's, by the rule above 
 but where a login's answer holds its token and how it authenticates, and a
 redis key — MUST be shown as `<redacted>`, and so MUST every value of a key
 ending in `_file` or `_files`; a URL's userinfo and the values of its query
-parameters whose names read as credentials MUST be withheld, and a header's
-value in which text reads as a credential; a Python script MUST be shown
+parameters whose names read as credentials MUST be withheld; every other
+string of the request block — a header's or a query parameter's value, an
+`http` body, a `grpc` message, a `tcp` send, a `redis` command's argument,
+a `sql` statement or argument — in which text reads as a credential, by the
+rule that masks text the exporter did not write, or that writes a text
+protocol's login command (`AUTH`, `PASS` or `APOP` at the start of a line,
+in any case), MUST be shown as `<redacted>` whole, in the copy too, a folded
+block scalar among them then on one line; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
 copy of the YAML shown, which then runs, and MUST remember, through edits
 while it is open, the configured collector the playground was copied from.
+The copy MUST leave out what the playground refuses of its request — every
+key ending in `_file` or `_files` but `max_files`, at any depth of the
+request's mappings, and `login` — each replaced by a YAML comment, where its
+line was, that names it and says why it was dropped, and a mapping left
+with nothing MUST be left out with it, its comment naming each of its keys,
+so that a copy of a collector without Python loads as a playground; a
+mapping written in flow style (`tls: {ca_file: …, server_name: …}`) that
+loses a key, and each mapping that holds it, MUST be written in block
+style, so that every comment has a line of its own; the
+page MUST say above the editor which keys the copy left out, and, for a
+collector that runs Python, that a run of the copy is refused until the
+script is taken out. With `--web.debug.dangerous` the copy MUST keep a
+`login`, and MUST still leave out the keys ending in `_file` or `_files`,
+whose paths the page withholds, each comment saying to write the path in its
+place. `/debug/collector` MUST answer the copy as `copy` and the note as
+`copy_note`, and the page opened on a configured collector MUST hold them
+for *Edit a copy*. *Edit a copy* MUST be disabled while the collector's YAML
+is being read and after a read of it failed, when the editor holds what the
+page says of it, and MUST copy nothing but the copy `/debug/collector`
+answered.
+
+The editor MUST number its lines in a gutter beside it, for a configured
+collector's YAML and for the playground alike, each number level with its
+line however the editor is scrolled, down or sideways; the editor MUST NOT
+wrap a line. When a run of the playground the editor still holds is refused
+with an error that names lines (`line <n>:`, counted from the collector's
+first line), the page MUST mark each of those lines in the gutter and with
+a band behind it, MUST make each `line <n>` of the error a control that
+selects that line in the editor, and MUST clear the marks at the next edit,
+at a run that is not refused and at a change of collector. In the
+playground Tab MUST put in two spaces, or indent the lines selected by two,
+and Shift+Tab MUST take up to two spaces from the start of each line the
+selection is on; Esc, then Tab, MUST leave the editor, and a read-only
+editor MUST take Tab as any field does. Ctrl+Enter and Cmd+Enter MUST run
+from anywhere on the page, the editors and fields included, as *Run* does,
+which MUST say so in its title, its `aria-keyshortcuts` and a hint beside
+it, centred level with *Run* and the timeout's box; Enter with either in a parameter's value MUST NOT add a row.
 The page MUST open with the example playground, an `http` collector,
 whatever was written or copied on it before: it MUST NOT keep the
 playground, the body or the collector copied from in the browser. While
@@ -33641,7 +33802,10 @@ that names its own, and each filled parameter row, a repeated
 MUST carry `debug=true`. The command MUST be `curl -s` and the URL in single
 quotes, a single quote in it written `'\''`. The `scrape_config` MUST be the
 multi-target job of `docs/LOCALFILE.md`: `job_name` the collector's name,
-`metrics_path` the URL's path, `scheme: https` when the page is served over
+`metrics_path` the URL's path as it reads, its percent-escapes decoded,
+since Prometheus escapes the path itself (a prefix `/my%20pfx` MUST be
+written `/my pfx`; a path whose escapes decode to no text MUST be written as
+it stands), `scheme: https` when the page is served over
 HTTPS, `params` of `collector` and each parameter with its values in the
 order of the rows, and, for a collector that takes a target, the target in
 `static_configs`, moved by `relabel_configs` into `__param_target` and

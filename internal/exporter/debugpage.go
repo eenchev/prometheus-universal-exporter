@@ -297,9 +297,10 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	t, p := report.trace, report.probe
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	configured := fetch.ConfiguredQuery(p.slotOf())
 	for _, req := range t.requests.Requests() {
 		shown := debugShownRequest{
-			Method: req.Method, URL: shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit),
+			Method: req.Method, URL: shownStart(fetch.RedactRequestURL(req.URL, configured), debugURLLimit),
 			Page: req.Page, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
 			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy, Wait: req.Wait,
 		}
@@ -632,10 +633,15 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
 		if chosen != "" && chosen == c.Name && page.Chosen == "" {
-			if shown, err := shownCollectorYAML(c); err == nil {
-				page.Chosen, page.ChosenYAML = c.Name, shown
+			shown, err := shownCollectorYAML(c)
+			copied, note, copyErr := "", "", err
+			if err == nil {
+				copied, note, copyErr = copiedCollectorYAML(c, s.playgroundUnbound())
+			}
+			if copyErr == nil {
+				page.Chosen, page.ChosenYAML, page.ChosenCopy, page.ChosenCopyNote = c.Name, shown, copied, note
 			} else {
-				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", err)
+				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", copyErr)
 			}
 		}
 	}

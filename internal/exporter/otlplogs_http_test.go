@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,6 +222,75 @@ func TestTheExportersLogArrivesOverOTLP(t *testing.T) {
 	exportLogsNow(server)
 	if got := len(receiver.logRequests(t)); got != 1 {
 		t.Errorf("an export with nothing waiting made a request: %d", got)
+	}
+}
+
+// A key given twice in one line — by With and by the line, twice in the
+// line, or by a group and an attribute the group's dot makes alike — is one
+// attribute of the record, as OTLP has each key once: the value given last,
+// where the key was first given. stderr writes both, as slog does.
+func TestALogRecordHasEachAttributeKeyOnce(t *testing.T) {
+	receiver := newLogReceiver(t)
+	server, logger, stderr := logExportServer(t, receiver, nil)
+	logger.With("a", 1, "b", "with").Info("m", "c", 3, "a", 2, "trip.x", "flat", slog.Group("trip", "x", "group"), "c", 4)
+	logger.With("a", 1).Info("other")
+	exportLogsNow(server)
+	records := receiver.logRecords(t)
+	if len(records) != 2 {
+		t.Fatalf("%d records, want 2", len(records))
+	}
+	var got []string
+	for _, a := range records[0].Attributes {
+		value := a.Value.IntValue
+		if a.Value.StringValue != nil {
+			value = *a.Value.StringValue
+		}
+		got = append(got, a.Key+"="+value)
+	}
+	if want := []string{"a=2", "b=with", "c=4", "trip.x=group"}; !slices.Equal(got, want) {
+		t.Errorf("the attributes are %q, want %q", got, want)
+	}
+	if attrs := records[1].Attributes; len(attrs) != 1 || attrs[0].Key != "a" || attrs[0].Value.IntValue != "1" {
+		t.Errorf("the next line's attributes are %+v, want the logger's a=1 alone", attrs)
+	}
+	if !strings.Contains(stderr.String(), `"a":1,"b":"with","c":3,"a":2`) {
+		t.Errorf("stderr is not what it was without the export:\n%s", stderr.String())
+	}
+}
+
+// nilError is an error whose Error does not guard against a nil receiver.
+type nilError struct{ text string }
+
+func (e *nilError) Error() string { return e.text }
+
+// panickyStringer is a fmt.Stringer whose String panics.
+type panickyStringer struct{}
+
+func (panickyStringer) String() string { panic("no text") }
+
+// A value whose Error or String panics — a nil *T whose method does not
+// guard against nil, most often — is written as slog's handlers write a
+// value whose method panics, <nil> for a nil pointer, as stderr has the nil
+// error, and !PANIC: with the panic otherwise, and the line is logged and
+// exported: logging it does not panic.
+func TestALogValueWhoseMethodPanicsIsWrittenAsSlogWritesIt(t *testing.T) {
+	receiver := newLogReceiver(t)
+	server, logger, stderr := logExportServer(t, receiver, nil)
+	var typedNil *nilError
+	logger.Info("m", "error", typedNil, "stringer", panickyStringer{}, "fine", &nilError{text: "boom"})
+	exportLogsNow(server)
+	records := receiver.logRecords(t)
+	if len(records) != 1 {
+		t.Fatalf("%d records, want 1", len(records))
+	}
+	attrs := attributesOf(records[0])
+	for key, want := range map[string]string{"error": "<nil>", "stringer": "!PANIC: no text", "fine": "boom"} {
+		if got := text(attrs[key]); got != want {
+			t.Errorf("attribute %s is %q, want %q", key, got, want)
+		}
+	}
+	if !strings.Contains(stderr.String(), `"error":"<nil>"`) {
+		t.Errorf("stderr writes the nil error otherwise:\n%s", stderr.String())
 	}
 }
 

@@ -95,7 +95,7 @@ func TestADebugProbeReportsTheTrip(t *testing.T) {
 	assertContains(t, body,
 		`Debug probe of collector "dbg"`,
 		"A probe would have answered 200 with 1 series",
-		"1. GET "+target.URL+"?token=<redacted>&view=<redacted> -> 200 OK",
+		"1. GET "+target.URL+"?token=<redacted>&view=full -> 200 OK",
 		"Authorization: <redacted>", "X-Api-Key: <redacted>", "Accept: application/json",
 		"Rules that carried on without some series",
 		"Status 200 OK", "Content-Type: application/json", "Set-Cookie: <redacted>",

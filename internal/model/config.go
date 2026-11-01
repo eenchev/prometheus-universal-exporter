@@ -199,6 +199,21 @@ type Collector struct {
 	// debug page to show; nil for a collector not read from a file. It is
 	// no key of the configuration, and no part of what the collector is.
 	Written *yaml.Node `yaml:"-" json:"-"`
+	// WrittenBlocks are the folded block scalars (>, >-) of Written as the
+	// file writes them, in the order Written holds them, depth first: the
+	// header and the lines, which the scalar's value, folded into one line,
+	// no longer has, for the debug page to show the statement over the
+	// lines it was written on. One whose lines could not be told is empty.
+	// Nil when Written has none.
+	WrittenBlocks []WrittenBlock `yaml:"-" json:"-"`
+}
+
+// WrittenBlock is a folded block scalar as its file writes it: Header, its
+// indicator and chomping (>-), and Lines, its lines without the block's
+// indentation, a more indented line keeping what it has beyond it.
+type WrittenBlock struct {
+	Header string
+	Lines  []string
 }
 
 // RequestConfig is a collector's request block: how the target is reached.

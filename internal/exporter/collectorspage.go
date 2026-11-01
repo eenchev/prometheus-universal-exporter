@@ -248,12 +248,15 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 // The exporter's own Basic Auth, when on, is the browser's to send.
 for (const form of document.querySelectorAll("form.probe")) {
   // At --web.debug=full the debug link carries the target entered, so the
-  // debug page fetches it; the link is built as it is followed.
+  // debug page fetches it; the link is built as it is followed, each time
+  // from the link the page was served with, so a target cleared since it
+  // was last followed is not carried.
   const debug = form.querySelector("a[data-with-target]");
   if (debug) {
+    debug.dataset.href = debug.getAttribute("href");
     debug.addEventListener("click", () => {
       const target = form.querySelector('[name="target"]').value;
-      const link = new URL(debug.getAttribute("href"), document.baseURI);
+      const link = new URL(debug.dataset.href, document.baseURI);
       if (target !== "") link.searchParams.set("target", target);
       debug.href = link.href;
     });

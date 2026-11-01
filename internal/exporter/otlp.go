@@ -73,9 +73,14 @@ type otlpMetric struct {
 	Summary     *otlpSummary   `json:"summary,omitempty"`
 }
 
+// otlpCumulative is AGGREGATION_TEMPORALITY_CUMULATIVE as OTLP/JSON writes
+// it: an enum is its number there, which the OTLP specification's JSON
+// encoding requires, not its name, which some receivers refuse.
+const otlpCumulative = 2
+
 type otlpHistogram struct {
 	DataPoints             []otlpHistogramDataPoint `json:"dataPoints"`
-	AggregationTemporality string                   `json:"aggregationTemporality"`
+	AggregationTemporality int                      `json:"aggregationTemporality"`
 }
 
 // otlpHistogramDataPoint is one series of a histogram. OTLP's bucket counts
@@ -152,7 +157,7 @@ type otlpGauge struct {
 
 type otlpSum struct {
 	DataPoints             []otlpNumberDataPoint `json:"dataPoints"`
-	AggregationTemporality string                `json:"aggregationTemporality"`
+	AggregationTemporality int                   `json:"aggregationTemporality"`
 	IsMonotonic            bool                  `json:"isMonotonic"`
 }
 
@@ -820,9 +825,9 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 // set has them. own is where the exporter's own series begin in the set,
 // after those that waited in the queue (exportOTLP). keep, when there is
 // one, is asked of every point before it is made — the series it is of, by
-// its place in the set, and the name, the kind and the attributes it would
-// be exported with — and a point it refuses is left out, and its series'
-// start time not asked for.
+// its place in the set, the name the exposition writes the point under, and
+// the name, the kind and the attributes it would be exported with — and a
+// point it refuses is left out, and its series' start time not asked for.
 //
 // shared says that two points of the result may be one to a receiver — one
 // metric's, with the same attributes — or that a name is two metrics of
@@ -836,7 +841,7 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 // metric gets a point of a second run, where a name is exported as a second
 // kind, and where a histogram or a summary is exported as gauges under its
 // samples' names, with le or quantile among the attributes.
-func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(m model.Metric, at string) string, keep func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
+func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(m model.Metric, at string) string, keep func(series int, source, name string, shape otlpShape, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
 	// Where the metric of a name is in out, and the run that made it.
 	type place struct{ at, run int }
 	index := map[string]place{}
@@ -866,17 +871,22 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 			at = strconv.FormatInt(*m.Timestamp*int64(time.Millisecond), 10)
 		}
 		attributes := otlpAttributesForLabels(m.Labels)
-		// gauge adds a gauge's point; a sample of a family exported as
-		// gauges keeps the name the exposition writes it under, and has
-		// no unit, whatever otlp.metric_names says.
-		gauge := func(name, unit string, attributes []otlpAttribute, value float64) {
+		// gaugeOf adds a gauge's point, which the exposition writes under
+		// source.
+		gaugeOf := func(source, name, unit string, attributes []otlpAttribute, value float64) {
 			shape := otlpShape{kind: otlpKindGauge, unit: unit}
-			if keep != nil && !keep(i, name, shape, attributes) {
+			if keep != nil && !keep(i, source, name, shape, attributes) {
 				return
 			}
 			v := otlpDouble(value)
 			g := metric(name, m.Help, shape).Gauge
 			g.DataPoints = append(g.DataPoints, otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v})
+		}
+		// gauge adds the point of a sample of a family exported as gauges,
+		// which keeps the name the exposition writes it under, and has no
+		// unit, whatever otlp.metric_names says.
+		gauge := func(name string, attributes []otlpAttribute, value float64) {
+			gaugeOf(name, name, "", attributes, value)
 		}
 		kind := otlpKindOf(m)
 		if kind != otlpKindGauge && untyped[m.Name] {
@@ -886,36 +896,36 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 			case otlpKindHistogram:
 				for _, b := range e.ascendingBuckets(m.Histogram.Buckets) {
 					if !math.IsInf(b.UpperBound, 1) {
-						gauge(m.Name+"_bucket", "", otlpAttributesWith(m.Labels, "le", strconv.FormatFloat(b.UpperBound, 'g', -1, 64)), float64(b.CumulativeCount))
+						gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", strconv.FormatFloat(b.UpperBound, 'g', -1, 64)), float64(b.CumulativeCount))
 					}
 				}
 				if inf, has := m.Histogram.InfBucket(); has {
-					gauge(m.Name+"_bucket", "", otlpAttributesWith(m.Labels, "le", "+Inf"), float64(inf))
+					gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", "+Inf"), float64(inf))
 				}
 				if !m.Histogram.NoSum {
-					gauge(m.Name+"_sum", "", attributes, m.Histogram.Sum)
+					gauge(m.Name+"_sum", attributes, m.Histogram.Sum)
 				}
 				if !m.Histogram.NoCount {
-					gauge(m.Name+"_count", "", attributes, float64(m.Histogram.Count))
+					gauge(m.Name+"_count", attributes, float64(m.Histogram.Count))
 				}
 			case otlpKindSummary:
 				for _, q := range e.ascendingQuantiles(m.Summary.Quantiles) {
-					gauge(m.Name, "", otlpAttributesWith(m.Labels, "quantile", strconv.FormatFloat(q.Quantile, 'g', -1, 64)), q.Value)
+					gauge(m.Name, otlpAttributesWith(m.Labels, "quantile", strconv.FormatFloat(q.Quantile, 'g', -1, 64)), q.Value)
 				}
 				if !m.Summary.NoSum {
-					gauge(m.Name+"_sum", "", attributes, m.Summary.Sum)
+					gauge(m.Name+"_sum", attributes, m.Summary.Sum)
 				}
 				if !m.Summary.NoCount {
-					gauge(m.Name+"_count", "", attributes, float64(m.Summary.Count))
+					gauge(m.Name+"_count", attributes, float64(m.Summary.Count))
 				}
 			default:
-				gauge(m.Name, "", attributes, m.Value)
+				gauge(m.Name, attributes, m.Value)
 			}
 			continue
 		}
 		name, unit := otlpNameOf(m.Name, kind, otel)
 		shape := otlpShape{kind: kind, unit: unit}
-		if keep != nil && kind != otlpKindGauge && !keep(i, name, shape, attributes) {
+		if keep != nil && kind != otlpKindGauge && !keep(i, m.Name, name, shape, attributes) {
 			continue
 		}
 		startAt := ""
@@ -944,21 +954,28 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 			s := metric(name, m.Help, shape).Sum
 			s.DataPoints = append(s.DataPoints, otlpNumberDataPoint{Attributes: attributes, StartTimeUnixNano: startAt, TimeUnixNano: at, AsDouble: &v})
 		default:
-			gauge(name, unit, attributes, m.Value)
+			gaugeOf(m.Name, name, unit, attributes, m.Value)
 		}
 	}
 	return out, shared
 }
 
 // otlpNameClash is a name that the writers of one resource export as
-// metrics of different kinds in one export: the kind the latest of them
-// wrote is exported, and points of the others, of the kinds leftOut, are
-// not.
+// metrics of different kinds in one export, or, under otlp.metric_names:
+// otel, as the name of metrics of different Prometheus names: the kind the
+// latest of them wrote is exported, and points of the others, of the kinds
+// leftOut, are not; and of that kind, the Prometheus name, source, the
+// latest wrote, and the points of the others, sourcePoints of the names
+// leftOutSources, are not.
 type otlpNameClash struct {
 	name    string
 	kept    otlpShape
 	leftOut []otlpShape
 	points  int
+
+	source         string
+	leftOutSources []string
+	sourcePoints   int
 }
 
 // otlpMetricsOf is otlpMetrics of what one resource has in an export — the
@@ -986,6 +1003,16 @@ type otlpNameClash struct {
 //   - Of the kinds a name is exported as, the one of the point written last
 //     is exported, and no point of another: they are reported, to be logged
 //     (logOTLPNameClashes).
+//   - Of the Prometheus names a name is exported for, which under
+//     otlp.metric_names: otel are more than one where x_seconds and
+//     x_seconds_total, or requests and requests_total, are both counters,
+//     the one of the point written last is exported, and no point of
+//     another, among the points of the kind exported: they are reported
+//     too. Two series are one stream only where the exposition writes them
+//     under one name; two that it does not are two series to Prometheus,
+//     which one metric of the export would merge into one where their
+//     labels are the same, and a receiver could not tell apart where they
+//     are not.
 //   - Of the points of one metric with the same attributes, the one written
 //     last is exported, as a later scrape's point replaces a series' in
 //     the queue, without a word.
@@ -1033,9 +1060,9 @@ func (o *otlpPointSources) add(series int, name string, shape otlpShape) {
 // it, and only then, so sources are told of a point where keep says yes.
 func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Metric, at string) string, sources *otlpPointSources) ([]otlpMetric, []otlpNameClash) {
 	set, own, otel := resource.Set, len(resource.seqs), resource.otelNames
-	var keep func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool
+	var keep func(series int, source, name string, shape otlpShape, attributes []otlpAttribute) bool
 	if sources != nil {
-		keep = func(series int, name string, shape otlpShape, _ []otlpAttribute) bool {
+		keep = func(series int, _, name string, shape otlpShape, _ []otlpAttribute) bool {
 			sources.add(series, name, shape)
 			return true
 		}
@@ -1046,24 +1073,24 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	}
 	// Every point the export would have, in the order they are made in.
 	type point struct {
-		name, identity string
-		shape          otlpShape
-		written        int64
+		name, source, identity string
+		shape                  otlpShape
+		written                int64
 	}
 	var points []point
-	otlpPoints(set, own, otel, now, nil, func(series int, name string, shape otlpShape, attributes []otlpAttribute) bool {
+	otlpPoints(set, own, otel, now, nil, func(series int, source, name string, shape otlpShape, attributes []otlpAttribute) bool {
 		written := int64(math.MaxInt64)
 		if series < own {
 			written = resource.seqs[series]
 		}
-		points = append(points, point{name: name, identity: otlpPointIdentity(name, attributes), shape: shape, written: written})
+		points = append(points, point{name: name, source: source, identity: otlpPointIdentity(name, attributes), shape: shape, written: written})
 		return false
 	})
 	later := func(a, b int) bool {
 		return points[a].written > points[b].written || points[a].written == points[b].written && a > b
 	}
 	// The point of each name written last, whose kind the name is exported
-	// as.
+	// as, for the Prometheus name it is of.
 	last := map[string]int{}
 	for n := range points {
 		if of, seen := last[points[n].name]; !seen || later(n, of) {
@@ -1073,22 +1100,37 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	leftOut, some := make([]bool, len(points)), false
 	latest := map[string]int{}
 	var clashes map[string]*otlpNameClash
+	clashOf := func(p *point) *otlpNameClash {
+		if clashes == nil {
+			clashes = map[string]*otlpNameClash{}
+		}
+		clash := clashes[p.name]
+		if clash == nil {
+			kept := &points[last[p.name]]
+			clash = &otlpNameClash{name: p.name, kept: kept.shape, source: kept.source}
+			clashes[p.name] = clash
+		}
+		return clash
+	}
 	for n := range points {
 		p := &points[n]
-		if kept := points[last[p.name]].shape; p.shape != kept {
+		kept := &points[last[p.name]]
+		if p.shape != kept.shape {
 			leftOut[n], some = true, true
-			if clashes == nil {
-				clashes = map[string]*otlpNameClash{}
-			}
-			clash := clashes[p.name]
-			if clash == nil {
-				clash = &otlpNameClash{name: p.name, kept: kept}
-				clashes[p.name] = clash
-			}
+			clash := clashOf(p)
 			if !slices.Contains(clash.leftOut, p.shape) {
 				clash.leftOut = append(clash.leftOut, p.shape)
 			}
 			clash.points++
+			continue
+		}
+		if p.source != kept.source {
+			leftOut[n], some = true, true
+			clash := clashOf(p)
+			if !slices.Contains(clash.leftOutSources, p.source) {
+				clash.leftOutSources = append(clash.leftOutSources, p.source)
+			}
+			clash.sourcePoints++
 			continue
 		}
 		earlier, seen := latest[p.identity]
@@ -1109,7 +1151,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	if sources != nil {
 		*sources = otlpPointSources{index: map[string]int{}}
 	}
-	out, _ = otlpPoints(set, own, otel, now, start, func(series int, name string, shape otlpShape, _ []otlpAttribute) bool {
+	out, _ = otlpPoints(set, own, otel, now, start, func(series int, _, name string, shape otlpShape, _ []otlpAttribute) bool {
 		n++
 		if leftOut[n-1] {
 			return false
@@ -1124,6 +1166,7 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 		slices.SortFunc(clashes[name].leftOut, func(a, b otlpShape) int {
 			return cmp.Or(cmp.Compare(a.kind, b.kind), cmp.Compare(a.unit, b.unit))
 		})
+		slices.Sort(clashes[name].leftOutSources)
 		reported = append(reported, *clashes[name])
 	}
 	return out, reported
@@ -1144,13 +1187,29 @@ func otlpPointIdentity(name string, attributes []otlpAttribute) string {
 // errOTLPNameClash is what is logged of a name exported as two kinds.
 var errOTLPNameClash = errors.New("two writers of one OTLP resource - probes, static targets, or the exporter with its own metrics - export this metric name as different kinds, and a name is one metric of one kind there; rename one of the metrics, or give a static target a resource of its own with its otlp.service_name or otlp.resource_attributes")
 
+// errOTLPNamesMerged is what is logged of a name exported for two
+// Prometheus names.
+var errOTLPNamesMerged = errors.New("otlp.metric_names: otel exports these Prometheus metric names of one OTLP resource under one name, and a name is one metric there, whose points of the two would be one stream where their labels are the same; rename one of the metrics, or export with otlp.metric_names: prometheus")
+
 // logOTLPNameClashes logs each name of a resource that an export had as
-// two kinds, once and then as a repeat (failureLog), whichever of the kinds
-// was written last at each export. The line shows the name as an error
-// shows one (model.ShownName), and the clash is remembered under the whole
-// name.
+// two kinds, or for two Prometheus names, once and then as a repeat
+// (failureLog), whichever was written last at each export. The line shows
+// the names as an error shows one (model.ShownName), and the clash is
+// remembered under the whole name, of kinds and of Prometheus names apart.
 func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
 	for _, clash := range clashes {
+		if len(clash.leftOutSources) > 0 {
+			names := make([]string, 0, len(clash.leftOutSources))
+			for _, source := range clash.leftOutSources {
+				names = append(names, model.ShownName(source))
+			}
+			s.failures.failed(s.logger, slog.LevelWarn, otlpNameMergeKey(resource, clash.name),
+				"OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export", "otlp", errOTLPNamesMerged,
+				"metric", model.ShownName(clash.name), "prometheus_name", model.ShownName(clash.source), "left_out_prometheus_name", strings.Join(names, ", "), "left_out_points", clash.sourcePoints, "service_name", identity.ServiceName)
+		}
+		if len(clash.leftOut) == 0 {
+			continue
+		}
 		kinds := make([]string, 0, len(clash.leftOut))
 		for _, shape := range clash.leftOut {
 			kinds = append(kinds, shape.String())
@@ -1231,11 +1290,11 @@ func newOTLPMetric(name, help string, shape otlpShape) otlpMetric {
 	out := otlpMetric{Name: name, Description: help, Unit: shape.unit}
 	switch shape.kind {
 	case otlpKindHistogram:
-		out.Histogram = &otlpHistogram{AggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"}
+		out.Histogram = &otlpHistogram{AggregationTemporality: otlpCumulative}
 	case otlpKindSummary:
 		out.Summary = &otlpSummary{}
 	case otlpKindSum:
-		out.Sum = &otlpSum{AggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE", IsMonotonic: true}
+		out.Sum = &otlpSum{AggregationTemporality: otlpCumulative, IsMonotonic: true}
 	default:
 		out.Gauge = &otlpGauge{}
 	}

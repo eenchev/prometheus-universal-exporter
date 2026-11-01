@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -332,6 +333,7 @@ func (h *otlpLogHandler) encode(r slog.Record) []byte {
 			return true
 		})
 	}
+	record.Attributes = lastOfEachKey(record.Attributes)
 	raw, err := json.Marshal(record)
 	if err != nil {
 		// Not reached: nothing in a record is of a kind JSON refuses.
@@ -369,6 +371,37 @@ func appendLogAttribute(attrs []otlpAnyAttribute, prefix string, a slog.Attr) []
 	return append(attrs, otlpAnyAttribute{Key: prefix + a.Key, Value: otlpLogValue(a.Value)})
 }
 
+// lastOfEachKey is attrs with each key once, as an OTLP record's attributes
+// must have it: the value given last, which is the record's own over one
+// the logger was given with With, where the key was first given. attrs is
+// returned as it is when no key is given twice, as nearly always, and is
+// never changed: it may be the handler's own.
+func lastOfEachKey(attrs []otlpAnyAttribute) []otlpAnyAttribute {
+	twice := false
+	for i := 1; i < len(attrs) && !twice; i++ {
+		for j := range i {
+			if attrs[j].Key == attrs[i].Key {
+				twice = true
+				break
+			}
+		}
+	}
+	if !twice {
+		return attrs
+	}
+	at := make(map[string]int, len(attrs))
+	out := make([]otlpAnyAttribute, 0, len(attrs))
+	for _, a := range attrs {
+		if i, seen := at[a.Key]; seen {
+			out[i].Value = a.Value
+			continue
+		}
+		at[a.Key] = len(out)
+		out = append(out, a)
+	}
+	return out
+}
+
 // otlpLogValue is an attribute's value with its type: a string, an integer,
 // a double or a boolean. An unsigned integer past int64 is written as text,
 // as are a double that is not a number or infinite, which JSON has no
@@ -399,16 +432,34 @@ func otlpLogValue(v slog.Value) otlpAnyValue {
 	case slog.KindTime:
 		return otlpString(v.Time().Format(time.RFC3339Nano))
 	}
-	switch value := v.Any().(type) {
+	return otlpAnyLogValue(v.Any())
+}
+
+// otlpAnyLogValue is the text of a value of no kind of slog's own: its error
+// text, its String, or its JSON. A method that panics — the Error of a nil
+// *T whose method does not guard against nil, most often — is written as
+// slog's handlers write it, <nil> for a nil pointer and !PANIC: and the
+// panic otherwise, rather than taking the exporter down with the log line.
+func otlpAnyLogValue(value any) (out otlpAnyValue) {
+	defer func() {
+		if r := recover(); r != nil {
+			if v := reflect.ValueOf(value); v.Kind() == reflect.Pointer && v.IsNil() {
+				out = otlpString("<nil>")
+				return
+			}
+			out = otlpString(fmt.Sprintf("!PANIC: %v", r))
+		}
+	}()
+	switch value := value.(type) {
 	case error:
 		return otlpString(value.Error())
 	case fmt.Stringer:
 		return otlpString(value.String())
 	}
-	if raw, err := json.Marshal(v.Any()); err == nil {
+	if raw, err := json.Marshal(value); err == nil {
 		return otlpString(string(raw))
 	}
-	return otlpString(fmt.Sprintf("%+v", v.Any()))
+	return otlpString(fmt.Sprintf("%+v", value))
 }
 
 // otlpLogRequest is one request of a log export: its body, and which of the

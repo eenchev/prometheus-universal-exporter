@@ -1085,7 +1085,7 @@ func traceSQL(ctx context.Context, key sqlPoolKey, args int, reused bool, err er
 		"Sql-Connection": {connection},
 		"Sql-Args":       {strconv.Itoa(args)},
 	}
-	traceRequest(ctx, sqlMethod, key.base.driver+"://"+key.address.hostPort+"/"+database, header, "", false)
+	traceRequest(ctx, sqlMethod, pathURL(key.base.driver, key.address.hostPort, "/"+database), header, "", false)
 	if err != nil {
 		traceOutcome(ctx, "error: "+err.Error())
 	}

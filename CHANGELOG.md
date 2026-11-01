@@ -97,6 +97,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   another collector fetches, through `request_from` or a static target,
   must now be of that collector's request type (`400` otherwise), where it
   had to be an `http` collector before.
+- The OTLP export writes `aggregationTemporality` as the number `2` where it
+  wrote the name `AGGREGATION_TEMPORALITY_CUMULATIVE`: the OTLP/JSON encoding
+  requires an enum's number, which every receiver accepts. A receiver or a
+  test that matched the request body's text sees the number now.
 
 ### New
 
@@ -171,9 +175,39 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   a Prometheus `scrape_config` for the collector and the target, and the
   debug probe's URL, and a static target as its `/static-targets` URL and
   `curl` command; no credential is put in them.
+- The debug page's editor numbers its lines in a gutter beside the text, and
+  marks the lines a refusal of the playground names, in the gutter and with
+  a band behind each; `line 7` in the error is a link that selects the line.
+  In the playground Tab indents by two spaces and Shift+Tab outdents (Esc,
+  then Tab, leaves the editor), and Ctrl+Enter or ⌘+Enter runs from
+  anywhere on the page.
 
 ### Fixed
 
+- The debug page no longer shows a credential written in free text of a
+  configured collector's request, in its view or in *Edit a copy*: an `http`
+  body, a `grpc` message, a `tcp` send (`AUTH …`, `PASS …`), a `redis`
+  command's argument, a `sql` statement or argument, a query parameter's
+  value, a folded block among them, is shown `<redacted>` whole when
+  something in it reads as a credential.
+- *Edit a copy* of a collector whose `tls` or other block is written on one
+  line (`tls: {ca_file: /etc/ca.pem, server_name: api}`) loads: the comment
+  for the dropped file stands on a line of its own, where a stand-in key was
+  left that the playground refused.
+- *Edit a copy* of a `grpc` collector with `descriptors: proto` or
+  `protoset` loads: the playground, which makes no request, no longer asks
+  for the `proto_files` or `protoset_file` the copy leaves out.
+- *Edit a copy* is disabled until the collector's YAML is read, so it no
+  longer copies the page's `Reading the configuration…` line or an error.
+- *Copy as* *scrape_config* writes `metrics_path` as the path reads
+  (`/my pfx/probe`), which Prometheus escapes once, not escaped twice.
+- The status page no longer swaps its content under the long-text box when
+  a refresh already on its way answers while the box is open; the answer is
+  shown when it closes, and focus goes back to *Show all*.
+- The collectors page's *Debug* link no longer keeps a target cleared from
+  the form since it was last followed.
+- The debug page's `Ctrl+Enter runs` hint is level with *Run* and the
+  timeout's box.
 - The debug page asks for what the chosen collector's request type takes,
   not for an HTTP target: the target as the type names it, with an example
   of its forms (`SSH host`, `host or host:22`; `Name to resolve`,
@@ -224,6 +258,46 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   fields follow the type as it is typed.
 - *Scrape a static target* says whose static targets it lists: the
   collector chosen, or the one the playground was copied from.
+- A `localfile` read's `READ` line in a debug report, and its verbose `url`
+  label, show the file's `file://` URL escaped as a URL is: a space in the
+  path is `%20`, where it was shown as a literal space, and a `?` or a `#`
+  in a file's name no longer reads as a query or a fragment. The `sftp://`
+  URL of an `sshfile` read, the `s3://` URL of an `s3file` object and the
+  database of a `sql` statement's URL are escaped the same way.
+- The debug page shows a configured collector's folded block scalar, such
+  as a `statement: >-` written over several lines, over the lines its file
+  writes it on, where it was folded into one long line that ran off the
+  right of the editor.
+- A debug report's request lines, on `/probe?debug=true` and the debug page,
+  show the values of the query parameters the collector's configuration
+  sets as its file writes them, where every value was `<redacted>`: a
+  `graphite` collector's `target`, `from`, `until` and `format=json`, an
+  `http` collector's `request.query` values without placeholders and a
+  `kubernetes` listing's `limit` and selectors. A value a probe parameter,
+  a placeholder or a `${NAME}` reference gives, the target's own query and
+  any parameter whose name reads as a credential's stay masked, as every
+  query value of an error, which a probe's caller is told, does.
+- *Edit a copy* of a configured collector that names files (`tls.ca_file`,
+  `password_file`, `bearer_token_file`, `known_hosts_file`, …) or logs in
+  gives a playground that loads: those lines are left out, each replaced by
+  a comment saying why, with a block they leave empty, and a note above the
+  editor lists them. It was refused until they were deleted by hand.
+- `--healthcheck` with `--web.listen-address=[::]:PORT` asks `127.0.0.1`,
+  which the exporter's `[::]` listener answers too, where it asked `[::1]`
+  and failed on a host without IPv6, so `healthProbes.mode: exec` restarted
+  the pod for ever. A named port (`:http`) and an IPv6 zone
+  (`[fe80::1%eth0]:8080`) give a URL the check can ask, where it could not.
+- With `otlp.metric_names: otel` two counters that are one name there, such
+  as `x_seconds` and `x_seconds_total`, or `requests` and `requests_total`,
+  are no longer merged into one metric that kept one point of the two where
+  their labels were alike: the one written last is exported, and the other
+  is left out and logged as a warning, `OTLP metric name written for two
+  Prometheus metric names under one resource`, as a name of two kinds is.
+- The OTLP log export sends each attribute key of a record once, the value
+  given last, where `logger.With("a", 1)` and a line's own `a` gave two
+  attributes `a`; and a value whose `Error` or `String` panics, as a nil
+  error's may, is `<nil>` or `!PANIC: …`, as on stderr, where it took the
+  exporter down.
 
 ## exporter 1.8.0
 

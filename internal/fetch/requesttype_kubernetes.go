@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +88,24 @@ func kubernetesRequest(c *model.Collector) KubernetesConfig {
 	return own
 }
 
+// kubernetesShownQuery says which pairs of a listing's request a debug
+// report shows the values of (ConfiguredQuery): limit, the page size the
+// exporter asks for, and the selectors as the collector's file writes them.
+// continue, the API server's token for the next page, stays masked.
+func kubernetesShownQuery(c *model.Collector, name, value string) bool {
+	own := kubernetesRequest(c)
+	switch name {
+	case "limit":
+		_, err := strconv.ParseUint(value, 10, 31)
+		return err == nil
+	case "labelSelector":
+		return value == own.LabelSelector && writtenAsSent(c, value, "label_selector")
+	case "fieldSelector":
+		return value == own.FieldSelector && writtenAsSent(c, value, "field_selector")
+	}
+	return false
+}
+
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeKubernetes,
@@ -96,6 +115,7 @@ func init() {
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Requester:    kubernetesRequester{},
+		ShownQuery:   kubernetesShownQuery,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},

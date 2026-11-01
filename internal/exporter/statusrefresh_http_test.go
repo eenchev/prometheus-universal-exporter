@@ -70,7 +70,7 @@ func TestTheStatusPageHasRefreshControls(t *testing.T) {
 		`document.addEventListener("visibilitychange", schedule)`,
 		`url.searchParams.set("refresh", every.value)`,
 		`history.replaceState(null, "", url)`,
-		`content.innerHTML = await response.text()`,
+		`content.innerHTML = fragment;`,
 		`line.hidden = true;`,
 		`dataAt = time.getAttribute("datetime");`,
 		`state.textContent = "As of " + dataClock();`,

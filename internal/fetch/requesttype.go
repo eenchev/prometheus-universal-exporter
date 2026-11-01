@@ -171,6 +171,13 @@ type RequestType struct {
 	// alone: a pair of the target's own query that names one is dropped
 	// (withoutQueryKeys). Unset, it adds none.
 	Query func(c *model.Collector, overrides RequestOverrides) (url.Values, error)
+	// ShownQuery says, of a query pair the type sets itself on a request,
+	// its name and value as a server reads them, whether it was set from
+	// the collector's configuration as its file writes it (writtenAsSent),
+	// or is the exporter's own, such as graphite's format=json, so that a
+	// debug report shows its value (ConfiguredQuery). Unset, the type sets
+	// none, or none that is shown.
+	ShownQuery func(c *model.Collector, name, value string) bool
 	// CheckTargetRequest checks the values of a static target's request
 	// block, where CheckOverride sees only its keys. Unset, any value of an
 	// accepted key is accepted.

@@ -758,3 +758,13 @@ func TestS3FilesCallerIsToldTheStoresCodeAndNotItsMessage(t *testing.T) {
 		t.Errorf("no credentials: the caller is told %q", told)
 	}
 }
+
+// An object's url label, which a debug report's request line shows, is its
+// s3:// URL with the key escaped as a URL's path is: a space is %20.
+func TestAnS3FileLabelIsAnEscapedURL(t *testing.T) {
+	f := newFakeS3(t)
+	c := f.collector(t, "spaced", "my app.prom", s3Credentials(t, "AKIDFROMFILE"))
+	if label, err := RequestLabelFor("metrics", c, RequestOverrides{}); err != nil || label != "s3://metrics/exports/app/my%20app.prom" {
+		t.Errorf("url label %q, %v", label, err)
+	}
+}

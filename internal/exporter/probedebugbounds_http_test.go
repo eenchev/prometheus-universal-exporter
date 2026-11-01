@@ -224,11 +224,12 @@ func TestACutShowsNothingTheReportWithholds(t *testing.T) {
 	const mask = "<redacted>"
 
 	// The request is for the target with the collector's query,
-	// ?token=s3cret-query&view=full, which the report shows masked.
+	// ?token=s3cret-query&view=full, which the report shows with the token
+	// masked and view, the collector's own, as it was sent.
 	for inside := -1; inside <= len(mask)+1; inside++ {
 		path := "/" + strings.Repeat("p", debugURLLimit-inside-len(target.URL)-len("/?token="))
 		report := debugProbeGet(t, server, "collector=dbg&debug=true&target="+url.QueryEscape(target.URL+path)).Body.String()
-		whole := target.URL + path + "?token=" + mask + "&view=" + mask
+		whole := target.URL + path + "?token=" + mask + "&view=full"
 		head := debugURLLimit
 		if inside > 0 && inside < len(mask) {
 			head += len(mask) - inside

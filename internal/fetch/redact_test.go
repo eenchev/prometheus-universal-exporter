@@ -266,3 +266,23 @@ func TestAQueryNameIsReadAsAServerReadsIt(t *testing.T) {
 		}
 	}
 }
+
+// A debug report's request line shows the values of the query pairs the
+// configuration set (RedactRequestURL), read with their escapes decoded,
+// and masks every other: one whose name reads as a credential's, whatever
+// the configuration says, one next to a ;, which a server may split, and
+// one whose escapes do not decode; the userinfo and the fragment are
+// withheld as ever, and with nothing configured it is a debug report's
+// URL as before.
+func TestARequestLineShowsTheConfiguredQueryValuesAlone(t *testing.T) {
+	configured := func(name, value string) bool {
+		return name == "tenant" && value == "a b" || name == "api_key" || name == "x" || name == "y" || name == "z" && value == "%ZZ"
+	}
+	raw := "https://user:pw@h/p?tenant=a+b&api_key=1&own=2&x=1;y=2&z=%ZZ&tenant=c#frag"
+	if got, want := RedactRequestURL(raw, configured), "https://redacted:redacted@h/p?tenant=a+b&api_key=<redacted>&own=<redacted>&x=<redacted>;y=<redacted>&z=<redacted>&tenant=<redacted>"; got != want {
+		t.Errorf("shown\n%s\nwant\n%s", got, want)
+	}
+	if got, want := RedactRequestURL(raw, nil), RedactURLString(raw, MaskQueryValues); got != want {
+		t.Errorf("with nothing configured %s, want %s", got, want)
+	}
+}

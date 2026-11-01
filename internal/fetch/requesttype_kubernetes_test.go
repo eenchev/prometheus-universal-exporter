@@ -506,3 +506,20 @@ func TestAKubernetesCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 		t.Errorf("api_server with a path is %q, %v", server, err)
 	}
 }
+
+// A debug report shows a listing's limit, the exporter's own, and the
+// selectors the collector writes, and masks the API server's continue
+// token (ConfiguredQuery).
+func TestADebugReportShowsAKubernetesListingsOwnQuery(t *testing.T) {
+	c := kubernetesCollector(t, "", "pods", func(c *model.Collector) {
+		editKubernetes(c, func(k *KubernetesConfig) { k.LabelSelector, k.FieldSelector = "app=shop", "status.phase=Running" })
+	})
+	raw := "https://10.0.0.1/api/v1/pods?continue=eyJ0b2tlbiI6MX0&fieldSelector=status.phase%3DRunning&labelSelector=app%3Dshop&limit=50"
+	want := "https://10.0.0.1/api/v1/pods?continue=<redacted>&fieldSelector=status.phase%3DRunning&labelSelector=app%3Dshop&limit=50"
+	if got := RedactRequestURL(raw, ConfiguredQuery(c)); got != want {
+		t.Errorf("shown\n%s\nwant\n%s", got, want)
+	}
+	if got := RedactRequestURL(strings.Replace(raw, "app%3Dshop", "app%3Dother", 1), ConfiguredQuery(c)); !strings.Contains(got, "labelSelector=<redacted>") {
+		t.Errorf("a selector the collector does not write is shown: %s", got)
+	}
+}

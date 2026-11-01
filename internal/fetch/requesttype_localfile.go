@@ -186,21 +186,21 @@ func resolveLocalFile(target string, c *model.Collector, overrides RequestOverri
 	return fileUnderRoot(dir, c, overrides, bind, "no file to read: set request.path, or give the probe a target naming a file under request.root")
 }
 
-// localFileLabel is the url label of a file read: its file:// URL, with path
-// parameters as their placeholders.
+// localFileLabel is the url label of a file read: its file:// URL, escaped as
+// a URL is (pathURL), with path parameters as their placeholders.
 func localFileLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
 	if readsDirectory(c) {
 		dir, err := localFileTargetDir(c, target)
 		if err != nil {
 			return "", err
 		}
-		return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, dir)) + "/", nil
+		return pathURL("file", "", filepath.ToSlash(filepath.Join(c.Request.Root, dir))+"/"), nil
 	}
 	file, err := resolveLocalFile(target, c, overrides, false)
 	if err != nil {
 		return "", err
 	}
-	return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, file)), nil
+	return pathURL("file", "", filepath.ToSlash(filepath.Join(c.Request.Root, file))), nil
 }
 
 // localFileMaxAbandonedReads is how many reads of one collector may be left

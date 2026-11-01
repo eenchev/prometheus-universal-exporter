@@ -17,7 +17,10 @@ import (
 // decoder resolves them, so it stands on its own; and its comments left out,
 // since they are not configuration. The keys it takes from its file's
 // defaults block are added where the collector would write them, from the
-// block as it is written, each with a comment that says so.
+// block as it is written, each with a comment that says so. A folded block
+// scalar (>, >-), such as a long statement, keeps the lines the file writes
+// it over (model.Collector.WrittenBlocks): its value is one line, and the
+// page would show it as one.
 
 // fromDefaultsComment marks a key the collector took from its file's
 // defaults block.
@@ -36,6 +39,7 @@ func recordWritten(raw []byte, collectors []model.Collector) {
 	if len(nodes) != len(collectors) {
 		return
 	}
+	lines := strings.Split(string(raw), "\n")
 	var defaults *yaml.Node
 	for _, entry := range model.DecodedEntries(root) {
 		if model.KeyName(entry.Key) == defaultsKey {
@@ -43,17 +47,75 @@ func recordWritten(raw []byte, collectors []model.Collector) {
 		}
 	}
 	for i := range collectors {
-		written := standalone(nodes[i], map[*yaml.Node]bool{})
+		w := writtenCopy{lines: lines}
+		written := w.standalone(nodes[i], map[*yaml.Node]bool{})
 		if written == nil || written.Kind != yaml.MappingNode {
 			continue
 		}
 		if defaults != nil {
 			for _, key := range collectors[i].FromDefaults {
-				addFromDefaults(written, defaults, strings.Split(key, "."))
+				w.addFromDefaults(written, defaults, strings.Split(key, "."))
 			}
 		}
-		collectors[i].Written = written
+		collectors[i].Written, collectors[i].WrittenBlocks = written, w.inOrder(written, nil)
 	}
+}
+
+// writtenCopy copies a collector's nodes out of its file (standalone), and
+// keeps the folded block scalars among them as the file's lines write them.
+type writtenCopy struct {
+	lines  []string
+	blocks map[*yaml.Node]model.WrittenBlock
+}
+
+// inOrder appends to out the folded block scalars of n, depth first, as the
+// file writes them, an empty one for each whose lines blockOf could not
+// tell: what model.Collector.WrittenBlocks holds, nil when n has none.
+func (w *writtenCopy) inOrder(n *yaml.Node, out []model.WrittenBlock) []model.WrittenBlock {
+	if n.Kind == yaml.ScalarNode && n.Style&yaml.FoldedStyle != 0 {
+		return append(out, w.blocks[n])
+	}
+	for _, child := range n.Content {
+		out = w.inOrder(child, out)
+	}
+	return out
+}
+
+// blockOf is the folded block scalar n as the file writes it: its header,
+// from where the node starts, and the lines after it that are indented
+// further than the line it starts on, without the indentation of the
+// first; false for a header with an indentation indicator, whose lines
+// cannot be indented anew, or a node the file's lines do not hold.
+func (w *writtenCopy) blockOf(n *yaml.Node) (model.WrittenBlock, bool) {
+	if n.Line < 1 || n.Line > len(w.lines) || n.Column < 1 || n.Column > len(w.lines[n.Line-1]) {
+		return model.WrittenBlock{}, false
+	}
+	start := w.lines[n.Line-1]
+	header := strings.Fields(start[n.Column-1:])
+	if len(header) == 0 || !strings.HasPrefix(header[0], ">") || strings.ContainsAny(header[0], "123456789") {
+		return model.WrittenBlock{}, false
+	}
+	indentOf := func(line string) int { return len(line) - len(strings.TrimLeft(line, " ")) }
+	parent, indent := indentOf(start), -1
+	block := model.WrittenBlock{Header: header[0]}
+	for _, line := range w.lines[n.Line:] {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			block.Lines = append(block.Lines, "")
+			continue
+		}
+		if indentOf(line) <= parent || indent >= 0 && indentOf(line) < indent {
+			break
+		}
+		if indent < 0 {
+			indent = indentOf(line)
+		}
+		block.Lines = append(block.Lines, line[indent:])
+	}
+	for len(block.Lines) > 0 && block.Lines[len(block.Lines)-1] == "" {
+		block.Lines = block.Lines[:len(block.Lines)-1]
+	}
+	return block, len(block.Lines) > 0
 }
 
 // sourceRoot is the root of a document as it is written, which may hold
@@ -78,7 +140,7 @@ func sourceRoot(text string) (*yaml.Node, bool) {
 // its merge keys by the entries the decoder takes from them
 // (model.DecodedEntries), without anchors or comments. visiting guards
 // against an alias of a node that holds it, which the decoder refuses.
-func standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
+func (w *writtenCopy) standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
 	for n != nil && n.Kind == yaml.AliasNode {
 		n = n.Alias
 	}
@@ -89,9 +151,18 @@ func standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
 	defer delete(visiting, n)
 	out := &yaml.Node{Kind: n.Kind, Style: n.Style, Tag: n.Tag, Value: n.Value}
 	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Style&yaml.FoldedStyle != 0 {
+			if block, ok := w.blockOf(n); ok {
+				if w.blocks == nil {
+					w.blocks = map[*yaml.Node]model.WrittenBlock{}
+				}
+				w.blocks[out] = block
+			}
+		}
 	case yaml.MappingNode:
 		for _, entry := range model.DecodedEntries(n) {
-			key, value := standalone(entry.Key, visiting), standalone(entry.Value, visiting)
+			key, value := w.standalone(entry.Key, visiting), w.standalone(entry.Value, visiting)
 			if key == nil || value == nil {
 				continue
 			}
@@ -99,7 +170,7 @@ func standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
 		}
 	case yaml.SequenceNode:
 		for _, item := range n.Content {
-			if copied := standalone(item, visiting); copied != nil {
+			if copied := w.standalone(item, visiting); copied != nil {
 				out.Content = append(out.Content, copied)
 			}
 		}
@@ -111,7 +182,7 @@ func standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
 // block at path, where the collector does not write it, marked as taken
 // from the block. A block the collector writes takes the keys of the
 // defaults' block that it does not, each added on its own path.
-func addFromDefaults(collector, defaults *yaml.Node, path []string) {
+func (w *writtenCopy) addFromDefaults(collector, defaults *yaml.Node, path []string) {
 	value := lookUp(defaults, path)
 	if value == nil {
 		return
@@ -122,7 +193,7 @@ func addFromDefaults(collector, defaults *yaml.Node, path []string) {
 		if i == len(path)-1 {
 			if next == nil {
 				keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key, LineComment: fromDefaultsComment}
-				at.Content = append(at.Content, keyNode, standalone(value, map[*yaml.Node]bool{}))
+				at.Content = append(at.Content, keyNode, w.standalone(value, map[*yaml.Node]bool{}))
 			}
 			return
 		}

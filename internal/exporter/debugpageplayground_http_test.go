@@ -45,7 +45,7 @@ func TestTheDebugPageHasNoRunAsYouType(t *testing.T) {
 			t.Errorf("the page still has %q", gone)
 		}
 	}
-	requireContains(t, page, `<button type="button" id="run">Run</button>`, `$("run").addEventListener("click", run);`)
+	requireContains(t, page, `<button type="button" id="run" title="Run (Ctrl+Enter, or ⌘+Enter on a Mac, from anywhere on the page)" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>`, `$("run").addEventListener("click", run);`)
 }
 
 // A target is fetched through the collector chosen on the left, or through

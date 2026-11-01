@@ -172,7 +172,7 @@ func checkSSHFileTargetRequest(c *model.Collector, t *model.StaticTarget) error 
 }
 
 // sshFileLabel is the url label of a read: sftp://host:port/ and the file's
-// path on the host, with path parameters as their placeholders, or the
+// path on the host, escaped as a URL's is (pathURL), with path parameters as their placeholders, or the
 // directory's, ending in /, for a collector reading one.
 func sshFileLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
 	address, err := parseSSHTarget(RequestTypeSSHFile, target)
@@ -180,13 +180,13 @@ func sshFileLabel(target string, c *model.Collector, overrides RequestOverrides)
 		return "", err
 	}
 	if readsDirectory(c) {
-		return "sftp://" + address.hostPort + sshDirectory(c.Request.Root), nil
+		return pathURL("sftp", address.hostPort, sshDirectory(c.Request.Root)), nil
 	}
 	file, err := fileUnderRoot("", c, overrides, false, sshNoFile)
 	if err != nil {
 		return "", err
 	}
-	return "sftp://" + address.hostPort + path.Join(c.Request.Root, file), nil
+	return pathURL("sftp", address.hostPort, path.Join(c.Request.Root, file)), nil
 }
 
 // sshNoFile is the error of a read that names no file.
@@ -234,7 +234,7 @@ func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overri
 		body []byte
 		info fs.FileInfo
 	}
-	err = sshConns.session(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, "sftp://"+address.hostPort+full, func(src *sftpSource) error {
+	err = sshConns.session(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, pathURL("sftp", address.hostPort, full), func(src *sftpSource) error {
 		var err error
 		read.body, read.info, err = readSourceFile(src, c.Request.Root, file, responseLimit(c))
 		return err
@@ -255,7 +255,7 @@ func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overri
 // came is answered, and the files not read fail alone.
 func readSSHDirectory(ctx context.Context, key sshConnKey, c *model.Collector, target string) (*DirectoryRead, error) {
 	var read *DirectoryRead
-	err := sshConns.directory(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, "sftp://"+key.address+sshDirectory(c.Request.Root), func(src *sftpSource, progress *directoryProgress) error {
+	err := sshConns.directory(ctx, key, c.Name, c.Request.MaxOpenConnections, c.Request.Root, pathURL("sftp", key.address, sshDirectory(c.Request.Root)), func(src *sftpSource, progress *directoryProgress) error {
 		return readSourceDirectory(src, c, "", progress)
 	}, func(r *DirectoryRead) { read = r })
 	if err != nil {

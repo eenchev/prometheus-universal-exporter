@@ -739,3 +739,23 @@ func TestSSHFileTracesItsReads(t *testing.T) {
 		t.Errorf("traced\n%s\nwant\n%s", strings.Join(shown, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// A read's url label and its traced request, which a debug report's request
+// line shows, are the sftp:// URL of the file, its path escaped as a URL's
+// is: a space is %20.
+func TestAnSSHFileLabelIsAnEscapedURL(t *testing.T) {
+	f := newSSHFixture(t)
+	testutil.WriteIn(t, f.root, "my app.prom", sshPromFile)
+	c := f.collector(t, "spaced", "my app.prom")
+	want := "sftp://" + f.server.Addr + strings.ReplaceAll(filepath.Join(f.root, "my app.prom"), " ", "%20")
+	if label, err := RequestLabelFor(f.server.Addr, c, RequestOverrides{}); err != nil || label != want {
+		t.Errorf("label %q, %v; want %q", label, err, want)
+	}
+	ctx, trace := WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, f.server.Addr, c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if requests := trace.Requests(); len(requests) != 1 || requests[0].URL != want {
+		t.Errorf("traced %+v, want one read of %s", requests, want)
+	}
+}

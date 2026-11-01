@@ -29687,6 +29687,56 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestEditACopyLeavesOutWhatThePlaygroundRefuses`: the copy of a collector with `bearer_token_file`, `tls.ca_file` alone under `tls` and a json `login` has a comment in place of each, `tls` and `login` dropped whole, loads as a playground and is noted above the editor; the page holds it and its note in `data-copy` and `data-copy-note`, which *Edit a copy* puts in the playground; a copy of a collector with a `pre_script` keeps it and is noted as refused; with `--web.debug.dangerous` the login is kept, its `field_files` and the other paths dropped with a comment saying to write each, and nothing `<redacted>` is left.
 - `TestTheDebugPageNeverRunsOnOpening`, `TestTheDebugPageHasNoRunAsYouType` and `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the script calls `run` from its definition, *Run*'s click and the Ctrl+Enter handler alone; *Run* has its title and `aria-keyshortcuts`; Enter with Ctrl or Cmd in a parameter's value adds no row.
 
+## 34.250 Fixes from the review of the debug page, the OTLP export and the health check
+
+- `TestTheDebugPageWithholdsFreeTextHoldingACredential`: an `http` collector's body with `"password": "…"`, one written as a folded block over two lines, and a query value `Bearer …` are each shown `<redacted>` whole, in the configured view and in *Edit a copy* with and without `--web.debug.dangerous`, the folded block no longer over its lines; a body with no credential is shown as written.
+- `TestTheDebugPageWithholdsAStatementHoldingACredential` (sql): a statement, written as a folded block, with `Bearer …` in it, and an argument `password=…` are shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsAGRPCMessageHoldingACredential` (grpc): a message `{"api_key": "…"}` is shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsATCPSendHoldingACredential` (tcp): a send `AUTH …`, one `USER …` then `pass …` on its second line, and a folded block with `token=…` are shown `<redacted>` whole, in the view and in both copies.
+- `TestTheDebugPageWithholdsARedisArgumentHoldingACredential` (redis): a command argument `session:token=…` is shown `<redacted>`, in the view and in both copies.
+- `TestEditACopyOfAFlowMappingWritesItsComments`: *Edit a copy* of `tls: {ca_file: …, server_name: …}` writes `tls:` in block style with the comment for `ca_file` on its own line and `server_name` kept, and of `request: {type: http, tls: {ca_file: …}}` writes `request:` in block style with the comment for `tls.ca_file`; neither holds a `pue-dropped-` stand-in, and each loads as a playground.
+- `TestEditACopyOfAGRPCCollectorWithDescriptorFilesLoads` (grpc): *Edit a copy* of a collector with `descriptors: protoset` and of one with `descriptors: proto`, with and without `--web.debug.dangerous`, names neither file and loads as a playground.
+- `TestParseCollectorAsksForTheDescriptorFilesWhenTheRequestIsMade` (config, grpc): a collector with `descriptors: protoset` without `protoset_file`, and one with `descriptors: proto` without `proto_files`, read for the debug page load; read `WithRequestMade`, each is refused naming the key.
+- `TestEditACopyLeavesOutWhatThePlaygroundRefuses` (changed): *Edit a copy* is disabled while the collector chosen has no YAML read (`$("edit-copy").disabled = name !== "" && !configuredYAML.has(name);`), enabled when the read answers it and left disabled when it fails, and copies nothing but the copy read (`if (!shown) return;`).
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig` (changed): `metrics_path` is the URL's path decoded with `decodeURIComponent`, the path as it stands when that throws.
+- `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh` (changed): a fragment answered while the dialog is open is held (`if (whole.open) held = fragment;`) and swapped in on its close, after focus is given back to the opener; the one `innerHTML` is the swap of the fragment.
+- `TestTheStatusPageHasRefreshControls` (changed): the swap is `content.innerHTML = fragment;`.
+- `TestTheCollectorsPageLinksEachCollectorIntoTheDebugPage` (changed): the debug link keeps the href it was served with in `data-href` and is built from it each time it is followed.
+- `TestThePagesControlsOnOneLineLineUp` (changed): the hint beside *Run* is at the row's foot, `min-height: 36px`, its text centred, level with *Run* and the timeout's box.
+- `--healthcheck` asks `127.0.0.1` for a listen address with an empty host,
+  `0.0.0.0`, `[::]` or `[::ffff:0.0.0.0]`, the host as written for an
+  address or a name, an IPv6 zone escaped as `%25` (`[fe80::1%25eth0]`,
+  `[::1%25lo]`), and a named port by its number (`localhost:http` and
+  `:http` on port 80); every URL is one a request can be made of, and the
+  test fails on `[::1]` for `[::]`, on `:http` left in the URL and on a bare
+  `%` before a zone.
+- An exporter on a `[::]` listener passes `--healthcheck` at
+  `[::]:<port>`, also on a host without IPv6, where `[::1]` cannot be
+  dialed: the test fails there when the check asks `[::1]`.
+- Under `metric_names: otel` the counters `x_seconds` (`a=1` and `a=2`) and
+  `x_seconds_total` (`a=1`), and `requests_total` and `requests`, are the
+  sum `x` of unit `s` with `x_seconds_total`'s one point and `requests` with
+  the point of `requests`; the clashes report `x` kept as `x_seconds_total`
+  with `x_seconds` left out, two points, and `requests` with
+  `requests_total` left out, one; the warning names `metric`,
+  `prometheus_name`, `left_out_prometheus_name`, `left_out_points` and
+  `service_name`, and a name of two kinds and of two Prometheus names is
+  logged for each, under keys of its own. Under `prometheus` they are four
+  metrics and no clash. The test fails when the two are merged without a
+  report. A clash of kinds names the Prometheus name kept too.
+- Every enum of the export's JSON is its number: the golden export writes
+  each `aggregationTemporality` as `2` and no `AGGREGATION_TEMPORALITY_`
+  name, the golden JSON of the defaults pins it, and a warning's log record
+  has `"severityNumber":13`.
+- A log record has each attribute key once: `With("a", 1, "b", "with")`
+  and a line's `c=3`, `a=2`, `trip.x=flat`, a group `trip` with `x=group`
+  and `c=4` is the record's `a=2`, `b=with`, `c=4`, `trip.x=group`, in that
+  order; the logger's next line has `a=1` alone, and stderr still writes
+  both `a`s.
+- A nil `*T` error whose `Error` dereferences it is the attribute `<nil>`,
+  as on stderr, a `String` that panics is `!PANIC: no text`, a non-nil error
+  its text, and logging the line neither panics nor loses the record.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:

@@ -230,6 +230,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   in a file's name no longer reads as a query or a fragment. The `sftp://`
   URL of an `sshfile` read, the `s3://` URL of an `s3file` object and the
   database of a `sql` statement's URL are escaped the same way.
+- The debug page shows a configured collector's folded block scalar, such
+  as a `statement: >-` written over several lines, over the lines its file
+  writes it on, where it was folded into one long line that ran off the
+  right of the editor.
 
 ## exporter 1.8.0
 

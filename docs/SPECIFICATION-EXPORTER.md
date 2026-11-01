@@ -29669,6 +29669,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnS3FileLabelIsAnEscapedURL`: an s3file collector reading `my app.prom` under `exports/app` is labelled `s3://metrics/exports/app/my%20app.prom`.
 - `TestASQLLabelEscapesTheDatabase`: a sql collector of the database `my app_{{param_tenant}}` is labelled `sqlserver://db.example:1433/my%20app_{{param_tenant}}`.
 - `TestALocalfileRequestLineIsAnEscapedFileURL`: a configured localfile collector under `…/Claude outputs` run on `my app.prom` from the debug page lists its request as `READ file://…/Claude%20outputs/my%20app.prom`, and its report and a debug probe's report have that line.
+- `TestTheDebugPageShowsFoldedBlocksAsWritten`: `/debug/collector?name=pg_databases` and `/debug?collector=pg_databases` show a `statement: >-` written over two lines as `>-` over those two lines, a metric's `description: >` with a blank and a more indented line keeps both, and a `description: |` its lines; no stand-in is left in it, and the YAML read again as a collector, the withheld line left out, has the file's statement and descriptions.
 
 # 35. Documentation requirements
 
@@ -33494,7 +33495,10 @@ configured collector MUST be shown as YAML that its file writes: the
 collector's mapping as written, its keys in the file's order, its `${NAME}`
 references unexpanded whatever `--config.expand-env` says, the keys aliases
 and merge keys give it written out as the decoder reads them, without the
-file's comments, and with each key it takes from its file's `defaults`
+file's comments, a folded block scalar (`>`, `>-`, `>+`) with its header
+and over the lines the file writes it on, which MUST read as the value
+shown — one that would not, or whose header gives an indentation, MAY be
+written on one line — and with each key it takes from its file's `defaults`
 added where it would write it, marked `# from the file's defaults`. A
 collector the exporter holds without a file MUST be shown as it holds it,
 its empty keys left out. At `edit` as at `full` the YAML MUST NOT show a

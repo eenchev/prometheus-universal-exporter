@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -105,7 +106,10 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 			return "", err
 		}
 	}
+	// Told before withhold, which may change a scalar's style.
+	folded := foldedScalars(n, nil)
 	withhold(n, "")
+	blocks := writtenBlocks(x, folded)
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
@@ -115,7 +119,103 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 	if err := enc.Close(); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	return blocks.Replace(b.String()), nil
+}
+
+// shownBlock stands in, as a plain scalar, for a folded block scalar of the
+// collector's while it is encoded, and is then replaced with the block as
+// its file writes it.
+const shownBlock = "pue-written-block-"
+
+// foldedScalars appends to out the folded block scalars of n, depth first,
+// the order model.Collector.WrittenBlocks has them in.
+func foldedScalars(n *yaml.Node, out []*yaml.Node) []*yaml.Node {
+	if n.Kind == yaml.ScalarNode && n.Style&yaml.FoldedStyle != 0 {
+		return append(out, n)
+	}
+	for _, child := range n.Content {
+		out = foldedScalars(child, out)
+	}
+	return out
+}
+
+// writtenBlocks puts shownBlock<i> in place of each folded block scalar of
+// the collector, folded, that its file writes over several lines
+// (model.Collector.WrittenBlocks), and gives what writes the blocks in
+// their place once the YAML is encoded. The encoder writes a folded scalar
+// on one line, however long, as its value has it; a SQL statement of four
+// lines would run off the editor. Only a block whose lines still read as
+// the value shown, which the withholding has not changed, is written as
+// its file writes it.
+func writtenBlocks(x *model.Collector, folded []*yaml.Node) blockLines {
+	var out blockLines
+	if x.Written == nil || len(folded) != len(x.WrittenBlocks) {
+		return nil
+	}
+	for i, block := range x.WrittenBlocks {
+		n := folded[i]
+		if n.Style&yaml.FoldedStyle == 0 || len(block.Lines) == 0 || !blockReads(block, n.Value) {
+			continue
+		}
+		n.Value, n.Style, n.Tag = shownBlock+strconv.Itoa(len(out)), 0, "!!str"
+		out = append(out, block)
+	}
+	return out
+}
+
+// blockReads says whether block, written under a key, reads as value.
+func blockReads(block model.WrittenBlock, value string) bool {
+	var b strings.Builder
+	b.WriteString("v: " + block.Header + "\n")
+	for _, line := range block.Lines {
+		b.WriteString("  " + line + "\n")
+	}
+	var read struct{ V *string }
+	return yaml.Unmarshal([]byte(b.String()), &read) == nil && read.V != nil && *read.V == value
+}
+
+// blockLines are the folded block scalars writtenBlocks stood shownBlock<i>
+// in for, by i.
+type blockLines []model.WrittenBlock
+
+// Replace writes each block in place of its shownBlock<i> in text, the YAML
+// encoded, its lines indented two spaces beyond its key's, or beyond its
+// dash's for an entry of a list.
+func (blocks blockLines) Replace(text string) string {
+	if len(blocks) == 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// The value of a key, or an entry of a list, then perhaps a comment.
+		at := strings.Index(line, shownBlock)
+		if at < 0 || !strings.HasSuffix(line[:at], ": ") && !strings.HasSuffix(line[:at], "- ") {
+			out = append(out, line)
+			continue
+		}
+		rest := line[at+len(shownBlock):]
+		digits := len(rest) - len(strings.TrimLeft(rest, "0123456789"))
+		i, err := strconv.Atoi(rest[:digits])
+		if err != nil || i >= len(blocks) || rest[digits:] != "" && !strings.HasPrefix(rest[digits:], " #") {
+			out = append(out, line)
+			continue
+		}
+		// Where the key starts, past the indentation and any dashes.
+		start := len(line) - len(strings.TrimLeft(line, " "))
+		for strings.HasPrefix(line[start:], "- ") {
+			start = len(line) - len(strings.TrimLeft(line[start+1:], " "))
+		}
+		out = append(out, line[:at]+blocks[i].Header+rest[digits:])
+		for _, written := range blocks[i].Lines {
+			if written == "" {
+				out = append(out, "")
+				continue
+			}
+			out = append(out, strings.Repeat(" ", start+2)+written)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // heldCollector is x as the exporter holds it, with the keys that hold

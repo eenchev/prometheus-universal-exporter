@@ -5408,9 +5408,11 @@ in its place, read-only, since it runs as configured:
 - **As its file writes it**: its keys in the order the file has them, its
   `${NAME}` references as written, not what they expand to, the keys an
   anchor or a merge key (`<<`) gives it written out, as the loader reads
-  them, and the file's comments left out. The keys it takes from its file's
-  [defaults](#defaults-for-the-collectors-of-a-file) are added where it
-  would write them, each marked `# from the file's defaults`.
+  them, and the file's comments left out. A folded block scalar, such as a
+  `statement: >-` of several lines, is shown with the lines the file writes
+  it over, not folded into one, as a literal one (`|`) is. The keys it takes
+  from its file's [defaults](#defaults-for-the-collectors-of-a-file) are
+  added where it would write them, each marked `# from the file's defaults`.
 - **Without its credentials**, at `edit` as at `full`: a value whose key
   reads as a credential's — `bearer_token`, `basic_auth`'s `password`, a
   header, a query parameter or a login field named like one, by the rule

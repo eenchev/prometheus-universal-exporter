@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -63,31 +65,36 @@ func (f *healthcheckFlag) Set(value string) error {
 
 // healthcheckURL is the URL of endpoint on the exporter listening on
 // listenAddress, which ValidateListenAddress has accepted. A listener on
-// every address is asked on the loopback address of its family: an empty
-// host and 0.0.0.0 on 127.0.0.1, which a dual-stack listener answers too,
-// and [::] on [::1]. A name or a particular address is asked as it is, since
-// the exporter may listen on nothing else.
+// every address (an empty host, 0.0.0.0, [::] or [::ffff:0.0.0.0]) is asked
+// on 127.0.0.1: the exporter listens with Go's "tcp" network, whose [::]
+// listener is dual-stack and answers IPv4 too, and falls back to IPv4 alone
+// on a host without IPv6, where [::1] could not even be dialed. A name or a
+// particular address is asked as it is, zone included, since the exporter
+// may listen on nothing else. A named port, which the listener resolves, is
+// resolved here too, so the URL carries a number.
 func healthcheckURL(listenAddress, endpoint string) string {
 	host, port, _ := net.SplitHostPort(listenAddress)
 	if host == "" {
 		host = "127.0.0.1"
 	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		if ip.To4() != nil {
-			host = "127.0.0.1"
-		} else {
-			host = "::1"
+		host = "127.0.0.1"
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		if number, err := net.DefaultResolver.LookupPort(context.Background(), "tcp", port); err == nil {
+			port = strconv.Itoa(number)
 		}
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/" + endpoint
+	// url.URL escapes an IPv6 zone's % as %25, which the URL needs.
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: "/" + endpoint}).String()
 }
 
 // runHealthcheck asks the exporter at listenAddress for endpoint and returns
 // the exit status: 0 when it answers 200, and 1 otherwise, with one JSON line
 // on stderr saying why.
 func runHealthcheck(listenAddress, endpoint string, stderr io.Writer) int {
-	url := healthcheckURL(listenAddress, endpoint)
+	target := healthcheckURL(listenAddress, endpoint)
 	fail := func(args ...any) int {
-		newLogger("info", stderr).Error("healthcheck failed", append([]any{"url", url}, args...)...)
+		newLogger("info", stderr).Error("healthcheck failed", append([]any{"url", target}, args...)...)
 		return 1
 	}
 	client := &http.Client{
@@ -99,7 +106,7 @@ func runHealthcheck(listenAddress, endpoint string, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fail("error", err.Error())
 	}

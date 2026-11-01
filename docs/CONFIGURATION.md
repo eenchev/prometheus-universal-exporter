@@ -6024,8 +6024,12 @@ prometheus-universal-exporter --healthcheck --web.listen-address=:8080
 prometheus-universal-exporter --healthcheck=health --web.listen-address=:8080
 ```
 
-A listen address with no host, or with `0.0.0.0`, is asked on `127.0.0.1`,
-and `[::]` on `[::1]`; a name or a particular address is asked as it is.
+A listen address with no host, or with a wildcard (`0.0.0.0`, `[::]` or
+`[::ffff:0.0.0.0]`), is asked on `127.0.0.1`: the exporter's `[::]` listener
+answers IPv4 too, and listens on IPv4 alone on a host without IPv6, where
+`[::1]` could not be reached. A name or a particular address is asked as it
+is, an IPv6 zone included (`[fe80::1%eth0]:8080`), and a named port such as
+`:http` by its number.
 The check gives up after 5 seconds. It starts no server, reads no file and
 loads no configuration, so it takes a few milliseconds. The other flags are
 checked as at a start, so the container's own arguments can be given with

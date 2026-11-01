@@ -97,6 +97,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   another collector fetches, through `request_from` or a static target,
   must now be of that collector's request type (`400` otherwise), where it
   had to be an `http` collector before.
+- The OTLP export writes `aggregationTemporality` as the number `2` where it
+  wrote the name `AGGREGATION_TEMPORALITY_CUMULATIVE`: the OTLP/JSON encoding
+  requires an enum's number, which every receiver accepts. A receiver or a
+  test that matched the request body's text sees the number now.
 
 ### New
 
@@ -254,6 +258,22 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   gives a playground that loads: those lines are left out, each replaced by
   a comment saying why, with a block they leave empty, and a note above the
   editor lists them. It was refused until they were deleted by hand.
+- `--healthcheck` with `--web.listen-address=[::]:PORT` asks `127.0.0.1`,
+  which the exporter's `[::]` listener answers too, where it asked `[::1]`
+  and failed on a host without IPv6, so `healthProbes.mode: exec` restarted
+  the pod for ever. A named port (`:http`) and an IPv6 zone
+  (`[fe80::1%eth0]:8080`) give a URL the check can ask, where it could not.
+- With `otlp.metric_names: otel` two counters that are one name there, such
+  as `x_seconds` and `x_seconds_total`, or `requests` and `requests_total`,
+  are no longer merged into one metric that kept one point of the two where
+  their labels were alike: the one written last is exported, and the other
+  is left out and logged as a warning, `OTLP metric name written for two
+  Prometheus metric names under one resource`, as a name of two kinds is.
+- The OTLP log export sends each attribute key of a record once, the value
+  given last, where `logger.With("a", 1)` and a line's own `a` gave two
+  attributes `a`; and a value whose `Error` or `String` panics, as a nil
+  error's may, is `<nil>` or `!PANIC: …`, as on stderr, where it took the
+  exporter down.
 
 ## exporter 1.8.0
 

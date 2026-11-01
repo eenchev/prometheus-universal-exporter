@@ -195,6 +195,17 @@ func unusedParamsIn(c *model.Collector, unused, places string) error {
 	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them", unused, c.Name, places)
 }
 
+// pathURL is the URL of a path read over scheme from host, as the url label
+// of a file, an object or a database read and a debug report's request line
+// show it: the path escaped as a URL's path is, so a space in a file's name
+// is %20 and a ? or a # in it stays part of the path rather than reading as
+// a query or a fragment, with {{param_...}} placeholders kept as they are
+// written, as requestLabel keeps them.
+func pathURL(scheme, host, p string) string {
+	u := url.URL{Scheme: scheme, Host: host, Path: p}
+	return strings.NewReplacer("%7B%7B", "{{", "%7D%7D", "}}").Replace(u.String())
+}
+
 // requestLabel is the URL a verbose self-metric carries for a request. Path
 // parameters stay as their placeholders: the value is exactly the kind of thing
 // requestLabelURL keeps out of labels already — a tenant, an account — and one

@@ -168,3 +168,19 @@ func TestALocalFilePathMayHoldAQueryAndAFragment(t *testing.T) {
 		t.Fatalf("a localfile path with ? and #: %v", err)
 	}
 }
+
+// A file's url label, which a debug report's request line shows, is its
+// file:// URL escaped as a URL's path is: a space is %20, and a # or a ? in
+// a file's name stays part of the path; a placeholder stays as written.
+func TestALocalfileLabelIsAnEscapedFileURL(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Claude outputs")
+	c := validated(t, fileCollector("files", root, "a b#1?.prom"))
+	label, err := RequestLabelFor("", c, RequestOverrides{})
+	if want := "file://" + filepath.ToSlash(strings.ReplaceAll(root, " ", "%20")) + "/a%20b%231%3F.prom"; err != nil || label != want {
+		t.Errorf("label %q, %v; want %q", label, err, want)
+	}
+	c = validated(t, fileCollector("files", root, "{{param_job}} now.prom"))
+	if label, _ := RequestLabelFor("", c, RequestOverrides{}); !strings.HasSuffix(label, "/Claude%20outputs/{{param_job}}%20now.prom") {
+		t.Errorf("label %q, want the placeholder kept and the space escaped", label)
+	}
+}

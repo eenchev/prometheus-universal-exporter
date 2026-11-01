@@ -1297,7 +1297,9 @@ such.
 It MUST accept these `/probe` parameters: `path`, `timeout` and
 `param_<name>`. A static target using a `localfile` collector MAY set
 `path` and `timeout`. Its verbose self-metrics MUST carry the file's `file://`
-URL, with path parameters as their placeholders, as `url`, and `READ` as
+URL, its path escaped as a URL's path is (a space as `%20`, a `?` as `%3F`, a
+`#` as `%23`), with path parameters as their placeholders, as `url`, and a
+debug report's request line MUST show that URL; `READ` MUST be
 `http_method`, so they are never mistaken for the per-collector series, which
 carry no method.
 
@@ -1842,7 +1844,8 @@ the same response. Its keys:
   replaces the collector's. These MUST enter its cache key in a section a
   probe's key never has.
 - A debug probe's request section MUST show each read: `READ`, the host and
-  the file or directory as `sftp://host:port/path`, the user, and whether the
+  the file or directory as `sftp://host:port/path`, the path escaped as a
+  URL's path is, as `localfile`'s is, the user, and whether the
   connection was made for the probe or kept from an earlier scrape, and no
   credential. The verbose `url` label MUST be that URL, with path parameters
   as their placeholders, ending in `/` for a directory, and `http_method`
@@ -2210,7 +2213,8 @@ of objects, one a row, of its columns by name. Its keys:
   named after the failure unless the caller's text names it.
 - A failed statement MUST be reported in the `sql` stage, naming the server.
   A debug probe's request section MUST show `QUERY`,
-  `driver://host:port/database` (the service for `oracle`), the account,
+  `driver://host:port/database` (the service for `oracle`), the database
+  escaped as a URL's path is, as `localfile`'s file is, the account,
   whether the connection was new or kept, and the number of bound values,
   and never a credential, a bound value or the statement's text; the
   outcome MUST name the rows and the columns. The verbose `url` label MUST
@@ -2506,7 +2510,8 @@ carries it. Its keys:
   follow MUST fail the read saying so.
 - An object's response MUST be `localfile`'s, with `ETag`, the object's
   entity tag, among its headers. A debug probe's request section MUST show
-  `READ` and the object's `s3://bucket/key` URL, or the prefix's ending in
+  `READ` and the object's `s3://bucket/key` URL, the key escaped as a URL's
+  path is, as `localfile`'s file is, or the prefix's ending in
   `/`, and never a credential; the verbose `url` label MUST be that URL,
   path parameters as their placeholders, and `http_method` MUST be `READ`.
 - A static target MAY set `path` and `timeout`, the path held to the rules
@@ -29656,6 +29661,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDefaultIdleTimeoutKeepsAWorkerOfAScrapeEveryMinuteWarm` (testing/synctest): with the defaults, ten minutes of runs every 15s, 1m and 90s start one worker; runs every 5m start three.
 - `TestOutOfRangeLimitsAreCommandLineErrors` (root package, changed): `--python.max-idle-workers=-1` and `--python.idle-timeout` of `999ms`, `0s` and `-1m` exit 2 with their messages, with and without `--dry-run`.
 - `TestPythonWorkersThatDiedIdleAreReplaced`, `TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt`, `TestPythonWorkersAreCappedProcessWide` and `TestARunCountsInTheStatisticsItsTripCarries` (changed): each sets the idle workers it needs kept, which the default of 1 no longer keeps.
+
+## 34.249 The debug page's editor, the configured values a debug report shows, block scalars as written, escaped file URLs, and a copy without the server's files
+
+- `TestALocalfileLabelIsAnEscapedFileURL`: a localfile collector whose root is `…/Claude outputs` reading `a b#1?.prom` is labelled `file://…/Claude%20outputs/a%20b%231%3F.prom`, and one reading `{{param_job}} now.prom` keeps the placeholder and escapes the space.
+- `TestAnSSHFileLabelIsAnEscapedURL`: an sshfile collector reading `my app.prom` is labelled, and its read traced, as `sftp://host:port/…/my%20app.prom`.
+- `TestAnS3FileLabelIsAnEscapedURL`: an s3file collector reading `my app.prom` under `exports/app` is labelled `s3://metrics/exports/app/my%20app.prom`.
+- `TestASQLLabelEscapesTheDatabase`: a sql collector of the database `my app_{{param_tenant}}` is labelled `sqlserver://db.example:1433/my%20app_{{param_tenant}}`.
+- `TestALocalfileRequestLineIsAnEscapedFileURL`: a configured localfile collector under `…/Claude outputs` run on `my app.prom` from the debug page lists its request as `READ file://…/Claude%20outputs/my%20app.prom`, and its report and a debug probe's report have that line.
 
 # 35. Documentation requirements
 

@@ -540,7 +540,8 @@ func sqlDisplay(target string) string {
 }
 
 // sqlLabel is the url label of a statement: driver://host:port/ and the
-// database, or an Oracle service, as written, its placeholders as they are.
+// database, or an Oracle service, as written, escaped as a URL's path is
+// (pathURL), its placeholders as they are.
 // It holds neither the statement nor a credential.
 func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
 	address, err := parseSQLTarget(c, target)
@@ -551,7 +552,7 @@ func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, er
 	if d := sqlDriverOf(c); d != nil && d.serviceName {
 		database = sqlRequest(c).ServiceName
 	}
-	return sqlRequest(c).Driver + "://" + address.hostPort + "/" + database, nil
+	return pathURL(sqlRequest(c).Driver, address.hostPort, "/"+database), nil
 }
 
 // sqlBase is what a pool depends on of a collector's configuration and of a

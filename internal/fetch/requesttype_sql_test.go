@@ -970,3 +970,13 @@ func TestACollectorIsWrittenWithoutTheSQLKeysItLeavesOut(t *testing.T) {
 		}
 	}
 }
+
+// A database's name in the url label, which a debug report's request line
+// shows, is escaped as a URL's path is: a space is %20, a placeholder kept.
+func TestASQLLabelEscapesTheDatabase(t *testing.T) {
+	f := newSQLFixture(t)
+	c := f.collector(t, "db", SQLDriverSQLServer, "SELECT 1 AS one", func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "my app_{{param_tenant}}" }) })
+	if label, err := RequestLabelFor("db.example", c, RequestOverrides{}); err != nil || label != "sqlserver://db.example:1433/my%20app_{{param_tenant}}" {
+		t.Errorf("label %q, %v", label, err)
+	}
+}

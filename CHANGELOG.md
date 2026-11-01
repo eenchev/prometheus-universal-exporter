@@ -224,6 +224,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   fields follow the type as it is typed.
 - *Scrape a static target* says whose static targets it lists: the
   collector chosen, or the one the playground was copied from.
+- A `localfile` read's `READ` line in a debug report, and its verbose `url`
+  label, show the file's `file://` URL escaped as a URL is: a space in the
+  path is `%20`, where it was shown as a literal space, and a `?` or a `#`
+  in a file's name no longer reads as a query or a fragment. The `sftp://`
+  URL of an `sshfile` read, the `s3://` URL of an `s3file` object and the
+  database of a `sql` statement's URL are escaped the same way.
 
 ## exporter 1.8.0
 

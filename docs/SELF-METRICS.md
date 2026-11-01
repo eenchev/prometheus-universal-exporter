@@ -671,7 +671,9 @@ query string is dropped, and because one series per tenant would be unbounded.
 
 A [`localfile`](LOCALFILE.md#errors-and-self-metrics) collector's reads carry
 the file's `file://` URL, placeholders kept the same way, and
-`http_method="READ"`.
+`http_method="READ"`. The path in it is escaped as a URL's is, as it is for
+the `sshfile`, `s3file` and `sql` URLs below: a space in a file's name is
+`%20`, and a `?` or a `#` in it stays part of the path, as `%3F` and `%23`.
 
 An [`sshfile`](SSHFILE.md#errors-and-self-metrics) collector's reads carry
 `sftp://host:port/` and the file's path on the host, placeholders kept the

@@ -26,8 +26,11 @@ type debugPage struct {
 	Example, ExampleBody string
 	// Chosen is the configured collector the page's address names, which
 	// it opens with, and ChosenYAML that collector as the page shows it
-	// (debugcollector.go).
-	Chosen, ChosenYAML string
+	// (debugcollector.go); ChosenCopy is what Edit a copy puts in the
+	// playground in its place, and ChosenCopyNote what the page says of it
+	// (debugcopy.go).
+	Chosen, ChosenYAML         string
+	ChosenCopy, ChosenCopyNote string
 	// StaticTargets are the static targets scraped through Chosen, which
 	// the page offers to scrape, StaticTarget the one the page's address
 	// names, and StaticNote why none is offered, at full.
@@ -94,8 +97,29 @@ section.panel h2 { margin: 0 0 8px; font-size: 17px; }
 label { display: block; font-size: 13px; margin: 8px 0 2px; }
 input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; resize: vertical; tab-size: 2; }
-textarea#collector { min-height: 360px; }
 textarea[readonly] { background: var(--code); }
+/* The collector's editor: a gutter of line numbers beside the textarea, and
+   behind it a band for each line a run's error names. The textarea does not
+   wrap, so each of its lines is one line box of --editor-line, which the
+   gutter and the bands are laid out by, and its scroll is followed. */
+.editor { --editor-line: 20px; --editor-pad: 6px; display: flex; margin-top: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); overflow: hidden; }
+.editor.readonly { background: var(--code); }
+.editor:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.editor .gutter { flex: 0 0 auto; position: relative; overflow: hidden; width: 4ch; min-width: 3.2em; border-right: 1px solid var(--line); background: var(--code); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: var(--editor-line); text-align: right; user-select: none; }
+/* Laid out of the flow, so the numbers of a long YAML never make the editor
+   taller than its textarea. */
+.editor .gutter-lines { position: absolute; top: 0; left: 4px; right: 6px; padding-top: var(--editor-pad); will-change: transform; }
+.editor .band-layer { position: relative; will-change: transform; }
+.editor .gutter-lines div { height: var(--editor-line); white-space: nowrap; }
+.editor .gutter-lines div.marked { color: var(--on-accent); background: var(--bad); border-radius: 3px; font-weight: 600; }
+.editor .text { flex: 1 1 auto; position: relative; min-width: 0; }
+.editor .bands { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.editor .bands .band { position: absolute; left: 0; right: 0; height: var(--editor-line); background: var(--danger-bg); box-shadow: inset 3px 0 0 var(--bad); }
+.editor textarea { position: relative; display: block; min-height: 360px; padding: var(--editor-pad) 8px; border: 0; border-radius: 0; background: transparent; line-height: var(--editor-line); white-space: pre; overflow-wrap: normal; overflow: auto; }
+.editor textarea:focus { outline: none; }
+.editor-hint { margin: 4px 0 0; }
+.actions .run-hint { flex: 0 1 auto; align-self: center; margin: 0; }
+pre button.line-link { padding: 0; margin: 0; border: 0; background: transparent; color: var(--bad); font: inherit; text-decoration: underline; cursor: pointer; }
 .collector-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
 .collector-head label { flex: 1 1 200px; }
 .row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
@@ -199,7 +223,14 @@ p.danger strong { color: var(--bad); }
 <button type="button" class="secondary" id="back-to-example" hidden>Back to the example</button>
 </div>
 <p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> makes the playground a copy of it, which runs in its place and fetches a target through it.</p>
-<textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
+<p class="note" id="copy-note" role="status" hidden></p>
+<div class="editor{{if .Chosen}} readonly{{end}}" id="collector-editor">
+<div class="gutter" aria-hidden="true"><div class="gutter-lines" id="collector-gutter"></div></div>
+<div class="text"><div class="bands" id="collector-bands" aria-hidden="true"></div>
+<textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}" data-copy="{{.ChosenCopy}}" data-copy-note="{{.ChosenCopyNote}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
+</div>
+</div>
+<p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor. Ctrl+Enter (⌘+Enter on a Mac) runs.</p>
 </section>
 <section class="panel">
 <h2>Response</h2>
@@ -281,7 +312,8 @@ p.danger strong { color: var(--bad); }
 </div>
 {{- end}}
 <div class="actions">
-<button type="button" id="run">Run</button>
+<button type="button" id="run" title="Run (Ctrl+Enter, or ⌘+Enter on a Mac, from anywhere on the page)" aria-keyshortcuts="Control+Enter Meta+Enter">Run</button>
+<p class="note run-hint" id="run-hint">Ctrl+Enter runs, ⌘+Enter on a Mac</p>
 <div class="narrow"><label for="timeout">Timeout, seconds</label>
 <input id="timeout" type="number" min="1" max="600" step="any" value="{{.ProbeTimeoutSeconds}}"></div>
 </div>
@@ -523,7 +555,7 @@ function editor(rowsBox, addButton, noun, check, hint, names) {
     row.name.addEventListener("input", () => { row.value.placeholder = hint(row.name.value.trim()); });
     // Enter in the last row's value adds a row.
     row.value.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" || rows[rows.length - 1] !== row) return;
+      if (event.key !== "Enter" || event.ctrlKey || event.metaKey || rows[rows.length - 1] !== row) return;
       event.preventDefault();
       add("", "", true);
     });
@@ -706,14 +738,160 @@ function fitBody() {
   if (body.value !== example && body.value !== "") return;
   body.value = $("configured").value === "" && copiedFrom === "" ? example : "";
 }
+// The collector's editor is a textarea, which does not wrap, with a gutter
+// of its line numbers beside it and, behind it, a band on each line a run's
+// error names, the line's number marked in the gutter too. Each line of the
+// textarea is one line box of the height the gutter's lines and the bands
+// are laid out by, so both follow its scroll, sideways scrolling leaving
+// them where they are. The marks go with the next edit, which moves the
+// lines they were of.
+const editorArea = $("collector"), gutterLines = $("collector-gutter"), bandLayer = document.createElement("div");
+bandLayer.className = "band-layer";
+$("collector-bands").append(bandLayer);
+editorArea.setAttribute("aria-describedby", "editor-hint");
+let marked = [];
+const editorLine = () => parseFloat(getComputedStyle(editorArea).lineHeight) || 20;
+const editorPad = () => parseFloat(getComputedStyle(editorArea).paddingTop) || 0;
+function followScroll() {
+  const shift = "translateY(" + -editorArea.scrollTop + "px)";
+  gutterLines.style.transform = shift;
+  bandLayer.style.transform = shift;
+}
+function drawGutter() {
+  const count = editorArea.value.split("\n").length;
+  // Room for the widest number, and the gutter's padding.
+  gutterLines.parentElement.style.width = "calc(" + String(count).length + "ch + 12px)";
+  while (gutterLines.childElementCount > count) gutterLines.lastElementChild.remove();
+  for (let n = gutterLines.childElementCount + 1; n <= count; n++) {
+    const number = document.createElement("div");
+    number.textContent = String(n);
+    gutterLines.append(number);
+  }
+  followScroll();
+}
+// markLines marks the lines numbered in lines, those the editor has.
+function markLines(lines) {
+  for (const n of marked) if (gutterLines.children[n - 1]) gutterLines.children[n - 1].classList.remove("marked");
+  marked = lines.filter((n) => n >= 1 && n <= gutterLines.childElementCount);
+  const height = editorLine(), pad = editorPad();
+  bandLayer.replaceChildren(...marked.map((n) => {
+    gutterLines.children[n - 1].classList.add("marked");
+    const band = document.createElement("div");
+    band.className = "band";
+    band.style.top = pad + (n - 1) * height + "px";
+    return band;
+  }));
+  followScroll();
+}
+function setEditor(text) {
+  editorArea.value = text;
+  markLines([]);
+  drawGutter();
+}
+editorArea.addEventListener("scroll", followScroll);
+// jumpTo selects the line numbered n in the editor and scrolls it into the
+// middle of the view.
+function jumpTo(n) {
+  const lines = editorArea.value.split("\n");
+  if (n < 1 || n > lines.length) return;
+  let start = 0;
+  for (let i = 0; i < n - 1; i++) start += lines[i].length + 1;
+  editorArea.focus();
+  editorArea.setSelectionRange(start, start + lines[n - 1].length);
+  editorArea.scrollTop = Math.max(0, editorPad() + (n - 1) * editorLine() - editorArea.clientHeight / 2);
+  editorArea.scrollLeft = 0;
+  followScroll();
+}
+// linesNamed are the lines an error of the loader names, "line 4: …" or
+// "yaml: line 4: …", counted from the collector's first line, as the
+// editor numbers them; each once, in order.
+const lineNamed = /\bline (\d+)\b/g;
+const linesNamed = (text) => [...new Set([...text.matchAll(lineNamed)].map((m) => Number(m[1])))].sort((a, b) => a - b);
+// showError writes an error into pre, each "line N" a button that selects
+// that line in the editor when linked; as text alone, never as HTML.
+function showError(pre, text, linked) {
+  pre.replaceChildren();
+  let at = 0;
+  for (const m of text.matchAll(lineNamed)) {
+    pre.append(text.slice(at, m.index));
+    if (linked) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "line-link";
+      button.textContent = m[0];
+      button.title = "Select line " + m[1] + " in the editor";
+      button.addEventListener("click", () => jumpTo(Number(m[1])));
+      pre.append(button);
+    } else {
+      pre.append(m[0]);
+    }
+    at = m.index + m[0].length;
+  }
+  pre.append(text.slice(at));
+}
+// In the playground Tab puts in two spaces, or indents the lines selected
+// by two, and Shift+Tab takes up to two from the start of each line the
+// selection is on. Esc, then Tab, leaves the editor, as Tab does anywhere
+// else, so the keyboard is never caught in it.
+let escaped = false;
+editorArea.addEventListener("focus", () => { escaped = false; });
+editorArea.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { escaped = true; return; }
+  if (event.key === "Shift") return;
+  const leave = escaped;
+  escaped = false;
+  if (event.key !== "Tab" || leave || editorArea.readOnly || event.ctrlKey || event.altKey || event.metaKey) return;
+  event.preventDefault();
+  indent(event.shiftKey);
+});
+// edit replaces start to end with text, through the browser's own editing
+// where it has it, which keeps its undo, and selects from to to after.
+function edit(start, end, text, from, to) {
+  editorArea.setSelectionRange(start, end);
+  let done = false;
+  try { done = document.execCommand("insertText", false, text); } catch (error) { done = false; }
+  if (!done || editorArea.value.slice(start, start + text.length) !== text) {
+    editorArea.setRangeText(text, start, end, "end");
+    editorArea.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  editorArea.setSelectionRange(from, to);
+}
+function indent(out) {
+  const value = editorArea.value, start = editorArea.selectionStart, end = editorArea.selectionEnd;
+  const many = value.slice(start, end).includes("\n");
+  if (!out && !many) { edit(start, end, "  ", start + 2, start + 2); return; }
+  // The lines the selection is on, a line it ends at the start of left out.
+  const from = value.lastIndexOf("\n", start - 1) + 1;
+  let to = value.indexOf("\n", end > start && value[end - 1] === "\n" ? end - 1 : end);
+  if (to < 0) to = value.length;
+  const lines = value.slice(from, to).split("\n");
+  const cuts = lines.map((line) => out ? (line.startsWith("  ") ? 2 : line.startsWith(" ") ? 1 : 0) : -2);
+  const changed = lines.map((line, i) => cuts[i] < 0 ? "  " + line : line.slice(cuts[i])).join("\n");
+  if (changed === value.slice(from, to)) return;
+  if (many) { edit(from, to, changed, from, from + changed.length); return; }
+  const at = Math.max(from, start - cuts[0]);
+  edit(from, to, changed, at, Math.max(at, end - cuts[0]));
+}
 // The editor shows what runs: the playground, or the configured collector
 // chosen, as /debug/collector shows it, read-only, since it runs as
 // configured. Edit a copy makes the playground a copy of that one.
+// Each is kept as /debug/collector answers it: the YAML shown, and the copy
+// Edit a copy makes of it, which leaves out what the playground refuses,
+// with the note that says what (debugcopy.go).
 const configuredYAML = new Map();
-if ($("collector").dataset.shown) configuredYAML.set($("collector").dataset.shown, $("collector").value);
+if ($("collector").dataset.shown) {
+  configuredYAML.set($("collector").dataset.shown, { yaml: $("collector").value, copy: $("collector").dataset.copy, note: $("collector").dataset.copyNote || "" });
+}
+let copyNote = "";
 async function showCollector() {
   const area = $("collector"), name = $("configured").value;
   area.readOnly = name !== "";
+  $("collector-editor").classList.toggle("readonly", name !== "");
+  markLines([]);
+  // A playground copied from none, the example, has nothing left out.
+  if (copiedFrom === "") copyNote = "";
+  $("copy-note").textContent = copyNote;
+  $("copy-note").hidden = name !== "" || copiedFrom === "" || copyNote === "";
   $("edit-copy").hidden = name === "";
   $("back-to-example").hidden = name !== "" || copiedFrom === "";
   $("collector-note").hidden = name === "";
@@ -724,9 +902,9 @@ async function showCollector() {
   showForm();
   showStaticTargets();
   fitBody();
-  if (name === "") { area.value = written; return; }
-  if (configuredYAML.has(name)) { area.value = configuredYAML.get(name); return; }
-  area.value = "# Reading the configuration of " + name + "…";
+  if (name === "") { setEditor(written); return; }
+  if (configuredYAML.has(name)) { setEditor(configuredYAML.get(name).yaml); return; }
+  setEditor("# Reading the configuration of " + name + "…");
   let text;
   try {
     const url = new URL("debug/collector", document.baseURI);
@@ -734,11 +912,15 @@ async function showCollector() {
     const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
     const answer = await response.json();
     if (answer.error) text = "# " + answer.error;
-    else { configuredYAML.set(name, text = answer.yaml); learnForm(name, answer); }
+    else {
+      configuredYAML.set(name, { yaml: answer.yaml, copy: answer.copy || answer.yaml, note: answer.copy_note || "" });
+      text = answer.yaml;
+      learnForm(name, answer);
+    }
   } catch (error) {
     text = "# The configuration could not be read: " + error.message;
   }
-  if ($("configured").value === name) area.value = text;
+  if ($("configured").value === name) setEditor(text);
 }
 // Copy as gives what the page's form asks for as it is asked of the exporter
 // outside the page: the /probe URL, a curl command for it, a Prometheus job
@@ -859,6 +1041,9 @@ if (staticCopy) $("static-target").addEventListener("change", staticCopy);
 // what was typed in them, for when the type comes back, and are not sent.
 let typeFrame = 0;
 $("collector").addEventListener("input", () => {
+  // An edit moves the lines an error named: their marks go.
+  markLines([]);
+  drawGutter();
   if ($("collector").readOnly) return;
   written = $("collector").value;
   if (typeFrame) return;
@@ -868,13 +1053,21 @@ $("collector").addEventListener("input", () => {
     if (now !== writtenType) { writtenType = now; showForm(); }
   });
 });
+// The copy leaves out what the playground would refuse, the lines that name
+// the server's files and a login, each replaced by a comment, and the note
+// above the editor says what it left out (debugcopy.go).
 $("edit-copy").addEventListener("click", () => {
-  written = $("collector").value;
+  const shown = configuredYAML.get($("configured").value);
+  written = shown && shown.copy ? shown.copy : $("collector").value;
+  copyNote = shown ? shown.note : "";
   writtenType = requestTypeOf(written);
   copiedFrom = $("configured").value;
   $("configured").value = "";
   showCollector();
+  // The copy is read from its first line.
+  $("collector").setSelectionRange(0, 0);
   $("collector").focus();
+  $("collector").scrollTop = 0;
 });
 // Back to the example puts the example playground back in place of the
 // copy, with the example's body unless one was written in.
@@ -888,6 +1081,7 @@ $("back-to-example").addEventListener("click", () => {
 for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", showMode);
 $("configured").addEventListener("change", showCollector);
 showMode();
+drawGutter();
 showCollector();
 // A list whose rows are wrong is not sent: the first wrong row is focused,
 // and the status says where to look.
@@ -946,7 +1140,7 @@ async function run() {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout((timeout + 5) * 1000)]),
     });
     const answer = await response.json();
-    show(answer, response, Math.round(performance.now() - started));
+    show(answer, response, Math.round(performance.now() - started), request.collector);
   } catch (error) {
     if (controller.signal.aborted) return;
     statusLine.className = "status failed";
@@ -1110,7 +1304,10 @@ function drawRows() {
 }
 $("series-filter").addEventListener("input", drawRows);
 $("series-metric").addEventListener("change", drawRows);
-function show(answer, response, took) {
+// sent is the playground's YAML the run sent, undefined for a configured
+// collector's run: the lines a refusal of it names are marked in the editor,
+// and link to it, while the editor still holds what was sent.
+function show(answer, response, took, sent) {
   const statusLine = $("status-line");
   const series = $("series");
   const stages = $("stages");
@@ -1121,12 +1318,15 @@ function show(answer, response, took) {
     statusLine.className = "status failed";
     statusLine.textContent = response.status + ": refused in " + took + " ms";
     series.className = "error";
-    series.textContent = answer.error;
+    const ours = sent !== undefined && sent === editorArea.value && $("configured").value === "";
+    showError(series, answer.error, ours);
+    markLines(ours ? linesNamed(answer.error) : []);
     fillTable({});
     for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
   }
+  markLines([]);
   statusLine.className = "status " + (answer.ok ? "ok" : "failed");
   statusLine.textContent = "Ran in " + took + " ms: " + answer.verdict;
   series.className = "";
@@ -1168,6 +1368,13 @@ function show(answer, response, took) {
   $("report").textContent = answer.report || "";
 }
 $("run").addEventListener("click", run);
+// Ctrl+Enter, or Cmd+Enter, runs as Run does, from anywhere on the page, the
+// editors and the fields among it.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  run();
+});
 // Nothing runs until the visitor presses Run: the page takes its collector
 // and target from its URL, which a link on any page can set, and running on
 // opening would make that link a run the visitor never asked for.

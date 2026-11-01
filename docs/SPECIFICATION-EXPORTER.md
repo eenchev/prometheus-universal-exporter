@@ -29675,6 +29675,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestADebugReportShowsAKubernetesListingsOwnQuery`: a listing's request line shows `limit=50` and the selectors the collector writes and masks `continue`, and a selector the collector does not write.
 - `TestADebugReportShowsTheQueryValuesTheConfigurationSets`: a configured http collector with `request.query` `tenant: acme`, `api_key: s3cret`, `t: "{{param_t}}"` and `region: ${PUE_TEST_REGION}` loaded with `--config.expand-env`, run from the debug page on a target with `?own=1`, lists its request with `tenant=acme` and `own`, `api_key`, `t` and `region` `<redacted>`, as its report and a debug probe's report do; a failed probe's caller is still told `tenant=<redacted>`.
 - `TestADebugProbeReportsTheTrip`, `TestACutShowsNothingTheReportWithholds` and `TestTheReportsOfTheExamplesAreWrittenAsTheyWere` (changed): the collector's own `view=full` is shown, the token still masked, and the oracle masks as `fetch.RedactRequestURL` does with the collector's `fetch.ConfiguredQuery`.
+- `TestTheDebugPageEditorNumbersItsLines`: `/debug` and `/debug?collector=rooms` have the editor's gutter and its bands beside the textarea, which does not wrap, laid out by one line height (`--editor-line`), the gutter's numbers out of the flow, the read-only editor marked `readonly`, and the script draws a number a line and follows the textarea's `scroll` with `translateY` of the gutter and the bands.
+- `TestTheDebugPageMarksTheLinesAnErrorNames`: the loader's refusal of a playground with two unknown keys names `line 7` and `line 9`, as the page's `/\bline (\d+)\b/g` reads them; the script marks them, in the gutter and with a band, for a refused run of the playground the editor still holds alone, makes each `line N` a button that selects the line, clears the marks on an edit, and writes no HTML.
+- `TestTheDebugPageRunsOnCtrlEnter`: *Run*'s title and `aria-keyshortcuts="Control+Enter Meta+Enter"`, the hint beside it, the page's keydown handler that runs on Ctrl+Enter or Cmd+Enter, and a parameter's value that adds no row on either.
+- `TestTheDebugPageEditorIndentsOnTab`: the hint below the editor, Tab putting in two spaces or indenting the lines selected, Shift+Tab taking up to two, Esc then Tab and a read-only editor leaving Tab alone, through `execCommand("insertText")`.
+- `TestEditACopyLeavesOutWhatThePlaygroundRefuses`: the copy of a collector with `bearer_token_file`, `tls.ca_file` alone under `tls` and a json `login` has a comment in place of each, `tls` and `login` dropped whole, loads as a playground and is noted above the editor; the page holds it and its note in `data-copy` and `data-copy-note`, which *Edit a copy* puts in the playground; a copy of a collector with a `pre_script` keeps it and is noted as refused; with `--web.debug.dangerous` the login is kept, its `field_files` and the other paths dropped with a comment saying to write each, and nothing `<redacted>` is left.
+- `TestTheDebugPageNeverRunsOnOpening`, `TestTheDebugPageHasNoRunAsYouType` and `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the script calls `run` from its definition, *Run*'s click and the Ctrl+Enter handler alone; *Run* has its title and `aria-keyshortcuts`; Enter with Ctrl or Cmd in a parameter's value adds no row.
 
 # 35. Documentation requirements
 
@@ -33530,6 +33536,37 @@ with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
 copy of the YAML shown, which then runs, and MUST remember, through edits
 while it is open, the configured collector the playground was copied from.
+The copy MUST leave out what the playground refuses of its request — every
+key ending in `_file` or `_files` but `max_files`, at any depth of the
+request's mappings, and `login` — each replaced by a YAML comment, where its
+line was, that names it and says why it was dropped, and a mapping left
+with nothing MUST be left out with it, its comment naming each of its keys,
+so that a copy of a collector without Python loads as a playground; the
+page MUST say above the editor which keys the copy left out, and, for a
+collector that runs Python, that a run of the copy is refused until the
+script is taken out. With `--web.debug.dangerous` the copy MUST keep a
+`login`, and MUST still leave out the keys ending in `_file` or `_files`,
+whose paths the page withholds, each comment saying to write the path in its
+place. `/debug/collector` MUST answer the copy as `copy` and the note as
+`copy_note`, and the page opened on a configured collector MUST hold them
+for *Edit a copy*.
+
+The editor MUST number its lines in a gutter beside it, for a configured
+collector's YAML and for the playground alike, each number level with its
+line however the editor is scrolled, down or sideways; the editor MUST NOT
+wrap a line. When a run of the playground the editor still holds is refused
+with an error that names lines (`line <n>:`, counted from the collector's
+first line), the page MUST mark each of those lines in the gutter and with
+a band behind it, MUST make each `line <n>` of the error a control that
+selects that line in the editor, and MUST clear the marks at the next edit,
+at a run that is not refused and at a change of collector. In the
+playground Tab MUST put in two spaces, or indent the lines selected by two,
+and Shift+Tab MUST take up to two spaces from the start of each line the
+selection is on; Esc, then Tab, MUST leave the editor, and a read-only
+editor MUST take Tab as any field does. Ctrl+Enter and Cmd+Enter MUST run
+from anywhere on the page, the editors and fields included, as *Run* does,
+which MUST say so in its title, its `aria-keyshortcuts` and a hint beside
+it; Enter with either in a parameter's value MUST NOT add a row.
 The page MUST open with the example playground, an `http` collector,
 whatever was written or copied on it before: it MUST NOT keep the
 playground, the body or the collector copied from in the browser. While

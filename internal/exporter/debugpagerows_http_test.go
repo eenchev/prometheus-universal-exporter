@@ -97,7 +97,7 @@ func TestTheDebugPageEditsHeadersAndParametersAsRows(t *testing.T) {
 		`row.name.setAttribute("aria-label", title + " name " + (i + 1));`, `row.value.setAttribute("aria-label", title + " value " + (i + 1));`,
 		`row.remove.setAttribute("aria-label", "Remove " + noun + " " + (i + 1));`, `row.remove.textContent = "\u00d7";`,
 		`if (names) row.name.setAttribute("list", names);`, `option.value = name;`, `row.value.placeholder = hint(name.trim());`,
-		`const next = rows[at] || rows[at - 1];`, `(next ? next.name : addButton).focus();`, `if (event.key !== "Enter" || rows[rows.length - 1] !== row) return;`,
+		`const next = rows[at] || rows[at - 1];`, `(next ? next.name : addButton).focus();`, `if (event.key !== "Enter" || event.ctrlKey || event.metaKey || rows[rows.length - 1] !== row) return;`,
 		`addButton.addEventListener("click", () => add("", "", true));`, `headers.add();`,
 		// The checks, worded as the server's.
 		`return "A " + noun + " needs a name: give one, or clear the value.";`,

@@ -52,8 +52,13 @@ var urlValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 // debugCollectorAnswer is what debugCollectorPath answers: the collector's
 // name and YAML, and the keys it took from its file's defaults; or Error.
 type debugCollectorAnswer struct {
-	Name         string   `json:"name,omitempty"`
-	YAML         string   `json:"yaml,omitempty"`
+	Name string `json:"name,omitempty"`
+	YAML string `json:"yaml,omitempty"`
+	// Copy is the YAML Edit a copy puts in the playground, and CopyNote
+	// what the page says above it of what the copy left out
+	// (copiedCollectorYAML).
+	Copy         string   `json:"copy,omitempty"`
+	CopyNote     string   `json:"copy_note,omitempty"`
 	FromDefaults []string `json:"from_defaults,omitempty"`
 	// StaticTargets are the static targets scraped through the collector,
 	// at full alone, where the page scrapes them: empty, not left out, when
@@ -97,6 +102,12 @@ func debugStaticTargets(followed *followedConfig, name string) []debugStaticTarg
 
 // shownCollectorYAML is the configured collector x as the page shows it.
 func shownCollectorYAML(x *model.Collector) (string, error) {
+	return collectorYAML(x, nil)
+}
+
+// collectorYAML is x as the page shows it, and, with drops set, as Edit a
+// copy copies it, the keys the playground refuses dropped (copyDrops).
+func collectorYAML(x *model.Collector, drops *copyDrops) (string, error) {
 	var n *yaml.Node
 	if x.Written != nil {
 		n = copyNode(x.Written)
@@ -110,6 +121,9 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 	folded := foldedScalars(n, nil)
 	withhold(n, "")
 	blocks := writtenBlocks(x, folded)
+	if drops != nil {
+		drops.dropFrom(n)
+	}
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
@@ -119,7 +133,11 @@ func shownCollectorYAML(x *model.Collector) (string, error) {
 	if err := enc.Close(); err != nil {
 		return "", err
 	}
-	return blocks.Replace(b.String()), nil
+	text := blocks.Replace(b.String())
+	if drops != nil {
+		text = drops.Replace(text)
+	}
+	return text, nil
 }
 
 // shownBlock stands in, as a plain scalar, for a folded block scalar of the
@@ -388,8 +406,14 @@ func (s *Server) debugCollectorHandler(w http.ResponseWriter, r *http.Request) {
 		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
 		return
 	}
+	copied, note, err := copiedCollectorYAML(x, s.playgroundUnbound())
+	if err != nil {
+		s.logger.Error("copying a collector on the debug page failed", "collector", name, "error", err)
+		answer(http.StatusInternalServerError, debugCollectorAnswer{Error: "the collector could not be shown"})
+		return
+	}
 	form := debugFormOf(x)
-	a := debugCollectorAnswer{Name: x.Name, YAML: shown, FromDefaults: x.FromDefaults, Form: &form}
+	a := debugCollectorAnswer{Name: x.Name, YAML: shown, Copy: copied, CopyNote: note, FromDefaults: x.FromDefaults, Form: &form}
 	if s.debug == DebugFull {
 		// The page offers them when this collector is chosen or the
 		// playground is a copy of it, read at each change of collector, so

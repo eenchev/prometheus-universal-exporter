@@ -171,6 +171,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   a Prometheus `scrape_config` for the collector and the target, and the
   debug probe's URL, and a static target as its `/static-targets` URL and
   `curl` command; no credential is put in them.
+- The debug page's editor numbers its lines in a gutter beside the text, and
+  marks the lines a refusal of the playground names, in the gutter and with
+  a band behind each; `line 7` in the error is a link that selects the line.
+  In the playground Tab indents by two spaces and Shift+Tab outdents (Esc,
+  then Tab, leaves the editor), and Ctrl+Enter or ⌘+Enter runs from
+  anywhere on the page.
 
 ### Fixed
 
@@ -243,6 +249,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   a placeholder or a `${NAME}` reference gives, the target's own query and
   any parameter whose name reads as a credential's stay masked, as every
   query value of an error, which a probe's caller is told, does.
+- *Edit a copy* of a configured collector that names files (`tls.ca_file`,
+  `password_file`, `bearer_token_file`, `known_hosts_file`, …) or logs in
+  gives a playground that loads: those lines are left out, each replaced by
+  a comment saying why, with a block they leave empty, and a note above the
+  editor lists them. It was refused until they were deleted by hand.
 
 ## exporter 1.8.0
 

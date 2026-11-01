@@ -665,7 +665,8 @@ func TestTheDebugPageNotesTheLoadsWarningsAndTheRunsLogs(t *testing.T) {
 
 // The page takes its collector and target from its URL, which a link on any
 // page can set, so it runs nothing when it opens: run is called when Run is
-// pressed, and nowhere else: not on opening, nor after an edit.
+// pressed, or Ctrl+Enter, and nowhere else: not on opening, nor after an
+// edit.
 func TestTheDebugPageNeverRunsOnOpening(t *testing.T) {
 	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
 	server.SetDebug(DebugFull)
@@ -678,8 +679,9 @@ func TestTheDebugPageNeverRunsOnOpening(t *testing.T) {
 	for _, use := range regexp.MustCompile(`(?:^|[^\w.$])run\b.{0,6}`).FindAllString(code, -1) {
 		uses = append(uses, strings.TrimSpace(use))
 	}
-	want := []string{"run() {", "run);"}
+	want := []string{"run() {", "run);", "run();"}
 	if !slices.Equal(uses, want) {
-		t.Errorf("the page's script uses run at %q, want only its definition and the click handler: %q", uses, want)
+		t.Errorf("the page's script uses run at %q, want only its definition, the click handler and the Ctrl+Enter one: %q", uses, want)
 	}
+	requireContains(t, script, "event.preventDefault();\n  run();\n});")
 }

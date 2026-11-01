@@ -5424,15 +5424,40 @@ in its place, read-only, since it runs as configured:
   credentials in a file it reads.
 
 *Edit a copy* makes the playground a copy of that YAML, which then runs in
-its place, under the rules for the playground: what was withheld has to be
-left out or written again, and a collector with Python or with a file is
-refused as any playground is. A copy of a collector of any request type
+its place, under the rules for the playground. The copy leaves out what the
+playground would refuse: every key of the request ending in `_file` or
+`_files` (`tls.ca_file`, `password_file`, `bearer_token_file`,
+`known_hosts_file`, …) and a `login`, each line replaced by a comment that
+says what was dropped and why,
+`# tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)`,
+and a block left with nothing, such as a `tls:` that held only `ca_file`,
+with it, so that the copy loads; a note above the editor lists what was left
+out. A target probed, or a static target scraped, through the collector it
+was copied from is still fetched with them. In [dangerous debug
+mode](#dangerous-debug-mode) a `login` is kept, but the paths, which the
+page withholds, are dropped all the same, each comment saying to write the
+path in its place. Python is left in: the note says that a run of the copy
+is refused until the script is taken out, as for any playground, but in
+dangerous debug mode. Any other value shown `<redacted>` has to be left out
+or written again. A copy of a collector of any request type
 runs: a `tlscert` collector's copy reads a pasted handshake, or what
 `tls_cert` answers when a target is probed or a static target scraped
 through it. The page remembers the collector the playground was copied
 from, through edits, while it is open, and fetches a target through it;
 *Back to the example*, shown while the playground is a copy, puts the
 example back.
+
+The editor numbers its lines in a gutter beside the text, for the YAML of a
+configured collector as for the playground. It does not wrap: a long line,
+such as a statement, scrolls sideways, and the numbers stay beside their
+lines however the text is scrolled. When a run of the playground is refused
+with a mistake on a line — `line 7: unknown key "bogus" in a metric rule` —
+each line the error names is marked, in the gutter and by a band behind it,
+and `line 7` in the error is a link that selects that line in the editor;
+the marks go with the next edit. In the playground Tab indents by two
+spaces, or indents the lines selected, and Shift+Tab outdents them; to leave
+the editor with the keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on
+a Mac, runs from anywhere on the page, as *Run* does.
 
 It reads one of three responses:
 

@@ -633,10 +633,15 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
 		if chosen != "" && chosen == c.Name && page.Chosen == "" {
-			if shown, err := shownCollectorYAML(c); err == nil {
-				page.Chosen, page.ChosenYAML = c.Name, shown
+			shown, err := shownCollectorYAML(c)
+			copied, note, copyErr := "", "", err
+			if err == nil {
+				copied, note, copyErr = copiedCollectorYAML(c, s.playgroundUnbound())
+			}
+			if copyErr == nil {
+				page.Chosen, page.ChosenYAML, page.ChosenCopy, page.ChosenCopyNote = c.Name, shown, copied, note
 			} else {
-				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", err)
+				s.logger.Error("showing a collector on the debug page failed", "collector", c.Name, "error", copyErr)
 			}
 		}
 	}

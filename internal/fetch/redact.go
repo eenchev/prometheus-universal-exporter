@@ -154,10 +154,12 @@ func maskQueryShowing(raw string, all bool, shown func(name, value string) bool)
 		}
 		raw = raw[len(piece)+len(separator):]
 		name, _, hasValue := strings.Cut(piece, "=")
+		// With all, a value is masked unless the configuration set it.
+		allMasked := all && (!alone || !configuredPair(name, strings.TrimPrefix(piece, name+"="), shown))
 		switch {
 		// The first piece with a = after an & holds the = that ends the
 		// whole name, so wholeName is asked of that piece's value.
-		case hasValue && (all && !(alone && configuredPair(name, piece[len(name)+1:], shown)) || masked || wholeName || credentialQueryName(name)):
+		case hasValue && (allMasked || masked || wholeName || credentialQueryName(name)):
 			b.WriteString(name)
 			b.WriteString("=" + Redacted)
 			masked = true

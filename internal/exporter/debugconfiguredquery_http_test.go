@@ -66,7 +66,8 @@ func TestADebugReportShowsTheQueryValuesTheConfigurationSets(t *testing.T) {
 		t.Fatalf("the target was asked %q", asked)
 	}
 	check("the page's request", answer.Requests[0].URL)
-	check("the page's report", answer.Report[strings.Index(answer.Report, "1. GET "):])
+	_, line, _ := strings.Cut(answer.Report, "1. GET ")
+	check("the page's report", line)
 
 	recorder := serve(server, httptest.NewRequest(http.MethodGet, "/probe?collector=rooms&target="+target.URL+"/%3Fown%3D1&param_t=v1&debug=true", nil))
 	report := recorder.Body.String()

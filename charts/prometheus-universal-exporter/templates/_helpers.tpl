@@ -22,9 +22,12 @@
   "--probe.default-timeout" "set server.probeDefaultTimeout instead"
   "--probe.max-concurrent" "set server.probeMaxConcurrent instead"
   "--python.max-workers" "set server.pythonMaxWorkers instead"
+  "--python.max-idle-workers" "set server.pythonMaxIdleWorkers instead"
+  "--python.idle-timeout" "set server.pythonIdleTimeout instead"
   "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.debug" "set server.debug instead"
+  "--web.debug.dangerous" "set server.debugDangerous instead"
   "--web.gzip-level" "set server.gzipLevel instead"
   "--web.status-refresh" "set server.statusRefresh instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
@@ -495,6 +498,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $level -}}
 {{- end -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.debugDangerous" -}}
+{{- /* The exporter refuses --web.debug.dangerous below --web.debug=full and
+       would exit at once, restarting for ever; refused here instead, where
+       the values are. */ -}}
+{{- if .Values.server.debugDangerous -}}
+{{- if ne (include "prometheus-universal-exporter.debug" .) "full" -}}
+{{- fail (printf "server.debugDangerous needs server.debug: full, not %q: it lets the debug page's playground run Python, read the pod's files and make its own requests" (.Values.server.debug | default "" | toString)) -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.gzipLevel" -}}
 {{- /* Empty or null leaves the flag out, and the exporter's default, 1,
        applies; 0, which answers uncompressed, is rendered like the levels
@@ -548,20 +562,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.countFlag" -}}
-{{- /* A count flag's value, from (list name value): empty or null leaves the
-       flag out; otherwise a whole number from 0 to 2147483647, as a number
-       or as a string of digits with no zero before another digit: the
-       exporter's flag reads 010 as eight and refuses 08, so the chart takes
-       neither. The pattern is the values schema's, and spells the range out
-       digit by digit, since it has to hold for a string of any length. */ -}}
+{{- /* A count flag's value, from (list name value), or (list name value
+       zero) where 0 means something other than no limit, zero saying what:
+       empty or null leaves the flag out; otherwise a whole number from 0 to
+       2147483647, as a number or as a string of digits with no zero before
+       another digit: the exporter's flag reads 010 as eight and refuses 08,
+       so the chart takes neither. The pattern is the values schema's, and
+       spells the range out digit by digit, since it has to hold for a string
+       of any length. */ -}}
 {{- $name := index . 0 -}}
 {{- $value := index . 1 -}}
+{{- $zero := "0 for no limit" -}}
+{{- if gt (len .) 2 -}}{{- $zero = index . 2 -}}{{- end -}}
 {{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
 {{- $text := include "prometheus-universal-exporter.text" $value -}}
 {{- if not (regexMatch "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$" $text) -}}
-{{- fail (printf "%s %q must be a whole number from 0 to 2147483647, 0 for no limit, or empty to keep the exporter's default" $name $text) -}}
+{{- fail (printf "%s %q must be a whole number from 0 to 2147483647, %s, or empty to keep the exporter's default" $name $text $zero) -}}
 {{- end -}}
 {{- $text -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.pythonIdleTimeout" -}}
+{{- /* Empty leaves the flag out, as for probeTimeoutOffset. Only whole hours,
+       minutes and seconds, so the chart can hold it to the exporter's least,
+       1s, which would otherwise stop the exporter at startup. */ -}}
+{{- $timeout := .Values.server.pythonIdleTimeout | default "" | toString -}}
+{{- if $timeout -}}
+{{- if or (not (regexMatch "^([0-9]+h)?([0-9]+m)?([0-9]+s)?$" $timeout)) (eq (include "prometheus-universal-exporter.durationSeconds" $timeout) "0") -}}
+{{- fail (printf "server.pythonIdleTimeout %q must be whole hours, minutes and seconds of at least 1s, for example \"2m\" or \"10m\"; set server.pythonMaxIdleWorkers to 0 to keep no worker idle" $timeout) -}}
+{{- end -}}
+{{- $timeout -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.shutdownTimeout" -}}

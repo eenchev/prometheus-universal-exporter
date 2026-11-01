@@ -87,16 +87,24 @@ type SelfMetricsConfig struct {
 	// warns against unbounded self-metric labels, so it is opt-in and the
 	// number of tracked requests is capped.
 	Verbose bool `yaml:"verbose"`
-	// ResourceMetrics adds the familiar go_ and process_ series describing the
-	// exporter's own CPU and memory. Opt-in because reading them is not free:
-	// runtime.ReadMemStats briefly stops the world on every scrape.
-	ResourceMetrics bool `yaml:"resource_metrics_enabled"`
+	// ResourceMetrics publishes the familiar go_ and process_ series
+	// describing the exporter's own CPU and memory. Unset means true: they
+	// are read from runtime/metrics, runtime/debug and /proc, none of which
+	// stops the world, so they cost a scrape little; false leaves them out.
+	// See ResourceMetricsEnabled.
+	ResourceMetrics *bool `yaml:"resource_metrics_enabled"`
 	// CreatedTimestamps writes, in an OpenMetrics answer, a _created sample
 	// after each of the exporter's own counters, histograms and summaries:
 	// when the series began to count. Opt-in, as in Prometheus' Go client: a
 	// Prometheus without its created-timestamp feature stores every _created
 	// line as one more series.
 	CreatedTimestamps bool `yaml:"created_timestamps"`
+}
+
+// ResourceMetricsEnabled reports whether the go_ and process_ series are
+// published: unless resource_metrics_enabled is false.
+func (c SelfMetricsConfig) ResourceMetricsEnabled() bool {
+	return c.ResourceMetrics == nil || *c.ResourceMetrics
 }
 
 // ExporterBasicAuth is web.basic_auth, the credentials a client must present
@@ -171,6 +179,13 @@ type Collector struct {
 	// static targets that use it, are not checked against them. It is no
 	// key of the configuration.
 	DescriptorFilesUnread bool `yaml:"-"`
+	// RequestNotMade says the collector's request block is never made: the
+	// debug page's playground (config.ParseCollector), which reads only a
+	// pasted response or what a configured collector fetched. The keys
+	// naming the files a request would read, which the playground may not
+	// set, are then not required of it, as a key a request needs is
+	// required of every other collector. It is no key of the configuration.
+	RequestNotMade bool `yaml:"-"`
 	// FromDefaults are the keys the collector took from the defaults block
 	// of its file (CollectorDefaults.ApplyTo), by their paths, for the
 	// errors about them and the dry run to say so. It is no key of the

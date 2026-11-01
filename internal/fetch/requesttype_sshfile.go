@@ -67,6 +67,7 @@ func init() {
 		Requester:      sshFileRequester{},
 		FileExtensions: true,
 		TargetHint:     sshTargetHint,
+		AnswerHint:     "Paste the file's content",
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.path (%q) or its label values", c.Request.Path))
 		},

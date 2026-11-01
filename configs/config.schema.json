@@ -5247,6 +5247,7 @@
               "type": "boolean"
             },
             "resource_metrics_enabled": {
+              "description": "Publish the go_ and process_ series describing the exporter's own CPU and memory on the self-metrics endpoint. Reading them does not stop the world. Defaults to true. See docs/SELF-METRICS.md#resource-metrics.",
               "type": "boolean"
             },
             "verbose": {

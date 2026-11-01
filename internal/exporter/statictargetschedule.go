@@ -339,12 +339,15 @@ var (
 // A shutdown stops the static targets in two steps. When the loop's context
 // ends, no scrape starts, and a scrape still waiting for a slot gives up,
 // without a word of advice about the file's concurrency; the scrapes in
-// flight go on, under their own context, and the loop waits for them. When
-// that wait has to end — --web.shutdown-timeout running out —
-// AbortStaticScrapes cancels them. A scrape cut short that way publishes
-// nothing and logs no failure: the target did not fail, the exporter stopped,
-// and its last result stands. Without this every restart published each
-// target in flight as down, and sent that over OTLP on the way out.
+// flight go on, under their own context, and the loop waits for them.
+// AbortStaticScrapes cancels them, which the exporter's shutdown does at
+// once (main.go): what a scrape would publish is served by this process
+// alone, which is stopping, so a target that does not answer would only
+// hold the shutdown for --web.shutdown-timeout. A scrape cut short that way
+// publishes nothing and logs no failure: the target did not fail, the
+// exporter stopped, and its last result stands. Without this every restart
+// published each target in flight as down, and sent that over OTLP on the
+// way out.
 
 // staticTargetsOf is the targets of a static target file, none without one.
 func staticTargetsOf(file *model.StaticTargetFile) []model.StaticTarget {
@@ -365,8 +368,8 @@ func (s *Server) initStaticScrapes() {
 	s.scrapesCtx, s.abortScrapes = context.WithCancelCause(context.Background())
 }
 
-// AbortStaticScrapes cancels the static target scrapes in flight, as a
-// shutdown whose wait has run out does. They publish nothing.
+// AbortStaticScrapes cancels the static target scrapes in flight, as the
+// shutdown does as it begins. They publish nothing.
 func (s *Server) AbortStaticScrapes() {
 	s.scrapesOnce.Do(s.initStaticScrapes)
 	s.abortScrapes(errShuttingDown)

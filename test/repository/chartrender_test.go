@@ -190,6 +190,14 @@ func TestChartRendersItsOptions(t *testing.T) {
 			args:  []string{"--set", "server.debug=off"},
 			avoid: []string{"--web.debug"},
 		},
+		"dangerous debugging": {
+			args: []string{"--set", "server.debug=full", "--set", "server.debugDangerous=true"},
+			want: []string{"- \"--web.debug=full\"\n            - --web.debug.dangerous\n"},
+		},
+		"debugging at full, not dangerous": {
+			args:  []string{"--set", "server.debug=full", "--set", "server.debugDangerous=false"},
+			avoid: []string{"--web.debug.dangerous"},
+		},
 		"answers uncompressed": {
 			args: []string{"--set", "server.gzipLevel=0"},
 			want: []string{"- \"--web.gzip-level=0\"\n"},
@@ -346,6 +354,10 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"a zero compound watch interval":               {[]string{"--set", "server.watchConfig=true", "--set", "server.watchConfigInterval=0m0s"}, "watchConfigInterval"},
 		"debugging as an extra":                        {[]string{"--set", "extraArgs[0]=--web.debug=full"}, "server.debug"},
 		"a debug level that is none":                   {[]string{"--set", "server.debug=on"}, "server.debug"},
+		"dangerous debugging without debugging":        {[]string{"--set", "server.debugDangerous=true"}, "server.debugDangerous needs server.debug: full"},
+		"dangerous debugging at edit":                  {[]string{"--set", "server.debug=edit", "--set", "server.debugDangerous=true"}, "server.debugDangerous needs server.debug: full"},
+		"dangerous debugging as an extra":              {[]string{"--set", "server.debug=full", "--set", "extraArgs[0]=--web.debug.dangerous"}, "server.debugDangerous"},
+		"dangerous debugging that is no boolean":       {[]string{"--set", "server.debug=full", "--set-string", "server.debugDangerous=yes"}, "debugDangerous"},
 		"a gzip level above 9":                         {[]string{"--set", "server.gzipLevel=10"}, "server.gzipLevel"},
 		"a negative gzip level":                        {[]string{"--set", "server.gzipLevel=-1"}, "server.gzipLevel"},
 		"a fractional gzip level":                      {[]string{"--set", "server.gzipLevel=1.5"}, "server.gzipLevel"},
@@ -1197,5 +1209,29 @@ func TestChartRefusesAStaticTargetsMonitorTimeoutOverItsInterval(t *testing.T) {
 	}
 	if out, ok := helmTemplate(t, helm, chartDir, "-f", targets, "--set", "staticTargets.monitor.enabled=true", "--set", "staticTargets.monitor.interval=10s", "--set", "staticTargets.monitor.scrapeTimeout=10s"); !ok {
 		t.Errorf("a scrape timeout equal to the interval fails rendering:\n%s", out)
+	}
+}
+
+// The notes warn while server.debugDangerous is on, and not otherwise.
+func TestChartNotesWarnAboutDangerousDebugging(t *testing.T) {
+	helm := requireHelm(t)
+	dir := chartWithNotesAsAManifest(t)
+	for name, tc := range map[string]struct {
+		args   []string
+		warned bool
+	}{
+		"dangerous":     {[]string{"--set", "server.debug=full", "--set", "server.debugDangerous=true"}, true},
+		"at full alone": {[]string{"--set", "server.debug=full"}, false},
+		"the default":   {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, ok := helmTemplate(t, helm, dir, append([]string{"--show-only", "templates/notes.yaml"}, tc.args...)...)
+			if !ok {
+				t.Fatalf("rendering failed:\n%s", out)
+			}
+			if warned := strings.Contains(out, "WARNING: server.debugDangerous is on.") && strings.Contains(out, "never leave it on in a shared deployment"); warned != tc.warned {
+				t.Errorf("warned %v, want %v:\n%s", warned, tc.warned, out)
+			}
+		})
 	}
 }

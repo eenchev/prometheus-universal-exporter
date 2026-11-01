@@ -161,7 +161,7 @@ func TestOddValuesOfATargetReachTheOTLPEndpoint(t *testing.T) {
 				t.Fatalf("the export is not valid OTLP: %v", err)
 			}
 			for _, m := range scope.Metrics {
-				if !strings.HasPrefix(m.Name, "http_exporter_") {
+				if !strings.HasPrefix(m.Name, "http_exporter_") && !strings.HasPrefix(m.Name, "go_") && !strings.HasPrefix(m.Name, "process_") {
 					probed = append(probed, m)
 				}
 			}

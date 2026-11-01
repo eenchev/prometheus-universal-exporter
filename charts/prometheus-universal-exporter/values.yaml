@@ -158,6 +158,14 @@ server:
   # collector written on the page never runs Python or reads a file of the
   # pod. Off by default; behind web.basic_auth when that is configured.
   debug: ""
+  # Dangerous debug mode (--web.debug.dangerous), with debug: full only:
+  # the debug page's playground may run Python, read the pod's files (any
+  # *_file key, login, a localfile root) and probe a target with its own
+  # request. Whoever can open the page can then run code in the pod and read
+  # its files and mounted secrets. For a debugging session no one else can
+  # reach, never a shared deployment. Off by default; true without
+  # debug: full fails rendering.
+  debugDangerous: false
   # The gzip level of the answers of /probe, the self-metrics and the static
   # targets to a scrape that accepts gzip, as Prometheus's do
   # (--web.gzip-level): 1, the fastest, to 9, the smallest; 0 answers them
@@ -184,6 +192,19 @@ server:
   # number up to 2147483647; 0 or empty leaves them bounded only per script,
   # and empty leaves the flag out.
   pythonMaxWorkers: ""
+  # How many Python workers of each collector's script stay idle, ready for
+  # its next scrape, after a burst of concurrent scrapes
+  # (--python.max-idle-workers): each is a Python process of about 11 MB,
+  # 17 MB with lxml. 0 keeps none, and every scrape starts an interpreter. A
+  # whole number up to 2147483647; empty keeps the exporter's default, 1, and
+  # leaves the flag out.
+  pythonMaxIdleWorkers: ""
+  # How long an idle Python worker is kept unused before it is stopped
+  # (--python.idle-timeout): whole hours, minutes and seconds, at least 1s,
+  # such as "5m". Keep it longer than the Python collectors' scrape interval,
+  # or every scrape starts an interpreter. Empty keeps the exporter's
+  # default, 2m, and leaves the flag out.
+  pythonIdleTimeout: ""
   # How long a pod that is stopping waits for the probes in progress before
   # closing their connections: hours, minutes and seconds such as "30s" or
   # "1m30s". Keep it at least as long as the monitors' scrapeTimeout, or a
@@ -450,8 +471,8 @@ monitors: []
 # configured in the exporter configuration rather than here: set
 # web.self_metrics.verbose for the per-request series, the per-collector
 # scrape-time histograms and the Python worker metrics, and
-# web.self_metrics.resource_metrics_enabled for the go_ and process_ series
-# describing the exporter's own CPU and memory.
+# web.self_metrics.resource_metrics_enabled: false to leave out the go_ and
+# process_ series describing the exporter's own CPU and memory.
 # The monitor for the exporter's own metrics: one ServiceMonitor, or a
 # PodMonitor with type pod. It is rendered with enabled when the chart renders
 # another monitor (a probe monitor or the static targets monitor), or when the

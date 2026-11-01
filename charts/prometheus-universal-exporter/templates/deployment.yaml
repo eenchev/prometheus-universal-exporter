@@ -155,6 +155,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.debug" .) }}
             - {{ printf "--web.debug=%s" . | quote }}
             {{- end }}
+            {{- if include "prometheus-universal-exporter.debugDangerous" . }}
+            - --web.debug.dangerous
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.gzipLevel" .) }}
             - {{ printf "--web.gzip-level=%s" . | quote }}
             {{- end }}
@@ -172,6 +175,12 @@ spec:
             {{- end }}
             {{- with (include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)) }}
             - {{ printf "--python.max-workers=%s" . | quote }}
+            {{- end }}
+            {{- with (include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxIdleWorkers" .Values.server.pythonMaxIdleWorkers "0 to keep no worker idle")) }}
+            - {{ printf "--python.max-idle-workers=%s" . | quote }}
+            {{- end }}
+            {{- with (include "prometheus-universal-exporter.pythonIdleTimeout" .) }}
+            - {{ printf "--python.idle-timeout=%s" . | quote }}
             {{- end }}
             {{- with (include "prometheus-universal-exporter.memoryLimitRatio" .) }}
             - {{ printf "--runtime.memory-limit-ratio=%s" . | quote }}

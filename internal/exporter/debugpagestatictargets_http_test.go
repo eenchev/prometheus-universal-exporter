@@ -83,7 +83,7 @@ func TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen(t *testing.T) {
 	requireContains(t, debugPageScript(page),
 		`const select = $("static-target"), through = fetcher();`,
 		`url.searchParams.set("name", through);`,
-		`else targets = answer.static_targets || [];`,
+		`else { targets = answer.static_targets || []; learnForm(through, answer); }`,
 		`new Option(target.target ? target.name + " — " + target.target : target.name, target.name)`,
 		"  showStaticTargets();\n")
 	// At edit nothing is scraped, so neither the page nor /debug/collector
@@ -116,7 +116,7 @@ func TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector(t *testing.T) {
 	playground := getPage(t, server, "/debug")
 	requireContains(t, playground,
 		`<input type="radio" name="mode" value="static" id="mode-static" disabled> Scrape a static target`,
-		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to fetch a target or scrape a static target.</p>`,
+		`<p class="note" id="fetch-unavailable">Choose a configured collector, or <em>Edit a copy</em> of one, to probe a target or scrape a static target.</p>`,
 		`<p class="note" id="static-unavailable" hidden></p>`)
 
 	none := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
@@ -177,4 +177,18 @@ func TestTheDebugPagesStaticTargetsFollowAReload(t *testing.T) {
 	if got, _ := debugCollectorStaticTargets(t, r.server, "second"); len(got) != 1 || got[0].Name != "one" {
 		t.Errorf("/debug/collector?name=second after the reload: %+v", got)
 	}
+}
+
+// The static targets offered say whose they are: those of the collector
+// chosen, or of the one the playground was copied from, which a copy scrapes
+// them through; the example playground, copied from none, names none.
+func TestTheDebugPageSaysWhoseStaticTargetsItOffers(t *testing.T) {
+	server := staticTargetsPageServer(t)
+	requireContains(t, getPage(t, server, "/debug?collector=rooms"), `<p class="note" id="static-through">Static targets of rooms, the collector chosen.</p>`)
+	page := getPage(t, server, "/debug")
+	requireContains(t, page, `<p class="note" id="static-through"></p>`,
+		`<input type="radio" name="mode" value="static" id="mode-static" disabled> Scrape a static target`)
+	requireContains(t, debugPageScript(page),
+		`"Static targets of " + through + ", the collector chosen."`,
+		`"Static targets of " + through + ", the collector this playground was copied from."`)
 }

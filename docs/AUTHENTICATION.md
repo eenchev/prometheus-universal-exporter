@@ -400,6 +400,12 @@ files named in `field_files`, `client_id_file` or `client_secret_file`.
 it and shows the answer in place. What the form asks for follows the
 collector:
 
+- **The target** is labelled and hinted as the collector's request type
+  names it — *URL* and `https://host:port` for `http`, *SSH host* and
+  `host or host:22` for `sshfile`, *Name to resolve* and `example.com` for
+  `dns`, as the [debug page](CONFIGURATION.md#the-debug-page) lists them —
+  marked optional where the type may leave it out, and offered disabled,
+  `none: leave it out`, for a `kubernetes` collector, which takes none.
 - **A credential in the collector's configuration** — `basic_auth`,
   `basic_auth_file`, `bearer_token`, `bearer_token_file`, a
   [`login`](#logging-in-to-a-target), a TLS client certificate — is the
@@ -471,9 +477,16 @@ is kept from reaching further than that:
   be framed. The debug URLs only read, with `GET`, and answer `text/plain`
   with `nosniff`, which a browser never runs as a page.
 - **The server's files and credentials.** The playground, a collector
-  written on the page, that names a file — `basic_auth_file`, `bearer_token_file`, a TLS file, a
-  `login` — is refused, and so is any request type but `http`, since the others read
-  files, hosts and databases with the server's keys. `${NAME}` references in
+  written on the page, may be of any request type, since its request block
+  is inert: no run makes a request with it, whatever its type — a pasted
+  response is decoded as it is, and a target is reached only through a
+  configured collector — so a `sql` or `sshfile` playground reaches no
+  database or host, and a `localfile` one reads no file; its type says only
+  how the answer is read. One that names a file — any request key ending
+  in `_file` or `_files`, such as `bearer_token_file`, a TLS file or
+  `known_hosts_file`, and a `login` — is still refused, so that nothing a
+  file holds can reach an answer even through a mistake in that rule, and
+  so is Python (below). `${NAME}` references in
   it are not expanded, so the environment stays unseen. A pasted response
   makes no request at all. A configured collector run by name is the
   operator's own: on a pasted response it makes no request either. The page
@@ -493,6 +506,21 @@ is kept from reaching further than that:
   target's answer is on every probe. An expression of the other transforms
   runs on the server against the response, bounded by the probe's deadline,
   the collector's limits and 4 runs of the page at a time.
+
+`--web.debug.dangerous` lifts the two rules above that hold the playground
+to the response — no file of the server's, and no Python — and lets it
+make its own request ([Dangerous debug mode](CONFIGURATION.md#dangerous-debug-mode)).
+With it, whoever can open the page runs code on the server: a script runs
+in the workers' [sandbox](PYTHON.md), which keeps a script from opening
+files or sockets by mistake but is no wall against one written to get out;
+a `localfile` playground reads any file under a root it chooses, and its
+own request reaches any host the exporter can, with whatever credential
+file it names. Basic Auth and the checks against other sites' pages still hold,
+but the page is then as powerful as a shell in the exporter's container.
+Use it on a machine of your own or in a locked-down debugging session, and
+never on a shared deployment; the exporter warns at startup, and every
+page's bar says the mode is on. `${NAME}` references stay unexpanded even
+so, since the environment is where a deployment keeps its secrets.
 
 ## Requests from other sites
 

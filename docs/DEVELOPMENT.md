@@ -146,8 +146,11 @@ network.
 - What the rest of the exporter knows of the type: its own self-metric
   families (`Families`; the shared ones follow from its keys and hooks, the
   target lists giving `http_exporter_targets_refused_total`), whether its
-  cached responses are revalidated (`Revalidates`), its target hint on the
-  collectors page (`TargetHint`, `NoTarget`), whether the debug page writes
+  cached responses are revalidated (`Revalidates`), what the collectors
+  page and the debug page ask for as its target (`TargetHint`, a label and
+  an example of its forms, or `NoTarget`) and what a response of it pasted
+  on the debug page is (`AnswerHint`) — both required, a type registered
+  without them failing at its start — whether the debug page writes
   it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
   `FileExtensions`), the article its name is read with (`Article`), its rule
   in the configuration schema (`SchemaRule`) and what the schema says of its

@@ -113,7 +113,7 @@ func TestAKubernetesCollectorProbe(t *testing.T) {
 		t.Errorf("%d %v, want %v", recorder.Code, got, want)
 	}
 	// The collectors page offers no target to fill in, and says so.
-	if page := probeOnce(t, server, "/collectors", nil).Body.String(); !strings.Contains(page, `placeholder="none: leave it out"`) {
+	if page := probeOnce(t, server, "/collectors", nil).Body.String(); !strings.Contains(page, `placeholder="none: leave it out" disabled>`) {
 		t.Errorf("the collectors page offers a target:\n%s", page)
 	}
 	metrics := probeOnce(t, server, "/self-metrics", nil).Body.String()

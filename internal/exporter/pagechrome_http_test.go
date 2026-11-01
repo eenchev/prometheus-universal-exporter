@@ -132,3 +132,67 @@ func TestEveryPageCarriesTheBar(t *testing.T) {
 		}
 	}
 }
+
+// Every page draws its dropdowns' arrow itself, in from the field's right
+// edge with the text stopping before it, rather than the browser's own,
+// which sits against the edge; the rule outweighs each page's own rule for
+// its fields, which sets the background with its shorthand.
+func TestEveryPagesDropdownsHaveTheirArrowInFromTheEdge(t *testing.T) {
+	for _, page := range []string{pageStyle} {
+		for _, want := range []string{
+			":root select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-right: 34px;",
+			"background-position: calc(100% - 19px) 50%, calc(100% - 14px) 50%;",
+		} {
+			if !strings.Contains(page, want) {
+				t.Errorf("the pages' style lacks %q", want)
+			}
+		}
+	}
+}
+
+// Every page sets the theme kept in the browser in its head, before anything
+// is drawn, and offers Auto, Light and Dark in its bar, hidden until its
+// script shows it: without JavaScript the pages follow the browser. The
+// status page's fragment, which its refresh swaps in under the html element
+// the theme is set on, has neither.
+func TestEveryPageOffersTheThemeAndSetsItBeforeItIsDrawn(t *testing.T) {
+	server := landingServer(t, weatherConfig())
+	server.SetDebug(DebugFull)
+	status := server.staticTargetsStatusEndpoint()
+	picker := `<label class="theme" hidden>Theme <select id="theme">
+<option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option>
+</select></label><script id="theme-script">`
+	for _, path := range []string{"/", "/collectors", "/debug", status} {
+		page := getPath(server, http.MethodGet, path).Body.String()
+		head, body, _ := strings.Cut(page, "</head>")
+		script := strings.Index(head, `<script id="theme-head">try { const theme = localStorage.getItem("theme"); if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme; }`)
+		if script < 0 || script > strings.Index(head, "<style>") {
+			t.Errorf("%s does not set the theme in its head before its style:\n%.2000s", path, head)
+		}
+		bar := regexp.MustCompile(`(?s)<header class="site">.*?</header>`).FindString(body)
+		if strings.Count(page, picker) != 1 || !strings.Contains(bar, picker) {
+			t.Errorf("%s has no theme picker in its bar:\n%s", path, bar)
+		}
+		requireContains(t, bar, `picker.value = root.dataset.theme || "auto";`, `localStorage.setItem("theme", picker.value);`, `localStorage.removeItem("theme");`, `delete root.dataset.theme;`, `picker.parentElement.hidden = false;`)
+	}
+	fragment := getPath(server, http.MethodGet, status+"?format=fragment").Body.String()
+	if strings.Contains(fragment, "theme") {
+		t.Errorf("the status page's fragment touches the theme:\n%.300s", fragment)
+	}
+}
+
+// The dark colours apply where the browser prefers dark unless Light is
+// chosen, and where Dark is chosen whatever it prefers; color-scheme follows
+// each, so the browser's own controls match.
+func TestThePagesStyleHasBothThemesChosen(t *testing.T) {
+	requireContains(t, pageStyle,
+		":root { color-scheme: light dark; "+lightColours+" }",
+		`:root[data-theme="light"] { color-scheme: light; }`,
+		`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; `+darkColours+` } }`,
+		`:root[data-theme="dark"] { color-scheme: dark; `+darkColours+` }`,
+		`header.site label.theme[hidden] { display: none; }`,
+	)
+	if strings.Count(pageStyle, "prefers-color-scheme") != 1 {
+		t.Error("a rule follows the browser's preference unguarded by the theme chosen")
+	}
+}

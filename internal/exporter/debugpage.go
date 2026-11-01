@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -59,15 +64,28 @@ import (
 // collector written on the page is refused what would reach further than
 // the response:
 //
+//   - its request block is inert: no path of a run makes a request with it,
+//     a pasted response being decoded as it is and a target fetched through
+//     a configured collector alone. So it may be of any request type the
+//     build has, a sql or a tlscert collector as an http one, its type
+//     saying only how the answer is read: its decoder, a sql collector's
+//     rows, the JSON document a tlscert collector's handshake is made into;
 //   - Python, a python transform or a pre_script, is never run: a script is
 //     a program run on the server, with the server's files and network;
-//   - a collector of another request type than http, whose type reads files,
-//     hosts or databases with the server's own keys and passwords, and an
-//     http collector that names a file — basic_auth_file, bearer_token_file,
-//     a tls file or a login's — are refused before they are checked, so nothing the
-//     run answers can carry what such a file holds;
+//   - a collector that names a file — any key of its request ending in _file
+//     or _files, such as bearer_token_file, a tls file or an sshfile
+//     collector's known_hosts_file, and a login, which reads its secrets
+//     from files — is refused before it is checked, so nothing the run
+//     answers can carry what such a file holds; the request is never made,
+//     so those a request needs are not required of it
+//     (model.Collector.RequestNotMade);
 //   - ${NAME} references are left as written: the answer would show the
 //     server's environment.
+//
+// --web.debug.dangerous lifts the first three (debuglevel.go): the
+// playground then runs Python, may name the server's files, and fetching a
+// target with no request_from makes its own request block's request, as a
+// configured collector's probe does. ${NAME} references stay as written.
 //
 // A configured collector is the operator's own, put in force by the
 // configuration, and is run as it is, its Python included: a pasted body is
@@ -127,16 +145,61 @@ var debugHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 // pasted response; Target with RequestFrom, a fetch; or StaticTarget, a
 // static target's scrape.
 type debugRunRequest struct {
-	Collector    *string           `json:"collector"`
-	Configured   string            `json:"configured"`
-	Body         *string           `json:"body"`
-	ContentType  string            `json:"content_type"`
-	Status       int               `json:"status"`
-	Headers      map[string]string `json:"headers"`
-	RequestFrom  string            `json:"request_from"`
-	Target       *string           `json:"target"`
-	StaticTarget string            `json:"static_target"`
-	Params       map[string]string `json:"params"`
+	Collector    *string     `json:"collector"`
+	Configured   string      `json:"configured"`
+	Body         *string     `json:"body"`
+	ContentType  string      `json:"content_type"`
+	Status       int         `json:"status"`
+	Headers      debugValues `json:"headers"`
+	RequestFrom  string      `json:"request_from"`
+	Target       *string     `json:"target"`
+	StaticTarget string      `json:"static_target"`
+	Params       debugValues `json:"params"`
+}
+
+// debugValues are a run's headers or probe parameters, each name with a
+// string, or a list of strings for a name given more than once: a response
+// may repeat a header, as HTTP lets it, and a probe a header_<name>
+// parameter, each value of which is forwarded. A JSON object cannot hold a
+// name twice, and a value joined with commas is not what a response with
+// the header twice gives a decoder, which reads the first.
+type debugValues map[string][]string
+
+func (v *debugValues) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make(debugValues, len(raw))
+	for name, value := range raw {
+		var one string
+		if err := json.Unmarshal(value, &one); err == nil {
+			out[name] = []string{one}
+			continue
+		}
+		var many []string
+		if err := json.Unmarshal(value, &many); err != nil {
+			return fmt.Errorf("%q has neither a string nor a list of strings", name)
+		}
+		out[name] = many
+	}
+	*v = out
+	return nil
+}
+
+// count is the number of values, every value of a name counted.
+func (v debugValues) count() int {
+	n := 0
+	for _, values := range v {
+		n += len(values)
+	}
+	return n
+}
+
+// names are v's names in order, so that values are added, and a run
+// refused, the same way each time.
+func (v debugValues) names() []string {
+	return slices.Sorted(maps.Keys(v))
 }
 
 // debugSource is what a run reads.
@@ -166,7 +229,8 @@ func (req debugRunRequest) sources() (debugSource, int) {
 
 // debugAnswer is what /debug/run answers: the run's report as JSON. Error
 // alone is a run refused before it ran; otherwise Series is what a probe
-// would have served, as Prometheus text, Verdict what it would have
+// would have served, as Prometheus text, Samples the same series one by one
+// for the page's table (debugSamples), Verdict what it would have
 // answered, Requests and Response what was sent and what came back, Stages
 // and Notes the stages and what was logged, Lint the metric lint's advice,
 // and Report the whole report as /probe?debug=true writes it.
@@ -174,6 +238,7 @@ type debugAnswer struct {
 	OK       bool                    `json:"ok"`
 	Verdict  string                  `json:"verdict,omitempty"`
 	Series   string                  `json:"series"`
+	Samples  []debugSample           `json:"samples,omitempty"`
 	Requests []debugShownRequest     `json:"requests,omitempty"`
 	Response *debugShownResponse     `json:"response,omitempty"`
 	Stages   []debugStage            `json:"stages,omitempty"`
@@ -181,6 +246,10 @@ type debugAnswer struct {
 	Lint     []transform.LintFinding `json:"lint,omitempty"`
 	Report   string                  `json:"report,omitempty"`
 	Error    string                  `json:"error,omitempty"`
+	// Dangerous says the run was made with --web.debug.dangerous, whose
+	// playground runs Python, names the server's files and makes its own
+	// request.
+	Dangerous bool `json:"dangerous,omitempty"`
 }
 
 type debugStage struct {
@@ -223,6 +292,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	out := debugAnswer{OK: report.ok, Verdict: report.verdict, Lint: report.lint, Report: string(report.text())}
 	if report.answer != nil {
 		out.Series = string(appendMetricSet(nil, report.answer))
+		out.Samples = debugSamples(report.answer)
 	}
 	t, p := report.trace, report.probe
 	t.mu.Lock()
@@ -274,6 +344,81 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	return out
 }
 
+// debugSample is one line of a probe's answer as the page's table shows it:
+// Name, the sample's name, a histogram's or a summary's with its suffix;
+// Metric, the name of the metric it is of, which the metric lint's findings
+// name (transform.LintFinding.Metric), so the page puts a finding beside the
+// series it is about; Type, the metric's type, as its TYPE line says it;
+// Labels, a bucket's le and a quantile's quantile among them; and Value as
+// the text format writes it, NaN, +Inf and a count's whole number included.
+// A series does not carry the rule that made it, so the page can tie a
+// finding to a series by the metric's name alone.
+type debugSample struct {
+	Name   string            `json:"name"`
+	Metric string            `json:"metric"`
+	Type   string            `json:"type"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Value  string            `json:"value"`
+}
+
+// debugSamples are the samples of set in the order appendMetricSet writes
+// them: metric by metric, a histogram's buckets ascending, its +Inf bucket,
+// _sum and _count, a summary's quantiles ascending, _sum and _count. They
+// are made from the set itself, as the text is, never by reading the text
+// again.
+func debugSamples(set *model.MetricSet) []debugSample {
+	var e expositionWriter
+	var out []debugSample
+	add := func(m model.Metric, suffix, own, ownValue, value string) {
+		labels := make(map[string]string, len(m.Labels)+1)
+		for k, v := range m.Labels {
+			labels[k] = v
+		}
+		if own != "" {
+			labels[own] = ownValue
+		}
+		if len(labels) == 0 {
+			labels = nil
+		}
+		out = append(out, debugSample{Name: m.Name + suffix, Metric: m.Name, Type: string(m.Type), Labels: labels, Value: value})
+	}
+	float := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+	count := func(n uint64) string { return strconv.FormatUint(n, 10) }
+	for _, i := range seriesByFamily(set) {
+		m := set.Metrics[i]
+		switch {
+		case m.Histogram != nil:
+			for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
+				if !math.IsInf(x.UpperBound, 1) {
+					add(m, "_bucket", "le", float(x.UpperBound), count(x.CumulativeCount))
+				}
+			}
+			if inf, has := m.Histogram.InfBucket(); has {
+				add(m, "_bucket", "le", "+Inf", count(inf))
+			}
+			if !m.Histogram.NoSum {
+				add(m, "_sum", "", "", float(m.Histogram.Sum))
+			}
+			if !m.Histogram.NoCount {
+				add(m, "_count", "", "", count(m.Histogram.Count))
+			}
+		case m.Summary != nil:
+			for _, x := range e.ascendingQuantiles(m.Summary.Quantiles) {
+				add(m, "", "quantile", float(x.Quantile), float(x.Value))
+			}
+			if !m.Summary.NoSum {
+				add(m, "_sum", "", "", float(m.Summary.Sum))
+			}
+			if !m.Summary.NoCount {
+				add(m, "_count", "", "", count(m.Summary.Count))
+			}
+		default:
+			add(m, "", "", "", float(m.Value))
+		}
+	}
+	return out
+}
+
 // writeDebugAnswer writes answer as JSON with status code.
 func writeDebugAnswer(w http.ResponseWriter, code int, answer debugAnswer) {
 	body, err := json.Marshal(answer)
@@ -304,50 +449,49 @@ func debugSameOrigin(r *http.Request) error {
 }
 
 // refusedOnDebugPage refuses, before it is checked, a collector written on
-// the debug page that the page does not run: Python, a request type other
-// than http, the one the page writes (fetch.RequestType.DebugPage), and an
-// http collector that names a file of the server's.
+// the debug page that the page does not run: Python, and one that names a
+// file of the server's. Its request may be of any type the build has, since
+// its request block is never made: it says only how the answer is read
+// (fetch.RequestType's decoder, rows or JSON document).
 func refusedOnDebugPage(x *model.Collector) error {
-	if kind := x.Request.Type; kind != "" && !onDebugPage(kind) {
-		return fmt.Errorf("collector %q uses request.type %s; a collector written on the debug page is an http collector, since the other types read files, hosts and databases with the server's own credentials. Write it with request.type http to try its decoder and rules on a pasted response, or run a configured collector by name", x.Name, kind)
-	}
 	if runsPython(x) {
 		return fmt.Errorf("collector %q runs Python (transform.type python or transform.pre_script); a collector written on the debug page never runs Python, since a script is a program run on the server. Put it in the configuration and run it here by name instead", x.Name)
 	}
-	var files []string
-	r := x.Request
-	if r.BasicAuthFile != nil {
-		files = append(files, "basic_auth_file")
-	}
-	if r.BearerTokenFile != "" {
-		files = append(files, "bearer_token_file")
-	}
-	if r.Login != nil {
-		// A login reads its secrets from files, and sends them.
-		files = append(files, "login")
-	}
-	for key, path := range map[string]string{"tls.ca_file": r.TLS.CAFile, "tls.cert_file": r.TLS.CertFile, "tls.key_file": r.TLS.KeyFile} {
-		if path != "" {
-			files = append(files, key)
-		}
-	}
-	if len(files) > 0 {
-		// In the order the file has them; tls's keys, which the map above
-		// gives in no order, in theirs where it says none.
-		sort.Strings(files)
-		files = model.InFileOrder(files, x.Request.Order)
+	if files := serverFileKeys(x.Request); len(files) > 0 {
 		return fmt.Errorf("collector %q sets request.%s, which names a file on the server; a collector written on the debug page reads no file of the server's. Leave it out: a pasted response needs no credential, and a target is fetched through a configured collector (request_from), with its credentials", x.Name, strings.Join(files, ", request."))
 	}
 	return nil
 }
 
-// onDebugPage reports whether a collector written on the debug page may be
-// of the request type, and another collector read what one of it fetches:
-// http's, which reads nothing of the server's but what its configuration
-// names (fetch.RequestType.DebugPage).
-func onDebugPage(requestType string) bool {
-	rt := fetch.RequestTypes[requestType]
-	return rt != nil && rt.DebugPage
+// serverFileKeys are the keys of a request block that name a file of the
+// server's, in the order the block has them: every key ending in _file or
+// _files, of any type, at the top of the block or in a mapping it holds,
+// as tls.ca_file, but max_files, a count, and login, which reads its
+// secrets from files and sends them. A key inside one already named is not
+// named again.
+func serverFileKeys(r model.RequestConfig) []string {
+	var files []string
+	for _, key := range r.Order {
+		if slices.ContainsFunc(files, func(named string) bool { return strings.HasPrefix(key, named+".") }) {
+			continue
+		}
+		last := key[strings.LastIndex(key, ".")+1:]
+		if key == "login" || strings.HasSuffix(last, "_file") || strings.HasSuffix(last, "_files") && last != "max_files" {
+			files = append(files, key)
+		}
+	}
+	return files
+}
+
+// readsWhatFetches reports whether reader, a collector run, may read what
+// fetcher, another collector, fetches: when both are of one request type,
+// whose answer the reader reads as its type reads one, its rows a sql
+// collector's and the JSON document a tlscert collector's.
+func readsWhatFetches(reader, fetcher *model.Collector) error {
+	if reader.Request.Type == fetcher.Request.Type {
+		return nil
+	}
+	return fmt.Errorf("collector %q reads what a collector of its request type, %s, fetches only, and collector %q is of request type %s", reader.Name, reader.Request.Type, fetcher.Name, fetcher.Request.Type)
 }
 
 // debugPageCollector is a configured collector as the page offers it.
@@ -355,8 +499,116 @@ type debugPageCollector struct {
 	Name, RequestType string
 }
 
+// debugForm is what the page asks for a run of a collector, as its request
+// type says it, so a form never asks a collector of another type for what
+// an http collector takes: for a pasted response, the body, with a
+// Content-Type where the decoder is left to choose by it, and a status and
+// headers for an answer that is an HTTP response (fetch.AnswersHTTP); for a
+// target, what the type takes as one (fetch.TargetPromptOf), or nothing for
+// a type that takes none, and the collector's probe parameters
+// (debugParamsOf). The page holds the form of each configured collector
+// and of the playground, and GET /debug/collector answers it again with the
+// collector, so it follows a reload.
+type debugForm struct {
+	RequestType string `json:"request_type"`
+	// Answer is the body's placeholder (fetch.AnswerHintOf).
+	Answer      string `json:"answer"`
+	ContentType bool   `json:"content_type,omitempty"`
+	HTTPAnswer  bool   `json:"http_answer,omitempty"`
+	TargetLabel string `json:"target_label,omitempty"`
+	TargetHint  string `json:"target_hint,omitempty"`
+	NoTarget    bool   `json:"no_target,omitempty"`
+	// Params are the collector's own probe parameters, a row of each, and
+	// OtherParams the names of the others it takes, offered as names to
+	// choose (debugParamsOf); both are empty for a collector that takes
+	// none.
+	Params      []debugParam `json:"params,omitempty"`
+	OtherParams []string     `json:"other_params,omitempty"`
+}
+
+// debugParam is a {{param_<name>}} placeholder of a collector: its name,
+// param_<name>, and its default, "" for one without.
+type debugParam struct {
+	Name    string `json:"name"`
+	Default string `json:"default"`
+}
+
+// debugFormOf is the form the page asks a run of c to fill.
+func debugFormOf(c *model.Collector) debugForm {
+	f := debugForm{RequestType: c.Request.Type, Answer: fetch.AnswerHintOf(c), HTTPAnswer: fetch.AnswersHTTP(c)}
+	f.Params, f.OtherParams = debugParamsOf(c)
+	if f.Answer == "" {
+		f.Answer = "Paste what the target answers"
+	}
+	// The decoder of a type that makes its answer, or reads rows, is its
+	// own: a Content-Type would choose nothing.
+	if rt := fetch.RequestTypes[c.Request.Type]; rt == nil || f.HTTPAnswer || !rt.JSONAnswer && !rt.Rows && rt.Decoder == "" {
+		f.ContentType = true
+	}
+	required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
+	f.NoTarget = fetch.TargetPromptOf(c).None
+	if !f.NoTarget {
+		f.TargetLabel, f.TargetHint = targetHint(c, required)
+	}
+	return f
+}
+
+// playgroundForm is the form of the playground the page opens with, the
+// example, as its request type says it; a build without that type has an
+// example that runs nothing, whose form asks for a response as an HTTP
+// response is asked for. The example is read once.
+var playgroundForm = sync.OnceValue(func() debugForm {
+	if cfg, err := config.ParseCollector([]byte(debugExample), nil); err == nil {
+		return debugFormOf(&cfg.Collectors[0])
+	}
+	return debugForm{Answer: "Paste what the target answers", ContentType: true, HTTPAnswer: true}
+})
+
+// typeForms are the forms of a playground of each request type the build
+// has, by its name, as the type says them of a collector that sets nothing
+// else: the page follows the request.type written in the editor with them.
+func typeForms() map[string]debugForm {
+	forms := map[string]debugForm{}
+	for _, name := range fetch.BuiltRequestTypes() {
+		forms[name] = debugFormOf(&model.Collector{Request: model.RequestConfig{Type: name}})
+	}
+	return forms
+}
+
+// debugParamsOf is what the page offers of the probe parameters of c: a
+// row of each {{param_<name>}} placeholder of its request and its labels
+// (fetch.RequestParams), with its default, and as names to choose, the other
+// parameters its type takes from a probe, header_<name> those of the
+// headers it forwards; none when it takes none. timeout is left out: the
+// page's own timeout bounds the run.
+func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
+	var own []debugParam
+	for _, p := range fetch.RequestParams(c) {
+		own = append(own, debugParam{Name: p.Name, Default: p.Default})
+	}
+	var others []string
+	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
+		for _, key := range rt.Overrides {
+			switch {
+			case key == "timeout" || key == fetch.PathParamPrefix:
+				continue
+			case key == "header_":
+				for _, name := range forwardableHeaders(c.Request) {
+					others = append(others, "header_"+name)
+				}
+				continue
+			case rt.CheckOverride != nil && rt.CheckOverride(c, key) != nil:
+				continue
+			}
+			others = append(others, key)
+		}
+	}
+	return own, others
+}
+
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
-	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
+	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, Dangerous: s.playgroundUnbound(), ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
+	page.Forms = debugForms{Playground: playgroundForm(), Types: typeForms(), Collectors: map[string]debugForm{}}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).
 	followed := s.reconcile()
@@ -376,6 +628,7 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		page.Collectors = append(page.Collectors, debugPageCollector{Name: c.Name, RequestType: c.Request.Type})
+		page.Forms.Collectors[c.Name] = debugFormOf(c)
 		// A link that names a configured collector opens the page with it
 		// shown, as choosing it would show it.
 		if chosen != "" && chosen == c.Name && page.Chosen == "" {
@@ -386,6 +639,10 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	page.Form = page.Forms.Playground
+	if page.Chosen != "" {
+		page.Form = page.Forms.Collectors[page.Chosen]
+	}
 	if page.Full {
 		page.StaticTargets = debugStaticTargets(followed, page.Chosen)
 		switch {
@@ -394,6 +651,11 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 		case page.Chosen != "" && len(page.StaticTargets) == 0:
 			page.StaticNote = "No static target uses " + page.Chosen + "."
 		}
+	}
+	// The page's Copy as says to give curl and Prometheus a credential when
+	// the exporter asks for one; it is never given the credential itself.
+	if auth := s.manager.Get().Web.BasicAuth; auth != nil && auth.Enabled {
+		page.BasicAuth = true
 	}
 	s.renderPage(w, debugPageTemplate, page)
 }
@@ -444,6 +706,7 @@ func (s *Server) debugRunHandler(w http.ResponseWriter, r *http.Request) {
 	report := s.runDebug(r.Context(), p)
 	answer := debugAnswerOf(report)
 	answer.Notes = append(notes, answer.Notes...)
+	answer.Dangerous = s.playgroundUnbound()
 	s.countDebugRun(debugKindPage, report.result())
 	s.logger.Info("debug run served", "collector", p.collector.Name, "edited", p.edited, "on", p.source)
 	writeDebugAnswer(w, http.StatusOK, answer)
@@ -485,18 +748,20 @@ func readDebugRunRequest(w http.ResponseWriter, r *http.Request) (debugRunReques
 		return req, http.StatusBadRequest, errors.New("params are not taken with static_target: a static target's scrape is made with the target's own settings")
 	case req.Status != 0 && (req.Status < 100 || req.Status > 599):
 		return req, http.StatusBadRequest, fmt.Errorf("status %d is no HTTP status; give one from 100 to 599", req.Status)
-	case len(req.Headers) > debugMaxHeaders:
-		return req, http.StatusBadRequest, fmt.Errorf("%d headers; a pasted response may have at most %d", len(req.Headers), debugMaxHeaders)
+	case req.Headers.count() > debugMaxHeaders:
+		return req, http.StatusBadRequest, fmt.Errorf("%d headers; a pasted response may have at most %d", req.Headers.count(), debugMaxHeaders)
 	}
-	for name, value := range req.Headers {
+	for _, name := range req.Headers.names() {
 		if !debugHeaderName.MatchString(name) {
 			return req, http.StatusBadRequest, fmt.Errorf("header name %q is not one HTTP allows", name)
 		}
-		if err := fetch.CheckHeaderValue(value); err != nil {
-			return req, http.StatusBadRequest, fmt.Errorf("header %s %w", name, err)
+		for _, value := range req.Headers[name] {
+			if err := fetch.CheckHeaderValue(value); err != nil {
+				return req, http.StatusBadRequest, fmt.Errorf("header %s %w", name, err)
+			}
 		}
 	}
-	for key := range req.Params {
+	for _, key := range req.Params.names() {
 		if probeIdentityParam(key) || key == probeDebugParam {
 			return req, http.StatusBadRequest, fmt.Errorf("params holds %s, which the debug page sets itself: give the target as target, and the collector as collector, configured or request_from", key)
 		}
@@ -519,7 +784,17 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			return p, nil, http.StatusBadRequest, fmt.Errorf("unknown collector %q in configured; name a collector of the configuration in force", req.Configured)
 		}
 	} else {
-		cfg, err := config.ParseCollector([]byte(*req.Collector), refusedOnDebugPage)
+		refuse, opts := refusedOnDebugPage, []config.ParseOption(nil)
+		if s.playgroundUnbound() {
+			// --web.debug.dangerous: nothing is refused, and a playground
+			// that fetches a target with no request_from makes its own
+			// request, which is checked as a load checks a request.
+			refuse = nil
+			if source, _ := req.sources(); source == debugSourceTarget && req.RequestFrom == "" {
+				opts = append(opts, config.WithRequestMade())
+			}
+		}
+		cfg, err := config.ParseCollector([]byte(*req.Collector), refuse, opts...)
 		if err != nil {
 			return p, nil, http.StatusUnprocessableEntity, err
 		}
@@ -537,8 +812,8 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		if p.edited || through.Name != c.Name {
 			// Another collector reads what the target's fetches: the
 			// target's request, read by the collector run.
-			if !onDebugPage(through.Request.Type) {
-				return p, nil, http.StatusBadRequest, fmt.Errorf("static target %q is scraped through collector %q, a %s collector; another collector reads what an http collector fetches only. Run collector %q itself on it", static.static.Name, through.Name, through.Request.Type, through.Name)
+			if err := readsWhatFetches(c, through); err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("static target %q is scraped through collector %q: %w. Run collector %q itself on it, or a copy of it", static.static.Name, through.Name, err, through.Name)
 			}
 			static.collector, static.requester, static.generation = c, through, p.generation
 			// The stale result would be the target's collector's, not this
@@ -549,8 +824,12 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		return static, notes, 0, nil
 	}
 	query := url.Values{}
-	for key, value := range req.Params {
-		query.Set(key, value)
+	// Every value is given, so a parameter given twice is refused as
+	// /probe refuses it, and a header_<name> given twice forwards both.
+	for _, key := range req.Params.names() {
+		for _, value := range req.Params[key] {
+			query.Add(key, value)
+		}
 	}
 	requester := c
 	if source == debugSourceTarget {
@@ -560,11 +839,13 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			if requester == nil {
 				return p, nil, http.StatusBadRequest, fmt.Errorf("unknown collector %q in request_from; name a collector of the configuration in force", req.RequestFrom)
 			}
-		case p.edited:
+		case p.edited && !s.playgroundUnbound():
 			return p, nil, http.StatusBadRequest, errors.New("a collector written on the debug page makes no request of its own: name in request_from the configured collector to fetch the target through")
 		}
-		if (p.edited || requester.Name != c.Name) && !onDebugPage(requester.Request.Type) {
-			return p, nil, http.StatusBadRequest, fmt.Errorf("collector %q in request_from is a %s collector; another collector reads what an http collector fetches only", requester.Name, requester.Request.Type)
+		if p.edited || requester.Name != c.Name {
+			if err := readsWhatFetches(c, requester); err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("request_from: %w", err)
+			}
 		}
 		target := ""
 		if req.Target != nil {
@@ -603,8 +884,10 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 	p.overrides, p.budget, p.budgetSource = overrides, budget, budgetSource
 	if source == debugSourcePasted {
 		headers := make(http.Header, len(req.Headers)+1)
-		for name, value := range req.Headers {
-			headers.Set(name, value)
+		for _, name := range req.Headers.names() {
+			for _, value := range req.Headers[name] {
+				headers.Add(name, value)
+			}
 		}
 		if req.ContentType != "" {
 			headers.Set("Content-Type", req.ContentType)
@@ -614,6 +897,16 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			status = http.StatusOK
 		}
 		p.pasted = &fetch.HTTPResponse{StatusCode: status, Headers: headers, Body: []byte(*req.Body), Collector: c.Name}
+		if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
+			// A sql collector's answer is the rows its driver read, which
+			// its decoder hands on as they are: what is pasted is those
+			// rows, as a run's response shows them.
+			rows, columns, err := pastedRows(*req.Body)
+			if err != nil {
+				return p, nil, http.StatusBadRequest, fmt.Errorf("collector %q is a %s collector, whose answer is the rows its statement returned: paste them as JSON, a list of objects of each row's columns by name, such as [{\"state\": \"open\", \"jobs\": 3}]; %w", c.Name, c.Request.Type, err)
+			}
+			p.pasted.Rows, p.pasted.Columns = rows, columns
+		}
 		p.source = "a pasted response"
 		return p, notes, 0, nil
 	}
@@ -629,7 +922,7 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 	}
 	if requester != c {
 		p.requester = requester
-	} else if model.UsesCache(c) || c.FailureBackoff != nil {
+	} else if !p.edited && (model.UsesCache(c) || c.FailureBackoff != nil) {
 		// A configured collector fetching for itself is a debug probe of it,
 		// whose stale answer and backoff are the same probe's
 		// (probeHandler).
@@ -642,6 +935,63 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 		}
 	}
 	return p, notes, 0, nil
+}
+
+// pastedRows reads a pasted body as the rows of a statement: a JSON list of
+// objects, each a row's columns by name, as a driver's rows are handed on
+// (fetch.HTTPResponse.Rows). A whole number is an int and another a
+// float64, as a driver's are; true and false are 1 and 0; null leaves the
+// column out of its row, as NULL does. The columns are every name a row
+// has, sorted.
+func pastedRows(body string) ([]any, []string, error) {
+	dec := json.NewDecoder(strings.NewReader(body))
+	dec.UseNumber()
+	var list []map[string]any
+	if err := dec.Decode(&list); err != nil {
+		return nil, nil, fmt.Errorf("it is not: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, nil, errors.New("more follows the list")
+	}
+	seen := map[string]bool{}
+	var columns []string
+	rows := make([]any, 0, len(list))
+	for i, pastedRow := range list {
+		if pastedRow == nil {
+			return nil, nil, fmt.Errorf("row %d is not an object", i+1)
+		}
+		row := make(map[string]any, len(pastedRow))
+		for name, v := range pastedRow {
+			switch x := v.(type) {
+			case nil:
+				continue
+			case json.Number:
+				if n, err := x.Int64(); err == nil {
+					row[name] = int(n)
+				} else if f, err := x.Float64(); err == nil {
+					row[name] = f
+				} else {
+					return nil, nil, fmt.Errorf("row %d's %s, %s, is no number a column holds", i+1, name, x)
+				}
+			case bool:
+				row[name] = 0
+				if x {
+					row[name] = 1
+				}
+			case string:
+				row[name] = x
+			default:
+				return nil, nil, fmt.Errorf("row %d's %s is a list or an object; a column holds a number, text or null", i+1, name)
+			}
+			if !seen[name] {
+				seen[name] = true
+				columns = append(columns, name)
+			}
+		}
+		rows = append(rows, row)
+	}
+	sort.Strings(columns)
+	return rows, columns, nil
 }
 
 // pastedResponse is a copy of a pasted response for a trip to decode, held

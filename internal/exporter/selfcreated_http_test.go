@@ -32,7 +32,7 @@ func createdServer(t *testing.T, created, resource bool) *Server {
 	cfg := &model.Config{
 		Collectors: []model.Collector{testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), pythonCollector("py", `metric(name="v", value=1)`)},
 		OTLP:       otlpConfig("http://collector.invalid/v1/metrics"),
-		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: resource, CreatedTimestamps: created}},
+		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: new(resource), CreatedTimestamps: created}},
 	}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "kept", Target: "http://static.example"}}}
 	server := newStaticServer(t, cfg, file)

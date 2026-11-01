@@ -90,7 +90,8 @@ func TestTheCollectorsPageHasAProbeFormPerCollector(t *testing.T) {
 		`href="./"`,
 		`<form class="probe" action="probe" method="get" autocomplete="off">`,
 		`<input type="hidden" name="collector" value="weather">`,
-		`name="target" placeholder="http://host:port" required>`,
+		`<label for="weather-target">URL</label>`,
+		`name="target" placeholder="https://host:port" required>`,
 	)
 	for _, absent := range []string{"Request parameters", "Forwarded headers", "Target credential", "The exporter sends the target"} {
 		if strings.Contains(page, absent) {

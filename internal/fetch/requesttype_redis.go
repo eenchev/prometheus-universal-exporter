@@ -99,7 +99,8 @@ func init() {
 		TargetFields: []string{"timeout", "username", "password_file", "tls"},
 		Requester:    redisRequester{},
 		JSONAnswer:   true,
-		TargetHint:   func(*model.Collector) string { return "host, host:port or rediss://host:port" },
+		TargetHint:   func(*model.Collector) (string, string) { return "Server", "host, host:port or rediss://host:port" },
+		AnswerHint:   "Paste the commands' answers as the JSON document the exporter makes of them, as the Response of a run shows it",
 		Templates:    redisTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the arguments of its request.commands or its label values")
@@ -269,7 +270,9 @@ func validateRedisRequest(x *model.Collector) error {
 		if HasPathParams(r.Username) {
 			return fmt.Errorf("collector %q request.username %q has a placeholder; the account is used as it is written", x.Name, r.Username)
 		}
-		if r.PasswordFile == "" {
+		// The debug page's playground makes no request, and may name no
+		// file.
+		if r.PasswordFile == "" && !x.RequestNotMade {
 			return fmt.Errorf("collector %q sets request.username without request.password_file; an ACL user logs in with AUTH username password, so name the file of its password", x.Name)
 		}
 	}

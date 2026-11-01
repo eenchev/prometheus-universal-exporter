@@ -307,7 +307,8 @@ say when the exporter became unready under any count a reload sets.
 On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
 then makes one last export, bounded by `otlp.timeout`, of what they, earlier
 probes and static targets queued, with a last self-metric snapshot. Static
-targets are not scraped again for it. An export the shutdown interrupted is not
+targets are not scraped again for it, and their scrapes in flight are cut
+short rather than waited for, so what those would have queued is not in it. An export the shutdown interrupted is not
 lost: its data goes out with that last export; if the last export fails, its
 data points are dropped and counted. A second signal ends the process at once,
 without it (see [Shutting down](CONFIGURATION.md#shutting-down)).

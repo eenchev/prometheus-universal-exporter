@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 	// The IANA time zones, for a rule's time_zone: carried in the binary, so
@@ -58,10 +59,12 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 // paths that terminate early, and taking the arguments and output streams as
 // parameters lets the command line be tested end to end.
 //
-// Exit statuses: 0 on a clean shutdown, a passing --dry-run or a passing
-// --healthcheck, 1 when the configuration is invalid, a --dry-run or a
-// --healthcheck fails or the server stops with an error, and 2 when the
-// command line itself cannot be parsed.
+// Exit statuses: 0 on a clean shutdown, one whose --web.shutdown-timeout ran
+// out included, a passing --dry-run or a passing --healthcheck, 1 when the
+// configuration is invalid, a --dry-run or a --healthcheck fails or the
+// server stops with an error, and 2 when the command line itself cannot be
+// parsed. A second SIGTERM or SIGINT during the shutdown ends the process by
+// that signal instead (exitOnSecondSignal).
 func run(args []string, stdout, stderr io.Writer) int {
 	// SIGHUP is caught before anything else, and until run returns. Its
 	// default action ends the process, and a start can take seconds — the
@@ -82,6 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable /-/reload, which on POST or PUT reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	debugLevel := flags.String("web.debug", "off", "Debugging collectors: off; edit, the /debug page, where a collector written there or a configured one is run on a pasted response and each stage of its trip shown, nothing fetched; or full, which adds fetching a target or a static target's scrape on that page, /probe?...&debug=true and /static-targets?debug=<name>, all of which show what the target answered")
+	debugDangerous := flags.Bool("web.debug.dangerous", false, "With --web.debug=full only: let the debug page's playground, a collector written on the page, run Python, name the server's files (any *_file or *_files key, and login) and probe a target with its own request. Whoever can open the page can then run code and read files as the exporter's user; for a debugging session on one's own machine, never a shared deployment")
 	statusRefresh := flags.String("web.status-refresh", "off", "The status page's auto-refresh when its URL gives none with ?refresh=: off, or a duration in whole seconds from 5s to 24h, such as 30s or 1m. The page offers off and 5s to 1h, and keeps the interval chosen in its URL")
 	gzipLevel := flags.Int("web.gzip-level", exporter.DefaultGzipLevel, "The gzip level of the answers of /probe, the self-metrics and the static targets to a client that accepts gzip, as Prometheus does: 1, the fastest, to 9, the smallest; or 0 to answer uncompressed whatever the client accepts")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
@@ -92,6 +96,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	memoryLimitRatio := flags.Float64("runtime.memory-limit-ratio", 0, "Set the Go memory limit to this share of the container's memory limit, read from its cgroup at startup, so the Go runtime collects harder as its heap nears it and leaves the rest to the Python workers. 0, the default, leaves the Go runtime's own default; otherwise from 0.1 to 1, since below 0.1 the runtime would spend its time collecting garbage. GOMEMLIMIT in the environment wins")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	pythonMaxWorkers := flags.Int("python.max-workers", 0, "How many Python workers, of every collector together, may be alive at once, starting, running a script or idle. A run that finds none free takes the place of the idle worker unused for longest, or waits within its probe's deadline. 0, the default, leaves them bounded only per script")
+	pythonMaxIdleWorkers := flags.Int("python.max-idle-workers", transform.PythonDefaultMaxIdleWorkers, "How many Python workers of each collector's script stay idle, ready for its next run, after a burst of concurrent scrapes. Each is a Python process of 11 MB or more. 0 keeps none: a worker stops when its run ends, and every run starts an interpreter")
+	pythonIdleTimeout := flags.Duration("python.idle-timeout", transform.PythonDefaultIdleTimeout, "How long an idle Python worker is kept unused before it is stopped, at least 1s. Keep it longer than the scrape interval of the Python collectors, or each scrape starts an interpreter")
 	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk, or a grpc collector's descriptor files do")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
@@ -170,6 +176,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
+	if err := transform.ValidateMaxIdleWorkers(*pythonMaxIdleWorkers); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := transform.ValidateIdleTimeout(*pythonIdleTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 	selfMetricsEndpoint, err := exporter.SelfMetricsPath(*selfMetricsPath)
 	if err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
@@ -182,6 +196,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	debug, err := exporter.ParseDebugLevel(*debugLevel)
 	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateDebugDangerous(debug, *debugDangerous); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -331,6 +349,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 	server.SetDebug(debug)
+	server.SetDebugDangerous(*debugDangerous)
+	if *debugDangerous {
+		logger.Warn(exporter.DebugDangerousWarning)
+	}
 	server.SetStatusRefresh(refresh)
 	server.SetGzipLevel(*gzipLevel)
 	if alloc != nil {
@@ -342,7 +364,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go manager.ReloadLoop(ctx)
 	exporter.ApplyMemoryLimitRatio(*memoryLimitRatio, logger)
 	transform.PythonWorkers().SetMaxWorkers(*pythonMaxWorkers)
-	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
+	transform.PythonWorkers().SetMaxIdleWorkers(*pythonMaxIdleWorkers)
+	transform.PythonWorkers().SetIdleTimeout(*pythonIdleTimeout)
+	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkers().ReapInterval())
 	// SIGHUP is caught until the process exits, not only until the first
 	// SIGTERM: a reload sidecar sending one during the shutdown would
 	// otherwise meet Go's default action and end the process at once,
@@ -412,9 +436,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case <-ctx.Done():
-		// From here a second SIGTERM or Ctrl-C takes the default action and
-		// ends the process at once, rather than being swallowed while the
-		// probes finish and the last OTLP export is sent.
+		// From here a second SIGTERM or Ctrl-C ends the process at once,
+		// saying so, rather than being swallowed while the probes finish and
+		// the last OTLP export is sent. It is caught before the first
+		// signal's handler is let go, so none falls between the two.
+		exitOnSecondSignal(server, logger)
 		stop()
 		// /ready answers 503 from now, and connections are no longer kept
 		// alive, so whatever still routes probes here moves away while this
@@ -433,22 +459,46 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
 			waitOutShutdownDelay(*shutdownDelay)
 		}
-		logger.Info(shutdownMessage(manager.Get().OTLP), "shutdown_timeout", shutdownTimeout.String())
+		// No static target scrape and no periodic export starts from here,
+		// and the scrapes in flight are cut short at once, without
+		// publishing anything, so a target is never reported down only
+		// because the exporter stopped. They are not waited for: what they
+		// would publish is served by this process alone, which is stopping,
+		// and a target that does not answer would hold the shutdown for
+		// all of --web.shutdown-timeout. The last OTLP export goes without
+		// them, with what the scrapes before them queued.
+		stopLoops()
+		server.AbortStaticScrapes()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
-		// No static target scrape and no periodic export starts from here;
-		// the scrapes in flight finish within --web.shutdown-timeout, or are
-		// cut short without publishing anything, so a target is never
-		// reported down only because the exporter stopped.
-		stopLoops()
-		go func() {
-			<-shutdownCtx.Done()
-			server.AbortStaticScrapes()
-		}()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		probes, others := server.InProgress()
+		logger.Info(shutdownMessage(manager.Get().OTLP, probes, others, *shutdownTimeout), "probes", probes, "other_requests", others, "shutdown_timeout", shutdownTimeout.String())
+		// The probes in progress are waited for: Prometheus is waiting for
+		// their answers. The log says every shutdownProgressInterval what
+		// is still awaited, so a wait from a terminal does not look hung.
+		shutdownDone := make(chan error, 1)
+		go func() { shutdownDone <- httpServer.Shutdown(shutdownCtx) }()
+		progress := time.NewTicker(shutdownProgressInterval)
+		var shutdownErr error
+	waiting:
+		for {
+			select {
+			case shutdownErr = <-shutdownDone:
+				break waiting
+			case <-progress.C:
+				if probes, others := server.InProgress(); probes+others > 0 {
+					deadline, _ := shutdownCtx.Deadline()
+					left := max(time.Until(deadline), 0).Round(time.Second)
+					logger.Info("shutting down: still waiting for "+inProgressText(probes, others)+", "+left.String()+" left", "probes", probes, "other_requests", others, "time_left", left.String())
+				}
+			}
+		}
+		progress.Stop()
+		if shutdownErr != nil {
 			// The wait ran out: the probes still in progress are cut off, and
 			// Prometheus records them as failed scrapes.
-			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
+			probes, others := server.InProgress()
+			logger.Error("shutting down: gave up waiting for "+inProgressText(probes, others)+"; --web.shutdown-timeout ran out and their connections are closed", "probes", probes, "other_requests", others, "shutdown_timeout", shutdownTimeout.String(), "error", shutdownErr)
 			_ = httpServer.Close()
 		}
 		// The probes have finished, and the export and static target scrape loops
@@ -513,13 +563,83 @@ func newExporterLogger(level string, out io.Writer) (*slog.Logger, *exporter.OTL
 	return logger, logs
 }
 
-// shutdownMessage is the line the graceful shutdown begins with: the probes in
-// progress are finished, and, when OTLP export is on, the last export is sent.
-// It names the export only then, as FlushOTLP sends one only then: an exporter
-// without OTLP said it would send an export it never sends.
-func shutdownMessage(otlp model.OTLPConfig) string {
-	if otlp.Enabled && otlp.Endpoint != "" {
-		return "shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once"
+// shutdownMessage is the line the graceful shutdown begins with: what it
+// waits for, the probes and the other requests in progress, for at most
+// timeout, and, when OTLP export is on, that the last export is sent. It
+// names the export only then, as FlushOTLP sends one only then: an exporter
+// without OTLP said it would send an export it never sends. With nothing to
+// wait for and no export to send the exporter exits at once, and says only
+// that.
+func shutdownMessage(otlp model.OTLPConfig, probes, others int, timeout time.Duration) string {
+	export := otlp.Enabled && otlp.Endpoint != ""
+	switch {
+	case probes+others > 0 && export:
+		return "shutting down: waiting for " + inProgressText(probes, others) + ", at most " + timeout.String() + ", then sending the last OTLP export; a second signal exits at once"
+	case probes+others > 0:
+		return "shutting down: waiting for " + inProgressText(probes, others) + ", at most " + timeout.String() + "; a second signal exits at once"
+	case export:
+		return "shutting down: no probes in progress; sending the last OTLP export; a second signal exits at once"
 	}
-	return "shutting down: finishing the probes in progress; a second signal exits at once"
+	return "shutting down: no probes in progress; exiting"
+}
+
+// inProgressText is what is in progress, in words: "1 probe", "2 probes and
+// 1 other request", "1 request".
+func inProgressText(probes, others int) string {
+	counted := func(n int, one, many string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return strconv.Itoa(n) + " " + many
+	}
+	switch {
+	case probes > 0 && others > 0:
+		return counted(probes, "probe", "probes") + " and " + counted(others, "other request", "other requests") + " in progress"
+	case others > 0:
+		return counted(others, "request", "requests") + " in progress"
+	}
+	return counted(probes, "probe", "probes") + " in progress"
+}
+
+// shutdownProgressInterval is how often a shutdown waiting for requests in
+// progress says what it is still waiting for.
+const shutdownProgressInterval = 5 * time.Second
+
+// signalExitStatus is the status a shell reports for a process killed by
+// sig, 128 and the signal's number, for a process that has to exit on the
+// signal rather than be killed by it.
+func signalExitStatus(sig os.Signal) int {
+	if n, ok := sig.(syscall.Signal); ok {
+		return 128 + int(n)
+	}
+	return 1
+}
+
+// exitOnSecondSignal ends the process on the next SIGTERM or SIGINT, after
+// logging what that leaves unfinished. The process is ended by that signal,
+// with the signal's default action, as it was before it logged: a shell
+// reports 130 for SIGINT and 143 for SIGTERM, and a supervisor sees a
+// process killed by the signal rather than one that exited 0. One that
+// started with the signal ignored exits with that same status instead.
+func exitOnSecondSignal(server *exporter.Server, logger *slog.Logger) {
+	second := make(chan os.Signal, 1)
+	signal.Notify(second, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-second
+		probes, others := server.InProgress()
+		line := "second signal: exiting now"
+		if probes+others > 0 {
+			line += ", " + inProgressText(probes, others) + " left unfinished"
+		}
+		logger.Warn(line, "signal", sig.String(), "probes", probes, "other_requests", others)
+		signal.Reset(sig)
+		if self, err := os.FindProcess(os.Getpid()); err == nil && self.Signal(sig) == nil {
+			// The signal ends the process as soon as it is delivered; this
+			// goroutine only waits for that. A process started with the
+			// signal ignored, as a shell starts a background job with
+			// SIGINT, goes back to ignoring it, and exits below instead.
+			time.Sleep(time.Second)
+		}
+		os.Exit(signalExitStatus(sig))
+	}()
 }

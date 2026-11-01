@@ -134,7 +134,8 @@ func init() {
 		JSONAnswer:   true,
 		// ldap is said letter by letter.
 		Article:    "an",
-		TargetHint: func(*model.Collector) string { return "host, host:port or ldaps://host:port" },
+		TargetHint: func(*model.Collector) (string, string) { return "LDAP server", "host, host:port or ldaps://host:port" },
+		AnswerHint: "Paste the entries found as the JSON document the exporter makes of them, as the Response of a run shows it",
 		Templates:  ldapTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "the base or filter of its request.searches or its label values")
@@ -242,7 +243,9 @@ func validateLDAPRequest(x *model.Collector) error {
 		if err := checkLDAPDN(own.BindDN); err != nil {
 			return fmt.Errorf("collector %q request.bind_dn %q is not a DN: %w", x.Name, own.BindDN, err)
 		}
-		if r.PasswordFile == "" {
+		// The debug page's playground makes no request, and may name no
+		// file.
+		if r.PasswordFile == "" && !x.RequestNotMade {
 			return fmt.Errorf("collector %q sets request.bind_dn without request.password_file; a simple bind with a DN and no password is an unauthenticated bind, which a server takes without checking anything, so name the file of the account's password", x.Name)
 		}
 	}

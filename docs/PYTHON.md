@@ -529,10 +529,13 @@ start once and then serves scrape after scrape.
   otherwise fails saying so. Each worker that frees lets the first run in line
   through, rather than every waiting run racing for it. A worker stopped this way is counted with the reason `evicted`.
   `0`, the default, leaves the workers bounded only per script.
-- **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
-  collector after a burst of scrapes, and an idle one stops after five minutes
-  — checked every minute, so a collector nobody scrapes any more does not keep
-  its interpreters. A reload that changes or removes a script stops its idle
+- **Lifetime.** A worker is reused up to 1,000 times. After a burst of
+  concurrent scrapes, at most `--python.max-idle-workers` of a collector's
+  workers, one by default, stay idle for its next scrape, and the rest stop,
+  counted as `surplus`; an idle one stops once it has been unused for longer
+  than `--python.idle-timeout`, two minutes by default — checked every minute,
+  or every half the timeout when that is shorter, so a collector nobody
+  scrapes any more does not keep its interpreters. A reload that changes or removes a script stops its idle
   workers at once, and a busy one when its run ends; the workers of a
   collector a reload removed are not kept for a collector added again under
   its name, which starts its own.
@@ -543,6 +546,31 @@ start once and then serves scrape after scrape.
   ends within about that second of the exporter being gone, even in the middle
   of a script that would never have returned. The watch keeps running through
   a script that uses all of `limits.max_script_memory`.
+- **Idle workers and memory.** Each idle worker is a CPython process of about
+  11 MB resident, 17 MB with lxml imported, so what idle workers cost is the
+  Python collectors times `--python.max-idle-workers` times that: ten Python
+  collectors keep 110 to 170 MB with the default of one, and kept 440 to
+  680 MB at four each, the default before. A collector scraped by one
+  Prometheus needs one worker, which serves scrape after scrape; more stay
+  idle only to serve the next burst of concurrent scrapes — several
+  Prometheus replicas, or static targets of one collector due together —
+  without starting interpreters, so raise `--python.max-idle-workers` to the
+  scrapes a collector has in progress at once when those bursts are regular.
+  `0` keeps none idle: every run starts an interpreter, tens of
+  milliseconds, more with libraries to import, and nothing is left between
+  scrapes. Runs of one script still run at once, each in a worker of its
+  own. The idle timeout, from `1s` with no upper bound, should outlast the
+  longest scrape interval of the Python collectors: an idle worker that
+  stops before the next scrape makes every scrape start one, which the
+  `idle` stops in the [worker series](SELF-METRICS.md#python-workers) rising
+  with every scrape show. The default of two minutes is twice a scrape
+  interval of a minute, so a collector scraped every minute or more often
+  keeps its worker through a late or a missed scrape; lengthen it for
+  collectors scraped less often, or lower it, and `--python.max-idle-workers`,
+  to free the memory sooner. Both are set for the whole exporter, as
+  `--python.max-workers` is, with no `limits` key of a collector's: they are
+  about what the exporter's machine spends on interpreters, not what a
+  script needs.
 - **Metrics.** With `web.self_metrics.verbose`, the exporter publishes each
   collector's workers by state (starting, idle, busy), how many started or
   failed to, why they stopped, and how script runs ended, and the same for

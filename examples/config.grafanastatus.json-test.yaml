@@ -80,7 +80,6 @@ web:
     # scheme, host and path only; credentials and the query string are never
     # put in a label.
     verbose: true
-    resource_metrics_enabled: true
 
 collectors:
   - name: statuspage

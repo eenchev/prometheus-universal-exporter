@@ -73,7 +73,8 @@ func init() {
 		Requester:    ntpRequester{},
 		JSONAnswer:   true,
 		Article:      "an",
-		TargetHint:   func(*model.Collector) string { return "host or host:port" },
+		TargetHint:   func(*model.Collector) (string, string) { return "NTP server", "host or host:" + ntpDefaultPort },
+		AnswerHint:   "Paste the reply as the JSON document the exporter makes of it, as the Response of a run shows it",
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},

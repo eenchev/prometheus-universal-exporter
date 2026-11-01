@@ -207,11 +207,10 @@ func TestTheDebugPageLeavesEnvironmentReferencesAsWritten(t *testing.T) {
 	}
 }
 
-// A collector written on the page never runs Python, at full as at edit, a
-// request type other than http is refused, and so is an http collector
-// naming a file of the server's, a login's among them: nothing the file
-// holds reaches the answer. The keys naming files are listed in the order
-// the collector has them.
+// A collector written on the page never runs Python, at full as at edit,
+// and is refused when it names a file of the server's, a login's among
+// them: nothing the file holds reaches the answer. The keys naming files are
+// listed in the order the collector has them.
 func TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(secret, []byte("file-secret-value"), 0o600); err != nil {
@@ -224,7 +223,6 @@ func TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector(t *testing.T
 	for name, c := range map[string]struct{ yaml, want string }{
 		"python transform":          {"name: x\nrequest:\n  type: http\ntransform:\n  type: python\n  script: |\n    metric('up', 1)\nmetrics:\n  - name: up\n", "never runs Python"},
 		"pre_script":                {strings.Replace(roomsYAML("x"), "  type: jq\n", "  type: jq\n  pre_script: |\n    data['x'] = 1\n", 1), "never runs Python"},
-		"localfile":                 {"name: x\nrequest:\n  type: localfile\n  root: /etc\ntransform:\n  type: regex\nmetrics:\n  - name: up\n    type: gauge\n    expression: 'root:(x)'\n", "request.type localfile; a collector written on the debug page is an http collector"},
 		"bearer_token_file":         {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  bearer_token_file: "+secret+"\n", 1), "request.bearer_token_file, which names a file on the server"},
 		"basic_auth_file":           {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  basic_auth_file:\n    username: "+secret+"\n    password: "+secret+"\n", 1), "request.basic_auth_file"},
 		"tls files":                 {strings.Replace(roomsYAML("x"), "  type: http\n", "  type: http\n  tls:\n    ca_file: "+secret+"\n    key_file: "+secret+"\n", 1), "request.tls.ca_file, request.tls.key_file"},
@@ -624,8 +622,11 @@ func TestTheDebugPageIsSelfContained(t *testing.T) {
 			t.Errorf("the page has %q", found)
 		}
 	}
-	for _, found := range regexp.MustCompile(`https?://[^"\s<]*`).FindAllString(page, -1) {
-		if found != landingDocs && found != "http://host:port" {
+	// The forms the script reads hold the placeholders of the targets of
+	// every request type, such as https://graphite:8080, which are text.
+	forms := regexp.MustCompile(`(?s)<script type="application/json" id="forms">.*?</script>`)
+	for _, found := range regexp.MustCompile(`https?://[^"\s<]*`).FindAllString(forms.ReplaceAllString(page, ""), -1) {
+		if found != landingDocs && found != "https://host:port" {
 			t.Errorf("the page names %s", found)
 		}
 	}

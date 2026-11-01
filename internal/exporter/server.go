@@ -35,6 +35,14 @@ type Server struct {
 	// counts every run of the debug engine.
 	debug      DebugLevel
 	debugSlots chan struct{}
+	// debugDangerous is --web.debug.dangerous: the playground may run
+	// Python, name the server's files and make its own request
+	// (debuglevel.go).
+	debugDangerous bool
+	// fetchCollector makes a trip's request: fetch.FetchCollector, which the
+	// debug page's tests wrap to see whose request block every run makes,
+	// since the playground's must make none (debugpage.go).
+	fetchCollector func(ctx context.Context, target string, c *model.Collector, overrides fetch.RequestOverrides, forwarded http.Header) (*fetch.HTTPResponse, error)
 	// statusRefresh is the status page's auto-refresh when its URL does
 	// not say, --web.status-refresh, 0 for off (statusrefresh.go).
 	statusRefresh     time.Duration
@@ -118,6 +126,9 @@ type Server struct {
 	fingerprints *fingerprintMemo
 	// stopping is set when a shutdown begins; /ready answers 503 from then.
 	stopping atomic.Bool
+	// answering and probing count the requests being answered, and the
+	// probes among them: what a shutdown waits for (InProgress).
+	answering, probing atomic.Int64
 	// followed is the configuration the per-collector state was last
 	// reconciled with, with the static target file in force with it, and its
 	// generation (reconcile.go). It is replaced under statsMu, together with
@@ -142,7 +153,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), recent: newRecentProbes(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout, compression: newAnswerCompression(DefaultGzipLevel)}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), recent: newRecentProbes(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout, compression: newAnswerCompression(DefaultGzipLevel), fetchCollector: fetch.FetchCollector}
 	// The collectors the exporter starts with count from its start; one a
 	// reload adds, from when its statistics are made (selfcreated.go).
 	cfg, targets := m.InForce()
@@ -310,7 +321,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
 		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
 	}
-	return s.writeBounded(mux)
+	return s.countInProgress(s.writeBounded(mux))
 }
 
 // readOnly reports whether r is a GET or a HEAD, which an endpoint that

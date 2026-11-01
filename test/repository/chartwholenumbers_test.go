@@ -109,6 +109,7 @@ func TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates(t *testing.
 		{"allocator.replicas", "allocator-deployment.yaml", whole + `(list "allocator.replicas" $allocator.replicas 1 2147483647)`, 1},
 		{"server.probeMaxConcurrent", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.probeMaxConcurrent" .Values.server.probeMaxConcurrent)`, 0},
 		{"server.pythonMaxWorkers", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)`, 0},
+		{"server.pythonMaxIdleWorkers", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxIdleWorkers" .Values.server.pythonMaxIdleWorkers "0 to keep no worker idle")`, 0},
 	} {
 		if !strings.Contains(templates[tc.template], tc.call) {
 			t.Errorf("templates/%s does not render %s through the helper that checks it: %s", tc.template, tc.value, tc.call)
@@ -184,7 +185,7 @@ func TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates(t *testing.
 	if !strings.Contains(helpers, `regexMatch "`+countFlagPattern+`" $text`) {
 		t.Errorf("the countFlag helper does not check the value against %s", countFlagPattern)
 	}
-	for _, value := range []string{"server.probeMaxConcurrent", "server.pythonMaxWorkers"} {
+	for _, value := range []string{"server.probeMaxConcurrent", "server.pythonMaxWorkers", "server.pythonMaxIdleWorkers"} {
 		if got, want := schemaAt(t, value)["pattern"], "^$|"+countFlagPattern; got != want {
 			t.Errorf("the schema's pattern for %s is %v, want %s: empty, or what the helper accepts", value, got, want)
 		}
@@ -233,6 +234,7 @@ func wholeNumberValues(written string) string {
 server:
   probeMaxConcurrent: N
   pythonMaxWorkers: N
+  pythonMaxIdleWorkers: N
 terminationGracePeriodSeconds: N
 podDisruptionBudget:
   enabled: true
@@ -282,16 +284,17 @@ func wholeNumberLines(whole string) (deployment, scaling map[string]int) {
 	deployment, scaling = map[string]int{}, map[string]int{}
 	for line, count := range map[string]int{
 		"\n  replicas: N\n": 1,
-		"\n            - \"--probe.max-concurrent=N\"\n": 1,
-		"\n            - \"--python.max-workers=N\"\n":   1,
-		"\n      terminationGracePeriodSeconds: N\n":     1,
-		"\n  minAvailable: N\n":                          1,
-		"\n        runAsUser: N\n":                       1,
-		"\n        fsGroup: N\n":                         1,
-		"\n            runAsUser: N\n":                   1,
-		"\n            periodSeconds: N\n":               1,
-		"\n              cpu: N\n":                       1,
-		"\n          modulus: N\n":                       1,
+		"\n            - \"--probe.max-concurrent=N\"\n":    1,
+		"\n            - \"--python.max-workers=N\"\n":      1,
+		"\n            - \"--python.max-idle-workers=N\"\n": 1,
+		"\n      terminationGracePeriodSeconds: N\n":        1,
+		"\n  minAvailable: N\n":                             1,
+		"\n        runAsUser: N\n":                          1,
+		"\n        fsGroup: N\n":                            1,
+		"\n            runAsUser: N\n":                      1,
+		"\n            periodSeconds: N\n":                  1,
+		"\n              cpu: N\n":                          1,
+		"\n          modulus: N\n":                          1,
 	} {
 		deployment[strings.ReplaceAll(line, "N", whole)] = count
 	}

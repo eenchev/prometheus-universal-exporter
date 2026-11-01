@@ -244,7 +244,7 @@ func (p *oraclePool) release(spec pythonSpec, worker *pythonWorker) {
 		st.stops[pythonStopReload]++
 		return
 	}
-	if len(p.idle[key]) >= pythonWorkerMaxIdle {
+	if len(p.idle[key]) >= PythonDefaultMaxIdleWorkers {
 		p.stopLocked(worker)
 		st.stops[pythonStopSurplus]++
 		return
@@ -260,7 +260,7 @@ func (p *oraclePool) reapLocked(now time.Time) {
 	for key, workers := range p.idle {
 		kept := workers[:0]
 		for _, worker := range workers {
-			if now.Sub(worker.idleSince) > pythonWorkerIdleTimeout {
+			if now.Sub(worker.idleSince) > PythonDefaultIdleTimeout {
 				p.stopLocked(worker)
 				p.statsLocked(worker.collector).stops[pythonStopIdle]++
 				continue

@@ -510,7 +510,7 @@ func TestPythonWorkerIdleWorkersAreReaped(t *testing.T) {
 		PythonWorkers().mu.Unlock()
 		t.Fatalf("%d idle workers, want 1", len(idle))
 	}
-	idle[0].idleSince = time.Now().Add(-pythonWorkerIdleTimeout - time.Second)
+	idle[0].idleSince = time.Now().Add(-PythonDefaultIdleTimeout - time.Second)
 	PythonWorkers().reapLocked(time.Now())
 	_, stillThere := PythonWorkers().idle[key]
 	PythonWorkers().mu.Unlock()
@@ -533,7 +533,7 @@ func TestPythonWorkerPoolsAreKeyedByScript(t *testing.T) {
 }
 
 // Concurrent scrapes each get a worker; afterwards at most
-// pythonWorkerMaxIdle stay around.
+// PythonDefaultMaxIdleWorkers stay around.
 func TestPythonWorkerConcurrentRuns(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("concurrent", `metric(name="v", value=1)`)
@@ -553,8 +553,8 @@ func TestPythonWorkerConcurrentRuns(t *testing.T) {
 	PythonWorkers().mu.Lock()
 	idle := len(PythonWorkers().idle[key])
 	PythonWorkers().mu.Unlock()
-	if idle < 1 || idle > pythonWorkerMaxIdle {
-		t.Fatalf("%d idle workers after a burst, want 1..%d", idle, pythonWorkerMaxIdle)
+	if idle < 1 || idle > PythonDefaultMaxIdleWorkers {
+		t.Fatalf("%d idle workers after a burst, want 1..%d", idle, PythonDefaultMaxIdleWorkers)
 	}
 }
 
@@ -588,6 +588,9 @@ func TestPythonWorkersAreCappedProcessWide(t *testing.T) {
 	requirePython(t)
 	pool := PythonWorkers()
 	pool.SetMaxWorkers(2)
+	// Both workers stay idle after the burst, for the last script to take
+	// the place of one of.
+	pool.SetMaxIdleWorkers(2)
 	start := pool.start
 	together := make(chan struct{})
 	pool.start = func(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {

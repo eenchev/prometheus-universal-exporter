@@ -16,6 +16,22 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Fewer Python workers stay idle, for less long: after a burst of scrapes one
+  worker of each collector's script stays idle, rather than four, and an idle
+  worker stops after two minutes unused, rather than five. Each is a CPython
+  process of about 11 MB, 17 MB with lxml, so ten Python collectors keep
+  about 110 to 170 MB in idle workers rather than 440 to 680 MB. Two minutes
+  is twice a scrape interval of a minute, so a collector scraped every minute
+  or more often still keeps its worker warm. `--python.max-idle-workers` and
+  `--python.idle-timeout` bring the old behaviour back (`4` and `5m`).
+- The `go_` and `process_` resource metrics are published on the
+  self-metrics endpoint by default: reading them no longer stops the world,
+  because the memory statistics now come from `runtime/metrics` and the
+  garbage collection pauses from `runtime/debug.ReadGCStats` instead of
+  `runtime.ReadMemStats`. Set `web.self_metrics.resource_metrics_enabled:
+  false` to leave them out. `go_gc_duration_seconds` now carries the
+  quantiles 0, 0.25, 0.5, 0.75 and 1 beside its `_sum` and `_count`, as in
+  client_golang. The series names, types and help texts are as before.
 - The JSON schemas refuse more of what the exporter refuses, so an editor now
   marks it: durations and sizes under the exporter's least (`script_timeout`
   under 1ms, `max_script_memory` under 32MiB, intervals under 1s, a zero
@@ -49,8 +65,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `--web.listen-address` needs `--health-cmd` with it, and the target
   allocator run from the image needs `--no-healthcheck`.
 - The debug page calls the collector written on it the playground, and runs
-  only when *Run* is pressed: *Run as you type* is gone. *Fetch a target*
-  fetches through the configured collector chosen, or, with the playground,
+  only when *Run* is pressed: *Run as you type* is gone. *Probe a target*
+  probes through the configured collector chosen, or, with the playground,
   through the one it was copied from with *Edit a copy*; the *Fetch through*
   list is gone, and a playground copied from none cannot fetch. *Scrape a
   static target* is a list of the static targets of that same collector,
@@ -65,9 +81,40 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   refresh while the box is open. On the debug page *Run* stands level with
   the timeout box beside it, and the status page's Refresh button and
   auto-refresh selector are one height, centred on one line.
+- A `SIGTERM` or `SIGINT` no longer waits for the static target scrapes in
+  flight: they are cut short at once, logging nothing above `debug`, so a
+  target that does not answer no longer holds Ctrl-C up for all of
+  `--web.shutdown-timeout`. The last OTLP export goes without what those
+  scrapes would have queued. Probes in progress are still waited for, and the
+  log now says how many, for how long at most, what is still awaited every 5
+  seconds, and what it gave up on when the timeout runs out. A second signal
+  logs `second signal: exiting now, …` before the process ends by it, as
+  before. The line the shutdown begins with now reads
+  `shutting down: waiting for 1 probe in progress, at most 15s; …`, or
+  `shutting down: no probes in progress; exiting`.
+- The debug page no longer keeps the playground, its body or the collector
+  it was copied from in the browser between visits. A collector run on what
+  another collector fetches, through `request_from` or a static target,
+  must now be of that collector's request type (`400` otherwise), where it
+  had to be an `http` collector before.
 
 ### New
 
+- `--python.max-idle-workers` (the chart's `server.pythonMaxIdleWorkers`),
+  `1` by default, says how many workers of each collector's script stay idle
+  after a burst of concurrent scrapes; `0` keeps none, each worker stopping
+  when its run ends. `--python.idle-timeout` (`server.pythonIdleTimeout`),
+  `2m` by default and at least `1s`, says how long an idle worker is kept
+  unused. Idle workers are checked every minute, or every half the timeout
+  when that is shorter. See
+  [Idle workers and memory](docs/PYTHON.md#how-scripts-run).
+- `--web.debug.dangerous` (the chart's `server.debugDangerous`), with
+  `--web.debug=full` only, lets the debug page's playground run Python, name
+  the server's files and probe a target with its own request, for writing a
+  collector on a machine of one's own; never on a shared deployment.
+- The pages' bar has a *Theme* picker: *Auto*, the default, follows the
+  browser's light or dark preference, and *Light* or *Dark* holds whatever it
+  prefers, kept in the browser for every page.
 - `--healthcheck` asks a running exporter whether it is ready (`/ready`), or
   with `--healthcheck=health` alive (`/health`), and exits 0 or 1, for a
   container health check in an image without `curl`.
@@ -107,9 +154,36 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A static target's `otlp.labels_as_resource` moves labels of its own from
   every exported data point to its OTLP resource, and `otlp.instance_id: true`
   gives the resource `service.instance.id`, the target's name.
+- The debug page shows a run's series as a table, beside the Prometheus
+  text: a row for each sample, a column for each label, the value and the
+  type, sorted by a column's header, filtered by text and by metric, and the
+  metric lint's advice on the rows of the metric it is about. The text view
+  is the whole answer, as before, and `/debug/run` answers the series one
+  sample at a time as `samples`. The response radio that probes a target is
+  now called *Probe a target*. A pasted response's headers and the probe
+  parameters are rows of a name and a value, added with *+ Add header* or
+  *+ Add parameter* and removed with *×*, in place of a text box of lines:
+  a row is checked as the server would check it and marked with why, the
+  collector's own `{{param_<name>}}` parameters are rows to start with,
+  their defaults shown, and the others it takes are suggested as names. A
+  run's `headers` and `params` take a list of values for a repeated name.
+  *Copy as* gives a probe of the form as its `/probe` URL, a `curl` command,
+  a Prometheus `scrape_config` for the collector and the target, and the
+  debug probe's URL, and a static target as its `/static-targets` URL and
+  `curl` command; no credential is put in them.
 
 ### Fixed
 
+- The debug page asks for what the chosen collector's request type takes,
+  not for an HTTP target: the target as the type names it, with an example
+  of its forms (`SSH host`, `host or host:22`; `Name to resolve`,
+  `example.com`), no target field for a collector that names its own
+  (`kubernetes`), the collector's own `{{param_...}}` parameters with their
+  defaults, or a note that it takes none, and, for a pasted response, what
+  the type's answer is, with a status and headers only for `http` and
+  `graphite`. A response pasted for a `sql` collector is read as its rows,
+  a JSON list of objects, where it gave no series before. The collectors
+  page labels and hints each target the same way.
 - The problems of a one-line block (`defaults: {...}`, a collector's
   `request`, `otlp`, `web.basic_auth`) are said in the order of the keys on
   the line.
@@ -133,6 +207,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   keys it takes from its file's defaults marked, instead of the example,
   which it does not run; *Edit a copy* writes it on the page. A link from
   `/collectors` opens the page with it shown.
+- The debug page's playground may be of any request type the build has, so
+  *Edit a copy* of a `tlscert`, `sql`, `dns` or other collector now runs: on
+  a pasted answer of that type, or on what the collector it was copied from
+  answers for a target or a static target. Before, every run of such a copy
+  was refused with `422: ... a collector written on the debug page is an
+  http collector`. The playground's request block still makes no request,
+  and a playground with a `*_file` key, a `login` or Python is still
+  refused.
+- The debug page opens with the example playground every time, not with
+  what was written or copied on it at an earlier visit; *Back to the
+  example* puts it back in place of a copy.
+- A pasted response asks for a `Content-Type`, a status and headers only
+  when the playground's `request.type`, as the editor writes it, is `http`
+  or `graphite`, and its placeholder says what that type's answer is; the
+  fields follow the type as it is typed.
+- *Scrape a static target* says whose static targets it lists: the
+  collector chosen, or the one the playground was copied from.
 
 ## exporter 1.8.0
 

@@ -28,6 +28,15 @@ reverse proxy that serves the exporter under a path of its own. Each page's
 browser-tab icon is the project's logo, [`docs/logo.svg`](logo.svg), carried
 in the page itself as a `data:` URL, so it costs no request of its own.
 
+The bar's *Theme* picker chooses the pages' colours: *Auto*, the default,
+follows the browser's light or dark preference, and *Light* or *Dark* holds
+whatever it prefers. The choice is kept in the browser's local storage and
+holds on every page and on later visits; where the browser keeps nothing,
+as some private windows do, it holds until the page is left. Each page sets
+it before it is first drawn, so it never shows in the other theme first,
+and the status page's refresh keeps it. Without JavaScript the picker is
+hidden and the pages follow the browser.
+
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
 or `same-site`, with Basic Auth on or off: a browser sends the exporter's

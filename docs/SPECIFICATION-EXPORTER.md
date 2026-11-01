@@ -5679,11 +5679,23 @@ typical script.
   its error, since a C library out of memory can end the interpreter rather
   than raise `MemoryError`. `0`, the default, MUST leave the workers
   bounded only per pool; a negative value MUST be a command-line error.
-- A healthy worker MUST be reused at most 1000 times; at most four idle workers
-  MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
-  Idle workers MUST be checked against that timeout on a timer, every minute,
-  and not only when a worker is next asked for, so a collector that is no
-  longer scraped does not keep its interpreters.
+- A healthy worker MUST be reused at most 1000 times; at most
+  `--python.max-idle-workers` idle workers, 1 by default, MUST be kept per
+  pool, a worker whose run ends with that many idle already being stopped with
+  the reason `surplus`, and an idle worker unused for longer than
+  `--python.idle-timeout`, 2 minutes by default, MUST be stopped with the
+  reason `idle`. `--python.max-idle-workers=0` MUST keep no worker idle, each
+  stopping when its run ends, and MUST NOT limit how many runs of a script run
+  at once; a worker so stopped MUST free its place under
+  `--python.max-workers` for a run waiting for one. A negative
+  `--python.max-idle-workers` and an `--python.idle-timeout` under 1 second
+  MUST be command-line errors (exit 2); neither has an upper bound. The
+  default timeout is twice a scrape interval of a minute, so a collector
+  scraped every minute or more often keeps its worker warm through a late or
+  a missed scrape. Idle workers MUST be checked against the timeout on a
+  timer, every minute or every half the timeout when that is shorter, and not
+  only when a worker is next asked for, so a collector that is no longer
+  scraped does not keep its interpreters.
 - A reload that removes or changes a collector's script MUST stop that script's
   idle workers at once and each busy one when its run finishes, counting them
   with the stop reason `reload`; workers of scripts the reload keeps MUST be
@@ -7697,22 +7709,31 @@ checked first.
 
 The exporter MUST support publishing the standard `go_` and `process_` series
 describing its own CPU and memory, configured under
-`web.self_metrics.resource_metrics_enabled` and defaulting to false.
+`web.self_metrics.resource_metrics_enabled` and defaulting to true; false
+MUST leave every one of them out.
 
-The names and semantics MUST match what `prometheus/client_golang` publishes, so
-an existing Go dashboard or alert works against this exporter unchanged. That is
-the only reason to use the prefix at all; a series named `go_goroutines` that
-means something else is worse than no series.
+The names, types, help texts and semantics MUST match what
+`prometheus/client_golang` publishes, so an existing Go dashboard or alert works
+against this exporter unchanged. That is the only reason to use the prefix at
+all; a series named `go_goroutines` that means something else is worse than no
+series.
 
-They MUST default to off. Collecting them is not free — reading the memory
-statistics briefly stops the world — and an exporter scraped frequently by
-several Prometheus servers should not pay that cost unless it is asked for.
+Collecting them MUST NOT stop the world: the exporter MUST NOT call
+`runtime.ReadMemStats` outside its tests. The memory series MUST be read from
+`runtime/metrics`, every source in one `metrics.Read` per scrape, and computed
+from the memory classes as client_golang's Go collector computes the
+`runtime.MemStats` fields for Go 1.17 and later; `go_memstats_last_gc_time_seconds`
+and `go_gc_duration_seconds` MUST come from `runtime/debug.ReadGCStats`. Because
+nothing pauses the program they are on by default. The samples and the pause
+history MUST be reused from one scrape to the next, so that overlapping scrapes
+neither race on them nor allocate them again.
 
 The runtime series MUST be available on every platform the exporter builds for.
-The CPU class series MUST be requested from the runtime by name and omitted when
-the Go release in use does not provide them, so the exporter publishes what its
-runtime actually offers rather than a fixed list a toolchain upgrade could
-invalidate.
+Every `runtime/metrics` source MUST be requested by name and checked against the
+descriptions the runtime gives (`metrics.All`); a series MUST be omitted when the
+Go release in use does not describe one of its sources, so the exporter
+publishes what its runtime actually offers rather than a fixed list a toolchain
+upgrade could invalidate, and never a sum with a part missing.
 
 The `process_` series MUST reflect the operating system's view of the process
 and MUST be omitted where that view is unavailable. They MUST NOT be synthesised
@@ -7722,10 +7743,11 @@ time and includes idle. Publishing one under the other's name is wrong in a way
 that only appears when somebody trusts the graph.
 
 Where a standard series cannot be produced faithfully it MUST be omitted rather
-than approximated. `go_gc_duration_seconds` MUST therefore be published as a
-summary with its count and sum only, because the quantiles are not available
-from the runtime statistics the exporter reads; it MUST NOT be published as two
-counters, which would give the family a type client_golang does not give it.
+than approximated. `go_gc_duration_seconds` MUST be published as the summary
+client_golang publishes: the quantiles 0, 0.25, 0.5, 0.75 and 1 of the recent
+pauses, the total pause as its sum and the number of collections as its count.
+It MUST NOT be published as two counters, which would give the family a type
+client_golang does not give it.
 
 `process_start_time_seconds` MUST be the same at every scrape of one process:
 it MUST be worked out from the boot time the system reports and the process's
@@ -8076,7 +8098,10 @@ Recommended behavior:
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
   that probes a target through it and shows the answer in place. The form MUST
-  offer a field for the target, required when the request type needs one; a
+  offer a field for the target, required when the request type needs one,
+  labelled and hinted as its request type names a target and shows its forms
+  (§ 42.17), and disabled with the hint `none: leave it out` for a type that
+  takes none; a
   timeout, 10 seconds to start with, sent as the
   `X-Prometheus-Scrape-Timeout-Seconds` header so the probe answers with its
   own error, with the page giving up a few seconds after it; for each
@@ -8103,8 +8128,19 @@ Recommended behavior:
   what they show, MUST NOT be cached, MUST NOT be framed by another site
   (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
   `frame-ancestors 'none'`), since the collectors page takes credentials, and
-  MUST lay out at phone width and
-  follow the browser's light or dark preference.
+  MUST lay out at phone width.
+- Every HTML page the exporter serves MUST offer in its bar a theme picker
+  of *Auto*, the default, *Light* and *Dark*. *Auto* MUST follow the
+  browser's light or dark preference, and *Light* and *Dark* MUST hold
+  whatever the browser prefers, `color-scheme` included, so the browser's
+  own controls match. The choice MUST be kept in the browser's local
+  storage and hold on every page; where the storage cannot be used, the page
+  MUST still work and the choice MUST hold until the page is left. Each page
+  MUST set the choice kept, as the `data-theme` attribute of its `html`
+  element, from a script in its head, before it is first drawn, and a part
+  of a page a script swaps in, as the status page's fragment, MUST NOT touch
+  it. Without JavaScript the picker MUST be hidden and the pages MUST follow
+  the browser.
 - Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
   status page (§ 42.14a) — MUST carry the same bar at its top, once, with
   the same style: a link back to `/` (on `/` itself, the exporter's name
@@ -10022,6 +10058,8 @@ Provide clear CLI flags, for example:
 --probe.default-timeout=30s
 --probe.max-concurrent=0
 --python.max-workers=0
+--python.max-idle-workers=1
+--python.idle-timeout=2m
 --runtime.memory-limit-ratio=0
 --web.enable-lifecycle
 --web.debug=off
@@ -10046,12 +10084,34 @@ garbage: such a limit leaves the Go heap almost nothing.
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
 probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
-refused as a malformed command line. When it runs out, the connections still
-open MUST be closed, which MUST be logged with the timeout, before the last
-OTLP export (§ 42.1a) and a clean exit.
-The line logged as the graceful shutdown begins MUST name the last OTLP
+refused as a malformed command line. The wait MUST be for the requests to the
+exporter in progress alone — the probes, and any other request being
+answered — and not for work the exporter started on its own: the static
+target scrapes in flight are cut short as it begins (below), and the
+configuration watch, the reload loop and the Python worker reaping stop then
+and are not waited for. When it runs out, the connections still
+open MUST be closed, which MUST be logged at `error` with the timeout and the
+number of probes and of other requests given up on, before the last
+OTLP export (§ 42.1a) and a clean exit, `0`.
+The line logged as the graceful shutdown begins MUST say what it waits for —
+the number of probes in progress, and of other requests when there are any,
+in words and as the attributes `probes` and `other_requests` — and the
+timeout, or, with nothing in progress, that there is nothing to wait for, in
+which case the exporter MUST NOT wait. It MUST name the last OTLP
 export only when OTLP export is enabled with an endpoint, the only case in
-which one is sent.
+which one is sent. While the wait goes on, the exporter MUST log, every 5
+seconds and no more often, what it still waits for and the time left, so a
+shutdown run from a terminal never looks hung.
+
+A second `SIGTERM` or `SIGINT`, from the first signal on, the delay below
+included, MUST end the process at once, without waiting for the probes or
+the last OTLP export, after logging one line that says so and how many probes
+and other requests it leaves unfinished. The process MUST then end by that
+signal's default action, so it reports itself killed by the signal (a shell's
+`130` for `SIGINT`, `143` for `SIGTERM`) rather than exiting `0`; a process
+started with that signal ignored, which the default action does not end, MUST
+exit with that status, 128 and the signal's number, within a second. `SIGTERM` and
+`SIGINT` MUST behave the same throughout.
 
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
@@ -10062,17 +10122,20 @@ sending probes before the listener closes rather than having them refused.
 Connections MUST NOT be kept alive past their current request during the
 delay, so clients reconnect to another instance. The exporter MUST log the
 delay when it starts one. A second signal during the delay MUST end the process
-at once, as during the shutdown timeout. A negative value MUST be refused as a
+at once, as during the shutdown timeout, with the same line. A negative value MUST be refused as a
 malformed command line.
 
 Static targets (§ 42.14) MUST keep being scraped during the delay, while their
 endpoint is still served. When the delay ends no static target scrape MUST
 start, and one waiting for a slot MUST give up without logging advice about
 `concurrency`; one that comes by a slot as the delay ends, or after, MUST NOT
-begin either. Those in flight MUST be allowed to finish within
-`--web.shutdown-timeout`, and publish as usual. One the timeout cuts short
-MUST publish nothing — on the endpoint or over OTLP — and MUST NOT be logged as
-a failure: the target did not fail, so it MUST NOT be reported down, and its
+begin either. Those in flight MUST be cut short as the delay ends, and MUST NOT
+be waited for: what they would publish is served by this process alone, which
+is stopping, and a target that does not answer would hold the shutdown for
+all of `--web.shutdown-timeout`. One cut short
+MUST publish nothing — on the endpoint or over OTLP, so the last OTLP export
+goes without it — and MUST NOT be logged as
+a failure, or at any level above `debug`: the target did not fail, so it MUST NOT be reported down, and its
 last result stands.
 
 `--version` prints the build information of § 22.0d and exits 0.
@@ -10849,10 +10912,11 @@ HTML/XML output.
 
 Test resource metrics:
 
-- None of the `go_` or `process_` series appear unless configured.
+- The `go_` and `process_` series appear without being configured, and none of
+  them appear with the setting false.
 - With the setting on, every runtime series is published, `go_info` carries this
   binary's Go version, and the values are the live ones rather than zeros.
-- The CPU class series are requested from the runtime by name and are counters.
+- The series read from `runtime/metrics` keep client_golang's types.
 - The `process_` series appear where the operating system's view is available
   and are absent where it is not, rather than being synthesised.
 - The process statistics are parsed correctly when the executable name contains
@@ -29448,7 +29512,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
 - `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
 - `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
-- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records and the browser keeps, and says `the collector this playground was copied from`.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`: at `full` neither `/debug` nor `/debug?collector=rooms` has a *Fetch through* list; `/debug` offers *Fetch a target* disabled with the note `Choose a configured collector, or Edit a copy of one, to fetch a target or scrape a static target.`, `/debug?collector=rooms` enabled with `Fetched through rooms, the collector chosen.`; the script sends `request_from` once, as the collector the playground was copied from, which *Edit a copy* records while the page is open, and says `the collector this playground was copied from`.
 - `TestTheDebugPagesBodyFitsTheCollectorChosen`: the body has the placeholder `Paste what the target answers` and the example in `data-example`; `/debug` starts it as the example, `/debug?collector=rooms` empty, and the script changes it on a change of collector only while it is empty or the example.
 - `TestTheDebugPageNeverRunsOnOpening` (changed): `run` is named only where it is defined and by *Run*'s click handler, with no timer.
 - `TestTheDebugPageIsSelfContained` (changed): the page loads nothing but its icon, a `data:` URL, and at `full` has the *Fetched through* note; its script chooses the collector the server chose (`data-chosen`).
@@ -29458,13 +29522,140 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPagesStaticTargetsFollowAReload`: a reload of the static target file that moves `one` from `first` to `second` and adds `two` to `first` shows on `/debug?collector=…` and in `/debug/collector`.
 - `TestALongTextIsPreviewedByItsStart`: a text of 160 characters (`é` each) or three lines is not cut; one of 161 characters is previewed as its first 160 and `…`, one of four lines as its first three and `…`, the whole text kept.
 - `TestTheStatusPageShowsALongErrorsStartAndTheWholeOne`: a static target's error past 160 characters, quoting `<script>alert(1)</script>`, is shown in its cell as `<details class="long">` with the summary `aria-label="Show the whole error"`, its preview and the whole error in `<pre class="whole">`, both escaped and no markup; a short error, `received HTTP status 500`, is shown whole with no `<details>`.
-- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*; `?format=fragment` has the `<details>` and no dialog.
+- `TestTheStatusPagesDialogIsOutsideTheSwappedContent`: the page has one `<dialog id="whole">`, after the content element and before the script, with `<pre id="whole-text">` and *Close*, without a heading and labelled `The whole text`, the script setting the label to the kind of text it opens; `?format=fragment` has the `<details>` and no dialog.
 - `TestTheStatusPagesScriptOpensLongTextsAndHoldsTheRefresh`: the script listens for clicks on the content element for `details.long > summary`, puts the whole text in the dialog with `textContent`, opens it with `showModal()`, skips a refresh while it is open (`if (inFlight || whole.open) return;`), closes it on a click on the backdrop, and on its close gives focus back to the control and calls `schedule()`; its one `innerHTML` is the swap of the fragment.
 - `TestThePagesControlsOnOneLineLineUp`: the debug page's `.actions` aligns its items at their ends with *Run* and the timeout box `36px` high, the debug and collectors pages' `.row` aligns at the ends, and the status page's refresh form centres its label and makes the button, link and selector `30px` high.
 - `TestTheStatusPageHasRefreshControls` and `TestTheStatusFragmentIsThePageContentAlone` (changed): the refresh skips while the dialog is open, and the content element is followed by the dialog.
 
 - `TestTheLogExportsLastRecordsAreMutedUnderItsResult`: the log export's last export says its result, and under it, muted as the metrics export's counts are, `1 log record`.
 - `TestTheStatusPagesShortColumnsKeepTheirWordsWhole`: the status page's headers do not wrap, its cells keep their words whole but for the target's and the error's, which break anywhere within bounds, and a facts table's error cell sets no least width, so a phone shows the OTLP sections without scrolling sideways.
+
+## 34.240 The debug page and the collectors page ask for what each request type takes
+
+- `TestEveryBuiltRequestTypeSaysWhatItsTargetAndItsAnswerAre` (fetch, every build): every request type built says what a pasted response of it is, and either takes no target or names one with a label and a hint, which hints a URL for `http` and `graphite` alone.
+- `TestARequestTypeMustSayWhatItsTargetAndItsAnswerAre` (fetch): registering a type without a target hint and without `NoTarget`, or without an answer hint, panics, and the type is not in `RequestTypes`.
+- `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`: `/debug?collector=weather`, an `http` collector with `{{param_city:sofia}}`, `{{param_days}}` and `forward_headers: [X-Tenant]`, and `/debug/collector?name=weather` give the form `URL`, `https://host:port`, the parameters `param_city=sofia`, `param_days=` and `also: method, path, body, insecure_skip_verify, follow_redirects, enable_http2, retry_attempts, retry_backoff, header_X-Tenant`, and a pasted body with its `Content-Type`, status and headers; the page says `Probed through weather, the collector chosen.` and that the target is probed as `/probe?debug=true` probes it; the playground shows the `Content-Type`, status and headers.
+- `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`: a postgres collector with `{{param_min:0}}` is asked for `Database server`, `host or host:5432` and `param_min=0`, and of a pasted response for the rows as JSON alone, its `Content-Type`, status and headers hidden.
+- `TestTheDebugPageReadsAPastedSQLResponseAsTheRows`: rows pasted for that collector, with a `null` column and `true`, give `demo_jobs{state="open"} 3`, `{state="done"} 40` and `{state="late"} 1`; an object, a row with an object for a value, a second list after the first and `[null]` are refused `400`, saying to paste a list of objects.
+- `TestTheDebugPageAsksADNSCollectorForTheNameToResolve`: a dns collector of `A` is asked for `Name to resolve`, `example.com`, one of `PTR` for `Address to resolve`, `192.0.2.1 or 2001:db8::1`; neither takes probe parameters, which the page says in place of the field, nor shows a `Content-Type`, status or headers.
+- `TestTheDebugPageProbesAKubernetesCollectorWithNoTarget`: a kubernetes collector's form has no target, the page hiding the field and saying `This collector names its own target.` and `This collector takes no probe parameters.`, its script sending an empty target for it; a run with an empty target is made, answered `200` with a report, not refused.
+- `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`: localfile collectors are asked for `Directory`, `a directory under its root that holds app.prom (optional)` with `path` among their parameters, for `Directory`, `a directory under its root (optional)` reading `files`, and for `File`, `a file under its root, such as app.prom (optional)`; a pasted body is the file's content, with a `Content-Type` and no status or headers.
+- `TestTheDebugPageAsksAnSSHFileCollectorForTheHost`: an sshfile collector is asked for `SSH host`, `host or host:22`, its parameters `also: path`, and of a pasted response for the file's content.
+- `TestTheCollectorsPageHasAProbeFormPerCollector`, `TestTheCollectorsPageNamesADNSTarget`, `TestTheCollectorsPageShowsAGraphiteTarget` and `TestTheCollectorsPageHintsALocalfileTarget` (changed): the collectors page labels the target `URL` with `https://host:port`, `Name to resolve` with `example.com`, `Graphite URL` with `https://graphite:8080`, and `Directory` with `a directory under its root that holds batch.prom (optional)`; the kubernetes test's form offers the target disabled.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied`, `TestTheDebugPagesBodyFitsTheCollectorChosen`, `TestTheDebugPageIsSelfContained` and `TestTheDebugPageOffersTheStaticTargetsOfTheCollectorChosen` (changed): the note reads `Probed through …`, the body's placeholder is the http type's answer hint, the page names no URL but `https://host:port`, and the script takes the form `/debug/collector` answers.
+
+## 34.241 The shutdown cuts static target scrapes short and says what it waits for
+
+- `TestAShutdownDoesNotWaitForStaticTargetScrapes`: with a static target on a listener that accepts the connection and never answers, its scrape in flight, an interval of a minute and `--web.shutdown-timeout=15s`, a `SIGINT` ends the exporter with exit status `0` within 5 seconds, where waiting for the scrape took the whole 15; the log says `shutting down: no probes in progress; exiting` with `probes` `0`, and has no `ERROR` or `WARN` line.
+- `TestAShutdownSaysWhatItWaitsFor`: with a probe of a target that never answers in progress, a static target scrape on a silent listener in flight and `--web.shutdown-timeout=7s`, a `SIGINT` exits `0` no sooner than 7 seconds, having logged `shutting down: waiting for 1 probe in progress, at most 7s; a second signal exits at once` with `probes` `1`, `other_requests` `0` and the timeout, exactly one `shutting down: still waiting for 1 probe in progress, <n>s left` line with `time_left`, and the `ERROR` line `shutting down: gave up waiting for 1 probe in progress; --web.shutdown-timeout ran out and their connections are closed` with `probes` `1`; no `static target scrape failed`.
+- `TestASecondSignalInTheShutdownDelayExitsAtOnce`: a second `SIGTERM` in a `--web.shutdown-delay` held open ends the process killed by `SIGTERM`, having logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `terminated`.
+- `TestASecondSignalEndsAnExporterStartedWithItIgnored`: an exporter started with `SIGINT` ignored, through a shell's `trap "" INT`, with a probe in progress and `--web.shutdown-timeout=10m`, exits with status `130` on a second `SIGINT`, having logged the second signal, where it used to ignore it and wait out the probe.
+- `TestSecondSignalExitsAtOnce` (changed): the process the second `SIGINT` ends is killed by `SIGINT`, and logged `second signal: exiting now, 1 probe in progress left unfinished` with `signal` `interrupt` and `probes` `1` first.
+- `TestTheShutdownSaysWhatItWaitsFor`: the line the shutdown begins with is `shutting down: waiting for 1 probe in progress, at most 15s; a second signal exits at once` for one probe, `2 probes`, `2 probes and 1 other request` and `3 requests` for those counts, and `shutting down: no probes in progress; exiting` for none.
+- `TestTheShutdownNamesTheLastOTLPExportOnlyWhenOneIsSent` (changed): so with nothing in progress as with a probe.
+- `TestShutdownTimeoutBoundsTheWait`, `TestTheExporterForwardsItsOwnLogOverOTLP`, `TestOTLPExportsThroughTheShutdownDelay` and the other shutdown tests (changed): they look for the new wording of the shutdown's first line and of its giving up.
+
+## 34.242 The debug page's series as a table, Probe a target, and headers and parameters as rows
+
+- `TestTheDebugPageAnswersEachSampleOfARun`: a pasted Prometheus text with a gauge, `NaN`, a counter, a histogram, a summary with its quantiles out of order and an untyped `+Inf` is answered with `samples` whose `name`, `labels` and `value`, written as sample lines, are the lines of `series` in its order, each with its metric's `metric` and `type`: the histogram's `le="0.5"` and `le="+Inf"` buckets, `_sum` and `_count`, the summary's `quantile="0.5"` before `0.9`, `_sum` and `_count`; a refused run has none.
+- `TestTheDebugPagesLintFindingsNameTheMetricOfTheirSamples`: a written collector's `jobs` counter and a counter `idle` whose items select nothing give `counter-total` findings on `jobs`, which samples are of, and on `idle`, which none is, and none on `queue_length`; the page's script puts a finding on the rows of the metric it names, lists one of no row's metric above the table, `which no series is of`, and writes the advice as a summary's title and as the text it opens to.
+- `TestTheDebugPageShowsTheSeriesAsATable`: `/debug` has the *Table* tab selected and the *Text* tab, the text's `<pre id="series"></pre>` unchanged in its own panel, a filter box, a metric list and the table in a box that scrolls; the script sorts by a clicked header, again reversed, `value`, `le` and `quantile` as numbers with `+Inf` read, a missing label last, filters case-insensitively and by metric, says `<n> of <m> series`, draws at most 2000 rows with `Showing the first 2000 of <n>; filter to narrow.`, fills cells by `textContent`, keeps the view in the browser and shows a refused run as text; it writes no HTML (`innerHTML`, `outerHTML`, `insertAdjacentHTML`).
+- `TestTheDebugPageSaysProbeATarget`: at `full`, with and without a collector chosen and a `target` in the address, the radio says *Probe a target* and the note `to probe a target or scrape a static target.`, its value `fetch` and id `mode-fetch` and the `target` the address names read as before, and the page says *Fetch a target* nowhere; at `edit` it says `Probing a target needs --web.debug=full`.
+- `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageSaysWhenNoStaticTargetUsesTheCollector` (changed): they look for *Probe a target* and `to probe a target or scrape a static target.`.
+- `TestTheDebugRunTakesRepeatedHeadersAndParameters`: a pasted run with `"X-Trace": ["one", "two"]` and `"X-Single": "three"` shows `X-Trace: one` then `X-Trace: two` and `X-Single: three` among the response's headers; `param_room` given twice is refused `probe parameter param_room is given 2 times; give it once`; a header's value as a number, a list of numbers or an object is refused `"X-Trace" has neither a string nor a list of strings`, and 101 values of one header as `101 headers`; at `full` `header_X-Tenant` given as `a` and `b` sends the target both.
+- `TestTheDebugPageEditsHeadersAndParametersAsRows`: `/debug` has no `headers` or `params` textarea and no `also: ` hint, but the headers' and the parameters' groups with their titles, row boxes, *+ Add header* and *+ Add parameter*, the `params-names` datalist and the note on defaults; the script labels each input and *×* with its row's number, fills by `value` and `textContent`, moves focus on add and remove, adds a row on Enter in the last value, words the checks as the server (`A header needs a name`, `Header name "…" is not one HTTP allows.`, `Probe parameter … is given … times; give it once.`, the page's own `target`, `collector` and `debug`, `header_<name>` free to repeat), marks the row `aria-invalid` and stops the run, sends one value as a string and more as a list, a header's name in any case and a parameter's as written, and keeps typed values for the names the next collector takes; the CSS keeps name, value and *×* `34px` high on one wrapping line; its header-name pattern is the server's `debugHeaderName`.
+- `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters`, `TestTheDebugPageAsksASQLCollectorForItsServerAndItsRows`, `TestTheDebugPageAsksALocalfileCollectorForAPathUnderItsRoot`, `TestTheDebugPageAsksAnSSHFileCollectorForTheHost` and the other per-type form tests (changed): the form gives `params` as names with defaults (`param_city` `sofia`, `param_days`; `param_min` `0`) and `other_params` as names (`method`, …, `header_X-Tenant`; `path`), and the page shows the parameters' group or the note that the collector takes none.
+
+## 34.243 The debug page copies a probe as a URL, a curl command and a scrape_config
+
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig`: at `edit` the page has no *Copy as*; at `full` *Probe a target* has the *Copy as* row with *URL*, *curl*, *scrape_config* and *Debug report URL*, the box of what is copied and the status, and *Scrape a static target* its own with *URL* and *curl*; the script quotes for the shell (`'\''`) and for YAML (`''`), makes the URL with `new URL("probe", document.baseURI)`, `collector`, `target` but for a collector that names its own and each parameter row, a repeated name repeated, `debug=true` in the debug report's URL alone, is blocked with a note while there is no collector to probe through, the target is empty or a row is wrong (`wrong()`, which marks none), says that a copied playground's edits are not in it, writes the job of `docs/LOCALFILE.md` (`metrics_path` the URL's path, `scheme: https` over HTTPS, `params` with `collector` first, the target moved into `__param_target` and `instance` and `__address__` the page's host) or, without a target, the page's host as the target, makes `/static-targets?targets=<name>`, copies with `navigator.clipboard.writeText` saying `Copied the …` or to select the text, follows the target and the parameter rows, and writes no HTML (`innerHTML`, `outerHTML`, `insertAdjacentHTML`); without `web.basic_auth` the page is not marked as asking for it.
+- `TestTheDebugPageCopiesNoCredential`: with `web.basic_auth` on, the page, fetched with the credential, is marked `data-basic-auth`, says that curl gets `-u USER` and the job a `basic_auth` to fill in, writes that `basic_auth` commented, and has neither the user nor the password anywhere.
+- `TestTheDebugPageEditsHeadersAndParametersAsRows` (changed): the check that a row with a value needs a name is now `messageOf`'s `return`, which `wrong()` shares.
+
+- `TestEveryPagesDropdownsHaveTheirArrowInFromTheEdge`: the pages' shared style draws a dropdown's arrow itself, 14px and 19px in from the field's right edge with 34px of padding before it, under a selector that outweighs each page's own rule for its fields.
+
+## 34.244 The debug page's playground of any request type, opened as the example
+
+- `TestAnHTTPPlaygroundMakesNoRequest`, `TestATLSCertPlaygroundMakesNoRequest`, `TestADNSPlaygroundMakesNoRequest`, `TestAnNTPPlaygroundMakesNoRequest`, `TestASQLPlaygroundMakesNoRequest`, `TestAGRPCPlaygroundMakesNoRequest`, `TestAGraphitePlaygroundMakesNoRequest`, `TestAKubernetesPlaygroundMakesNoRequest`, `TestAnSSHFilePlaygroundMakesNoRequest`, and in the builds that have them `TestAnSSHExecPlaygroundMakesNoRequest`, `TestATCPPlaygroundMakesNoRequest`, `TestARedisPlaygroundMakesNoRequest`, `TestAnLDAPPlaygroundMakesNoRequest` and `TestAnS3FilePlaygroundMakesNoRequest`: at `full`, a playground of the type, whose request reaches a listener that records TCP connections and UDP packets wherever the type names a host in its request block (an http or graphite `proxy_url`, a dns `server`, a kubernetes `api_server`, an s3file `endpoint`), and written without the files a request of its type needs (`known_hosts_file` and a key, a `bearer_token_file`, a password file), reads a pasted response of the type into its series (a JSON document, sql rows, a file's content, a command's output) with no request made; run on a target with `request_from` and on a static target, both of a configured collector of the type, every request is that collector's; and nothing ever connects to the listener. Each then sets every request key of its type ending in `_file` or `_files`, those of the common part it takes, of its own and of the mappings among them, one at a time, and is refused `422` naming it (`request.login` for a login's).
+- `TestALocalfilePlaygroundReadsNoFile`: a localfile playground whose `root` and `path` name a file holding other series gives the pasted content's series; through a configured localfile collector, its requests alone are made.
+- `TestTheDebugPageReadsWhatACollectorOfItsOwnTypeFetches`: a copy of a tlscert collector is run on that collector's static target and on a target fetched through it, the report saying so; an http playground on a tlscert collector's static target or through it, and a tlscert playground through an http collector or on its static target, are refused `400` saying that a collector reads what a collector of its request type fetches only.
+- `TestTheDebugPageHoldsTheFormOfAPlaygroundOfEachType`: the page holds, under `types`, the form of a playground of each request type the build has, as the type gives it, a tlscert one asking for the handshake's JSON document without `Content-Type`, status or headers, an http one with them, which is the example's; the script takes the playground's form from the `request.type` the editor holds, once a frame as it is typed, and sends no status, headers or `Content-Type` its form hides.
+- `TestTheDebugPageOpensWithTheExamplePlayground`: `/debug` opens with the example in the editor and *Back to the example* hidden; the script keeps nothing of the playground, the body or the collector copied from in the browser (no `debug.collector`, `debug.body`, `debug.copied` or `sessionStorage`), shows *Back to the example* while the playground is a copy, which puts the example back, and still keeps the choice of table or text.
+- `TestTheDebugPageSaysWhoseStaticTargetsItOffers`: `/debug?collector=rooms` says `Static targets of rooms, the collector chosen.`; `/debug`, with *Scrape a static target* disabled, says nothing, and the script says `…, the collector this playground was copied from.` of a copy.
+- `TestTheDebugPageRefusesPythonAndServerFilesInAWrittenCollector`, `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` and `TestTheDebugPageIsSelfContained` (changed): a localfile playground is no longer refused; the collector copied from is no longer kept in the browser; the targets' placeholders the forms hold are not URLs the page loads.
+
+## 34.245 The pages' theme picker: Auto, Light or Dark
+
+- `TestEveryPageOffersTheThemeAndSetsItBeforeItIsDrawn`: `/`, `/collectors`, `/debug` and the status page each set the theme kept in local storage (`theme`, `light` or `dark`) on the `html` element from a script in their head, before their style, and carry once in their bar the picker of *Auto*, *Light* and *Dark*, hidden until its script shows it, which shows the theme set, sets or removes it on a change and keeps it, or removes what is kept for *Auto*; the status page's fragment does not touch the theme.
+- `TestThePagesStyleHasBothThemesChosen`: the pages' style has the light colours with `color-scheme: light dark`, `color-scheme: light` for `data-theme="light"`, the dark colours under `prefers-color-scheme: dark` only where Light is not chosen and again for `data-theme="dark"`, each with its `color-scheme`, and no other rule following the browser's preference; a hidden picker is not shown.
+- `TestTheStatusPageHasRefreshControls` and the other status page refresh tests (changed): the auto-refresh selector's options are read up to its own `</select>`, the bar now holding one before it.
+
+## 34.246 The debug page's dangerous mode, --web.debug.dangerous
+
+- `TestTheDangerousDebugModeNeedsFull`: `ValidateDebugDangerous` refuses the flag at `off` and `edit`, naming `--web.debug=full` and the level, and takes it at `full` or left off at any level.
+- `TestTheDangerousDebugModeNeedsFullAndIsWarnedOf` (root package): `--web.debug.dangerous` alone, at `edit`, and at `edit` with `--dry-run`, exits `2` saying it needs `--web.debug=full`; at `full` the exporter starts, serves `/debug` and logs the warning at `WARN`.
+- `TestTheDangerousDebugModeRunsThePlaygroundsPython`: without the flag a playground with a python transform or a `pre_script` is refused `422`; with it both run on a pasted body (`length 4`; the `pre_script` keeping one room), the answer says `dangerous`, a configured collector of the playground's name counts no run, and the pool counts both with no worker left idle.
+- `TestTheDangerousDebugModeMakesThePlaygroundsOwnRequestWithItsFiles`: without the flag a playground with `bearer_token_file` is refused and one probing a target without `request_from` is told it makes no request of its own, the target reached by neither; with it the playground's own request is made with the file's token (`Bearer file-token`), the report naming it and not the token, a pasted run still makes no request, its own `allowed_targets` refuses the target (`403`), a missing token file fails the run without a request, and `request_from` still fetches through the configured collector.
+- `TestTheDangerousDebugModeLetsALocalfilePlaygroundReadAFile` (localfile): a localfile playground probed for `app.prom` under its own root is refused `400` without the flag and reads the file's series with it.
+- `TestTheDangerousDebugModeLeavesEnvironmentReferencesAsWritten`: with the flag a `${NAME}` in the playground is still left as written.
+- `TestTheDebugPageSaysWhatThePlaygroundMayDoInEachMode`: without the flag the page says the playground never runs Python and makes no request of its own, *Probe a target* disabled, and no page has the badge; with it the page has the red warning, `<main data-dangerous>`, *Probe a target* offered for the playground probed through its own request, the note for static targets alone, and the script's own-request form, without the usual note, and `/`, `/collectors`, `/debug` and the status page each carry the *Dangerous debug mode* badge; at `edit` the page warns of nothing.
+- `TestTheDebugPageCopiesAProbeAsAURLCurlAndAScrapeConfig` and `TestTheDebugPageFetchesThroughTheCollectorChosenOrCopied` (changed): the script's lines that block *Copy as* and disable *Probe a target* for a playground copied from none now also say what dangerous mode does.
+- `TestParseCollectorAsksForTheRequestsFilesWhenItIsMade` (config, sshfile): a collector read for the debug page is marked as never making its request and is not asked for `known_hosts_file`; read `WithRequestMade`, it is.
+
+## 34.247 Resource metrics without stopping the world, on by default
+
+- `TestResourceMetricsAreOnUnlessSwitchedOff` (internal/config): a
+  configuration that leaves `web.self_metrics.resource_metrics_enabled` out, or
+  writes an empty `self_metrics` block, loads with the resource metrics on;
+  `true` keeps them on and `false` turns them off (§ 22.0a).
+- `TestResourceMetricsArePublishedByDefault`: a configuration that does not
+  mention them publishes `go_goroutines` on the self-metrics endpoint, and one
+  that sets the key to false publishes no `go_` or `process_` line.
+- `TestRuntimeMetricsHangTogether`: every runtime series is published and
+  none is negative; heap in use and idle are each at most the heap obtained
+  from the system and add up to it, the released heap is at most the idle, the
+  allocated heap at most the heap in use, the stack in use at most the stack
+  from the system, the heap from the system at most `go_memstats_sys_bytes`,
+  frees at most mallocs, `go_memstats_alloc_bytes` equals
+  `go_memstats_heap_alloc_bytes`, and the next collection's goal, the heap
+  objects and the allocated bytes are positive; after 64 allocations of
+  64 KiB `go_memstats_alloc_bytes_total` has grown by at least 4 MiB and
+  `go_memstats_mallocs_total` by at least 64.
+- `TestGCDurationIsASummaryWithQuantiles`: across a `runtime.GC()`
+  `go_gc_duration_seconds` stays a summary whose count grows and whose sum
+  does not shrink, with exactly the quantiles 0, 0.25, 0.5, 0.75 and 1 in that
+  order, their values ascending and the maximum positive; the exposition
+  writes the five `quantile` lines.
+- `TestRuntimeSeriesNeedEverySource`: a runtime that does not describe
+  `/memory/classes/heap/unused:bytes` leaves out `go_memstats_heap_sys_bytes`
+  and `go_memstats_heap_inuse_bytes`, which sum it, and keeps the series that
+  do not; with the descriptions of the Go release in use every source of
+  every runtime series is described.
+- `TestRuntimeMetricsReadConcurrently`: eight goroutines reading the runtime
+  series twenty times each at once all get every series (run under the race
+  detector in CI).
+- `TestRuntimeMetricsAllocateLittle`: a read of the runtime series allocates
+  at most 6 times and 4096 bytes, so neither the samples nor the pause history
+  ReadGCStats copies are allocated per scrape.
+- `TestRuntimeSeriesKeepTheirTypes`: each series read from `runtime/metrics`
+  is a counter when its name ends in `_total` and a gauge otherwise.
+- `TestResourceMetricsDocumentationListsWhatIsPublished` (test/repository):
+  the families of the table in docs/SELF-METRICS.md, "Resource metrics", are
+  exactly the `go_` and `process_` families /self-metrics publishes with the
+  default configuration (the `process_` rows only where `/proc` exists).
+- `TestNothingButTestsReadsMemStats` (test/repository): no Go file outside
+  `_test.go` files, `internal/testutil`, `vendor` and `testdata` calls
+  `ReadMemStats`.
+
+## 34.248 Python idle workers: --python.max-idle-workers and --python.idle-timeout
+
+- `TestPythonPoolKeepsAtMostTheMaxIdleWorkersOfAScript`: after a burst of five runs of one script at once, each in a worker started for it, a pool keeps 1 idle by default, none at `0`, 1 at `1`, 3 at `3` and all five at `8`, the rest stopped as `surplus`, and a second script keeps as many of its own; `ValidateMaxIdleWorkers` refuses `-1` and takes `0` and `1000`.
+- `TestPythonWorkersKeptNoneIdleStillFreeTheirPlace`: under `--python.max-workers=1` with no worker kept idle, a run of another script waiting for a place gets the one the first run's worker leaves when it stops at its run's end; both workers are counted as `surplus`, none as `evicted`, and none is left idle.
+- `TestAScriptRunsWithNoWorkerKeptIdle`: with `0`, two runs of a script through `executePython` succeed, each in a worker started for it and stopped as `surplus`, none left idle.
+- `TestPythonIdleWorkersStopAfterTheIdleTimeout` (testing/synctest): the timer alone stops an idle worker as `idle` once it is unused for longer than the timeout and not before: kept at 2m and stopped by 3m by default, checked every minute; at 30s checked every 15s, kept at 30s and stopped by 45s; at 10m checked every minute, stopped by 11m; at 1s checked every 500ms, stopped by 1.5s. `ValidateIdleTimeout` refuses `0`, `-1s` and `999ms` and takes `1s`, the default and `24h`.
+- `TestTheDefaultIdleTimeoutKeepsAWorkerOfAScrapeEveryMinuteWarm` (testing/synctest): with the defaults, ten minutes of runs every 15s, 1m and 90s start one worker; runs every 5m start three.
+- `TestOutOfRangeLimitsAreCommandLineErrors` (root package, changed): `--python.max-idle-workers=-1` and `--python.idle-timeout` of `999ms`, `0s` and `-1m` exit 2 with their messages, with and without `--dry-run`.
+- `TestPythonWorkersThatDiedIdleAreReplaced`, `TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt`, `TestPythonWorkersAreCappedProcessWide` and `TestARunCountsInTheStatisticsItsTripCarries` (changed): each sets the idle workers it needs kept, which the default of 1 no longer keeps.
 
 # 35. Documentation requirements
 
@@ -31838,7 +32029,8 @@ then one of the OTLP export. Of the static targets:
   MUST be put in the dialog with `textContent`, never parsed as HTML; the
   dialog MUST close on its Close button, on Esc and on a click on its
   backdrop, MUST give focus back to the control that opened it, and MUST say
-  the time its text is of. No refresh MUST swap the content while the
+  the time its text is of. It MUST have no heading, its label naming the
+  kind of text it holds (`The whole error`) for a screen reader. No refresh MUST swap the content while the
   dialog is open; closing it MUST resume the refresh, at once if one fell
   due. `?format=fragment` MUST have the `<details>` and no dialog, and the
   JSON MUST be as it is, every value whole.
@@ -32978,7 +33170,8 @@ Sofia in both halves of the year.
 One flag, `--web.debug`, MUST set how far collectors can be debugged: `off`,
 the default; `edit`; or `full`, in any case. Any other value MUST be a
 command-line error (exit 2, before `--dry-run` or startup). There MUST be no
-other flag for any part of it.
+other flag for any part of it but `--web.debug.dangerous` (below), which
+lifts what the playground is refused.
 
 - At `off`, `/debug` and `/debug/run` MUST answer `404`, and a debug probe
   and a debug scrape `403`.
@@ -33205,7 +33398,12 @@ response — `body`, with `content_type`, `status` (200 when left out, else
 100 to 599) and `headers` — or `target`, with `request_from`, a collector of
 the configuration in force, and `params`, probe parameters, as `/probe` takes
 them, without `target`, `collector` or `debug`; or `static_target`, the name
-of a static target, without `params`. A run that is not that object, names
+of a static target, without `params`. `headers` and `params` MUST be objects
+of names, each with a string or a list of strings, a name given more than
+once: a pasted response MUST have a header once for each of its values, in
+their order, at most 100 values in all, a `header_<name>` parameter MUST
+forward each, and any other parameter given more than once MUST be refused
+as `/probe` refuses it; a value of another kind MUST be answered `400`. A run that is not that object, names
 two collectors or none, or sends two sources or none, MUST be answered
 `400`, and so MUST a configured collector or a `request_from` the
 configuration does not have; a request over 2 MiB, a collector over 256 KiB
@@ -33226,14 +33424,48 @@ refuse MUST be answered `422` with the loader's message, its line numbers
 counted from the collector's first line. `${NAME}` references MUST NOT be
 expanded, whatever `--config.expand-env` says, and reading it MUST NOT size
 the expression caches, which are the configuration in force's. Before it is
-checked, at `full` as at `edit`, the page MUST refuse with `422`, saying
-why: a collector that runs Python (`transform.type: python` or
-`transform.pre_script`), which MUST NOT be run; one whose `request.type` is
-not `http`; and one that sets `request.basic_auth_file`,
-`request.bearer_token_file`, a `request.tls` file or `request.login`
+checked, at `full` as at `edit`, unless `--web.debug.dangerous` is on, the
+page MUST refuse with `422`, saying why: a collector that runs Python (`transform.type: python` or
+`transform.pre_script`), which MUST NOT be run; and one whose request block
+sets a key ending in `_file` or `_files` (but `max_files`, a count), at its
+top or in a mapping it holds, of any request type — `request.bearer_token_file`,
+a `request.tls` file, `request.known_hosts_file` — or `request.login`
 (§ 42.6a), naming every such key in the order the collector has them.
 Nothing a file holds
-MUST reach the answer. Its own request block MUST NOT make a request.
+MUST reach the answer. Without `--web.debug.dangerous`, its own request
+block MUST NOT make a request on any path of a run — a pasted response, a target fetched through `request_from`
+or a static target's scrape — whatever its type: it MUST be accepted of
+every request type the build has, its type saying only how its answer is
+read (its default decoder, a `sql` collector's rows, the JSON document of
+the types that make one), and the keys naming files that a request of its
+type needs (an `sshfile` or `sshexec` collector's `known_hosts_file` and key
+or password, a `kubernetes` collector's credential beside `api_server`, the
+password files of an `ldap` `bind_dn` and a `redis` `username`) MUST NOT be
+required of it.
+
+`--web.debug.dangerous`, a boolean flag off by default, MUST be a
+command-line error (exit 2, before `--dry-run` or startup) unless
+`--web.debug` is `full`, and the exporter MUST log a line at `warn` when it
+starts with it, saying that the playground runs Python and reads the
+server's files with the exporter's permissions. With it, a collector
+written on the page MUST NOT be refused for Python, for a key naming a file
+or for `request.login`. Its Python MUST run as a configured collector's
+runs, in the same worker pool and held to the same limits, and MUST count
+in the pool's worker series alone, under no collector's name, a configured
+collector of the same name included, leaving no worker of it idle. A run
+of it on a target without `request_from` MUST make its own request block's
+request, as a probe of a configured collector makes one, through the
+target policy and with the credentials it writes, and it MUST then be
+checked as a load checks a request, the files a request needs required;
+with `request_from`, the target MUST still be fetched through that
+collector, and a pasted response MUST still make no request. `${NAME}`
+references MUST still NOT be expanded. The debug page MUST then say, in a
+warning set apart from its notes, that the playground runs Python and reads
+the server's files with the exporter's permissions and makes its own
+request, in place of the note that it runs no Python; every page's bar
+MUST carry a *Dangerous debug mode* badge, and every answer of a run of
+`/debug/run` MUST carry `dangerous: true`. Without the flag, or below
+`full`, none of these MUST show.
 
 A configured collector MUST be run as it is configured, its Python
 included, at `edit` as at `full`: its scripts are the operator's, and read
@@ -33262,8 +33494,12 @@ value in which text reads as a credential; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
 copy of the YAML shown, which then runs, and MUST remember, through edits
-and between visits, the configured collector the playground was copied
-from. The YAML
+while it is open, the configured collector the playground was copied from.
+The page MUST open with the example playground, an `http` collector,
+whatever was written or copied on it before: it MUST NOT keep the
+playground, the body or the collector copied from in the browser. While
+the playground is a copy, the page MUST offer *Back to the example*, which
+puts the example back. The YAML
 shown, with the lines that hold what was withheld left out and written on
 the page, MUST be read as a collector and give the series the configured
 collector gives. `GET /debug/collector?name=<name>`, served and
@@ -33272,13 +33508,85 @@ authenticated as `/debug` is, MUST answer the YAML as JSON with `name`,
 only, `static_targets`, the static targets in force scraped through that
 collector, each with its `name` and its `target` shown as the status page
 shows it (§ 42.14a), with any credential in it withheld, an empty list when
-there is none; a name the configuration in force does not have `404` with
+there is none; and `form`, what the page asks a run of the collector for
+(below); a name the configuration in force does not have `404` with
 `error`.
+
+What the page asks for MUST follow the request type of the collector it is
+for, as the type says it in its own registration, so a type a build leaves
+out takes its words with it and every type MUST say them (a type that does
+not MUST fail to build): the collector run reads what is pasted, and a
+target is probed through the collector a target would be fetched through.
+The page MUST hold the form of the playground, of a playground of each
+request type the build has and of each configured collector, and MUST take
+the one `/debug/collector` answers with a collector when it reads it again.
+The playground's MUST follow the `request.type` its editor holds, read as
+it is typed from the top mapping's `request`, in block or flow style,
+quoted or not, comments left out; with none, or a type the page holds no
+form of, the page MUST ask as for `http`. A field the type hides MUST keep
+what was typed in it, and MUST NOT be sent:
+
+- the target MUST be asked for by its type's name for it and an example of
+  its forms — `URL` and `https://host:port` for `http`, `Name to resolve` and
+  `example.com` for `dns`, `Database server` and `host or host:<the
+  driver's port>` for `sql`, `SSH host` and `host or host:22` for `sshfile`
+  and `sshexec`, `host or host:123` for `ntp`, `host or host:443` (or the
+  `starttls` protocol's port) for `tlscert` — said to be optional where the
+  type may leave it out (`localfile`). A collector of a type that takes no
+  target (`kubernetes`) MUST be offered no target field, the page saying
+  `This collector names its own target.`, and its run MUST send an empty
+  target, which is not refused for want of one;
+- the probe parameters MUST be asked for as rows of a name and a value (below):
+  a row for each of the collector's own `{{param_<name>}}` placeholders, its
+  name filled in, its value empty with its default, if it has one, as the
+  value's placeholder, and the other parameters its type takes from a probe,
+  `header_<name>` for each header it forwards, `timeout` left out, offered as
+  names to choose; `/debug/collector`'s `form` MUST give them as `params`,
+  each a `name` and its `default`, and `other_params`. A collector that takes
+  none MUST be offered no rows, the page saying `This collector takes no
+  probe parameters.`;
+- a pasted response's body MUST be asked for as what an answer of the type
+  is — what the target answers for `http`, the rows as JSON for `sql`, the
+  JSON document the exporter makes for the types that make one, the file's
+  content for the types that read files — with a status and headers only
+  for a type whose answers are HTTP responses (`http`, `graphite`), and a
+  `Content-Type` only where it can choose the decoder: not for a type that
+  makes its answer, reads rows or has a decoder of its own. The page MUST
+  send no status, headers or `Content-Type` it does not ask for;
+- the page MUST NOT say that a target of another type than `http` is
+  fetched: it is probed as `/probe?debug=true` probes it, through the
+  collector named (`Probed through <name>, …`).
+
+A pasted response's other headers and the probe parameters MUST be asked for
+as rows, each a name and a value input with a button removing the row, and a
+button adding a row (*+ Add header*, *+ Add parameter*), every input and
+button labelled for assistive technology with its row's number (`Header name
+1`, `Remove parameter 2`). The headers MUST start with one empty row. A row
+whose name and value are both blank MUST NOT be sent; one with a value and no
+name, a header name that is not an HTTP token, worded as the server words
+it, and a probe parameter `/probe` would refuse — `target`, `collector` or
+`debug`, or a name given again but a `header_<name>` — MUST be marked on its
+row with why and focused, and the run MUST NOT be sent; the server MUST
+still check all it is sent. A header name given again, in any case, MUST be
+sent as one name with each value in the order of the rows. Adding a row
+MUST focus its name, and removing one the row that takes its place, the one
+before, or the adding button. A change of collector MUST keep the header
+rows, and make the parameter rows again for the collector a target is
+probed through, keeping the values typed for names it takes too. The rows
+MUST be made with `value` and `textContent` alone, never as HTML, and MUST
+keep a row's inputs and its button one height, on one line while the name
+and value fit side by side, and the page without sideways scrolling at a
+phone's width.
 
 A pasted response MUST NOT make any request. It MUST go through the trip a
 probe makes: the collector's `accept_status`, its response limit, which a
 body over fails as a fetched one does, the decode, the transform and the
-validation under the collector's limits. A fetch, at `full` only, MUST be
+validation under the collector's limits. A response pasted for a `sql`
+collector MUST be read as its rows, as its driver's are handed on (§ 5.1,
+`sql`): a JSON list of objects, each a row's columns by name, a whole
+number an integer, `true` and `false` 1 and 0, and `null` leaving the
+column out of its row; anything else, and a value that is a list or an
+object, MUST be refused with `400` saying what to paste. A fetch, at `full` only, MUST be
 made exactly as a debug probe of the collector that fetches would make it:
 the configured collector run, or the one `request_from` names, which a
 written collector MUST name (`400` otherwise) — through its request block,
@@ -33290,7 +33598,7 @@ forwarded; a target missing or a parameter wrong MUST be answered as
 collector chosen, or, with the playground, through the configured collector
 it was copied from, sent as `request_from`, saying which, and MUST NOT offer
 another collector to fetch through; while the playground was copied from
-none, the page MUST offer *Fetch a target* disabled, saying to choose a
+none, the page MUST offer *Probe a target* disabled, saying to choose a
 configured collector or *Edit a copy* of one. The pasted body MUST start as
 the example's answer with the example playground and empty with a
 configured collector or a copy of one, and a change of collector MUST NOT
@@ -33313,8 +33621,43 @@ answered as what the
 scrape would have published, its series with the target's labels and
 `static_target`; nothing MUST be published. A collector run on what
 another collector fetched — a written one, or one other than the static
-target's — MUST be given what an `http` collector fetched only (`400`
-otherwise), and decodes, transforms and validates it.
+target's — MUST be given what a collector of its own request type fetched
+only (`400` otherwise, before anything is fetched), and decodes, transforms
+and validates it as its type reads an answer. The page MUST say whose
+static targets it lists: `Static targets of <name>, the collector chosen.`
+or `…, the collector this playground was copied from.`
+
+*Probe a target* MUST offer *Copy as*, made from the form as it stands and
+made again as the target and the parameter rows change: the `/probe` URL,
+a `curl` command for it, a Prometheus `scrape_config` and the debug probe's
+URL. The URL MUST be absolute, resolved against the page's own address as
+the page's requests are, so that a path prefix in front of the exporter is
+kept, and MUST carry `collector`, the collector a target is probed through
+— the configured one chosen, or the one the playground was copied from, the
+page then saying that `/probe` runs the configured collectors only and so
+the playground's edits are not in it — `target`, left out for a collector
+that names its own, and each filled parameter row, a repeated
+`header_<name>` once for each row, URL-encoded; only the debug probe's URL
+MUST carry `debug=true`. The command MUST be `curl -s` and the URL in single
+quotes, a single quote in it written `'\''`. The `scrape_config` MUST be the
+multi-target job of `docs/LOCALFILE.md`: `job_name` the collector's name,
+`metrics_path` the URL's path, `scheme: https` when the page is served over
+HTTPS, `params` of `collector` and each parameter with its values in the
+order of the rows, and, for a collector that takes a target, the target in
+`static_configs`, moved by `relabel_configs` into `__param_target` and
+`instance`, `__address__` set to the host and port the page was reached at;
+for one that names its own, that host and port as the target. Every value
+MUST be a single-quoted YAML scalar, a single quote in it written `''`, and
+a key that YAML would read as other than its text quoted as well. With
+`web.basic_auth` on, the command MUST add `-u USER`, the job MUST carry a
+commented `basic_auth` to fill in, and the page MUST say so; the page MUST
+NOT be given or copy the credential. The buttons MUST be disabled, saying
+why, while the target is empty for a collector that takes one or a
+parameter row is wrong. *Scrape a static target* MUST offer *Copy as* the
+`/static-targets?targets=<name>` URL of the target chosen and its `curl`
+command. A button MUST show what it copies in a box that can be selected,
+copy it with the browser's clipboard where the browser allows it, and say
+whether it did; the text MUST be put in with `textContent` alone.
 
 A run MUST be bounded by the probe's deadline (§ 3.2a), and by
 `--probe.default-timeout`'s default when that is `0`, or a static target's
@@ -33323,7 +33666,13 @@ run past them answered `503`. A run MUST be answered `200` with a JSON
 object of `ok`, true when every stage succeeded and none carried on;
 `verdict`, what a probe or the scrape would have answered, as the text
 report says it; `series`, the exposition a probe would have served, to the
-byte; `requests` and `response`, what was sent and read, redacted and
+byte; `samples`, the same series one sample at a time, in the order
+`series` writes them, made from the series and not by reading the text
+again, each an object of `name`, the sample's name with a histogram's or a
+summary's suffix, `metric`, the metric's name, `type`, the metric's type,
+`labels`, a bucket's `le` and a quantile's `quantile` among them, and
+`value`, a string as the exposition writes it (`NaN`, `+Inf`, a count as a
+whole number); `requests` and `response`, what was sent and read, redacted and
 bounded as the text report redacts and bounds them; `stages` and `notes`,
 the stages and the warnings the load would give with every line the run
 logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
@@ -33331,6 +33680,26 @@ logged; `lint`, the findings of the metric lint (§ 30.1a), each an object of
 `report`, the text report of a debug probe, whose first line names it a
 debug run, the collector, whether it was written on the page, and what it
 read.
+
+The page MUST show a run's series both as a table, by default, and as
+`series` unchanged, switched between by *Table* and *Text*, MAY keep the
+choice in the browser, and MUST show a refused run's error as text. The
+table MUST have a row for each of `samples` and the columns `name`, one for
+each label name any sample has, in alphabetical order, `value` and `type`,
+and MUST put every text a run answers in it as text, never as HTML.
+Clicking a column's header MUST sort the rows by it, ascending and then
+descending; `value`, `le` and `quantile` MUST sort as numbers, `+Inf` and
+`-Inf` included, and a sample without the label MUST sort last either way.
+A filter MUST keep the rows whose name, a `label=value` or value holds its
+text, case-insensitively, and a list of the metrics MUST keep one metric's;
+the page MUST say how many rows are left of how many, `<n> of <m> series`.
+It MUST draw at most 2000 rows, saying when there are more that it shows
+the first 2000 and that a filter narrows them, and the text MUST stay whole.
+A lint finding MUST be shown on the rows of the metric it names, by
+`metric`, a series recording no rule, as its rule opening to its advice by
+click or keyboard, not by hover alone; one about a metric no row is of MUST
+be listed above the table. On a narrow screen the table MUST scroll in its
+own box and the page not.
 
 The collector MUST NOT be put in force. A run MUST NOT be answered from or
 fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log

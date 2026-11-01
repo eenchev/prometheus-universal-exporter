@@ -25,7 +25,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Static targets the exporter scrapes itself and delivers over OTLP
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
-* Self-metrics, optionally including per-request series and the standard `go_` and `process_` series
+* Self-metrics, including the standard `go_` and `process_` series and optionally per-request series
 * A target allocator that splits static targets over the exporter's pods
 * A HorizontalPodAutoscaler that can scale on how busy the pods are, or on static targets per pod
 * A debug page, `/debug`, that runs a collector on a pasted or fetched answer and shows every stage (`server.debug`)
@@ -749,12 +749,15 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.probeDefaultTimeout` | `--probe.default-timeout` | unset: the exporter's `30s` |
 | `server.probeMaxConcurrent` | `--probe.max-concurrent` | unset: no limit across collectors |
 | `server.pythonMaxWorkers` | `--python.max-workers` | unset: no limit across scripts |
+| `server.pythonMaxIdleWorkers` | `--python.max-idle-workers`: `0` keeps none idle | unset: the exporter's `1` per script |
+| `server.pythonIdleTimeout` | `--python.idle-timeout`: whole hours, minutes and seconds, at least `1s` | unset: the exporter's `2m` |
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `15s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval`, a positive Go duration such as `60s` or `1m30s` | off / `60s` |
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.debug` | `--web.debug`: `off`, `edit` or `full` | off |
+| `server.debugDangerous` | `--web.debug.dangerous` when true, which needs `server.debug: full`: the playground may run Python, read the pod's files and make its own requests | `false` |
 | `server.gzipLevel` | `--web.gzip-level`: `0` to `9` | unset: the exporter's `1` |
 | `server.statusRefresh` | `--web.status-refresh`: `off`, or `5s` to `24h` | unset: the exporter's `off` |
 | `staticTargets.enabled` | `--static-targets-file` | off |
@@ -776,7 +779,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 
 `server.statusRefresh` is how often the status page, at the static targets path followed by `/status`, refreshes itself when its URL does not say with `?refresh=` (see [Status page](../../docs/ENDPOINTS.md#status-page)): `off`, or whole hours, minutes and seconds from `5s` to `24h`, such as `30s` or `1m`, for a page left open on a wall screen. Anything else fails rendering, as does `--web.status-refresh` in `extraArgs`. Empty, the default, renders no flag, and the page does not refresh by itself until someone picks an interval on it.
 
-`server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit (the exporter's flag reads `010` as eight and refuses `08`), `0` for no limit, and are rendered only when set; the exporter itself takes a larger number on a 64-bit platform, and the chart does not. Size them to `resources.limits.memory`.
+`server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). `server.pythonMaxIdleWorkers` and `server.pythonIdleTimeout` say how many of each script's workers stay idle between scrapes, one by default, and for how long, two minutes by default: each idle worker is a process of about 11 MB, 17 MB with lxml, so ten Python collectors keep about 110 to 170 MB of the pod's memory in idle workers by default. `0` keeps none, and every scrape then starts an interpreter; keep the timeout longer than the Python collectors' scrape interval, or every scrape starts one too. The idle timeout is whole hours, minutes and seconds of at least `1s`, as the exporter takes it, and anything else fails rendering; `server.pythonMaxIdleWorkers` is a whole number as below, and both are rendered only when set (see [Idle workers and memory](../../docs/PYTHON.md#how-scripts-run)). Both take a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit (the exporter's flag reads `010` as eight and refuses `08`), `0` for no limit, and are rendered only when set; the exporter itself takes a larger number on a 64-bit platform, and the chart does not. Size them to `resources.limits.memory`.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -804,6 +807,8 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 `server.enableLifecycle` enables `/-/reload`, which, on `POST` or `PUT`, reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
 `server.debug` sets how far collectors can be debugged — see [Debugging collectors](../../docs/CONFIGURATION.md#debugging-collectors). `edit` enables `/debug`, a page where a collector written there, or a configured one, is run on a pasted response, showing each stage of the trip and the series a probe would serve, with nothing put in force and nothing fetched; a collector written on the page never runs Python or reads a file of the pod. `full` adds what shows a target's answer: fetching a target through a configured collector, or scraping a static target, on that page, `/probe?...&debug=true` and `/static-targets?debug=<name>`, and the status page shows each error whole, with the values of the answer it quotes and what it holds for the operator alone, such as an `sshexec` command's stderr. Turn `full` on while a collector is being fixed, and off again. Empty and `off` render no flag; anything else fails rendering. `--web.debug` in `extraArgs` fails rendering too.
+
+`server.debugDangerous: true` renders `--web.debug.dangerous` — see [Dangerous debug mode](../../docs/CONFIGURATION.md#dangerous-debug-mode) — and fails rendering unless `server.debug` is `full`, as the exporter would refuse to start; `--web.debug.dangerous` in `extraArgs` fails rendering too. **It is dangerous:** the debug page's playground then runs Python, in a sandbox that is no wall against a script written to get out, and reads any file of the pod, its mounted Secrets and service account token among them, with the exporter's permissions, and makes its own requests to any host the pod can reach. Anyone who can open the page can do the same, so turn it on only for a debugging session no one else can reach — a port-forward to a release of your own — and never in a shared deployment; the install notes warn while it is on.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version`, `--healthcheck` — print something or check something and exit, so they have no values: run them as a separate command, or, for `--healthcheck`, with [`healthProbes.mode: exec`](#probes). A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -1199,7 +1204,7 @@ A failing log export never makes the pod unready; the exporter's [status page](.
 
 ### Exporter resource metrics
 
-Set `web.self_metrics.resource_metrics_enabled: true` inside `config.data.config.yaml` to publish the standard `go_` and `process_` series describing the exporter's own CPU and memory, under the names an existing Go dashboard already uses:
+The exporter publishes the standard `go_` and `process_` series describing its own CPU and memory, under the names an existing Go dashboard already uses. They are on by default; set `web.self_metrics.resource_metrics_enabled: false` inside `config.data.config.yaml` to leave them out:
 
 ```yaml
 config:
@@ -1207,7 +1212,7 @@ config:
     config.yaml: |
       web:
         self_metrics:
-          resource_metrics_enabled: true
+          resource_metrics_enabled: false
       collectors:
         - name: example
           request:
@@ -1215,7 +1220,7 @@ config:
           ...
 ```
 
-They are scraped by the self-metrics monitor along with everything else on that endpoint. They carry no per-collector or per-target labels, so they add a fixed number of series rather than one per target. Off by default: reading them briefly stops the world on every scrape, which an exporter scraped frequently by several Prometheus servers should not pay for unless the numbers are wanted.
+They are scraped by the self-metrics monitor along with everything else on that endpoint. They carry no per-collector or per-target labels, so they add a fixed number of series rather than one per target. Reading them does not stop the world: the memory statistics come from `runtime/metrics` and the garbage collection pauses from `runtime/debug.ReadGCStats`, so a scrape of them is cheap. See [Resource metrics](../../docs/SELF-METRICS.md#resource-metrics) for every series and its source.
 
 ## Extra volumes and arguments
 
@@ -1619,7 +1624,7 @@ Helm passes a dependency the parent's `global` values, and the `enabled` its con
 
 Every value has a default, and `values.yaml` documents each one in place. `values.schema.json` is checked by Helm on install, upgrade and `helm template`, so a misspelled key or a wrong type fails there rather than on a pod that starts and behaves unexpectedly.
 
-A whole number is rendered as the whole number it is, however it is written: `replicaCount: 2000000`, `2e6` and `2000000.0` in a values file all render `replicas: 2000000`, never `2e+06`. The whole numbers the chart renders itself take a range, and a fraction or a number outside it fails rendering, refused by the schema and, with the schema skipped, by the templates: 0 to 2147483647 for `replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and a `podDisruptionBudget` count, 1 to 2147483647 for the replicas and utilization targets of `autoscaling`, and 1 to 65535 for `service.port`. A `podDisruptionBudget` count given as a string is rendered bare, so it is held to what Kubernetes takes on a budget and fails rendering otherwise, naming the key: a whole number from 0 to 2147483647 or a percentage from `0%` to `100%`, written with no zero before another digit, since `"010"` would render as YAML's octal number, eight. The probes' timings and the `strategy.rollingUpdate` counts are passed through as written, and the values schema bounds them as Kubernetes does, so `periodSeconds: 1e30` fails at `helm template` rather than when Kubernetes refuses the Deployment: each timing is a whole number up to 2147483647, from 0 for `initialDelaySeconds` and from 1 for the others, and a liveness probe's `successThreshold` is 1, the one value Kubernetes takes there; `maxSurge` and `maxUnavailable` are a whole number from 0 to 2147483647 or a percentage written with no zero before another digit, up to `100%` for `maxUnavailable`, and never a string of digits alone, which would reach Kubernetes as a string it refuses. Whole numbers inside the other Kubernetes shapes the chart passes through — a security context's `runAsUser` or `fsGroup`, such as OpenShift's `1000680000`, `resources`, tolerations, relabelings — are written out in digits too, and are Kubernetes' to bound.
+A whole number is rendered as the whole number it is, however it is written: `replicaCount: 2000000`, `2e6` and `2000000.0` in a values file all render `replicas: 2000000`, never `2e+06`. The whole numbers the chart renders itself take a range, and a fraction or a number outside it fails rendering, refused by the schema and, with the schema skipped, by the templates: 0 to 2147483647 for `replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers` and a `podDisruptionBudget` count, 1 to 2147483647 for the replicas and utilization targets of `autoscaling`, and 1 to 65535 for `service.port`. A `podDisruptionBudget` count given as a string is rendered bare, so it is held to what Kubernetes takes on a budget and fails rendering otherwise, naming the key: a whole number from 0 to 2147483647 or a percentage from `0%` to `100%`, written with no zero before another digit, since `"010"` would render as YAML's octal number, eight. The probes' timings and the `strategy.rollingUpdate` counts are passed through as written, and the values schema bounds them as Kubernetes does, so `periodSeconds: 1e30` fails at `helm template` rather than when Kubernetes refuses the Deployment: each timing is a whole number up to 2147483647, from 0 for `initialDelaySeconds` and from 1 for the others, and a liveness probe's `successThreshold` is 1, the one value Kubernetes takes there; `maxSurge` and `maxUnavailable` are a whole number from 0 to 2147483647 or a percentage written with no zero before another digit, up to `100%` for `maxUnavailable`, and never a string of digits alone, which would reach Kubernetes as a string it refuses. Whole numbers inside the other Kubernetes shapes the chart passes through — a security context's `runAsUser` or `fsGroup`, such as OpenShift's `1000680000`, `resources`, tolerations, relabelings — are written out in digits too, and are Kubernetes' to bound.
 
 | Value | Type | Default | What it sets |
 | --- | --- | --- | --- |
@@ -1634,7 +1639,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
 | `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `pythonMaxIdleWorkers`, `pythonIdleTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

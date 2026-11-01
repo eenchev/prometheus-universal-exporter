@@ -114,7 +114,7 @@ func TestAWorkerOfARemovedCollectorIsStoppedWhenItsRunEndsAndGivenToNoOther(t *t
 			switch reason {
 			case pythonStopIdle:
 				pool.release(again, taken)
-				pool.reapIdle(time.Now().Add(pythonWorkerIdleTimeout + time.Hour))
+				pool.reapIdle(time.Now().Add(PythonDefaultIdleTimeout + time.Hour))
 			case pythonStopTimeout:
 				pool.discard(taken, pythonStopTimeout)
 			case pythonStopReload:
@@ -575,7 +575,7 @@ func TestACollectorsWorkerSeriesAddUpWhateverTheReloadsDo(t *testing.T) {
 				check(fmt.Sprintf("the statistics of %v retired", model.SortedKeys(gone)))
 				events["statistics retired"]++
 			case choice < 16:
-				pool.reapIdle(time.Now().Add(pythonWorkerIdleTimeout + time.Hour))
+				pool.reapIdle(time.Now().Add(PythonDefaultIdleTimeout + time.Hour))
 				check("the idle timeout")
 			case choice < 17:
 				pool.SetMaxWorkers([]int{0, 2, 3, 6}[rng.IntN(4)])
@@ -608,7 +608,7 @@ func TestACollectorsWorkerSeriesAddUpWhateverTheReloadsDo(t *testing.T) {
 				spec := specOf(name, scripts[rng.IntN(len(scripts))])
 				spec.stats = pool.Stats(name)
 				var burst []*pythonWorker
-				for range pythonWorkerMaxIdle + 2 {
+				for range PythonDefaultMaxIdleWorkers + 2 {
 					worker, _, err := pool.acquire(context.Background(), spec)
 					if err != nil {
 						t.Fatal(err)
@@ -850,7 +850,7 @@ func TestThePoolAsAWholeCountsAsItDidWhereNoWorkerOutlivesItsCollector(t *testin
 				pool.recordRun(r.spec.stats, how.outcome)
 				compare("a worker stopped for " + how.reason)
 			case choice < 13:
-				at := base.Add(pythonWorkerIdleTimeout + time.Hour)
+				at := base.Add(PythonDefaultIdleTimeout + time.Hour)
 				old.reapIdle(at)
 				pool.reapIdle(at)
 				compare("the idle timeout")

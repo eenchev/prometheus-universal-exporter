@@ -32,6 +32,14 @@ Run static targets with replicaCount: 1 and autoscaling off, or split them
 into a release of their own.
 {{- end }}
 {{- end }}
+{{- if include "prometheus-universal-exporter.debugDangerous" . }}
+
+WARNING: server.debugDangerous is on. The debug page's playground runs Python
+and reads the pod's files, its mounted secrets among them, with the
+exporter's permissions, and makes its own requests to any target it names.
+Anyone who can open the page can do the same. Turn it off once the collector
+is fixed; never leave it on in a shared deployment.
+{{- end }}
 {{- $pdb := .Values.podDisruptionBudget }}
 {{- if and $pdb.enabled (not (kindIs "invalid" $pdb.maxUnavailable)) (has (toString $pdb.maxUnavailable) (list "0" "0%")) }}
 

@@ -3,10 +3,12 @@ package exporter
 import (
 	"os"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -16,19 +18,20 @@ import (
 // knows, and the `process_` series beside them. They are built from the
 // standard library rather than from prometheus/client_golang: this exporter
 // renders its own exposition from a []Metric and keeps no registry, so pulling
-// in a registry to gather sixteen numbers would add a dependency and an
+// in a registry to gather a few dozen numbers would add a dependency and an
 // adapter for no gain. The names and meanings match what client_golang
 // publishes, which is the whole point of the prefix — an existing dashboard or
 // alert should work unchanged.
 //
-// They are opt-in through web.self_metrics.resource_metrics_enabled. Reading
-// them is cheap but not free: runtime.ReadMemStats briefly stops the world, and
-// an exporter scraped every few seconds by several Prometheis should not pay
-// that unless somebody wants the numbers.
+// They are on unless web.self_metrics.resource_metrics_enabled switches them
+// off. Nothing here stops the world: the memory statistics come from
+// runtime/metrics and the collection pauses from runtime/debug.ReadGCStats,
+// never from runtime.ReadMemStats, which pauses every goroutine to fill its
+// struct and is what kept these off by default while the exporter used it.
 
 // resourceMetrics reports whether the running configuration asks for them.
 func (s *Server) resourceMetrics() bool {
-	return s.manager.Get().Web.SelfMetrics.ResourceMetrics
+	return s.manager.Get().Web.SelfMetrics.ResourceMetricsEnabled()
 }
 
 // runtimeMetrics returns the go_ and process_ series, or nothing when they are
@@ -49,52 +52,180 @@ func counter(name, help string, value float64) model.Metric {
 	return model.Metric{Name: name, Help: help, Type: model.CounterMetricType, Value: value}
 }
 
-// goMetrics are the runtime's own numbers. Every one of these is available on
-// every platform the exporter builds for.
-func goMetrics() []model.Metric {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
+// runtimeSeries are the go_ series read from runtime/metrics. Each is the sum
+// of its sources, which is how client_golang's Go collector rebuilds the
+// MemStats fields from runtime/metrics for Go 1.17 and later (memStatsFromRM):
+// heap_inuse is the live objects plus the unused space of the spans that hold
+// them, heap_idle the free plus the released, and so on. Mallocs and frees both
+// count the tiny allocations, as MemStats does, so that mallocs minus frees
+// stays the number of live objects. gc_sys is the GC metadata other than the
+// span and cache structures, and other_sys the runtime's other allocations
+// without the profiling buckets, again as in client_golang, which publishes
+// those structures as series of their own that this exporter does not.
+//
+// The sources are asked for by name and a series is left out when the Go
+// release in use does not describe one of them: a sum with a part missing
+// would be a wrong number under a known name, which is worse than no series.
+var runtimeSeries = []struct {
+	name    string
+	help    string
+	typ     model.MetricType
+	sources []string
+}{
+	{"go_memstats_alloc_bytes", "Number of bytes allocated in heap and currently in use.", model.GaugeMetricType, []string{"/memory/classes/heap/objects:bytes"}},
+	{"go_memstats_alloc_bytes_total", "Total number of bytes allocated in heap until now, including released memory.", model.CounterMetricType, []string{"/gc/heap/allocs:bytes"}},
+	{"go_memstats_sys_bytes", "Number of bytes obtained from system.", model.GaugeMetricType, []string{"/memory/classes/total:bytes"}},
+	{"go_memstats_mallocs_total", "Total number of heap objects allocated, both live and gc-ed.", model.CounterMetricType, []string{"/gc/heap/allocs:objects", "/gc/heap/tiny/allocs:objects"}},
+	{"go_memstats_frees_total", "Total number of heap objects frees.", model.CounterMetricType, []string{"/gc/heap/frees:objects", "/gc/heap/tiny/allocs:objects"}},
 
-	out := []model.Metric{
+	{"go_memstats_heap_alloc_bytes", "Number of heap bytes allocated and currently in use.", model.GaugeMetricType, []string{"/memory/classes/heap/objects:bytes"}},
+	{"go_memstats_heap_sys_bytes", "Number of heap bytes obtained from system.", model.GaugeMetricType, []string{"/memory/classes/heap/objects:bytes", "/memory/classes/heap/unused:bytes", "/memory/classes/heap/free:bytes", "/memory/classes/heap/released:bytes"}},
+	{"go_memstats_heap_idle_bytes", "Number of heap bytes waiting to be used.", model.GaugeMetricType, []string{"/memory/classes/heap/free:bytes", "/memory/classes/heap/released:bytes"}},
+	{"go_memstats_heap_inuse_bytes", "Number of heap bytes that are in use.", model.GaugeMetricType, []string{"/memory/classes/heap/objects:bytes", "/memory/classes/heap/unused:bytes"}},
+	{"go_memstats_heap_released_bytes", "Number of heap bytes released to OS.", model.GaugeMetricType, []string{"/memory/classes/heap/released:bytes"}},
+	{"go_memstats_heap_objects", "Number of currently allocated objects.", model.GaugeMetricType, []string{"/gc/heap/objects:objects"}},
+
+	{"go_memstats_stack_inuse_bytes", "Number of bytes obtained from system for stack allocator in non-CGO environments.", model.GaugeMetricType, []string{"/memory/classes/heap/stacks:bytes"}},
+	{"go_memstats_stack_sys_bytes", "Number of bytes obtained from system for stack allocator.", model.GaugeMetricType, []string{"/memory/classes/heap/stacks:bytes", "/memory/classes/os-stacks:bytes"}},
+	{"go_memstats_gc_sys_bytes", "Number of bytes used for garbage collection system metadata.", model.GaugeMetricType, []string{"/memory/classes/metadata/other:bytes"}},
+	{"go_memstats_other_sys_bytes", "Number of bytes used for other system allocations.", model.GaugeMetricType, []string{"/memory/classes/other:bytes"}},
+	{"go_memstats_next_gc_bytes", "Number of heap bytes when next garbage collection will take place.", model.GaugeMetricType, []string{"/gc/heap/goal:bytes"}},
+
+	// The CPU accounting the runtime keeps, under the names client_golang
+	// derives from the same sources.
+	{"go_cpu_classes_total_cpu_seconds_total", "Estimated total available CPU time for user Go code or the Go runtime, as defined by GOMAXPROCS.", model.CounterMetricType, []string{"/cpu/classes/total:cpu-seconds"}},
+	{"go_cpu_classes_user_cpu_seconds_total", "Estimated total CPU time spent running user Go code.", model.CounterMetricType, []string{"/cpu/classes/user:cpu-seconds"}},
+	{"go_cpu_classes_idle_cpu_seconds_total", "Estimated total available CPU time not spent executing any Go or Go runtime code.", model.CounterMetricType, []string{"/cpu/classes/idle:cpu-seconds"}},
+	{"go_cpu_classes_gc_total_cpu_seconds_total", "Estimated total CPU time spent performing garbage collection.", model.CounterMetricType, []string{"/cpu/classes/gc/total:cpu-seconds"}},
+	{"go_cpu_classes_scavenge_total_cpu_seconds_total", "Estimated total CPU time spent returning unneeded memory to the OS.", model.CounterMetricType, []string{"/cpu/classes/scavenge/total:cpu-seconds"}},
+}
+
+// runtimeReader holds what one scrape reads, so a scrape allocates neither the
+// samples nor the pause history: ReadGCStats keeps reusing the slices it was
+// given once they are large enough. Scrapes take turns under the mutex; both
+// reads are quick and neither stops the world.
+type runtimeReader struct {
+	mu      sync.Mutex
+	samples []metrics.Sample
+	// sources[i] are the indices into samples that runtimeSeries[i] sums,
+	// nil when the runtime does not describe one of them.
+	sources [][]int
+	gc      debug.GCStats
+}
+
+var (
+	runtimeReaderOnce sync.Once
+	sharedRuntime     *runtimeReader
+)
+
+// theRuntimeReader is built once: which names the runtime describes cannot
+// change while the process runs.
+func theRuntimeReader() *runtimeReader {
+	runtimeReaderOnce.Do(func() { sharedRuntime = newRuntimeReader(metrics.All()) })
+	return sharedRuntime
+}
+
+// newRuntimeReader keeps the sources described with a kind the reader can
+// turn into a number, each once however many series sum it.
+func newRuntimeReader(described []metrics.Description) *runtimeReader {
+	known := make(map[string]bool, len(described))
+	for _, d := range described {
+		if d.Kind == metrics.KindUint64 || d.Kind == metrics.KindFloat64 {
+			known[d.Name] = true
+		}
+	}
+	r := &runtimeReader{sources: make([][]int, len(runtimeSeries))}
+	index := map[string]int{}
+	for i, series := range runtimeSeries {
+		indices := make([]int, 0, len(series.sources))
+		for _, name := range series.sources {
+			if !known[name] {
+				indices = nil
+				break
+			}
+			at, seen := index[name]
+			if !seen {
+				at = len(r.samples)
+				index[name] = at
+				r.samples = append(r.samples, metrics.Sample{Name: name})
+			}
+			indices = append(indices, at)
+		}
+		r.sources[i] = indices
+	}
+	r.gc.PauseQuantiles = make([]time.Duration, len(gcQuantiles))
+	return r
+}
+
+// gcQuantiles are the quantiles of go_gc_duration_seconds, the minimum,
+// quartiles and maximum, as client_golang publishes them. ReadGCStats fills a
+// PauseQuantiles of this length with exactly these.
+var gcQuantiles = [...]float64{0, 0.25, 0.5, 0.75, 1}
+
+// read appends the runtime series to out, reading every source with one
+// metrics.Read.
+func (r *runtimeReader) read(out []model.Metric) []model.Metric {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	metrics.Read(r.samples)
+	for i, series := range runtimeSeries {
+		indices := r.sources[i]
+		if indices == nil {
+			continue
+		}
+		var value float64
+		valid := true
+		for _, at := range indices {
+			switch v := r.samples[at].Value; v.Kind() {
+			case metrics.KindUint64:
+				value += float64(v.Uint64())
+			case metrics.KindFloat64:
+				value += v.Float64()
+			default:
+				valid = false
+			}
+		}
+		if !valid {
+			continue
+		}
+		out = append(out, model.Metric{Name: series.name, Help: series.help, Type: series.typ, Value: value})
+	}
+
+	debug.ReadGCStats(&r.gc)
+	collections := uint64(max(r.gc.NumGC, 0)) // #nosec G115 -- not negative, as checked
+	quantiles := make([]model.Quantile, len(gcQuantiles))
+	for i, q := range gcQuantiles {
+		quantiles[i] = model.Quantile{Quantile: q, Value: r.gc.PauseQuantiles[i].Seconds()}
+	}
+	return append(out,
+		gauge("go_memstats_last_gc_time_seconds", "Number of seconds since 1970 of last garbage collection.", lastGCSeconds(r.gc.LastGC), nil),
+		model.Metric{Name: "go_gc_duration_seconds", Help: "A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.", Type: model.SummaryMetricType,
+			Summary: &model.Summary{Quantiles: quantiles, Count: collections, Sum: r.gc.PauseTotal.Seconds()}},
+	)
+}
+
+// goMetrics are the runtime's own numbers.
+func goMetrics() []model.Metric {
+	out := make([]model.Metric, 0, 6+len(runtimeSeries))
+	out = append(out,
 		gauge("go_info", "Information about the Go environment.", 1, map[string]string{"version": runtime.Version()}),
 		gauge("go_goroutines", "Number of goroutines that currently exist.", float64(runtime.NumGoroutine()), nil),
 		gauge("go_threads", "Number of OS threads created.", float64(threadCount()), nil),
 		gauge("go_sched_gomaxprocs_threads", "The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously.", float64(runtime.GOMAXPROCS(0)), nil),
-
-		gauge("go_memstats_alloc_bytes", "Number of bytes allocated in heap and currently in use.", float64(mem.Alloc), nil),
-		counter("go_memstats_alloc_bytes_total", "Total number of bytes allocated in heap until now, including released memory.", float64(mem.TotalAlloc)),
-		gauge("go_memstats_sys_bytes", "Number of bytes obtained from system.", float64(mem.Sys), nil),
-		counter("go_memstats_mallocs_total", "Total number of heap objects allocated, both live and gc-ed.", float64(mem.Mallocs)),
-		counter("go_memstats_frees_total", "Total number of heap objects frees.", float64(mem.Frees)),
-
-		gauge("go_memstats_heap_alloc_bytes", "Number of heap bytes allocated and currently in use.", float64(mem.HeapAlloc), nil),
-		gauge("go_memstats_heap_sys_bytes", "Number of heap bytes obtained from system.", float64(mem.HeapSys), nil),
-		gauge("go_memstats_heap_idle_bytes", "Number of heap bytes waiting to be used.", float64(mem.HeapIdle), nil),
-		gauge("go_memstats_heap_inuse_bytes", "Number of heap bytes that are in use.", float64(mem.HeapInuse), nil),
-		gauge("go_memstats_heap_released_bytes", "Number of heap bytes released to OS.", float64(mem.HeapReleased), nil),
-		gauge("go_memstats_heap_objects", "Number of currently allocated objects.", float64(mem.HeapObjects), nil),
-
-		gauge("go_memstats_stack_inuse_bytes", "Number of bytes obtained from system for stack allocator in non-CGO environments.", float64(mem.StackInuse), nil),
-		gauge("go_memstats_stack_sys_bytes", "Number of bytes obtained from system for stack allocator.", float64(mem.StackSys), nil),
-		gauge("go_memstats_gc_sys_bytes", "Number of bytes used for garbage collection system metadata.", float64(mem.GCSys), nil),
-		gauge("go_memstats_other_sys_bytes", "Number of bytes used for other system allocations.", float64(mem.OtherSys), nil),
-		gauge("go_memstats_next_gc_bytes", "Number of heap bytes when next garbage collection will take place.", float64(mem.NextGC), nil),
-		gauge("go_memstats_last_gc_time_seconds", "Number of seconds since 1970 of last garbage collection.", lastGCSeconds(mem), nil),
-
-		// A summary, as client_golang publishes it, with its count and sum and
-		// without the quantiles the runtime statistics cannot give.
-		{Name: "go_gc_duration_seconds", Help: "A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.", Type: model.SummaryMetricType, Summary: &model.Summary{Count: uint64(mem.NumGC), Sum: float64(mem.PauseTotalNs) / float64(time.Second)}},
-	}
-	return append(out, cpuClassMetrics()...)
+	)
+	return theRuntimeReader().read(out)
 }
 
-// lastGCSeconds reports 0 rather than the epoch when no collection has run yet,
-// so a fresh process does not look as though it last collected in 1970.
-func lastGCSeconds(mem runtime.MemStats) float64 {
-	if mem.LastGC == 0 {
+// lastGCSeconds reports 0 rather than the epoch when no collection has run yet
+// (ReadGCStats then gives the Unix time 0), so a fresh process does not look
+// as though it last collected in 1970.
+func lastGCSeconds(last time.Time) float64 {
+	nanos := last.UnixNano()
+	if nanos <= 0 {
 		return 0
 	}
-	return float64(mem.LastGC) / float64(time.Second)
+	return float64(nanos) / float64(time.Second)
 }
 
 // threadCount is what client_golang reports as go_threads.
@@ -103,42 +234,6 @@ func threadCount() int {
 		return profile.Count()
 	}
 	return 0
-}
-
-// cpuClassSamples are the CPU accounting the runtime keeps, under the names
-// client_golang derives from the same runtime/metrics sources. They are asked
-// for by name and skipped when a Go release does not have them, so the exporter
-// publishes what the runtime it was built with actually offers rather than a
-// fixed list that a toolchain upgrade could invalidate.
-var cpuClassSamples = []struct {
-	runtimeName string
-	metricName  string
-	help        string
-}{
-	{"/cpu/classes/total:cpu-seconds", "go_cpu_classes_total_cpu_seconds_total", "Estimated total available CPU time for user Go code or the Go runtime, as defined by GOMAXPROCS."},
-	{"/cpu/classes/user:cpu-seconds", "go_cpu_classes_user_cpu_seconds_total", "Estimated total CPU time spent running user Go code."},
-	{"/cpu/classes/idle:cpu-seconds", "go_cpu_classes_idle_cpu_seconds_total", "Estimated total available CPU time not spent executing any Go or Go runtime code."},
-	{"/cpu/classes/gc/total:cpu-seconds", "go_cpu_classes_gc_total_cpu_seconds_total", "Estimated total CPU time spent performing garbage collection."},
-	{"/cpu/classes/scavenge/total:cpu-seconds", "go_cpu_classes_scavenge_total_cpu_seconds_total", "Estimated total CPU time spent returning unneeded memory to the OS."},
-}
-
-func cpuClassMetrics() []model.Metric {
-	samples := make([]metrics.Sample, 0, len(cpuClassSamples))
-	for _, want := range cpuClassSamples {
-		samples = append(samples, metrics.Sample{Name: want.runtimeName})
-	}
-	metrics.Read(samples)
-
-	out := make([]model.Metric, 0, len(samples))
-	for i, sample := range samples {
-		// A name this Go release does not know comes back as KindBad rather
-		// than as an error, which is what makes skipping the right response.
-		if sample.Value.Kind() != metrics.KindFloat64 {
-			continue
-		}
-		out = append(out, counter(cpuClassSamples[i].metricName, cpuClassSamples[i].help, sample.Value.Float64()))
-	}
-	return out
 }
 
 // processMetrics are the operating system's view of the process. They are read

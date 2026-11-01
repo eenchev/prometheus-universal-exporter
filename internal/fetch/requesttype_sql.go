@@ -102,13 +102,9 @@ func init() {
 		TargetFields: []string{"timeout", "username", "password_file", "private_key_file", "connections", "tls"},
 		Requester:    sqlRequester{},
 		Rows:         true,
-		TargetHint: func(c *model.Collector) string {
-			if sqlRequest(c).Driver == SQLDriverSnowflake {
-				return "the Snowflake account identifier"
-			}
-			return "the database server, host or host:port"
-		},
-		Templates: sqlTemplates,
+		TargetHint:   sqlTargetHint,
+		AnswerHint:   "Paste the rows as JSON, a list of objects of each row's columns by name, as the Response of a run shows them",
+		Templates:    sqlTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.database, its args or its label values")
 		},
@@ -507,6 +503,23 @@ func parseSQLTarget(c *model.Collector, raw string) (sqlAddress, error) {
 		hostPort = "[" + canonical + "]"
 	}
 	return sqlAddress{host: canonical, port: port, hostPort: hostPort}, nil
+}
+
+// sqlTargetHint is what the collectors page and the debug page say of a
+// target: the server, host or host:port, the port the driver's when it
+// names none, or for a driver whose targets are accounts, the account.
+func sqlTargetHint(c *model.Collector) (string, string) {
+	d := sqlDriverOf(c)
+	switch {
+	case d == nil:
+		return "Database server", "host or host:port"
+	case d.account:
+		return "Account", "the account identifier, such as myorg-myaccount"
+	}
+	if port := d.port(sqlRequest(c).Options); port != "" {
+		return "Database server", "host or host:" + port
+	}
+	return "Database server", "host or host:port"
 }
 
 // checkSQLTarget is a probe's and a static target's check of the target.

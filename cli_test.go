@@ -281,12 +281,18 @@ func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 		"--web.gzip-level=fast":     "for flag -web.gzip-level: parse error",
 		// A page refreshing faster than Grafana's least, or past what a
 		// browser's timer holds, is refused rather than taken.
-		"--web.status-refresh=1s":          `--web.status-refresh \"1s\" must be off or a duration in whole seconds from 5s to 24h`,
-		"--web.status-refresh=0s":          `--web.status-refresh \"0s\" must be off`,
-		"--web.status-refresh=48h":         `--web.status-refresh \"48h\" must be off`,
-		"--web.status-refresh=2.5s":        `--web.status-refresh \"2.5s\" must be off`,
-		"--web.status-refresh=":            `--web.status-refresh \"\" must be off`,
-		"--python.max-workers=-1":          "--python.max-workers must not be negative",
+		"--web.status-refresh=1s":   `--web.status-refresh \"1s\" must be off or a duration in whole seconds from 5s to 24h`,
+		"--web.status-refresh=0s":   `--web.status-refresh \"0s\" must be off`,
+		"--web.status-refresh=48h":  `--web.status-refresh \"48h\" must be off`,
+		"--web.status-refresh=2.5s": `--web.status-refresh \"2.5s\" must be off`,
+		"--web.status-refresh=":     `--web.status-refresh \"\" must be off`,
+		"--python.max-workers=-1":   "--python.max-workers must not be negative",
+		// No worker kept idle is 0; a timeout under a second would have the
+		// reaper wake all the time for workers that hardly outlive their run.
+		"--python.max-idle-workers=-1":     "--python.max-idle-workers must not be negative, got -1",
+		"--python.idle-timeout=999ms":      "--python.idle-timeout must be at least 1s, got 999ms; --python.max-idle-workers=0 keeps no worker idle",
+		"--python.idle-timeout=0s":         "--python.idle-timeout must be at least 1s, got 0s",
+		"--python.idle-timeout=-1m":        "--python.idle-timeout must be at least 1s, got -1m0s",
 		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
 		// A soft limit of a few kilobytes would have the Go runtime collect
 		// garbage all the time.

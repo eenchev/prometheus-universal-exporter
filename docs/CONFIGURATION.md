@@ -4676,7 +4676,9 @@ The exporter's memory is the Go heap — responses, decoded documents and
 series while trips are in progress, and the response cache — and the Python
 workers, each a process of its own. `--probe.max-concurrent` bounds the
 first, `--python.max-workers` and
-[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second.
+[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second, and
+`--python.max-idle-workers` and `--python.idle-timeout` how many workers are
+kept between scrapes, and for how long.
 
 `limits.max_metrics` (10000 by default) bounds a scrape's series as they are
 made, not after: every transform stops at the first series past it, and the
@@ -5358,6 +5360,10 @@ is shown as the target sent it.
 [Debugging](AUTHENTICATION.md#debugging-collectors) says what each level lets
 a visitor of the exporter's pages do.
 
+`--web.debug.dangerous` (the chart's `server.debugDangerous`), with `full`
+only, lifts what the playground is refused for the server's sake: see
+[Dangerous debug mode](#dangerous-debug-mode).
+
 ### The debug page
 
 `/debug` runs one collector and shows the series a probe would answer, the
@@ -5378,7 +5384,12 @@ The collector run is one of two:
   and a mistake is reported in the words a load would use, with line numbers
   counted from the collector's first line. `${NAME}` references are left as
   they are written, whatever `--config.expand-env` says. It is never put in
-  force, and its own request block never makes a request. It takes no
+  force, and its own request block never makes a request: it may be of any
+  request type the build has, its `request.type` saying only how its answer
+  is read — its decoder, a `sql` collector's rows, the JSON document a
+  `tlscert` handshake is made into — and the keys a request needs to be
+  made, such as an `sshfile` collector's `known_hosts_file`, are not
+  required of it. It takes no
   [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
   a file, and refused here as `collectors` is, while a configured collector
   runs with the keys it took from its file's.
@@ -5388,8 +5399,9 @@ The collector run is one of two:
   stands for.
 
 The editor shows the collector that runs. While none of the configuration
-is chosen, *Playground* in the list, it holds the playground — the example to
-start with, then what was written, kept in the browser between visits. A configured
+is chosen, *Playground* in the list, it holds the playground — the example,
+an `http` collector, every time the page opens, then what was written, for
+as long as the page is open; nothing of it is kept in the browser. A configured
 collector chosen, in the list or by the link from `/collectors`, is shown
 in its place, read-only, since it runs as configured:
 
@@ -5411,10 +5423,14 @@ in its place, read-only, since it runs as configured:
 
 *Edit a copy* makes the playground a copy of that YAML, which then runs in
 its place, under the rules for the playground: what was withheld has to be
-left out or written again, and a collector of another request type than
-`http`, with Python or with a file, is refused as any playground is. The
-page remembers the collector the playground was copied from, through edits
-and between visits, and fetches a target through it.
+left out or written again, and a collector with Python or with a file is
+refused as any playground is. A copy of a collector of any request type
+runs: a `tlscert` collector's copy reads a pasted handshake, or what
+`tls_cert` answers when a target is probed or a static target scraped
+through it. The page remembers the collector the playground was copied
+from, through edits, while it is open, and fetches a target through it;
+*Back to the example*, shown while the playground is a copy, puts the
+example back.
 
 It reads one of three responses:
 
@@ -5424,18 +5440,48 @@ It reads one of three responses:
   configured collector or a copy of one; a body that has been written in is
   kept whichever collector is chosen. The status must be
   one the collector's `request.accept_status` accepts, and the body is held
-  to its response limit, as a fetched response would be.
-- **A target**, at `full` only: fetched exactly as `/probe?debug=true` fetches
-  it, through a configured collector — the one chosen, or the one the
+  to its response limit, as a fetched response would be. The page asks for
+  a status and headers only for an `http` or `graphite` collector, whose
+  answers are HTTP responses, and for a `Content-Type` only where it can
+  choose the decoder; the body's placeholder says what to paste: what the
+  target answers, a file's content, or, for the types that make their
+  answer, the JSON document a run's *Response* shows. For the playground
+  these follow the `request.type` written in the editor as it is typed,
+  in block style (`request:` with `type: sql` under it) or in flow style
+  (`request: {type: sql}`); with none written, or a type the build does not
+  have, the page asks as for `http`, and the run says what is wrong. What
+  was typed in a field the type hides is kept for when it is shown again,
+  and is not sent. A response pasted for a `localfile` collector that reads
+  a directory is read as one file. A `sql` collector's
+  response is its rows, pasted as JSON as a run's *Response* shows them, a
+  list of objects of each row's columns by name,
+  `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
+  `true` and `false` as 1 and 0, and `null` leaves the column out of its
+  row, as `NULL` does; anything else is refused with `400`.
+
+  The other headers are rows of a name and a value, starting with one
+  empty row; *+ Add header* adds a row and *×* removes one. A row left blank
+  is not sent. A name may be given again, in any case, as a response may
+  repeat a header: the run has each value, in the order of the rows. A row
+  with a value and no name, or with a name that is not an HTTP token
+  (letters, digits and ``!#$%&'*+.^_`|~-``), is marked on the row with why,
+  `Header name "Bad Name" is not one HTTP allows.`, and the run is not
+  sent; the server checks again what it is sent. The rows are kept when
+  another collector is chosen.
+- **A target**, *Probe a target* on the page, at `full` only: fetched
+  exactly as `/probe?debug=true` fetches it, through a configured collector — the one chosen, or the one the
   playground was copied from — with its request block,
   [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
   credentials, `accept_status` and
   [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
   parameters entered on the page. The playground decodes and transforms what
-  the collector it was copied from fetched; one not copied from a configured
-  collector, as the example, has nothing to fetch through, so *Fetch a
+  the collector it was copied from fetched; see below for what the page asks
+  for; one not copied from a configured
+  collector, as the example, has nothing to fetch through, so *Probe a
   target* is not offered with it. A collector run on what another fetched
-  reads what an `http` collector fetches only.
+  reads what a collector of its own request type fetches only, as it
+  reads that type's answer: a copy whose type was changed is refused
+  (`400`).
 - **A static target's scrape**, at `full` only: made once as its schedule
   makes it, with the target's own settings and credentials, its interval as
   the budget and its labels on the series, as
@@ -5451,23 +5497,135 @@ It reads one of three responses:
   static target file. With no static target of that collector, or none at
   all, *Scrape a static target* is offered disabled with a note saying so;
   the example playground, copied from no collector, scrapes none, as it
-  fetches none. The scrape is read by the collector chosen, the target's
+  fetches none. The panel says whose static targets it lists: *Static
+  targets of tls_cert, the collector chosen.*, or *…, the collector this
+  playground was copied from.* The scrape is read by the collector chosen, the target's
   own, or by the playground, a copy of it that may have been edited.
   `/debug?static_target=<name>` opens the page with that target chosen and
   its collector chosen on the left.
 
+What the page asks for follows the request type of the collector it is
+for — the collector run, for a pasted response, the playground's being the
+one its editor writes, and the one a target is probed through, for a target —
+as each type says it, so a build without a type has nothing of it:
+
+| Request type | Target, as the page labels and hints it |
+| --- | --- |
+| `http` | URL: `https://host:port` |
+| `graphite` | Graphite URL: `https://graphite:8080` |
+| `grpc` | Server: `host:port, grpc://host:port or grpcs://host:port` |
+| `sql` | Database server: `host or host:<the driver's port>`, such as `host:5432`; Account for `snowflake` |
+| `dns` | Name to resolve: `example.com`, the server being `request.server` or the system's resolver; Address to resolve for `PTR` |
+| `ntp` | NTP server: `host or host:123` |
+| `tlscert` | Server: `host or host:443`, or the `starttls` protocol's port |
+| `sshfile`, `sshexec` | SSH host: `host or host:22` |
+| `localfile` | File, or Directory when `request.path` names the file or `files` reads a directory: under its root, optional |
+| `kubernetes` | none: the field is left out, and the page says *This collector names its own target.* |
+| `s3file` | Bucket: `the bucket, or s3://bucket` |
+| `redis` | Server: `host, host:port or rediss://host:port` |
+| `tcp` | Server: `host:port` |
+| `ldap` | LDAP server: `host, host:port or ldaps://host:port` |
+
+The probe parameters are rows of a name and a value, as the headers are:
+a row for each of the collector's own `{{param_<name>}}` placeholders, its
+name filled in and its value empty, which takes the default, shown greyed
+in the box (none for one without a default); *+ Add parameter* adds a row,
+whose name box suggests the other parameters its type takes from a probe,
+`header_<name>` for each header it forwards. A blank row is not sent, and
+one with an empty value is sent empty, which a `param_<name>` takes as not
+given. The page marks on its row what `/probe` would refuse: a value with
+no name, `target`, `collector` or `debug`, which the page sets itself, and
+a parameter given again, `Probe parameter path is given 2 times; give it
+once.`, but for a `header_<name>`, each value of which is forwarded; the
+run is not sent then. Choosing another collector makes the rows again,
+keeping what was typed for a name the new one takes too. A collector that
+takes none, such as a `dns` collector without a placeholder, is offered no
+rows, and the page says *This collector takes no probe parameters.* The page reads the form of each collector again with
+its YAML from `/debug/collector`, so it follows a reload. The target is
+probed as `/probe?debug=true` probes it, and the page says through which
+collector: *Probed through status_json, the collector chosen.*
+
+*Copy as*, below the parameters, gives the probe as it is asked of the
+exporter outside the page, made from the form as it stands and made again
+as the target and the rows change:
+
+- **URL**: the `/probe` URL, absolute and resolved against the page's own
+  address, so a path prefix in front of the exporter is kept, with
+  `collector`, `target` and each filled parameter row, a repeated
+  `header_<name>` once for each row, URL-encoded:
+  `http://exporter:8080/probe?collector=status_json&target=http%3A%2F%2Fapi%3A8080&param_city=sofia`.
+- **curl**: `curl -s` and the URL in single quotes.
+- **scrape_config**: a Prometheus job of the collector and the target, the
+  multi-target job of [the `localfile` page](LOCALFILE.md#scraping-with-prometheus): the
+  parameters under `params`, the target moved into the `target` parameter
+  and `instance`, and the exporter scraped at the host and port the page was
+  opened at — inside a cluster, use its service's address instead. A
+  collector that names its own target, such as a `kubernetes` collector, is
+  given the exporter as the job's target and no `target` parameter. Every
+  value is a single-quoted YAML scalar.
+- **Debug report URL**: the URL with `debug=true`, the
+  [debug probe](#debug-probes).
+
+The buttons are disabled, with a note saying why, while the target is
+empty or a parameter row is wrong. With the playground, a copy of a
+collector, they probe through the collector it was copied from, as
+configured: `/probe` runs only the configured collectors, so the
+playground's edits are not in what is copied, and the page says so. A
+button shows what it copies in a box, so it can be selected where the
+browser does not let the page use the clipboard, and says *Copied the
+curl command.* when it did. With `web.basic_auth` on, curl is given
+`-u USER`, which asks for the password, and the job a commented
+`basic_auth` to fill in; the credential is never on the page.
+*Scrape a static target* offers *Copy as* too: its
+`/static-targets?targets=<name>` URL and the curl command for it.
+
+The series a run gave are shown as a table, or as the Prometheus text a probe
+would answer; *Table* and *Text* switch between them, and the browser keeps
+the choice. The text is the whole answer, to the byte. The table has a row
+for each sample — a histogram's buckets, `_sum` and `_count` and a summary's
+quantiles each a row of their own, `le` and `quantile` among the labels — and
+the columns `name`, one for each label name any row has, in alphabetical
+order, `value`, as the text writes it (`NaN`, `+Inf`), and `type`, from the
+metric's `# TYPE`:
+
+- **Sorting**: a column's header sorts by it, and again reverses the order;
+  `value`, `le` and `quantile` sort as numbers, and a row without the label
+  sorts last either way.
+- **Filtering**: the filter box keeps the rows whose name, a `label=value`
+  or value holds its text, whatever the case, and *Metric* keeps one metric's
+  rows; the page says how many rows of how many are left, `3 of 12 series`.
+- **Lint**: a [metric lint](#metric-lint) finding is shown on the rows of
+  the metric it names, in a `lint` column, as its rule, which opens to its
+  advice. A series does not record the rule that made it, so a finding is
+  put by the metric's name: every row of that metric has it. A finding about
+  a metric no row is of — a rule that gave no series — is listed above the
+  table. The *Lint* section below lists every finding as before.
+- **Size**: at most 2000 rows are drawn, so a large answer leaves the page
+  quick; past them the page says so, and the filter narrows them. The text
+  has them all.
+
+What a target sent is put in the table as text, never as HTML. On a narrow
+screen the table scrolls sideways in its own box.
+
 The playground may do nothing past the response, since what it is given
-runs on the server:
+runs on the server, unless [`--web.debug.dangerous`](#dangerous-debug-mode)
+lifts these:
 
 - **Python is never run.** A collector with `transform.type: python` or a
   `pre_script` is refused, at `full` as at `edit`; put it in the
   configuration and run it by name.
-- **Only `http` collectors**, since the other request types read files,
-  hosts and databases with the server's own credentials, and **no file of
-  the server's**: `request.basic_auth_file`, `request.bearer_token_file`,
-  the `request.tls` files and a `request.login`, which reads its secrets
-  from files, are refused, named in the order the collector has them. A pasted response needs no
-  credential, and a fetched target gets the configured collector's.
+- **Its request block is inert**, whatever its type: no run makes a
+  request with it, so a `sql`, `tlscert` or `localfile` playground reaches
+  no database, host or file. A pasted response is decoded as it is, and a
+  target is fetched, or a static target scraped, through a configured
+  collector alone.
+- **No file of the server's**: every request key ending in `_file` or
+  `_files`, of any type — `request.bearer_token_file`, the `request.tls`
+  files, an `sshfile` collector's `known_hosts_file`, a `grpc` collector's
+  `protoset_file` — and a `request.login`, which reads its secrets from
+  files, are refused, named in the order the collector has them. A pasted
+  response needs no credential, and a fetched target gets the configured
+  collector's.
 
 A run takes as long as a probe may — the timeout on the page, sent as
 Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
@@ -5495,22 +5653,82 @@ curl -s http://exporter:8080/debug/run \
 The editor reads a configured collector from `GET
 /debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
 YAML as the page shows it, `from_defaults`, the keys it took from its
-file's defaults, and at `full` `static_targets`, the static targets scraped
+file's defaults, at `full` `static_targets`, the static targets scraped
 through it, each a `name` and its `target` as the list shows it, `[]` for
-none; a name the configuration does not have is answered `404` with
-`error`.
+none, and `form`, what the page asks a run of it for: `request_type`,
+`answer`, the body's placeholder, `content_type` and `http_answer`, whether
+it asks for a `Content-Type` and for a status and headers, `target_label`
+and `target_hint`, or `no_target`, `params`, its own probe parameters, each
+a `name` and its `default`, and `other_params`, the names of the others it
+takes, each left out when it takes none; a name the configuration does not
+have is answered `404` with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for
 `collector`, `request_from`, the configured collector to fetch through, which
 the page fills with the one the playground was copied from; or
-`static_target`. It answers
+`static_target`. `headers` and `params` are objects of names, each with a
+string, or a list of strings for a name given more than once,
+`{"X-Trace": ["one", "two"]}`: a pasted response then has the header once
+for each value, at most 100 values in all, a `header_<name>` parameter
+forwards each, and any other parameter given twice is refused, as `/probe`
+refuses it. It answers
 `200` with `ok`, `verdict` (what a probe would have answered), `series`
-(Prometheus text), `requests`, `response`, `stages`, `notes`, `lint`, the
+(Prometheus text), `samples`, the same series one sample at a time as the
+table shows them, each with its `name` (a histogram's or summary's with its
+suffix), `metric` (the metric's name, as a lint finding names it), `type`,
+`labels` and `value` (as the text writes it, so `NaN` and `+Inf` are
+strings), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
 `metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
-`403`.
+`403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
+
+### Dangerous debug mode
+
+`--web.debug.dangerous`, off by default, lets the playground do what a
+configured collector does, for writing a collector whose script or files
+cannot be tried otherwise without putting it in the configuration. It
+needs `--web.debug=full`, and is refused at startup without it (exit status
+2); the exporter logs at `warn` when it starts with it on. The playground
+then:
+
+- **Runs Python**, a `python` transform and a `pre_script`, as a
+  configured collector's script runs: in the same worker pool and
+  [sandbox](PYTHON.md), which blocks opening files and sockets but is no
+  wall against a script written to get out, held to the same limits (`limits.script_timeout`, `max_script_memory`,
+  `max_output_bytes`, `--python.max-workers`) and to the run's deadline.
+  Its runs count in the pool-wide [Python worker
+  series](SELF-METRICS.md#python-workers) alone, under no collector's name,
+  and its worker is stopped once it has run, which those series count as a
+  stop for a reload.
+- **Names the server's files**: any request key ending in `_file` or
+  `_files`, and `request.login`, are taken.
+- **Makes its own request**: *Probe a target* with the playground, when it
+  is not a copy of a configured collector, fetches the target through the
+  playground's own request block, as a probe of a configured collector
+  would, with the `allowed_targets`, `denied_targets` and credentials it
+  writes; it is then checked as a load checks a request, the files a
+  request needs required of it. This is what makes its files of use: a
+  `localfile` playground reads a file under the `root` it names, a
+  `bearer_token_file` or a TLS file is read for the request it is sent
+  with, and a `sql` playground connects to the database it names. A copy
+  of a configured collector still fetches through that collector, whose
+  credentials the copy does not have, and a pasted response still makes no
+  request. *Copy as* copies no probe of the playground's own request:
+  `/probe` runs only the configured collectors.
+
+`${NAME}` references are still left as written: the environment is where a
+deployment keeps its secrets, and a collector written on the page can name
+a file instead.
+
+The page then says so in a red banner in place of its usual note, every
+page's bar carries a *Dangerous debug mode* badge, and `/debug/run` answers
+`dangerous: true`. Whoever can open the page can run code on the server,
+read any file the exporter's user can through a playground's request, and
+reach any host the exporter can: use it
+on a machine of your own, or in a debugging session no one else can reach,
+and never on a shared deployment ([Debugging](AUTHENTICATION.md#debugging-collectors)).
 
 ### Debug probes
 
@@ -5800,16 +6018,39 @@ scrapes on every rollout. The Helm chart sets it to 5 seconds. Static targets
 keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
 through the delay.
 
-Then it stops accepting connections, lets the
+Then it stops accepting connections, cuts short the
+[static target](STATIC-TARGETS.md) scrapes in flight, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
 followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
 export of its own log within the same `otlp.timeout`,
-and exits `0`. It logs that it is shutting down, and, when the timeout runs
-out with probes still in progress, that it closed them — Prometheus records
-those as failed scrapes. Keep the timeout at least as long as the longest
-scrape timeout of the monitors that probe the exporter, so a rollout does not
-cut probes off:
+and exits `0`. The static target scrapes are not waited for: their results are
+served by this exporter alone, which is stopping, so a target that does not
+answer would only hold the shutdown up. A scrape cut short publishes nothing
+and logs nothing above `debug`; the target's last result stands, and the last
+OTLP export goes without what that scrape would have queued. Nothing else the
+exporter runs on its own holds the shutdown up: the configuration watch stops
+as the shutdown begins, and the [allocator](ALLOCATOR.md) client, which keeps
+saying the replica is shutting down, once the probes are done.
+
+The log says what the shutdown waits for, and for how long at most:
+
+```json
+{"level":"INFO","msg":"shutting down: waiting for 2 probes in progress, at most 15s; a second signal exits at once","probes":2,"other_requests":0,"shutdown_timeout":"15s"}
+{"level":"INFO","msg":"shutting down: still waiting for 1 probe in progress, 10s left","probes":1,"other_requests":0,"time_left":"10s"}
+```
+
+`other_requests` counts the requests in progress that are not probes, such as
+a scrape of the self-metrics, which the shutdown waits for as well. While it
+waits it says every 5 seconds what it still waits for; with nothing in
+progress it says `shutting down: no probes in progress; exiting`, or that it
+sends the last OTLP export, and does not wait. When the timeout runs out with
+probes still in progress it logs an error saying it gave up on them and closed
+their connections — Prometheus records those as failed scrapes — and still
+exits `0`: the exporter stopped as asked, and a probe cut off is Prometheus's
+failed scrape, not the exporter's. Keep the timeout at least as long as the
+longest scrape timeout of the monitors that probe the exporter, so a rollout
+does not cut probes off:
 
 ```sh
 prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
@@ -5818,9 +6059,16 @@ prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 In Kubernetes the pod must also be allowed to run that long: its
 `terminationGracePeriodSeconds`, 30 by default, has to cover the delay, the
 timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
-`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time
-ends the process at once — the second Ctrl-C of an impatient operator, or a
-supervisor that signals twice — without waiting for the probes or the export.
+`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
+included, ends the process at once — the second Ctrl-C of an impatient
+operator, or a supervisor that signals twice — without waiting for the probes
+or the export. It logs one line first,
+`second signal: exiting now, 1 probe in progress left unfinished`, and the
+process is then ended by that signal, as an exporter that did not catch it
+would be: a shell reports `130` for `SIGINT` and `143` for `SIGTERM`, and
+Kubernetes the same exit codes. An exporter started with the signal ignored,
+as a script's background job is with `SIGINT`, exits with that same status
+instead, a second later. `SIGTERM` and `SIGINT` do the same throughout.
 A `SIGHUP` in that time [reloads](#reloading-on-demand) as at any other, and
 does not end the process.
 

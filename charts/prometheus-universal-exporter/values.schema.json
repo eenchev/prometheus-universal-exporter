@@ -167,6 +167,7 @@
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
         "debug": {"type": "string", "enum": ["", "off", "edit", "full"], "description": "Rendered as --web.debug when edit or full: edit enables the /debug page on pasted responses, full also fetching targets there, /probe?debug=true and /static-targets?debug=<name>. Empty and off render no flag."},
+        "debugDangerous": {"type": "boolean", "description": "Rendered as --web.debug.dangerous when true, which needs debug: full: the debug page's playground may run Python, read the pod's files and probe a target with its own request. Never for a shared deployment."},
         "gzipLevel": {
           "type": ["string", "integer", "null"],
           "description": "Rendered as --web.gzip-level when set: the gzip level of the answers of /probe, the self-metrics and the static targets, 1, the fastest, to 9, the smallest, or 0 to answer them uncompressed. Empty keeps the exporter's default, 1.",
@@ -202,6 +203,18 @@
           "pattern": "^$|^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$",
           "minimum": 0,
           "maximum": 2147483647
+        },
+        "pythonMaxIdleWorkers": {
+          "type": ["string", "integer", "null"],
+          "description": "Rendered as --python.max-idle-workers when set: how many Python workers of each collector's script stay idle after a burst of concurrent scrapes: a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit. 0 keeps none idle. Empty keeps the exporter's default, 1.",
+          "pattern": "^$|^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "pythonIdleTimeout": {
+          "type": "string",
+          "description": "Rendered as --python.idle-timeout when set: how long an idle Python worker is kept unused before it is stopped. Whole hours, minutes and seconds, at least 1s, such as 5m. Empty keeps the exporter's default, 2m.",
+          "pattern": "^$|^([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
         },
         "shutdownTimeout": {
           "type": "string",

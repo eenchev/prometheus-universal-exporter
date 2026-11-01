@@ -104,6 +104,7 @@ func init() {
 		// A kubernetes collector lists what its configuration names, and
 		// takes no target at all.
 		NoTarget:   true,
+		AnswerHint: "Paste the objects listed as the JSON document the exporter makes of them, as the Response of a run shows it",
 		JSONAnswer: true,
 		Stage:      "kubernetes",
 		CheckFiles: checkKubernetesFiles,
@@ -235,7 +236,8 @@ func validateKubernetesRequest(x *model.Collector) error {
 	if (r.TLS.CertFile == "") != (r.TLS.KeyFile == "") {
 		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
 	}
-	if r.BearerTokenFile == "" && r.TLS.CertFile == "" {
+	// The debug page's playground makes no request, and may name no file.
+	if r.BearerTokenFile == "" && r.TLS.CertFile == "" && !x.RequestNotMade {
 		return fmt.Errorf("collector %q names request.api_server with no credential; set bearer_token_file, or tls.cert_file and tls.key_file", x.Name)
 	}
 	return nil

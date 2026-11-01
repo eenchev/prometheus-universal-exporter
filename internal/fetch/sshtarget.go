@@ -43,10 +43,11 @@ func validateSSHConnection(x *model.Collector, account string) error {
 	if strings.TrimSpace(r.Username) == "" {
 		return fmt.Errorf("collector %q request.username is required for request.type %s: the account %s on the host", x.Name, x.Request.Type, account)
 	}
-	if strings.TrimSpace(r.KnownHostsFile) == "" {
+	// The debug page's playground makes no request, and may name no file.
+	if strings.TrimSpace(r.KnownHostsFile) == "" && !x.RequestNotMade {
 		return fmt.Errorf("collector %q request.known_hosts_file is required for request.type %s: the host's key is always verified, against the lines of this file (ssh-keyscan writes them)", x.Name, x.Request.Type)
 	}
-	if err := checkSSHCredentialKeys(x.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order); err != nil {
+	if err := checkSSHCredentialKeys(x.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order, !x.RequestNotMade); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if err := checkSSHFileKey("request.known_hosts_file", r.KnownHostsFile); err != nil {
@@ -77,8 +78,9 @@ func validateSSHConnection(x *model.Collector, account string) error {
 // template. An empty username is the collector's to require; a static
 // target's empty one keeps the collector's. requestType names the type in
 // the refusal, and order is the request block's keys in the order the file
-// has them, of which a refusal names the first.
-func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFile, passwordFile string, order []string) error {
+// has them, of which a refusal names the first. required says a key or a
+// password must be named, as it must for every request that is made.
+func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFile, passwordFile string, order []string, required bool) error {
 	if strings.Contains(username, "{{") {
 		return fmt.Errorf("request.username %q has a placeholder; the account is named as it is, so it takes none", username)
 	}
@@ -95,7 +97,7 @@ func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFil
 	if strings.TrimSpace(passphraseFile) != "" && strings.TrimSpace(privateKeyFile) == "" {
 		return errors.New("sets request.passphrase_file without request.private_key_file; the passphrase is the private key's")
 	}
-	if strings.TrimSpace(privateKeyFile) == "" && strings.TrimSpace(passwordFile) == "" {
+	if required && strings.TrimSpace(privateKeyFile) == "" && strings.TrimSpace(passwordFile) == "" {
 		return fmt.Errorf("sets neither request.private_key_file nor request.password_file; an %s request authenticates with a private key, a password, or both (the key is tried first)", requestType)
 	}
 	for _, key := range inOrder {
@@ -141,7 +143,7 @@ func checkSSHTargetAccount(c *model.Collector, t *model.StaticTarget) error {
 		}
 		return checkSSHBlank("request.username", r.Username)
 	}
-	if err := checkSSHCredentialKeys(c.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order); err != nil {
+	if err := checkSSHCredentialKeys(c.Request.Type, r.Username, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile, r.Order, true); err != nil {
 		return fmt.Errorf("%w; a target that sets a credential file replaces the collector's credential files with its own", err)
 	}
 	return nil
@@ -202,8 +204,11 @@ func sshTargetElsewhere(requestType string) string {
 	return "the file request.root and request.path"
 }
 
-// sshTargetHint is what the collectors page says of a target.
-func sshTargetHint(*model.Collector) string { return "host or host:port" }
+// sshTargetHint is what the collectors page and the debug page say of a
+// target: the account is request.username, never part of it.
+func sshTargetHint(*model.Collector) (string, string) {
+	return "SSH host", "host or host:" + sshDefaultPort
+}
 
 // sshDisplay renders a target for logs and labels: as written, since an
 // SSH target holds no credentials, when it is one at all.

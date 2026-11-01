@@ -116,7 +116,8 @@ func init() {
 			return unusedParamsIn(c, unused, fmt.Sprintf("its request.targets, its request.path (%q), its header or query values or its label values", c.Request.Path))
 		},
 		SchemaRule:         func() map[string]any { return map[string]any{"required": []string{"targets"}} },
-		TargetHint:         func(*model.Collector) string { return "http://graphite:8080" },
+		TargetHint:         func(*model.Collector) (string, string) { return "Graphite URL", "https://graphite:8080" },
+		AnswerHint:         "Paste what the render API answers: its JSON body, with its Content-Type, status and headers",
 		Query:              graphiteQuery,
 		CheckTargetRequest: checkGraphiteTargetRequest,
 		// The files of a login and of a target's own tls block; the

@@ -70,7 +70,8 @@ func init() {
 		SchemaRule:     func() map[string]any { return SchemaWrittenKey("root") },
 		OptionalTarget: true,
 		FileExtensions: true,
-		TargetHint:     func(*model.Collector) string { return "a file or directory under its root" },
+		TargetHint:     localFileTargetHint,
+		AnswerHint:     "Paste the file's content",
 		Stage:          "file",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// A param_ parameter can still fill a label value of the
@@ -120,6 +121,20 @@ func validateLocalFileRequest(x *model.Collector) error {
 		return err
 	}
 	return validateLocalDirectory(x)
+}
+
+// localFileTargetHint is what the collectors page and the debug page say of
+// a target: the file under root, or, when the collector reads a directory or
+// request.path names the file, the directory under root it is read in. The
+// target may be left out (OptionalTarget), which the pages say.
+func localFileTargetHint(c *model.Collector) (string, string) {
+	switch {
+	case readsDirectory(c):
+		return "Directory", "a directory under its root"
+	case c.Request.Path != "":
+		return "Directory", "a directory under its root that holds " + c.Request.Path
+	}
+	return "File", "a file under its root, such as app.prom"
 }
 
 // localFileTargetDir turns a target into a path relative to root. A target

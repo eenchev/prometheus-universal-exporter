@@ -63,11 +63,17 @@ var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true
 //
 // Lifetime. A worker that fails in any way is discarded. A healthy one is
 // reused up to pythonWorkerMaxRuns times, so a slow leak in a script or a
-// library cannot grow without bound, and at most pythonWorkerMaxIdle are kept
-// per pool once a burst of concurrent scrapes has passed. Idle workers are
-// stopped after pythonWorkerIdleTimeout, checked every
-// PythonWorkerReapInterval whether or not anything runs Python, so a collector
-// nobody scrapes any more does not keep its interpreters. A reload stops at
+// library cannot grow without bound, and at most --python.max-idle-workers
+// are kept per pool once a burst of concurrent scrapes has passed: one by
+// default, since each is a process of 11 MB or more that a collector scraped
+// one at a time never uses, and 0 keeps none, each worker stopping when its
+// run ends. Idle workers are stopped after --python.idle-timeout, two
+// minutes by default, checked every PythonPool.ReapInterval whether or not
+// anything runs Python, so a collector nobody scrapes any more does not keep
+// its interpreters. Two minutes is twice the longest scrape interval in
+// common use: a collector scraped every minute or more often keeps its one
+// worker warm through a late or a missed scrape, rather than paying for an
+// interpreter's start every time. A reload stops at
 // once the idle workers of scripts it removed or changed, and those still busy
 // when they finish, as it does the workers of a collector it removed, whose
 // statistics are retired (PythonStats), though a later reload has brought the
@@ -98,13 +104,19 @@ const (
 	// a request when the probe's deadline does not end it sooner: far longer
 	// than the largest response takes, and short enough that a worker that
 	// has stopped reading does not hold a scrape without a deadline for ever.
-	pythonHandoverTimeout   = 30 * time.Second
-	pythonWorkerMaxRuns     = 1000
-	pythonWorkerMaxIdle     = 4
-	pythonWorkerIdleTimeout = 5 * time.Minute
-	// PythonWorkerReapInterval is how often idle workers are checked against
-	// the idle timeout, so one lives at most the sum of the two unused.
-	PythonWorkerReapInterval = time.Minute
+	pythonHandoverTimeout = 30 * time.Second
+	pythonWorkerMaxRuns   = 1000
+	// PythonDefaultMaxIdleWorkers is the default of --python.max-idle-workers.
+	PythonDefaultMaxIdleWorkers = 1
+	// PythonDefaultIdleTimeout is the default of --python.idle-timeout.
+	PythonDefaultIdleTimeout = 2 * time.Minute
+	// pythonLeastIdleTimeout is the shortest --python.idle-timeout: below a
+	// second the reaper would wake all the time for workers that hardly
+	// outlive their run, which --python.max-idle-workers=0 does outright.
+	pythonLeastIdleTimeout = time.Second
+	// pythonWorkerReapInterval is how often, at most, idle workers are
+	// checked against the idle timeout (PythonPool.ReapInterval).
+	pythonWorkerReapInterval = time.Minute
 	pythonStderrTail         = 4096
 	pythonDefaultMaxOutput   = 1 << 20
 )
@@ -264,6 +276,11 @@ type PythonPool struct {
 	maxWorkers int
 	live       int
 	waiting    []chan struct{}
+	// maxIdle is how many workers of a script are kept idle
+	// (--python.max-idle-workers), and idleTimeout how long one is kept
+	// (--python.idle-timeout); both are read under mu.
+	maxIdle     int
+	idleTimeout time.Duration
 	// start starts a worker: startPythonWorker. It is a field so a test can
 	// give the pool a stand-in whose start-up takes the time the test says,
 	// rather than what an interpreter takes on the machine as it is loaded.
@@ -355,7 +372,7 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	pool := &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*PythonStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+	pool := &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*PythonStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker, maxIdle: PythonDefaultMaxIdleWorkers, idleTimeout: PythonDefaultIdleTimeout}
 	pool.departed = PythonStats{pool: pool, retired: true, stops: map[string]uint64{}, runs: map[string]uint64{}}
 	pool.startTimeout.Store(int64(pythonStartupTimeout))
 	return pool
@@ -402,6 +419,50 @@ func ValidateMaxWorkers(limit int) error {
 		return fmt.Errorf("--python.max-workers must not be negative, got %d", limit)
 	}
 	return nil
+}
+
+// SetMaxIdleWorkers is how many workers of each script are kept idle once
+// their runs end; 0 keeps none, so each worker stops when its run ends. It
+// bounds the workers that go idle after it is set, and is set before the
+// exporter runs any script.
+func (p *PythonPool) SetMaxIdleWorkers(limit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.maxIdle = limit
+}
+
+// ValidateMaxIdleWorkers refuses a negative --python.max-idle-workers.
+func ValidateMaxIdleWorkers(limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("--python.max-idle-workers must not be negative, got %d", limit)
+	}
+	return nil
+}
+
+// SetIdleTimeout is how long an idle worker is kept unused before it is
+// stopped.
+func (p *PythonPool) SetIdleTimeout(timeout time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.idleTimeout = timeout
+}
+
+// ValidateIdleTimeout refuses a --python.idle-timeout under a second.
+func ValidateIdleTimeout(timeout time.Duration) error {
+	if timeout < pythonLeastIdleTimeout {
+		return fmt.Errorf("--python.idle-timeout must be at least %s, got %s; --python.max-idle-workers=0 keeps no worker idle", pythonLeastIdleTimeout, timeout)
+	}
+	return nil
+}
+
+// ReapInterval is how often ReapLoop should check the idle workers: every
+// minute, or every half the idle timeout when that is shorter, so a worker
+// is stopped at most half its timeout late, rather than a minute late for a
+// timeout of a few seconds.
+func (p *PythonPool) ReapInterval() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return min(pythonWorkerReapInterval, p.idleTimeout/2)
 }
 
 // notifyLocked wakes the first run waiting for a worker; mu is held.
@@ -775,7 +836,7 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 		st.stops[pythonStopReload]++
 		return
 	}
-	if len(p.idle[key]) >= pythonWorkerMaxIdle {
+	if len(p.idle[key]) >= p.maxIdle {
 		p.stopLocked(worker)
 		st.stops[pythonStopSurplus]++
 		return
@@ -791,7 +852,7 @@ func (p *PythonPool) reapLocked(now time.Time) {
 	for key, workers := range p.idle {
 		kept := workers[:0]
 		for _, worker := range workers {
-			if now.Sub(worker.idleSince) > pythonWorkerIdleTimeout {
+			if now.Sub(worker.idleSince) > p.idleTimeout {
 				p.stopLocked(worker)
 				p.countedLocked(worker.stats).stops[pythonStopIdle]++
 				continue

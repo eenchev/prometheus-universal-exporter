@@ -192,6 +192,19 @@ server:
   # number up to 2147483647; 0 or empty leaves them bounded only per script,
   # and empty leaves the flag out.
   pythonMaxWorkers: ""
+  # How many Python workers of each collector's script stay idle, ready for
+  # its next scrape, after a burst of concurrent scrapes
+  # (--python.max-idle-workers): each is a Python process of about 11 MB,
+  # 17 MB with lxml. 0 keeps none, and every scrape starts an interpreter. A
+  # whole number up to 2147483647; empty keeps the exporter's default, 1, and
+  # leaves the flag out.
+  pythonMaxIdleWorkers: ""
+  # How long an idle Python worker is kept unused before it is stopped
+  # (--python.idle-timeout): whole hours, minutes and seconds, at least 1s,
+  # such as "5m". Keep it longer than the Python collectors' scrape interval,
+  # or every scrape starts an interpreter. Empty keeps the exporter's
+  # default, 2m, and leaves the flag out.
+  pythonIdleTimeout: ""
   # How long a pod that is stopping waits for the probes in progress before
   # closing their connections: hours, minutes and seconds such as "30s" or
   # "1m30s". Keep it at least as long as the monitors' scrapeTimeout, or a

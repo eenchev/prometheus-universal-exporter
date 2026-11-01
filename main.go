@@ -96,6 +96,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	memoryLimitRatio := flags.Float64("runtime.memory-limit-ratio", 0, "Set the Go memory limit to this share of the container's memory limit, read from its cgroup at startup, so the Go runtime collects harder as its heap nears it and leaves the rest to the Python workers. 0, the default, leaves the Go runtime's own default; otherwise from 0.1 to 1, since below 0.1 the runtime would spend its time collecting garbage. GOMEMLIMIT in the environment wins")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	pythonMaxWorkers := flags.Int("python.max-workers", 0, "How many Python workers, of every collector together, may be alive at once, starting, running a script or idle. A run that finds none free takes the place of the idle worker unused for longest, or waits within its probe's deadline. 0, the default, leaves them bounded only per script")
+	pythonMaxIdleWorkers := flags.Int("python.max-idle-workers", transform.PythonDefaultMaxIdleWorkers, "How many Python workers of each collector's script stay idle, ready for its next run, after a burst of concurrent scrapes. Each is a Python process of 11 MB or more. 0 keeps none: a worker stops when its run ends, and every run starts an interpreter")
+	pythonIdleTimeout := flags.Duration("python.idle-timeout", transform.PythonDefaultIdleTimeout, "How long an idle Python worker is kept unused before it is stopped, at least 1s. Keep it longer than the scrape interval of the Python collectors, or each scrape starts an interpreter")
 	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk, or a grpc collector's descriptor files do")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
@@ -171,6 +173,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := transform.ValidateMaxWorkers(*pythonMaxWorkers); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := transform.ValidateMaxIdleWorkers(*pythonMaxIdleWorkers); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := transform.ValidateIdleTimeout(*pythonIdleTimeout); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -354,7 +364,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go manager.ReloadLoop(ctx)
 	exporter.ApplyMemoryLimitRatio(*memoryLimitRatio, logger)
 	transform.PythonWorkers().SetMaxWorkers(*pythonMaxWorkers)
-	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
+	transform.PythonWorkers().SetMaxIdleWorkers(*pythonMaxIdleWorkers)
+	transform.PythonWorkers().SetIdleTimeout(*pythonIdleTimeout)
+	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkers().ReapInterval())
 	// SIGHUP is caught until the process exits, not only until the first
 	// SIGTERM: a reload sidecar sending one during the shutdown would
 	// otherwise meet Go's default action and end the process at once,

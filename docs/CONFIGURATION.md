@@ -4676,7 +4676,9 @@ The exporter's memory is the Go heap — responses, decoded documents and
 series while trips are in progress, and the response cache — and the Python
 workers, each a process of its own. `--probe.max-concurrent` bounds the
 first, `--python.max-workers` and
-[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second.
+[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second, and
+`--python.max-idle-workers` and `--python.idle-timeout` how many workers are
+kept between scrapes, and for how long.
 
 `limits.max_metrics` (10000 by default) bounds a scrape's series as they are
 made, not after: every transform stops at the first series past it, and the

@@ -16,6 +16,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Fewer Python workers stay idle, for less long: after a burst of scrapes one
+  worker of each collector's script stays idle, rather than four, and an idle
+  worker stops after two minutes unused, rather than five. Each is a CPython
+  process of about 11 MB, 17 MB with lxml, so ten Python collectors keep
+  about 110 to 170 MB in idle workers rather than 440 to 680 MB. Two minutes
+  is twice a scrape interval of a minute, so a collector scraped every minute
+  or more often still keeps its worker warm. `--python.max-idle-workers` and
+  `--python.idle-timeout` bring the old behaviour back (`4` and `5m`).
 - The `go_` and `process_` resource metrics are published on the
   self-metrics endpoint by default: reading them no longer stops the world,
   because the memory statistics now come from `runtime/metrics` and the
@@ -92,6 +100,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `--python.max-idle-workers` (the chart's `server.pythonMaxIdleWorkers`),
+  `1` by default, says how many workers of each collector's script stay idle
+  after a burst of concurrent scrapes; `0` keeps none, each worker stopping
+  when its run ends. `--python.idle-timeout` (`server.pythonIdleTimeout`),
+  `2m` by default and at least `1s`, says how long an idle worker is kept
+  unused. Idle workers are checked every minute, or every half the timeout
+  when that is shorter. See
+  [Idle workers and memory](docs/PYTHON.md#how-scripts-run).
 - `--web.debug.dangerous` (the chart's `server.debugDangerous`), with
   `--web.debug=full` only, lets the debug page's playground run Python, name
   the server's files and probe a target with its own request, for writing a

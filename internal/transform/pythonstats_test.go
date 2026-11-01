@@ -334,6 +334,9 @@ func TestARunCountsInTheStatisticsItsTripCarries(t *testing.T) {
 	usePythonPool(t)
 	pool := PythonWorkers()
 	scriptWorkers(pool)
+	// The worker of the carried statistics and the collector's own are of
+	// one script, and both stay idle.
+	pool.SetMaxIdleWorkers(2)
 	c := workerCollector("gone", `metric(name="v", value=1)`)
 	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("x"), Headers: http.Header{}}
 	run := func(ctx context.Context) {
@@ -734,7 +737,7 @@ func TestThePoolCountsAsItDidWhileNoStatisticsAreRetired(t *testing.T) {
 			case choice < 17:
 				// An idle worker dies: the same one in every pool, by the
 				// script it is of and its place among that script's.
-				key, place := "", rng.IntN(pythonWorkerMaxIdle)
+				key, place := "", rng.IntN(PythonDefaultMaxIdleWorkers)
 				oracle.locked(func(idle map[string][]*pythonWorker, _, _ int) {
 					keys := model.SortedKeys(idle)
 					if len(keys) > 0 {
@@ -755,7 +758,7 @@ func TestThePoolCountsAsItDidWhileNoStatisticsAreRetired(t *testing.T) {
 				compare("an idle worker dying")
 			case choice < 18:
 				for _, pool := range pools {
-					pool.reap(base.Add(pythonWorkerIdleTimeout + time.Hour))
+					pool.reap(base.Add(PythonDefaultIdleTimeout + time.Hour))
 				}
 				compare("the idle timeout")
 			case choice < 19 && rng.IntN(2) == 0:
@@ -787,7 +790,7 @@ func TestThePoolCountsAsItDidWhileNoStatisticsAreRetired(t *testing.T) {
 				for _, pool := range pools {
 					*pool.failStart = false
 					var burst []drivenRun
-					for range pythonWorkerMaxIdle + 2 {
+					for range PythonDefaultMaxIdleWorkers + 2 {
 						given := pool.given(spec)
 						worker, _, err := pool.acquire(given)
 						if err != nil {
@@ -803,7 +806,7 @@ func TestThePoolCountsAsItDidWhileNoStatisticsAreRetired(t *testing.T) {
 						})
 					}
 				}
-				tick += pythonWorkerMaxIdle + 2
+				tick += PythonDefaultMaxIdleWorkers + 2
 				compare("a burst that leaves surplus workers")
 			}
 		}

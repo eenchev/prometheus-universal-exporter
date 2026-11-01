@@ -38,7 +38,7 @@ func ageIdleWorkers(collector string) {
 	for _, workers := range PythonWorkers().idle {
 		for _, worker := range workers {
 			if worker.collector == collector {
-				worker.idleSince = time.Now().Add(-pythonWorkerIdleTimeout - time.Minute)
+				worker.idleSince = time.Now().Add(-PythonDefaultIdleTimeout - time.Minute)
 			}
 		}
 	}

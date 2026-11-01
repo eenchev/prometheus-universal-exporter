@@ -806,8 +806,9 @@ ended the script before `limits.script_timeout` did, and the worker was
 killed), a `crash` (the interpreter died, during a run or while it sat idle),
 an `output_limit` (it answered with more than `limits.max_output_bytes`),
 `cancelled` (the scrape was abandoned mid-run), `retired` (it reached 1,000
-runs), `surplus` (more than four were idle after a burst), `idle` (unused for
-five minutes), `reload` (a reload changed or removed its script, or removed
+runs), `surplus` (`--python.max-idle-workers` of its script, one by default,
+were idle already when its run ended), `idle` (unused for longer than
+`--python.idle-timeout`, two minutes by default), `reload` (a reload changed or removed its script, or removed
 its collector) or `evicted`
 (it was idle when another script needed a worker under
 `--python.max-workers`). `retired`, `surplus`, `idle` and `reload` are routine;

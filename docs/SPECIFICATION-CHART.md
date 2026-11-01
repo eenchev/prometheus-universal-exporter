@@ -581,6 +581,8 @@ values schema:
 | `server.probeDefaultTimeout` | `--probe.default-timeout`, a Go duration of zero or more |
 | `server.probeMaxConcurrent` | `--probe.max-concurrent`, a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit; empty renders no flag |
 | `server.pythonMaxWorkers` | `--python.max-workers`, a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit; empty renders no flag |
+| `server.pythonMaxIdleWorkers` | `--python.max-idle-workers`, a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit, `0` rendered and keeping no worker idle; empty renders no flag, and anything else MUST fail rendering, its message saying that 0 keeps no worker idle |
+| `server.pythonIdleTimeout` | `--python.idle-timeout`, whole hours, minutes and seconds of at least `1s`, the exporter's least; empty renders no flag, and `0s` or anything else MUST fail rendering, in the template whether or not the schema is checked |
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
@@ -612,7 +614,7 @@ decide what a whole number is by its value, not by how a template prints it.
 
 The whole numbers the templates print themselves each have a range:
 `replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`,
-`server.pythonMaxWorkers`, and a `podDisruptionBudget.minAvailable` or
+`server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers`, and a `podDisruptionBudget.minAvailable` or
 `maxUnavailable` given as a number, from 0 to 2147483647;
 `autoscaling.minReplicas`, `maxReplicas`,
 `targetCPUUtilizationPercentage` and `targetMemoryUtilizationPercentage`
@@ -668,7 +670,7 @@ neither add a pod nor take one away; a count left out is not rendered and
 is Kubernetes' default, 25%, and with `Recreate` neither is rendered. The
 other shapes are Kubernetes' to bound.
 
-`server.probeTimeoutOffset`, `server.probeDefaultTimeout`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and `server.shutdownTimeout` MUST default to empty
+`server.probeTimeoutOffset`, `server.probeDefaultTimeout`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers`, `server.pythonIdleTimeout` and `server.shutdownTimeout` MUST default to empty
 and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
 the chart neither renders nor refuses as one-shot (§ 33.10a). The chart
@@ -1905,6 +1907,19 @@ are skipped and the text checks of the templates still run:
    - The chart's renders without the allocator are unchanged: `make helm-test`
      and the CI chart steps also render allocator mode and reject the allocator
      beside static targets and a probe monitor beside the allocator.
+46. Python idle workers (§ 33.1): the default renders neither
+   `--python.max-idle-workers` nor `--python.idle-timeout`;
+   `server.pythonMaxIdleWorkers: 0` renders `"--python.max-idle-workers=0"` and
+   `3` renders `=3`, `server.pythonIdleTimeout: 5m` renders
+   `"--python.idle-timeout=5m"` and `1s` renders `=1s`
+   (`TestChartRendersThePythonIdleWorkerFlags`). `server.pythonIdleTimeout`
+   of `0s`, `500ms` and `ten` fail rendering, `0s` with the schema skipped
+   too, naming the value; `server.pythonMaxIdleWorkers` of `-1`, `1.5` and
+   `"010"` fail, the last with the schema skipped saying that 0 keeps no
+   worker idle; and `extraArgs` entries of either flag fail naming the value
+   to set instead (`TestChartRefusesPythonIdleWorkerValuesOutOfRange`). The
+   whole-number tests hold `server.pythonMaxIdleWorkers` to the count range
+   and pattern, and render it written as `2e6`, as the other count flags.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

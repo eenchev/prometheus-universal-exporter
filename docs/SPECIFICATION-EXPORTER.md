@@ -5679,11 +5679,23 @@ typical script.
   its error, since a C library out of memory can end the interpreter rather
   than raise `MemoryError`. `0`, the default, MUST leave the workers
   bounded only per pool; a negative value MUST be a command-line error.
-- A healthy worker MUST be reused at most 1000 times; at most four idle workers
-  MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
-  Idle workers MUST be checked against that timeout on a timer, every minute,
-  and not only when a worker is next asked for, so a collector that is no
-  longer scraped does not keep its interpreters.
+- A healthy worker MUST be reused at most 1000 times; at most
+  `--python.max-idle-workers` idle workers, 1 by default, MUST be kept per
+  pool, a worker whose run ends with that many idle already being stopped with
+  the reason `surplus`, and an idle worker unused for longer than
+  `--python.idle-timeout`, 2 minutes by default, MUST be stopped with the
+  reason `idle`. `--python.max-idle-workers=0` MUST keep no worker idle, each
+  stopping when its run ends, and MUST NOT limit how many runs of a script run
+  at once; a worker so stopped MUST free its place under
+  `--python.max-workers` for a run waiting for one. A negative
+  `--python.max-idle-workers` and an `--python.idle-timeout` under 1 second
+  MUST be command-line errors (exit 2); neither has an upper bound. The
+  default timeout is twice a scrape interval of a minute, so a collector
+  scraped every minute or more often keeps its worker warm through a late or
+  a missed scrape. Idle workers MUST be checked against the timeout on a
+  timer, every minute or every half the timeout when that is shorter, and not
+  only when a worker is next asked for, so a collector that is no longer
+  scraped does not keep its interpreters.
 - A reload that removes or changes a collector's script MUST stop that script's
   idle workers at once and each busy one when its run finishes, counting them
   with the stop reason `reload`; workers of scripts the reload keeps MUST be
@@ -10046,6 +10058,8 @@ Provide clear CLI flags, for example:
 --probe.default-timeout=30s
 --probe.max-concurrent=0
 --python.max-workers=0
+--python.max-idle-workers=1
+--python.idle-timeout=2m
 --runtime.memory-limit-ratio=0
 --web.enable-lifecycle
 --web.debug=off
@@ -29632,6 +29646,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestNothingButTestsReadsMemStats` (test/repository): no Go file outside
   `_test.go` files, `internal/testutil`, `vendor` and `testdata` calls
   `ReadMemStats`.
+
+## 34.248 Python idle workers: --python.max-idle-workers and --python.idle-timeout
+
+- `TestPythonPoolKeepsAtMostTheMaxIdleWorkersOfAScript`: after a burst of five runs of one script at once, each in a worker started for it, a pool keeps 1 idle by default, none at `0`, 1 at `1`, 3 at `3` and all five at `8`, the rest stopped as `surplus`, and a second script keeps as many of its own; `ValidateMaxIdleWorkers` refuses `-1` and takes `0` and `1000`.
+- `TestPythonWorkersKeptNoneIdleStillFreeTheirPlace`: under `--python.max-workers=1` with no worker kept idle, a run of another script waiting for a place gets the one the first run's worker leaves when it stops at its run's end; both workers are counted as `surplus`, none as `evicted`, and none is left idle.
+- `TestAScriptRunsWithNoWorkerKeptIdle`: with `0`, two runs of a script through `executePython` succeed, each in a worker started for it and stopped as `surplus`, none left idle.
+- `TestPythonIdleWorkersStopAfterTheIdleTimeout` (testing/synctest): the timer alone stops an idle worker as `idle` once it is unused for longer than the timeout and not before: kept at 2m and stopped by 3m by default, checked every minute; at 30s checked every 15s, kept at 30s and stopped by 45s; at 10m checked every minute, stopped by 11m; at 1s checked every 500ms, stopped by 1.5s. `ValidateIdleTimeout` refuses `0`, `-1s` and `999ms` and takes `1s`, the default and `24h`.
+- `TestTheDefaultIdleTimeoutKeepsAWorkerOfAScrapeEveryMinuteWarm` (testing/synctest): with the defaults, ten minutes of runs every 15s, 1m and 90s start one worker; runs every 5m start three.
+- `TestOutOfRangeLimitsAreCommandLineErrors` (root package, changed): `--python.max-idle-workers=-1` and `--python.idle-timeout` of `999ms`, `0s` and `-1m` exit 2 with their messages, with and without `--dry-run`.
+- `TestPythonWorkersThatDiedIdleAreReplaced`, `TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt`, `TestPythonWorkersAreCappedProcessWide` and `TestARunCountsInTheStatisticsItsTripCarries` (changed): each sets the idle workers it needs kept, which the default of 1 no longer keeps.
 
 # 35. Documentation requirements
 

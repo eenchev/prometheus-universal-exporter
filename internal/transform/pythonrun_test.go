@@ -290,7 +290,7 @@ metrics.append({"name": "n", "value": 2, "help": None, "type": None, "labels": N
 }
 
 // leaveIdleWorkers runs n scripts of the collector at once, which leaves n
-// workers idle, and returns them.
+// workers idle in a pool that keeps n idle, and returns them.
 //
 // The runs are at once because each is held where it starts its worker
 // until all n are there, and so has found no worker of another's to take.
@@ -299,6 +299,7 @@ metrics.append({"name": "n", "value": 2, "help": None, "type": None, "labels": N
 func leaveIdleWorkers(t *testing.T, c *model.Collector, n int) []*pythonWorker {
 	t.Helper()
 	pool := PythonWorkers()
+	pool.SetMaxIdleWorkers(n)
 	start := pool.start
 	var starting atomic.Int32
 	together := make(chan struct{})

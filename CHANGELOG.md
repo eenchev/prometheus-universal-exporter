@@ -234,6 +234,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   as a `statement: >-` written over several lines, over the lines its file
   writes it on, where it was folded into one long line that ran off the
   right of the editor.
+- A debug report's request lines, on `/probe?debug=true` and the debug page,
+  show the values of the query parameters the collector's configuration
+  sets as its file writes them, where every value was `<redacted>`: a
+  `graphite` collector's `target`, `from`, `until` and `format=json`, an
+  `http` collector's `request.query` values without placeholders and a
+  `kubernetes` listing's `limit` and selectors. A value a probe parameter,
+  a placeholder or a `${NAME}` reference gives, the target's own query and
+  any parameter whose name reads as a credential's stay masked, as every
+  query value of an error, which a probe's caller is told, does.
 
 ## exporter 1.8.0
 

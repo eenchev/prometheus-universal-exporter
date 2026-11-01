@@ -29670,6 +29670,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestASQLLabelEscapesTheDatabase`: a sql collector of the database `my app_{{param_tenant}}` is labelled `sqlserver://db.example:1433/my%20app_{{param_tenant}}`.
 - `TestALocalfileRequestLineIsAnEscapedFileURL`: a configured localfile collector under `…/Claude outputs` run on `my app.prom` from the debug page lists its request as `READ file://…/Claude%20outputs/my%20app.prom`, and its report and a debug probe's report have that line.
 - `TestTheDebugPageShowsFoldedBlocksAsWritten`: `/debug/collector?name=pg_databases` and `/debug?collector=pg_databases` show a `statement: >-` written over two lines as `>-` over those two lines, a metric's `description: >` with a blank and a more indented line keeps both, and a `description: |` its lines; no stand-in is left in it, and the YAML read again as a collector, the withheld line left out, has the file's statement and descriptions.
+- `TestARequestLineShowsTheConfiguredQueryValuesAlone`: with `tenant=a b`, `api_key`, `x`, `y` and `z=%ZZ` configured, `https://user:pw@h/p?tenant=a+b&api_key=1&own=2&x=1;y=2&z=%ZZ&tenant=c#frag` is shown `https://redacted:redacted@h/p?tenant=a+b&api_key=<redacted>&own=<redacted>&x=<redacted>;y=<redacted>&z=<redacted>&tenant=<redacted>`, and with nothing configured as `MaskQueryValues` shows it.
+- `TestADebugReportShowsAGraphiteCollectorsOwnQuery`: a graphite request line shows `format=json`, `from=-15min`, `until=now` and the expression without a placeholder, and masks the target's own `own=1`, the expression a probe parameter filled in, a `from` the probe gives and one written `${GRAPHITE_FROM}`.
+- `TestADebugReportShowsAKubernetesListingsOwnQuery`: a listing's request line shows `limit=50` and the selectors the collector writes and masks `continue`, and a selector the collector does not write.
+- `TestADebugReportShowsTheQueryValuesTheConfigurationSets`: a configured http collector with `request.query` `tenant: acme`, `api_key: s3cret`, `t: "{{param_t}}"` and `region: ${PUE_TEST_REGION}` loaded with `--config.expand-env`, run from the debug page on a target with `?own=1`, lists its request with `tenant=acme` and `own`, `api_key`, `t` and `region` `<redacted>`, as its report and a debug probe's report do; a failed probe's caller is still told `tenant=<redacted>`.
+- `TestADebugProbeReportsTheTrip`, `TestACutShowsNothingTheReportWithholds` and `TestTheReportsOfTheExamplesAreWrittenAsTheyWere` (changed): the collector's own `view=full` is shown, the token still masked, and the oracle masks as `fetch.RedactRequestURL` does with the collector's `fetch.ConfiguredQuery`.
 
 # 35. Documentation requirements
 
@@ -33337,7 +33342,19 @@ the values of request or response headers whose names read as a credential's
 by the rule below: they contain, in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
 `session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
-`pass` as a whole word.
+`pass` as a whole word. One exception: a request line MUST show the value
+of a query pair that the configuration of the collector that made the
+request sets as its file writes it — a `request.query` value without a
+placeholder, a `graphite` collector's expressions without placeholders, its
+`from` and `until` (their defaults when it writes none) and `format=json`, a
+`kubernetes` listing's `limit` and the selectors it writes — when the
+pair's name does not read as a credential's and no `;` is between the `&`
+before it and the one after it, its name and value compared with their
+escapes decoded. A value a probe parameter or a placeholder gave, one a
+`${NAME}` reference expanded to, the target's own query, a static target's
+own request keys and the API server's `continue` token MUST stay masked,
+and so MUST every query value of an error, which a probe's caller is told
+as well.
 
 With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request
@@ -33355,7 +33372,8 @@ together with `targets`, `400`.
 Every place a URL, a header or text from a target is shown — a displayed
 target, a metric label, a debug report, a logged body excerpt — MUST withhold
 credentials by the same rules, kept in one place: userinfo is never shown; a
-metric label drops the query, a debug report masks its values, and a
+metric label drops the query, a debug report masks its values (but those
+of the collector's configuration, above), and a
 displayed target — in a log line, the static targets endpoint's `target`
 label and the OTLP `target` attribute — masks the values of the parameters
 whose names read as credentials, and keeps the rest, in order, so targets

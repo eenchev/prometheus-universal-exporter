@@ -769,6 +769,10 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 			b.WriteString("  none sent\n")
 		}
 	}
+	// The values of the query pairs the configuration of the collector that
+	// made the requests set are shown, every other masked
+	// (fetch.ConfiguredQuery).
+	configured := fetch.ConfiguredQuery(p.slotOf())
 	for i, req := range requests {
 		via := ""
 		if req.Page > 0 {
@@ -786,7 +790,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		} else {
 			outcome += " in " + req.Duration.Round(time.Millisecond).String()
 		}
-		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit), via, outcome)
+		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, shownStart(fetch.RedactRequestURL(req.URL, configured), debugURLLimit), via, outcome)
 		writeHeaders(&b, req.Header, "     ")
 		if len(req.Withheld) > 0 {
 			// The names only: the values were not sent, and are not shown.

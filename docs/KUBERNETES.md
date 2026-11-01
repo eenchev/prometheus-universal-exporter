@@ -373,7 +373,8 @@ collector's. A collector has no target to refuse, so no
 `http_exporter_targets_refused_total` series.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows each page's
-request, `GET` and its URL with the query's values masked, the token
+request, `GET` and its URL with the `continue` token masked and the
+`limit` and the selectors shown, the bearer token
 masked, and the status it was answered with, a page over the response
 limit with its size and the limit after the status and followed by the
 same page's request with half the size, and then the document.

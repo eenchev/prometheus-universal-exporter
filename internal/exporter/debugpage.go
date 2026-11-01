@@ -297,9 +297,10 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	t, p := report.trace, report.probe
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	configured := fetch.ConfiguredQuery(p.slotOf())
 	for _, req := range t.requests.Requests() {
 		shown := debugShownRequest{
-			Method: req.Method, URL: shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit),
+			Method: req.Method, URL: shownStart(fetch.RedactRequestURL(req.URL, configured), debugURLLimit),
 			Page: req.Page, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
 			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy, Wait: req.Wait,
 		}

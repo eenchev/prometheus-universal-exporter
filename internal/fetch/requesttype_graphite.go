@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -119,6 +120,7 @@ func init() {
 		TargetHint:         func(*model.Collector) (string, string) { return "Graphite URL", "https://graphite:8080" },
 		AnswerHint:         "Paste what the render API answers: its JSON body, with its Content-Type, status and headers",
 		Query:              graphiteQuery,
+		ShownQuery:         graphiteShownQuery,
 		CheckTargetRequest: checkGraphiteTargetRequest,
 		// The files of a login and of a target's own tls block; the
 		// tokens request.login keeps, and its counts (login.go).
@@ -297,6 +299,31 @@ func graphiteQuery(c *model.Collector, overrides RequestOverrides) (url.Values, 
 		until = strings.TrimSpace(overrides.Until)
 	}
 	return url.Values{"target": targets, "from": {from}, "until": {until}, "format": {"json"}}, nil
+}
+
+// graphiteShownQuery says which pairs of graphiteQuery a debug report shows
+// the values of (ConfiguredQuery): format=json, the exporter's own, and the
+// collector's expressions without placeholders and its window as its file
+// writes them, from and until the defaults when it writes none. A window a
+// probe parameter or a static target gives, and an expression a placeholder
+// was filled in, are not the collector's, and stay masked.
+func graphiteShownQuery(c *model.Collector, name, value string) bool {
+	own := graphiteRequest(c)
+	switch name {
+	case "format":
+		return value == "json"
+	case "from":
+		return value == own.From && writtenAsSent(c, value, "from")
+	case "until":
+		return value == own.Until && writtenAsSent(c, value, "until")
+	case "target":
+		for i, expression := range own.Targets {
+			if expression == value && !HasPathParams(expression) && writtenAsSent(c, value, "targets", strconv.Itoa(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // withoutPlaceholders stands a plain value in for each {{param_...}}

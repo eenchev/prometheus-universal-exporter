@@ -5747,7 +5747,7 @@ Took 184ms. A probe would have answered 502: metric queue_len failed: ...
 A debug probe skips the response cache, shares no trip, records no self-metric but http_exporter_debug_runs_total and exports nothing over OTLP.
 
 Requests
-  1. GET https://api.example.com/v1/status?tenant=<redacted> -> 200 OK in 162ms
+  1. GET https://api.example.com/v1/status?tenant=<redacted>&view=full -> 200 OK in 162ms
      Accept: application/json
      Authorization: <redacted>
 
@@ -5920,10 +5920,20 @@ Below `--web.debug=full`, `debug=true` is answered `403`, before the target
 is contacted. When `web.basic_auth` is configured, a debug probe needs the
 same credentials as a probe. The report, and the page's JSON alike, redacts:
 
-- every query value, in the requests listed and in the errors that quote a
-  URL alike. The query is otherwise shown as it was sent: each pair where it
-  stood and as it was written, a pair with a `;` or a malformed escape
-  included ([how a query is masked](LOGGING.md#repeated-failures));
+- every query value in the errors that quote a URL, and in the requests
+  listed every one but those the collector's configuration sets as its file
+  writes them: a value of `request.query` without a placeholder, as `view=full`
+  above, a `graphite` collector's expressions without placeholders, `from`,
+  `until` and `format=json`, and a `kubernetes` listing's `limit` and
+  selectors. A value a probe parameter or a placeholder gives, as
+  `tenant={{param_tenant}}` above, one a `${NAME}` reference expanded to,
+  which is the environment's, the target's own query, a static target's
+  own keys, the API server's `continue` token and the value of any parameter
+  whose name reads as a credential's (below) stay masked, and so does a
+  pair next to a `;`, which a server may split. The query is otherwise
+  shown as it was sent: each pair where it stood and as it was written, a
+  pair with a `;` or a malformed escape included
+  ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
   credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): any

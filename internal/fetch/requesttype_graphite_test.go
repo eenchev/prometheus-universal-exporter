@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // A graphite collector's placeholders are in its targets.
@@ -382,5 +383,39 @@ func TestGraphiteRetriesTheStatusesRetryStatusesLists(t *testing.T) {
 		if err != nil || hits != want {
 			t.Errorf("a %d answer was sent %d times, want %d: %v", status, hits, want, err)
 		}
+	}
+}
+
+// A debug report shows the values of the query pairs a graphite collector
+// sets from its configuration as its file writes it (ConfiguredQuery):
+// format=json, the expressions without placeholders and the window, the
+// defaults among it; a window a probe parameter gives, an expression a
+// placeholder was filled in, a window a ${NAME} reference expanded to and
+// the target's own query stay masked.
+func TestADebugReportShowsAGraphiteCollectorsOwnQuery(t *testing.T) {
+	c := graphiteCollector("app.*.requests.count", "app.{{param_host}}.cpu")
+	if err := ValidateRequest(&c); err != nil {
+		t.Fatal(err)
+	}
+	overrides := RequestOverrides{Params: map[string]string{"param_host": "web1"}}
+	u := graphiteURL(t, &c, overrides)
+	u.RawQuery = "own=1&" + u.RawQuery
+	got := RedactRequestURL(u.String(), ConfiguredQuery(&c))
+	if want := "http://graphite.example:8080/render?own=<redacted>&format=json&from=-15min&target=app.%2A.requests.count&target=<redacted>&until=now"; got != want {
+		t.Errorf("shown\n%s\nwant\n%s", got, want)
+	}
+	overrides.From = "-2h"
+	if got := RedactRequestURL(graphiteURL(t, &c, overrides).String(), ConfiguredQuery(&c)); !strings.Contains(got, "from=<redacted>") || !strings.Contains(got, "until=now") {
+		t.Errorf("a window of the probe's is shown: %s", got)
+	}
+	// Written from: ${GRAPHITE_FROM}, which expanded to -5min.
+	editGraphite(&c, func(g *GraphiteConfig) { g.From = "-5min" })
+	c.Written = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Value: "request"}, {Kind: yaml.MappingNode, Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Value: "from"}, {Kind: yaml.ScalarNode, Value: "${GRAPHITE_FROM}"},
+		}},
+	}}
+	if got := RedactRequestURL(graphiteURL(t, &c, RequestOverrides{Params: overrides.Params}).String(), ConfiguredQuery(&c)); !strings.Contains(got, "from=<redacted>") || !strings.Contains(got, "target=app.%2A.requests.count") {
+		t.Errorf("a window the environment gave is shown: %s", got)
 	}
 }

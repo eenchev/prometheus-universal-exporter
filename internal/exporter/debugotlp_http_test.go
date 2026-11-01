@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -438,6 +439,88 @@ func postOTLPTest(t *testing.T, server *Server, signal string, code int) debugOT
 		t.Fatalf("%v: %s", err, recorder.Body)
 	}
 	return answer
+}
+
+// The request bodies are shown by the page's JSON viewer (jsonView): a tree
+// whose objects and arrays fold behind a button that says whether it is
+// open, made lazily, down to jsonOpenDepth at first, coloured by the
+// theme's token colours in both themes, with Expand all and Collapse all
+// beside Copy, which copies the body's text; every value goes in as text.
+func TestTheOTLPTabsBodiesAreAJSONViewer(t *testing.T) {
+	server := otlpDebugServer(t, "http://127.0.0.1:1/v1/metrics", func(c *model.OTLPConfig) { c.Logs.Enabled = true })
+	page := getPage(t, server, "/debug")
+	for _, body := range []struct{ id, copy string }{{"otlp-body", "otlp-body-copy"}, {"otlp-logs-body", "otlp-logs-copy"}} {
+		requireContains(t, page,
+			`<button type="button" class="secondary" id="`+body.copy+`">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="`+body.id+`">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="`+body.id+`">Collapse all</button>`,
+			`<div class="json-view" id="`+body.id+`"></div>`)
+	}
+	if strings.Contains(page, `<pre class="otlp-body"`) {
+		t.Error("a body is still a <pre>")
+	}
+	requireContains(t, page,
+		`.json-view { margin-top: 8px; padding: 10px 10px 10px 4px; max-height: 520px; overflow: auto;`,
+		`overflow-wrap: anywhere; }`,
+		`.json-view .jv-closed > .jv-kids, .json-view .jv-closed > .jv-tail { display: none; }`,
+		`.json-view .jv-kids > .jv-node { content-visibility: auto;`,
+		`.json-view button.jv-toggle:focus-visible { outline: 2px solid var(--accent);`,
+		`.json-view .jv-key { color: var(--json-key); }`,
+		`.json-view .jv-string { color: var(--json-string); }`,
+		`.json-view .jv-number { color: var(--json-number); }`,
+		`.json-view .jv-boolean { color: var(--json-boolean); }`,
+		`.json-view .jv-null { color: var(--json-null); }`,
+		`.json-view .jv-punct, .json-view .jv-summary { color: var(--json-punct); }`)
+	// Each token has a colour in the light theme's rule, and its own in each
+	// of the dark theme's two, the browser's preference and the picker's.
+	themes := map[string]*regexp.Regexp{
+		"light":            regexp.MustCompile(`:root \{ color-scheme: light dark; ([^}]*)\}`),
+		"dark (preferred)": regexp.MustCompile(`:root:not\(\[data-theme="light"\]\) \{ color-scheme: dark; ([^}]*)\}`),
+		"dark (chosen)":    regexp.MustCompile(`:root\[data-theme="dark"\] \{ color-scheme: dark; ([^}]*)\}`),
+	}
+	colours := map[string]map[string]string{}
+	for theme, rule := range themes {
+		m := rule.FindStringSubmatch(page)
+		if m == nil {
+			t.Fatalf("no %s rule", theme)
+		}
+		colours[theme] = map[string]string{}
+		for _, token := range []string{"key", "string", "number", "boolean", "null", "punct"} {
+			c := regexp.MustCompile(`--json-` + token + `: (#[0-9a-f]{6});`).FindStringSubmatch(m[1])
+			if c == nil {
+				t.Errorf("the %s theme has no --json-%s", theme, token)
+				continue
+			}
+			colours[theme][token] = c[1]
+		}
+	}
+	if colours["dark (preferred)"]["key"] != colours["dark (chosen)"]["key"] || colours["light"]["key"] == colours["dark (chosen)"]["key"] {
+		t.Errorf("the themes' colours %v", colours)
+	}
+	script := debugPageScript(page)
+	requireContains(t, script,
+		`const jsonOpenDepth = 4;`,
+		`typeof value === "number" ? new JSONNumber(context && typeof context.source === "string" ? context.source : String(value)) : value);`,
+		`const parts = text.split(/\n\n(?=[[{])/);`,
+		`span.textContent = text;`,
+		`toggle.type = "button";`,
+		`toggle.setAttribute("aria-label", what);`,
+		`const named = array ? undefined : [value.name, value.key].find((v) => typeof v === "string");`,
+		`(array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys"))`,
+		`jsonSet(node, depth <= jsonOpenDepth);`,
+		`if (open && !state.built) {`,
+		`state.toggle.setAttribute("aria-expanded", String(open));`,
+		`const until = performance.now() + 30;`,
+		`if (next < todo.length) requestAnimationFrame(slice);`,
+		`"This is not JSON (" + error.message + "), so it is shown as text."`,
+		`pre.textContent = text;`,
+		`button.addEventListener("click", () => jsonAll($(button.getAttribute("aria-controls")), button.dataset.jsonAll === "open"));`,
+		`await navigator.clipboard.writeText(jsonTexts.get($(source)) || "");`,
+		`jsonView($("otlp-body"), otlp.body);`,
+		`jsonView($("otlp-logs-body"), logs.body);`)
+	for _, never := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "new Function"} {
+		if strings.Contains(script, never) {
+			t.Errorf("the script has %s", never)
+		}
+	}
 }
 
 // The endpoint test sends one empty export with the export's headers and

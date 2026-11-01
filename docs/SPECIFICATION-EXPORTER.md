@@ -29748,6 +29748,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheOTLPTabShowsTheRunsLogRecords`: a failing run's `debug run failed` is a record of severity 17 `ERROR` with its time, `collector` and `error` attributes, exported at `info` and in the logs body; the log export then gets no line of the run nor `debug run served` (the test fails when that line is logged through the tee); at `error` a `log` rule's warning is shown not exported, `not exported: below otlp.logs.level error`.
 - `TestTheOTLPEndpointTest`: an endpoint answering `200` with a `partialSuccess` message is `ok` with it, its `Authorization` sent and shown withheld and the empty body sent; a `429` is one request and an outcome that would retry; a `401` refused; a slow endpoint past `otlp.timeout` a client timeout; an HTTPS endpoint with an unknown CA a certificate error; none of them changes the export's counts or history.
 - `TestTheOTLPEndpointTestOfTheLogsEndpoint`: `signal: logs` sends `{"resourceLogs":[]}` to `/v1/logs` alone.
+- `TestTheOTLPTabsBodiesAreAJSONViewer`: both bodies are a `json-view` box, not a `<pre>`, with *Copy*, *Expand all* and *Collapse all* in one row, the buttons naming the box by `aria-controls`; the box scrolls past 520px and wraps anywhere; the light theme's rule and both dark rules give each of `--json-key`, `--json-string`, `--json-number`, `--json-boolean`, `--json-null` and `--json-punct` a colour, the dark ones the same in both and different from the light; the script has the viewer (the reviver keeping a number's source, the split of several requests, the button toggle with `aria-expanded`, the folded summary and its `name`/`key` hint, the opening depth of 4, children made on first opening, *Expand all* in 30 ms slices, one a frame, the not-JSON fallback), Copy copies the text the box was given, and the script writes no HTML and evaluates no code.
 - `TestTheOTLPEndpointTestIsGuarded`: `403` at `edit`, without `X-Debug-Run` and from another site, `409` for logs with the log export off and with OTLP off, `400` for another signal, `405` for `GET`, `429` while a test is in progress, and no request sent by any of them.
 
 # 35. Documentation requirements
@@ -33916,7 +33917,21 @@ resource, the scope, the points as a table that sorts by a column's
 header and keeps the rows that hold a filter's text, a badge on a row with
 notes that opens to them by click or keyboard, the points left out, and
 the body folded away with a *Copy* button, every text put in as text,
-never as HTML. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
+never as HTML. The page MUST show a body, the metrics' and the logs', as a
+tree when it is JSON — a tree for each of several requests, one blank line
+between them — and as text, saying it is not JSON, when it is not: each
+object and array a node that folds behind a button reached by click or
+keyboard that says whether it is open (`aria-expanded`), showing when
+folded how many keys or items it has and its `name` or `key` where it has
+one of them as a string; keys, strings, numbers, booleans, `null` and
+punctuation each in a colour of the theme, readable in light and in dark;
+a number as the body writes it; nodes open down to four levels below the
+top and folded below; *Expand all* and *Collapse all* beside *Copy*, the
+latter folding every node but the top. A node's children MUST be made
+when it is first opened, and *Expand all* MUST make them in slices that
+leave the page responsive. *Copy* MUST copy the body's indented text, as
+the answer has it. A long string MUST wrap within the panel, which keeps
+its height and scrolls. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
 log lines as the records the log export makes of them, by the log
 export's own conversion — `time`, `severity_number`, `severity_text`,
 `body`, `attributes`, flattened and each key once, and `exported`, false

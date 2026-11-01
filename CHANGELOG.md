@@ -108,7 +108,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `otlp.enabled`: what the next export would send of a run's series, made by
   the export's own code — the resource, the scope, each data point with its
   OTLP name, kind, unit, attributes, value and what was changed of it, the
-  points left out and why, and the request's JSON — and with `otlp.logs` the
+  points left out and why, and the request's JSON as a tree that folds,
+  coloured, with *Expand all* and *Collapse all* — and with `otlp.logs` the
   run's log lines as log records. Nothing of a run is exported. At
   `--web.debug=full` it tests the endpoint with one empty export, sent once
   with the export's headers, TLS, compression and timeout

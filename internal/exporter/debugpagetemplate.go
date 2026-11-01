@@ -176,7 +176,30 @@ ul.otlp-notes { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; color: v
 .otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .otlp-test button { margin: 0; }
 .otlp-test button:disabled { opacity: 0.5; cursor: not-allowed; }
-pre.otlp-body { max-height: 520px; white-space: pre; overflow-wrap: normal; }
+/* The JSON viewer (jsonView): a line for each key or item, indented by
+   its node, with the node's fold button in the gutter before it, so keys
+   and items line up whether they fold or not. A long string wraps within
+   the panel, which scrolls past its height. */
+.json-view { margin-top: 8px; padding: 10px 10px 10px 4px; max-height: 520px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.json-view .jv-line { position: relative; padding-left: 1.6em; }
+.json-view .jv-kids { margin-left: 2ch; }
+.json-view .jv-kids > .jv-node { content-visibility: auto; contain-intrinsic-size: auto 18px; }
+.json-view button.jv-toggle { position: absolute; left: 0; top: 0; width: 1.5em; height: 1.5em; padding: 0; margin: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font: inherit; line-height: 1.5; cursor: pointer; }
+.json-view button.jv-toggle:hover { color: var(--accent); }
+.json-view button.jv-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.json-view .jv-closed > .jv-kids, .json-view .jv-closed > .jv-tail { display: none; }
+.json-view .jv-node:not(.jv-closed) > .jv-line > .jv-fold { display: none; }
+.json-view .jv-fold { cursor: pointer; }
+.json-view .jv-key { color: var(--json-key); }
+.json-view .jv-string { color: var(--json-string); }
+.json-view .jv-number { color: var(--json-number); }
+.json-view .jv-boolean { color: var(--json-boolean); }
+.json-view .jv-null { color: var(--json-null); }
+.json-view .jv-punct, .json-view .jv-summary { color: var(--json-punct); }
+.json-view .jv-hint { color: var(--fg); }
+.json-view .jv-doc + .jv-doc { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.json-view pre.jv-plain { padding: 0 0 0 6px; max-height: none; border: 0; overflow: visible; }
+.json-view p.note { margin: 0 0 6px 6px; }
 table.series details { margin: 0; }
 table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600; color: var(--accent); }
 .lint-advice { margin: 4px 0 0; font-size: 12px; white-space: normal; }
@@ -383,8 +406,8 @@ p.danger strong { color: var(--bad); }
 </div>
 <details id="otlp-body-part">
 <summary>Request body (ExportMetricsServiceRequest)</summary>
-<div class="copy-row"><button type="button" class="secondary" id="otlp-body-copy">Copy</button><span class="copy-done" id="otlp-body-copied"></span></div>
-<pre class="otlp-body" id="otlp-body"></pre>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-body-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-body">Collapse all</button><span class="copy-done" id="otlp-body-copied"></span></div>
+<div class="json-view" id="otlp-body"></div>
 </details>
 {{- if .OTLPLogs}}
 <div id="otlp-logs-part" hidden>
@@ -394,8 +417,8 @@ p.danger strong { color: var(--bad); }
 <div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
 <details id="otlp-logs-body-part">
 <summary>Request body (ExportLogsServiceRequest)</summary>
-<div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><span class="copy-done" id="otlp-logs-copied"></span></div>
-<pre class="otlp-body" id="otlp-logs-body"></pre>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-logs-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-logs-body">Collapse all</button><span class="copy-done" id="otlp-logs-copied"></span></div>
+<div class="json-view" id="otlp-logs-body"></div>
 </details>
 </div>
 {{- end}}
@@ -1394,6 +1417,163 @@ function drawRows() {
 }
 $("series-filter").addEventListener("input", drawRows);
 $("series-metric").addEventListener("change", drawRows);
+// jsonView shows text, which is JSON, in box as a tree: each object and
+// array a node that folds behind a button in the gutter, which says whether
+// it is open (aria-expanded), and which shows, folded, how many keys or
+// items it has and the value of its "name" or "key", so a folded OTLP
+// attribute still says which it is. Keys, strings, numbers, booleans, null
+// and punctuation each have a class of their own, coloured by the theme.
+// Every value is put in with textContent alone: they are the target's data,
+// label values and log lines among them. A node's children are made when it
+// is first opened, so a body of thousands of points costs what is shown:
+// at first the nodes down to jsonOpenDepth below the top. A number is the
+// text the body has of it, where the browser hands the reviver its source,
+// so a large integer is not rounded to a double's. Several documents, one
+// blank line between them, as the log export's requests are, are a tree
+// each; text that is not JSON is shown as it is, and the box says so. Copy
+// copies the text the box was given (jsonTexts), not what the tree shows.
+const jsonOpenDepth = 4;
+const jsonTexts = new WeakMap(), jsonNodes = new WeakMap();
+class JSONNumber { constructor(text) { this.text = text; } }
+const parseJSON = (text) => JSON.parse(text, (key, value, context) =>
+  typeof value === "number" ? new JSONNumber(context && typeof context.source === "string" ? context.source : String(value)) : value);
+function jsonDocuments(text) {
+  try {
+    return [parseJSON(text)];
+  } catch (error) {
+    const parts = text.split(/\n\n(?=[[{])/);
+    if (parts.length < 2) throw error;
+    return parts.map(parseJSON);
+  }
+}
+function jsonSpan(className, text) {
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+function jsonLeaf(value) {
+  if (value instanceof JSONNumber) return jsonSpan("jv-number", value.text);
+  if (typeof value === "string") return jsonSpan("jv-string", JSON.stringify(value));
+  if (typeof value === "boolean") return jsonSpan("jv-boolean", String(value));
+  return jsonSpan("jv-null", "null");
+}
+function jsonNode(key, value, depth, last) {
+  const head = document.createElement("div");
+  head.className = "jv-line";
+  if (key !== null) head.append(jsonSpan("jv-key", JSON.stringify(key)), jsonSpan("jv-punct", ": "));
+  const comma = () => last ? [] : [jsonSpan("jv-punct", ",")];
+  if (value === null || typeof value !== "object" || value instanceof JSONNumber) {
+    head.append(jsonLeaf(value), ...comma());
+    return head;
+  }
+  const array = Array.isArray(value);
+  const entries = array ? value.map((item) => [null, item]) : Object.entries(value);
+  const [open, close] = array ? ["[", "]"] : ["{", "}"];
+  if (entries.length === 0) {
+    head.append(jsonSpan("jv-punct", open + close), ...comma());
+    return head;
+  }
+  const node = document.createElement("div");
+  node.className = "jv-node";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "jv-toggle";
+  const named = array ? undefined : [value.name, value.key].find((v) => typeof v === "string");
+  const what = (key !== null ? key : array ? "array" : "object") + (named !== undefined ? " " + named : "");
+  toggle.setAttribute("aria-label", what);
+  const fold = jsonSpan("jv-fold", "");
+  fold.append(jsonSpan("jv-punct", "…" + close), ...comma(),
+    jsonSpan("jv-summary", " " + entries.length + (array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys")) + (named !== undefined ? " · " : "")));
+  if (named !== undefined) fold.append(jsonSpan("jv-hint", named));
+  head.prepend(toggle);
+  head.append(jsonSpan("jv-punct", open), fold);
+  const kids = document.createElement("div");
+  kids.className = "jv-kids";
+  const tail = document.createElement("div");
+  tail.className = "jv-line jv-tail";
+  tail.append(jsonSpan("jv-punct", close), ...comma());
+  node.append(head, kids, tail);
+  jsonNodes.set(node, { entries, depth, kids, toggle, built: false });
+  jsonSet(node, depth <= jsonOpenDepth);
+  return node;
+}
+function jsonSet(node, open) {
+  const state = jsonNodes.get(node);
+  if (open && !state.built) {
+    state.built = true;
+    state.kids.append(...state.entries.map(([key, value], i) => jsonNode(key, value, state.depth + 1, i === state.entries.length - 1)));
+  }
+  node.classList.toggle("jv-closed", !open);
+  state.toggle.textContent = open ? "▾" : "▸";
+  state.toggle.setAttribute("aria-expanded", String(open));
+}
+// jsonAll opens every node of box, making each, or folds every node but the
+// top ones, which keep their keys in sight. Opening goes down a level at a
+// time, the top first, in slices of 30 ms, one a frame, between which the
+// page answers clicks and draws, as a body of thousands of points has tens
+// of thousands of nodes; a later jsonAll, a click on a node, or a new body
+// stops it (jsonRuns).
+const jsonRuns = new WeakMap();
+function jsonAll(box, open) {
+  const pass = {};
+  jsonRuns.set(box, pass);
+  if (!open) {
+    for (const node of box.querySelectorAll(".jv-node")) jsonSet(node, jsonNodes.get(node).depth === 0);
+    return;
+  }
+  const todo = [...box.querySelectorAll(".jv-doc > .jv-node")];
+  let next = 0;
+  const slice = () => {
+    if (jsonRuns.get(box) !== pass) return;
+    const until = performance.now() + 30;
+    while (next < todo.length && performance.now() < until) {
+      const node = todo[next++];
+      jsonSet(node, true);
+      for (const child of jsonNodes.get(node).kids.children) if (child.classList.contains("jv-node")) todo.push(child);
+    }
+    if (next < todo.length) requestAnimationFrame(slice);
+  };
+  slice();
+}
+function jsonView(box, text) {
+  if (!jsonTexts.has(box)) {
+    box.addEventListener("click", (event) => {
+      const at = event.target.closest(".jv-toggle, .jv-fold");
+      if (!at) return;
+      const node = at.closest(".jv-node");
+      jsonRuns.delete(box);
+      jsonSet(node, node.classList.contains("jv-closed"));
+    });
+  }
+  jsonTexts.set(box, text);
+  jsonRuns.delete(box);
+  const buttons = document.querySelectorAll('[data-json-all][aria-controls="' + box.id + '"]');
+  let documents;
+  try {
+    documents = jsonDocuments(text);
+  } catch (error) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "This is not JSON (" + error.message + "), so it is shown as text.";
+    const pre = document.createElement("pre");
+    pre.className = "jv-plain";
+    pre.textContent = text;
+    box.replaceChildren(note, pre);
+    for (const button of buttons) button.disabled = true;
+    return;
+  }
+  for (const button of buttons) button.disabled = false;
+  box.replaceChildren(...documents.map((value) => {
+    const doc = document.createElement("div");
+    doc.className = "jv-doc";
+    doc.append(jsonNode(null, value, 0, true));
+    return doc;
+  }));
+}
+for (const button of document.querySelectorAll("[data-json-all]")) {
+  button.addEventListener("click", () => jsonAll($(button.getAttribute("aria-controls")), button.dataset.jsonAll === "open"));
+}
 // The OTLP tab (debugotlp.go): what the next export would send of the
 // run's series, as the server made it with the export's own code. Every
 // value is put in with textContent alone. The table of data points sorts by
@@ -1476,7 +1656,7 @@ if ($("series-otlp-part")) {
   $("otlp-filter").addEventListener("input", drawOTLPRows);
   const copyButton = (button, source, done) => button.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText($(source).textContent);
+      await navigator.clipboard.writeText(jsonTexts.get($(source)) || "");
       $(done).textContent = "Copied.";
     } catch (error) {
       $(done).textContent = "The browser did not let the page copy it; select the text below.";
@@ -1514,7 +1694,7 @@ function showOTLP(otlp, ran) {
   listOf($("otlp-left"), left.map((p) => "\u26a0 " + p.prometheus + " as " + p.name + " (" + p.kind + ")" + (p.attributes ? " {" + attributeText(p.attributes) + "}" : "") + ": " + p.reason));
   $("otlp-clashes").hidden = clashes.length === 0;
   $("otlp-clashes").textContent = clashes.join("\n");
-  $("otlp-body").textContent = otlp.body;
+  jsonView($("otlp-body"), otlp.body);
   if ($("otlp-logs-part")) {
     const logs = otlp.logs;
     $("otlp-logs-part").hidden = !logs;
@@ -1533,7 +1713,7 @@ function showOTLP(otlp, ran) {
         }
         return tr;
       }));
-      $("otlp-logs-body").textContent = logs.body;
+      jsonView($("otlp-logs-body"), logs.body);
     }
   }
 }

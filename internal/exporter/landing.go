@@ -42,8 +42,18 @@ ul.links { padding-left: 20px; }
 // when Dark is; color-scheme follows, so the browser's own parts of the page,
 // its scrollbars and form controls, match.
 const (
-	lightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; --danger-bg: #fef2f2;"
-	darkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; --danger-bg: #2c1517;"
+	lightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; --danger-bg: #fef2f2; " + lightJSONColours
+	darkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; --danger-bg: #2c1517; " + darkJSONColours
+)
+
+// lightJSONColours and darkJSONColours are the colours of the debug page's
+// JSON viewer (jsonView): keys, strings, numbers, booleans, null and the
+// punctuation. Each reads at 5.5:1 or more on the pages' background, panels
+// and code in its theme, and they differ in hue enough to tell a key from a
+// string and a number from a string of digits.
+const (
+	lightJSONColours = "--json-key: #1e40af; --json-string: #166534; --json-number: #9a3412; --json-boolean: #7e22ce; --json-null: #be123c; --json-punct: #5f6368;"
+	darkJSONColours  = "--json-key: #93c5fd; --json-string: #86efac; --json-number: #fdba74; --json-boolean: #d8b4fe; --json-null: #fda4af; --json-punct: #9aa0a6;"
 )
 
 // selectStyle draws the pages' dropdowns' arrow itself: the browser's own

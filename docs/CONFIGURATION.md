@@ -5677,15 +5677,27 @@ is what the export does, not a description of it:
   the export logs of them. Only the run's own points are checked against
   one another: those of other probes and static targets in the same export,
   and the exporter's own series, are not the run's.
-- **Request body**: the `ExportMetricsServiceRequest`, folded away, with
-  *Copy*, indented to be read; it is sent on one line, gzipped unless
-  `otlp.compression: none`. A cumulative point starts at its own time, as
-  at a series' first export: the export remembers when each series
-  started, which a run neither reads nor changes.
+- **Request body**: the `ExportMetricsServiceRequest`, folded away; it is
+  sent on one line, gzipped unless `otlp.compression: none`. It is shown as
+  a tree: each object and array folds behind a ▸/▾ button, which the
+  keyboard reaches too, and shows, folded, how many keys or items it has
+  and the value of its `name` or `key`, so a folded attribute still says
+  which it is. Keys, strings, numbers, booleans and `null` have colours of
+  their own in either theme. It opens four levels below the top, down to
+  each resource's attributes and the scope's metrics; *Expand all* and
+  *Collapse all* open every node or fold all but the top. A node's
+  contents are made when it is first opened, so a body of thousands of
+  points shows at once and *Expand all* goes a level at a time without
+  holding up the page. *Copy* copies the body as indented JSON, which the
+  tree is made from. A cumulative point starts at its own time, as at a
+  series' first export: the export remembers when each series started,
+  which a run neither reads nor changes.
 - **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on:
   each line the run logged as the record the log export makes of it — its
   time, severity, body and attributes — those below `otlp.logs.level`
-  marked as not exported, and the `ExportLogsServiceRequest` of the rest. A
+  marked as not exported, and the `ExportLogsServiceRequest` of the rest,
+  shown as the metrics' body is, a tree for each request when the records
+  are more than one holds. A
   probe logs a failure as `probe failed`, where a run says `debug run
   failed`, and a repeated one once and then every five minutes.
 

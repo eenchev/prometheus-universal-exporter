@@ -184,9 +184,9 @@ func writtenBlocks(x *model.Collector, folded []*yaml.Node) blockLines {
 // blockReads says whether block, written under a key, reads as value.
 func blockReads(block model.WrittenBlock, value string) bool {
 	var b strings.Builder
-	b.WriteString("v: " + block.Header + "\n")
+	fmt.Fprintf(&b, "v: %s\n", block.Header)
 	for _, line := range block.Lines {
-		b.WriteString("  " + line + "\n")
+		fmt.Fprintf(&b, "  %s\n", line)
 	}
 	var read struct{ V *string }
 	return yaml.Unmarshal([]byte(b.String()), &read) == nil && read.V != nil && *read.V == value

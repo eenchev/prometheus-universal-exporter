@@ -120,21 +120,29 @@ func TestTheHealthcheckPassesWithBasicAuthOn(t *testing.T) {
 	}
 }
 
-// A listener on every address is asked on the loopback address of its
-// family, a name or a particular address as it is.
+// A listener on every address is asked on 127.0.0.1, a name or a particular
+// address as it is, zone included; a named port is asked by its number. Each
+// URL is one a request can be made of.
 func TestTheHealthcheckURLFollowsTheListenAddress(t *testing.T) {
 	for address, want := range map[string]string{
 		":8080":               "http://127.0.0.1:8080/ready",
 		"0.0.0.0:8080":        "http://127.0.0.1:8080/ready",
-		"[::]:8080":           "http://[::1]:8080/ready",
+		"[::]:8080":           "http://127.0.0.1:8080/ready",
 		"[::ffff:0.0.0.0]:80": "http://127.0.0.1:80/ready",
 		"10.1.2.3:9115":       "http://10.1.2.3:9115/ready",
 		"[fd00::7]:9115":      "http://[fd00::7]:9115/ready",
+		"[fe80::1%eth0]:8080": "http://[fe80::1%25eth0]:8080/ready",
+		"[::1%lo]:8080":       "http://[::1%25lo]:8080/ready",
 		"exporter.local:9115": "http://exporter.local:9115/ready",
-		"localhost:http":      "http://localhost:http/ready",
+		"localhost:http":      "http://localhost:80/ready",
+		":http":               "http://127.0.0.1:80/ready",
 	} {
-		if got := healthcheckURL(address, "ready"); got != want {
+		got := healthcheckURL(address, "ready")
+		if got != want {
 			t.Errorf("%s: %s, want %s", address, got, want)
+		}
+		if _, err := http.NewRequest(http.MethodGet, got, nil); err != nil {
+			t.Errorf("%s: %s cannot be asked: %v", address, got, err)
 		}
 	}
 	// End to end, a wildcard listen address reaches the exporter on
@@ -144,6 +152,28 @@ func TestTheHealthcheckURLFollowsTheListenAddress(t *testing.T) {
 		if out := runCLI(t, "--healthcheck", "--web.listen-address="+address); out.code != 0 {
 			t.Errorf("%s: exit %d, stderr %q", address, out.code, out.stderr)
 		}
+	}
+}
+
+// An exporter listening on [::] passes the check: Go's [::] listener answers
+// IPv4 too, and on a host without IPv6, where [::1] cannot be dialed, it
+// listens on IPv4 alone.
+func TestTheHealthcheckReachesAnExporterListeningOnTheIPv6Wildcard(t *testing.T) {
+	listener, err := net.Listen("tcp", "[::]:0")
+	if err != nil {
+		t.Skipf("cannot listen on [::]: %v", err)
+	}
+	logger := newLogger("error", io.Discard)
+	exporterServer := exporter.NewServer(config.NewManager(&model.Config{}, "", logger), "python3", logger)
+	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: exporterServer.Handler(), ReadHeaderTimeout: time.Second}}
+	server.Start()
+	t.Cleanup(server.Close)
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := runCLI(t, "--healthcheck", "--web.listen-address=[::]:"+port); out.code != 0 {
+		t.Errorf("exit %d, stderr %q", out.code, out.stderr)
 	}
 }
 

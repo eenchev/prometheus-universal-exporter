@@ -3599,7 +3599,9 @@ a metric in an attribute whose name the target or a script chose — the
 set is validated, when the name is as long as the response; the `metric` and
 the `clashes_with` of a static target's metric left out of the static targets
 endpoint and the `metric` of its return (§ 42.14a); the `metric` of a name an
-OTLP export had as two kinds (§ 42.1), whose names are as long as a raised
+OTLP export had as two kinds, and the `metric`, `prometheus_name` and
+`left_out_prometheus_name` of one it had for two Prometheus names (§ 42.1),
+whose names are as long as a raised
 `limits.max_metric_name_length` lets them be — MUST show a name longer than
 200 bytes by its first 200 bytes, the cut between two characters, followed by
 `... (N bytes)` with the length of the whole name, as the error shows it
@@ -10153,8 +10155,10 @@ answers `200` and 1 otherwise: another status, a redirect, which it MUST NOT
 follow, a refused connection, or no answer within 5 seconds. On failure it
 MUST write one JSON line to stderr naming the URL and the status with the
 answer's body on one line, or the error. A listen address with an empty host
-or an IPv4 wildcard MUST be asked on `127.0.0.1`, the IPv6 wildcard on `::1`,
-and any other host as written. It MUST NOT bind the listen address, read the
+or a wildcard, IPv4, IPv6 or IPv4-mapped, MUST be asked on `127.0.0.1`, which
+a `[::]` listener answers too and which works on a host without IPv6, and any
+other host as written, with an IPv6 zone escaped in the URL as `%25`; a named
+port MUST be asked by its number. It MUST NOT bind the listen address, read the
 configuration or static target files, start any loop, or send credentials,
 since § 23's endpoints are never authenticated, and MUST NOT use a proxy from
 the environment. A value other than `ready` or `health` MUST be a
@@ -30072,6 +30076,9 @@ resource attributes MUST be preserved:
 
 - A gauge MUST be an OTLP gauge, and a counter a monotonic sum with cumulative
   temporality.
+- In the JSON representation every enum MUST be written as its number, as
+  the OTLP/JSON encoding requires, never as its name: `aggregationTemporality`
+  MUST be `2`, cumulative, and a log record's `severityNumber` a number.
 - A histogram MUST be an OTLP histogram with cumulative temporality, its count
   and sum — without the sum, which OTLP allows, when it was read from a target
   without a `_sum` (§ 14.1) — and its buckets converted from Prometheus's
@@ -30175,7 +30182,18 @@ resource attributes MUST be preserved:
     left out and the resource's service name, and says to rename a metric or
     to give a static target a resource of its own; as one repeated failure
     (§ 25.1) for the resource and the name, whichever kind is written last at
-    each export, with no line when it ends.
+    each export, with no line when it ends;
+  - of the Prometheus names, the names the exposition writes the points
+    under, that a name of a resource would be exported for in the kind
+    exported, which under `otlp.metric_names: otel` may be more than one —
+    the counters `x_seconds` and `x_seconds_total` — the name of the point
+    written last MUST be exported, with every point of it, and no point of
+    another, whatever their attributes. It MUST be logged as a warning that
+    names the metric, the Prometheus name exported, the Prometheus names and
+    the number of points left out and the resource's service name, and says
+    to rename a metric or to export with `metric_names: prometheus`; as one
+    repeated failure for the resource and the name, apart from the name's
+    clash of kinds, with no line when it ends.
 
   Written last is queued last, a point that waits again after a failed
   export keeping the place it was first queued with (§ 42.1a), and the
@@ -30215,7 +30233,8 @@ or `/d`. It MUST hold for the exporter's own metrics, the probes' and the
 static targets' alike. A family exported as gauges under its samples' names
 MUST keep those names and have no unit. Two names the translation makes one
 MUST be one name to the rule of one writer below, a different unit making a
-different kind of it, logged with the unit. Any other value MUST be refused
+different kind of it, logged with the unit, and two Prometheus names of one
+kind and unit two writers of the name, never merged into one metric. Any other value MUST be refused
 when the configuration loads, in a block that is switched on.
 
 `otlp.scope` MAY name the instrumentation scope of the export, its `name`
@@ -30349,7 +30368,12 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   each a string, an int, a double or a bool as its value is, and an
   attribute of a group named after the group and a dot. A value JSON has no
   number for, a whole number past an int, a duration, a time and an error
-  MUST be strings.
+  MUST be strings. A record MUST have each attribute key once, as OTLP
+  requires: of a key given twice — by `With` and by the line, or by a group
+  and a name its dot makes alike — the value given last, where the key was
+  first given. A value whose `Error` or `String` panics MUST be the string
+  `<nil>` when it is a nil pointer and `!PANIC: ` and the panic otherwise, as
+  slog's handlers write it, and the line MUST be logged and exported.
 - Only the lines at or above `otlp.logs.level` — `debug`, `info`, `warn` or
   `error`, in any case, `info` by default, any other value refused — MUST be
   exported, whatever `--log.level` writes to stderr.

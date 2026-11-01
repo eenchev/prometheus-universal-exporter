@@ -3,6 +3,7 @@ package exporter
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"reflect"
@@ -40,7 +41,7 @@ func otlpGoldenResources(cfg model.OTLPConfig) []otlpResourceSet {
 // otlpGoldenJSON is the export of otlpGoldenResources and the head of a
 // log export, as an export sends them without metric_names, scope or a
 // target's labels_as_resource and instance_id.
-const otlpGoldenJSON = `{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"prometheus-universal-exporter"}},{"key":"deployment.environment","value":{"stringValue":"test"}}]},"scopeMetrics":[{"scope":{"name":"prometheus-universal-exporter"},"metrics":[{"name":"queue_depth","description":"Jobs waiting.","gauge":{"dataPoints":[{"attributes":[{"key":"queue","value":{"stringValue":"a"}}],"timeUnixNano":"1700000000000000000","asDouble":3}]}},{"name":"jobs_processed_total","description":"Jobs done.","sum":{"dataPoints":[{"attributes":[{"key":"queue","value":{"stringValue":"a"}}],"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","asDouble":7}],"aggregationTemporality":"AGGREGATION_TEMPORALITY_CUMULATIVE","isMonotonic":true}},{"name":"request_latency_seconds","histogram":{"dataPoints":[{"attributes":[{"key":"route","value":{"stringValue":"/"}}],"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","count":"4","sum":1.5,"bucketCounts":["2","1","1"],"explicitBounds":[0.5,1]}],"aggregationTemporality":"AGGREGATION_TEMPORALITY_CUMULATIVE"}},{"name":"rpc_duration_milliseconds","summary":{"dataPoints":[{"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","count":"2","sum":30,"quantileValues":[{"quantile":0.5,"value":12}]}]}},{"name":"transfer_bytes_per_second","gauge":{"dataPoints":[{"timeUnixNano":"1700000000000000000","asDouble":1024}]}}]}]},{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"prometheus-universal-exporter"}},{"key":"deployment.environment","value":{"stringValue":"test"}}]},"scopeMetrics":[{"scope":{"name":"prometheus-universal-exporter"},"metrics":[{"name":"temperature_celsius","gauge":{"dataPoints":[{"attributes":[{"key":"city","value":{"stringValue":"berlin"}},{"key":"static_target","value":{"stringValue":"eu"}}],"timeUnixNano":"1700000000000000000","asDouble":21}]}}]}]}]}
+const otlpGoldenJSON = `{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"prometheus-universal-exporter"}},{"key":"deployment.environment","value":{"stringValue":"test"}}]},"scopeMetrics":[{"scope":{"name":"prometheus-universal-exporter"},"metrics":[{"name":"queue_depth","description":"Jobs waiting.","gauge":{"dataPoints":[{"attributes":[{"key":"queue","value":{"stringValue":"a"}}],"timeUnixNano":"1700000000000000000","asDouble":3}]}},{"name":"jobs_processed_total","description":"Jobs done.","sum":{"dataPoints":[{"attributes":[{"key":"queue","value":{"stringValue":"a"}}],"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","asDouble":7}],"aggregationTemporality":2,"isMonotonic":true}},{"name":"request_latency_seconds","histogram":{"dataPoints":[{"attributes":[{"key":"route","value":{"stringValue":"/"}}],"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","count":"4","sum":1.5,"bucketCounts":["2","1","1"],"explicitBounds":[0.5,1]}],"aggregationTemporality":2}},{"name":"rpc_duration_milliseconds","summary":{"dataPoints":[{"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000000000000000","count":"2","sum":30,"quantileValues":[{"quantile":0.5,"value":12}]}]}},{"name":"transfer_bytes_per_second","gauge":{"dataPoints":[{"timeUnixNano":"1700000000000000000","asDouble":1024}]}}]}]},{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"prometheus-universal-exporter"}},{"key":"deployment.environment","value":{"stringValue":"test"}}]},"scopeMetrics":[{"scope":{"name":"prometheus-universal-exporter"},"metrics":[{"name":"temperature_celsius","gauge":{"dataPoints":[{"attributes":[{"key":"city","value":{"stringValue":"berlin"}},{"key":"static_target","value":{"stringValue":"eu"}}],"timeUnixNano":"1700000000000000000","asDouble":21}]}}]}]}]}
 {"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"prometheus-universal-exporter"}},{"key":"deployment.environment","value":{"stringValue":"test"}}]},"scopeLogs":[{"scope":{"name":"prometheus-universal-exporter"},"logRecords":[{}]}]}]}`
 
 // otlpExportJSON is the JSON of the one request an export of resources
@@ -80,11 +81,28 @@ func otlpGoldenConfig(t *testing.T, change func(*model.OTLPConfig)) model.OTLPCo
 // byte for byte what it was before they were keys: names as the exposition
 // writes them and no unit, the scope prometheus-universal-exporter without
 // a version, and a target's labels on its points. metric_names: prometheus
-// written out is the same export.
+// written out is the same export. (Each aggregationTemporality has been 2,
+// cumulative, since enums are written as numbers; it was the enum's name.)
 func TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings(t *testing.T) {
 	cfg := otlpGoldenConfig(t, nil)
 	if got := otlpExportJSON(t, cfg, otlpGoldenResources(cfg)); got != otlpGoldenJSON {
 		t.Errorf("the export changed:\n%s\nwant\n%s", got, otlpGoldenJSON)
+	}
+}
+
+// Every enum of the export's JSON is its number, as the OTLP/JSON encoding
+// requires: a sum's and a histogram's aggregationTemporality is 2,
+// cumulative, and a log record's severityNumber a number too. No enum is
+// written by its name.
+func TestOTLPJSONWritesEnumsAsNumbers(t *testing.T) {
+	cfg := otlpGoldenConfig(t, nil)
+	body := otlpExportJSON(t, cfg, otlpGoldenResources(cfg))
+	if strings.Count(body, `"aggregationTemporality":2`) != 2 || strings.Contains(body, "AGGREGATION_TEMPORALITY") {
+		t.Errorf("the export does not write each temporality as 2:\n%s", body)
+	}
+	record, err := json.Marshal(otlpLogRecord{SeverityNumber: otlpSeverity(slog.LevelWarn)})
+	if err != nil || !strings.Contains(string(record), `"severityNumber":13`) {
+		t.Errorf("a log record is %s, %v", record, err)
 	}
 }
 
@@ -243,8 +261,8 @@ func TestOTelMetricNamesThatCollideAreOneNameOfTwoShapes(t *testing.T) {
 		t.Errorf("the metrics are %q, want %q", got, want)
 	}
 	want := []otlpNameClash{
-		{name: "jobs", kept: otlpShape{kind: otlpKindSum}, leftOut: []otlpShape{{kind: otlpKindGauge}}, points: 1},
-		{name: "latency", kept: otlpShape{kind: otlpKindGauge}, leftOut: []otlpShape{{kind: otlpKindGauge, unit: "s"}}, points: 1},
+		{name: "jobs", kept: otlpShape{kind: otlpKindSum}, leftOut: []otlpShape{{kind: otlpKindGauge}}, points: 1, source: "jobs_total"},
+		{name: "latency", kept: otlpShape{kind: otlpKindGauge}, leftOut: []otlpShape{{kind: otlpKindGauge, unit: "s"}}, points: 1, source: "latency"},
 	}
 	if !reflect.DeepEqual(clashes, want) {
 		t.Errorf("the clashes are %+v, want %+v", clashes, want)
@@ -255,6 +273,63 @@ func TestOTelMetricNamesThatCollideAreOneNameOfTwoShapes(t *testing.T) {
 	server.logOTLPNameClashes(otlpResourceIdentity{ServiceName: "svc"}, "resource", clashes)
 	if !strings.Contains(log.String(), `"metric":"latency","kind":"gauge","left_out_kind":"gauge of unit s"`) {
 		t.Errorf("the clash of units is logged as\n%s", log.String())
+	}
+}
+
+// Under metric_names: otel two counters of one unit whose Prometheus names
+// differ only by _total, or by nothing but it, are one name: the one written
+// last is exported, with every point of it, and no point of the other,
+// whatever its labels, where the export used to merge the two into one
+// metric and keep one point of the series alike. It is reported, and logged
+// with both Prometheus names.
+func TestOTelMetricNamesOfTwoPrometheusNamesAreOneWriters(t *testing.T) {
+	set := model.MetricSet{Metrics: []model.Metric{
+		{Name: "x_seconds", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{"a": "1"}},
+		{Name: "x_seconds", Type: model.CounterMetricType, Value: 5, Labels: map[string]string{"a": "2"}},
+		{Name: "x_seconds_total", Type: model.CounterMetricType, Value: 2, Labels: map[string]string{"a": "1"}},
+		{Name: "requests_total", Type: model.CounterMetricType, Value: 4},
+		{Name: "requests", Type: model.CounterMetricType, Value: 3},
+	}}
+	resource := otlpResourceSet{Set: set, seqs: []int64{1, 2, 3, 4, 5}}
+	if out, clashes := otlpMetricsOf(resource, "1", nil); len(out) != 4 || len(clashes) != 0 {
+		t.Fatalf("under metric_names: prometheus the export has %d metrics and the clashes %+v, want 4 and none", len(out), clashes)
+	}
+	resource.otelNames = true
+	out, clashes := otlpMetricsOf(resource, "1", nil)
+	var got []string
+	for _, m := range out {
+		for _, p := range m.Sum.DataPoints {
+			var attributes []string
+			for _, a := range p.Attributes {
+				attributes = append(attributes, a.Key+"="+a.Value.StringValue)
+			}
+			got = append(got, fmt.Sprintf("%s %s %v %v", m.Name, m.Unit, attributes, *p.AsDouble))
+		}
+	}
+	if want := []string{"x s [a=1] 2", "requests  [] 3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the points are %q, want %q", got, want)
+	}
+	want := []otlpNameClash{
+		{name: "requests", kept: otlpShape{kind: otlpKindSum}, source: "requests", leftOutSources: []string{"requests_total"}, sourcePoints: 1},
+		{name: "x", kept: otlpShape{kind: otlpKindSum, unit: "s"}, source: "x_seconds_total", leftOutSources: []string{"x_seconds"}, sourcePoints: 2},
+	}
+	if !reflect.DeepEqual(clashes, want) {
+		t.Errorf("the clashes are %+v, want %+v", clashes, want)
+	}
+	var log bytes.Buffer
+	server := NewServer(config.NewManager(&model.Config{}, "", slog.Default()), "python3", slog.Default())
+	server.logger = timelessLogger(&log, true)
+	server.logOTLPNameClashes(otlpResourceIdentity{ServiceName: "svc"}, "resource", clashes)
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[1], `"msg":"OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export"`) ||
+		!strings.Contains(lines[1], `"metric":"x","prometheus_name":"x_seconds_total","left_out_prometheus_name":"x_seconds","left_out_points":2,"service_name":"svc"`) {
+		t.Errorf("the clashes are logged as\n%s", log.String())
+	}
+	// A name of two kinds and of two Prometheus names is logged for each,
+	// under keys of its own.
+	server.logOTLPNameClashes(otlpResourceIdentity{ServiceName: "svc"}, "resource", []otlpNameClash{{name: "y", kept: otlpShape{kind: otlpKindSum}, leftOut: []otlpShape{{kind: otlpKindGauge}}, points: 1, source: "y_total", leftOutSources: []string{"y"}, sourcePoints: 1}})
+	if n := strings.Count(log.String(), `"level":"WARN"`); n != 4 {
+		t.Errorf("%d warnings, want 4:\n%s", n, log.String())
 	}
 }
 

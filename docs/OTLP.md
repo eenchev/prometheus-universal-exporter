@@ -196,6 +196,26 @@ rule a series already has while it waits: **the later replaces the earlier**.
   target a [resource of its own](#static-targets). The line is not followed by
   one that says it is over: a name not written as two kinds for an hour is
   forgotten, and logged in full if it happens again.
+- **One name for two Prometheus names.** With
+  [`metric_names: otel`](#metric-names) two metrics of one kind and unit
+  whose Prometheus names differ are one name too: a counter `x_seconds` and a
+  counter `x_seconds_total` are both the sum `x` of unit `s`, and a counter
+  `requests` and a counter `requests_total` both the sum `requests`. They are
+  two series to Prometheus, and one metric of the export would merge them,
+  keeping one point where their labels are the same. The Prometheus name
+  written last is exported, with every point of it, and the points of the
+  other, whatever their labels, are left out of that export; it is logged as
+  a warning as a name of two kinds is, once and then as a repeated failure,
+  apart from it:
+
+  ```json
+  {"level":"WARN","msg":"OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export","metric":"x","prometheus_name":"x_seconds_total","left_out_prometheus_name":"x_seconds","left_out_points":1,"service_name":"prometheus-universal-exporter","error":"otlp.metric_names: otel exports these Prometheus metric names of one OTLP resource under one name, and a name is one metric there, whose points of the two would be one stream where their labels are the same; rename one of the metrics, or export with otlp.metric_names: prometheus"}
+  ```
+
+  Rename one of the metrics, or export with `metric_names: prometheus`,
+  which keeps every name as the exposition writes it. A series written twice
+  under one Prometheus name, as a histogram `h` exported as gauges and a
+  gauge `h_bucket`, is one stream, the first case above, and not this.
 
 Written last is queued last: the probe or scrape that ran last, whatever
 timestamps its series carry, with the exporter's own metrics after every one
@@ -223,6 +243,11 @@ keep its data points for: they are dropped, counted in
 `dropped_points`.
 
 ## Delivery
+
+A request is OTLP/HTTP with a JSON body (`Content-Type: application/json`),
+in the OTLP specification's JSON encoding: an enum is written as its number,
+so a sum's and a histogram's `aggregationTemporality` is `2`, cumulative, and
+a log record's `severityNumber` a number, as every OTLP receiver reads them.
 
 Requests are gzipped (`Content-Encoding: gzip`), which every OpenTelemetry
 Collector accepts; set `otlp.compression: none` for an endpoint that does not.
@@ -577,7 +602,12 @@ fraction as a double, `true` and `false` as a bool. A whole number past the
 range of an int, and a number that is not one or is infinite, is a string, as
 are a duration (`1.5s`), a time (RFC 3339) and an error (its text). An
 attribute of a group is named after the group and a dot, `group.key`, as
-stderr's JSON nests it. The lines say what stderr says, credentials withheld
+stderr's JSON nests it. A record has each key once, as OTLP requires: a key
+given twice, by the logger and by the line, is the value the line gave,
+where stderr writes both. A value whose text cannot be had — a nil error
+whose `Error` does not guard against nil — is `<nil>`, as on stderr, and one
+whose `Error` or `String` panics otherwise is `!PANIC: ` and the panic, as
+slog writes it. The lines say what stderr says, credentials withheld
 alike: the redaction is where a line is made, not in what writes it.
 
 Logging never waits for the export. A line is queued as it is written, and one

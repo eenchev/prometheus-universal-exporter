@@ -35,6 +35,8 @@ var coreTypeNameAllowed = []struct {
 	count         int
 	why           string
 }{
+	{"healthcheck.go", "http", 1, "the scheme of the URL the health check asks"},
+	{"healthcheck.go", "tcp", 1, "the network a named port is looked up for"},
 	{"internal/config/config.go", "graphite", 2, "the graphite decoder, which response.graphite applies to"},
 	{"internal/config/config.go", "http", 2, "a URL's scheme, and the http reload trigger"},
 	{"internal/config/configschema.go", "tcp", 1, "a value of the keepalive check of a static target's sql connections"},

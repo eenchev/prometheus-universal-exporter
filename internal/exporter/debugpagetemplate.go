@@ -230,7 +230,7 @@ p.danger strong { color: var(--bad); }
 <textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}" data-copy="{{.ChosenCopy}}" data-copy-note="{{.ChosenCopyNote}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
 </div>
 </div>
-<p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor. Ctrl+Enter (⌘+Enter on a Mac) runs.</p>
+<p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor.</p>
 </section>
 <section class="panel">
 <h2>Response</h2>

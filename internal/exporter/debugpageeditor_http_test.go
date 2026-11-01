@@ -106,7 +106,7 @@ func TestTheDebugPageRunsOnCtrlEnter(t *testing.T) {
 // the editor says.
 func TestTheDebugPageEditorIndentsOnTab(t *testing.T) {
 	page := getPage(t, debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}}), "/debug")
-	requireContains(t, page, `<p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor. Ctrl+Enter (⌘+Enter on a Mac) runs.</p>`)
+	requireContains(t, page, `<p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor.</p>`)
 	requireContains(t, debugPageScript(page),
 		`editorArea.setAttribute("aria-describedby", "editor-hint");`,
 		`if (event.key === "Escape") { escaped = true; return; }`,
